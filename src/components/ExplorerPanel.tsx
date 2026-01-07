@@ -1,0 +1,196 @@
+'use client';
+import React, { useState, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import { FileEntry } from '../types/explorer';
+import { Folder, FileBox, ChevronRight, FileCode, FileText } from 'lucide-react';
+
+interface ExplorerPanelProps {
+    onFileSelect: (path: string) => void;
+    activeFile: string | null;
+}
+
+const FileItem: React.FC<{
+    entry: FileEntry;
+    depth: number;
+    onSelect: (path: string) => void;
+    activeFile: string | null;
+    refreshKey: number;
+}> = ({ entry, depth, onSelect, activeFile, refreshKey }) => {
+    const [expanded, setExpanded] = useState(false);
+    const [children, setChildren] = useState<FileEntry[] | null>(null);
+
+    // Clear cached children when refreshKey changes
+    useEffect(() => {
+        setChildren(null);
+        setExpanded(false);
+    }, [refreshKey]);
+
+    const toggleExpand = async () => {
+        if (!entry.is_dir) {
+            onSelect(entry.path);
+            return;
+        }
+
+        if (expanded) {
+            setExpanded(false);
+        } else {
+            setExpanded(true);
+            if (!children) {
+                try {
+                    const files = await invoke<FileEntry[]>('list_files', { path: entry.path });
+                    setChildren(files);
+                } catch (e) {
+                    console.error("Failed to list dir:", e);
+                }
+            }
+        }
+    };
+
+    const isActive = activeFile === entry.path;
+
+    // Icon Selection
+    const getIcon = () => {
+        if (entry.is_dir) return expanded ? <Folder className="w-4 h-4 text-zinc-400 fill-zinc-400/20" /> : <Folder className="w-4 h-4 text-zinc-500" />;
+        if (entry.name.endsWith('.rs')) return <FileCode className="w-4 h-4 text-orange-600/80" />;
+        if (entry.name.endsWith('.tsx') || entry.name.endsWith('.ts')) return <FileCode className="w-4 h-4 text-blue-500/80" />;
+        if (entry.name.endsWith('.json')) return <FileCode className="w-4 h-4 text-yellow-500/80" />;
+        if (entry.name.endsWith('.md')) return <FileText className="w-4 h-4 text-zinc-400" />;
+        return <FileBox className="w-4 h-4 text-zinc-600" />;
+    };
+
+    return (
+        <div>
+            <div
+                className={`flex items-center gap-1.5 py-1 px-2 cursor-pointer select-none text-xs font-mono transition-colors ${isActive ? 'bg-emerald-500/10 text-emerald-400' : 'hover:bg-zinc-800/50 text-zinc-400'}`}
+                style={{ paddingLeft: `${depth * 12 + 8}px` }}
+                onClick={toggleExpand}
+            >
+                {entry.is_dir && (
+                    <span className={`transition-transform ${expanded ? 'rotate-90' : ''}`}>
+                        <ChevronRight className="w-3 h-3 text-zinc-600" />
+                    </span>
+                )}
+                {!entry.is_dir && <span className="w-3" />} {/* Spacing for files */}
+
+                {getIcon()}
+                <span className="truncate">{entry.name}</span>
+            </div>
+
+            {expanded && children && (
+                <div>
+                    {children.map((child) => (
+                        <FileItem
+                            key={child.path}
+                            entry={child}
+                            depth={depth + 1}
+                            onSelect={onSelect}
+                            activeFile={activeFile}
+                            refreshKey={refreshKey}
+                        />
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
+export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, activeFile }) => {
+    const [roots, setRoots] = useState<FileEntry[]>([]);
+    const [error, setError] = useState<string | null>(null);
+    const [refreshKey, setRefreshKey] = useState(0);
+
+    const loadRoot = React.useCallback(async () => {
+        if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
+        try {
+            // List workspace root
+            const files = await invoke<FileEntry[]>('list_files', { path: null });
+            setRoots(files);
+            setError(null);
+        } catch (e) {
+            console.warn("Failed to load root (likely no workspace open):", e);
+            // Don't show critical error overlay for "No workspace open"
+            if (typeof e === 'string' && e.includes("No workspace open")) {
+                setRoots([]);
+                return;
+            }
+            setError(String(e));
+        }
+    }, []);
+
+    useEffect(() => {
+        loadRoot();
+    }, [loadRoot]);
+
+    useEffect(() => {
+        // Listen for refresh requests from backend
+        let unlistenFn: (() => void) | undefined;
+        const setupListener = async () => {
+            unlistenFn = await listen('refresh-explorer', () => {
+                console.log('[EXPLORER] Refresh event received');
+                setRefreshKey(prev => prev + 1);
+                loadRoot();
+            });
+        };
+        setupListener();
+
+        return () => {
+            if (unlistenFn) unlistenFn();
+        };
+    }, [loadRoot]);
+
+    // TEMPORARY: Simple input to open folder
+    const [pathInput, setPathInput] = useState('');
+    const openSpecificPath = async () => {
+        try {
+            await invoke('open_folder', { path: pathInput });
+            loadRoot();
+        } catch (e) {
+            console.error(e);
+            setError(String(e));
+        }
+    };
+
+    return (
+        <div className="h-full bg-[#18181b] border-r border-black flex flex-col text-zinc-400">
+            <div className="h-9 px-4 flex items-center bg-[#09090b] border-b border-black text-[10px] uppercase tracking-wider font-semibold select-none justify-between">
+                <span>Explorer</span>
+                <button onClick={loadRoot} className="hover:text-white" title="Refresh">
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto pt-2 scrollbar-thin scrollbar-thumb-zinc-800">
+                {roots.length === 0 ? (
+                    <div className="p-4 flex flex-col gap-2">
+                        <p className="text-xs text-zinc-500 italic text-center">No workspace open.</p>
+                        <div className="flex gap-1">
+                            <input
+                                className="bg-zinc-900 border border-zinc-700 text-xs p-1 w-full rounded-sm"
+                                placeholder="/path/to/folder"
+                                value={pathInput}
+                                onChange={e => setPathInput(e.target.value)}
+                                onKeyDown={e => e.key === 'Enter' && openSpecificPath()}
+                            />
+                            <button onClick={openSpecificPath} className="p-1.5 bg-zinc-800 hover:bg-zinc-700 rounded-sm">
+                                <ChevronRight className="w-3 h-3" />
+                            </button>
+                        </div>
+                        {error && <p className="text-[10px] text-red-500 break-all">{error}</p>}
+                    </div>
+                ) : (
+                    roots.map(file => (
+                        <FileItem
+                            key={file.path}
+                            entry={file}
+                            depth={0}
+                            onSelect={onFileSelect}
+                            activeFile={activeFile}
+                            refreshKey={refreshKey}
+                        />
+                    ))
+                )}
+            </div>
+        </div>
+    );
+};
