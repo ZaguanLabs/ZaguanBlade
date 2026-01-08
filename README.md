@@ -24,7 +24,7 @@ The system follows a strict Body/Brain separation:
 > 2.  **Hardcoded**: The client expects the server at a specific localhost address.
 > 3.  **Private**: The `zcoderd` repository is currently private ("The Secret Sauce").
 >
-> Future versions aim to make `zcoderd`.
+> Future versions aim to make `zcoderd` optional.
 
 ## Key Features
 
