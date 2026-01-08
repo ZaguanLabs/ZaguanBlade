@@ -907,7 +907,7 @@ impl ChatManager {
         active_file: Option<String>,
         ai: &mut AiWorkflow,
     ) -> Option<PendingToolBatch> {
-        let context = crate::tool_execution::ToolExecutionContext {
+        let context = crate::tool_execution::ToolExecutionContext::<tauri::Wry> {
             workspace_root: Some(workspace.to_string_lossy().to_string()),
             active_file,
             active_tab_index: 0,
@@ -939,6 +939,8 @@ mod tests {
             reasoning: None,
             tool_call_id: None,
             progress: None,
+            content_before_tools: None,
+            content_after_tools: None,
         });
 
         let api_config = ApiConfig {

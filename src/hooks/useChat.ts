@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { listen, emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
+import { BladeDispatcher } from '../services/blade';
 import type { ChatMessage, ModelInfo, ToolCall } from '../types/chat';
 import type { Change } from '../types/change';
 import { EventNames, type RequestConfirmationPayload, type StructuredAction, type ChangeAppliedPayload, type AllEditsAppliedPayload, type ToolExecutionCompletedPayload } from '../types/events';
@@ -26,15 +27,6 @@ export function useChat() {
     // Permission Logic
     const [pendingActions, setPendingActions] = useState<StructuredAction[] | null>(null);
     const [pendingChanges, setPendingChanges] = useState<Change[]>([]);
-    const [pendingActionErrors, setPendingActionErrors] = useState<string | null>(null);
-    const pendingActionsRef = useRef<StructuredAction[] | null>(null);
-    const [pendingToolCallId, setPendingToolCallId] = useState<string | null>(null);
-    const [pendingBatchId, setPendingBatchId] = useState<string | null>(null);
-    const [pendingTools, setPendingTools] = useState<any[]>([]);
-    const [pendingActionsLoading, setPendingActionsLoading] = useState(false);
-
-    // Track if we've created a research tab for current message
-    const researchTabCreatedRef = useRef(false);
 
     // Load initial conversation and models
     useEffect(() => {
@@ -86,77 +78,89 @@ export function useChat() {
             const u1 = await listen<ChatMessage>('chat-update', (event) => {
                 const msg = event.payload;
                 console.log('[CHAT UPDATE]', msg);
-                
+
                 setMessages((prev) => {
                     const last = prev[prev.length - 1];
-                    
-                    // Only set loading if we're adding a new assistant message (streaming started)
-                    if (!last || last.role !== 'Assistant') {
-                        setLoading(true);
-                    }
-                    
-                    // Handle Tool messages - match them with tool calls in previous assistant message
-                    if (msg.role === 'Tool' && msg.tool_call_id) {
-                        console.log('[TOOL RESULT] Matching tool_call_id:', msg.tool_call_id);
-                        // Find the assistant message with this tool call and update its status
-                        const updated = prev.map((m) => {
-                            if (m.role === 'Assistant' && m.tool_calls) {
-                                console.log('[TOOL RESULT] Checking assistant message with tool calls:', m.tool_calls.map(c => c.id));
-                                const updatedCalls = m.tool_calls.map(call => {
-                                    if (call.id === msg.tool_call_id) {
-                                        console.log('[TOOL RESULT] MATCH! Updating status to complete');
-                                        return {
-                                            ...call,
-                                            status: 'complete' as const,
-                                            result: msg.content
-                                        };
-                                    }
-                                    return call;
-                                });
-                                return { ...m, tool_calls: updatedCalls };
+
+                    // 1. If it's a Tool message (legacy or direct tool output), append it if it's new
+                    // Or if we want to hide Tool messages and only show them inside Assistant tool calls, we ignore them
+                    // But for now, let's keep the existing logic of using it to update tool status if we can match it.
+                    // Actually, with Blade Protocol, the backend sends the UPDATED Assistant message (Role=Assistant)
+                    // with status=complete. So we might not need to handle Role=Tool for status updates anymore.
+
+                    if (msg.role === 'Assistant') {
+                        // Start loading if this is the start of a response
+                        if (!last || last.role !== 'Assistant') {
+                            setLoading(true);
+                            return [...prev, msg];
+                        }
+
+                        // If the last message IS an Assistant message, check if we should Merge or Append.
+
+                        // CASE A: The new message has completed tool calls.
+                        // This usually means it's an update to the EXISTING message (e.g. status changed from executing->complete)
+                        const isToolUpdate = msg.tool_calls?.some(tc => tc.status === 'complete' || tc.status === 'error');
+
+                        if (isToolUpdate) {
+                            // Verify if it matches the last message's tool calls
+                            const lastHasMatchingTools = last.tool_calls?.some(ltc =>
+                                msg.tool_calls?.some(mtc => mtc.id === ltc.id)
+                            );
+
+                            if (lastHasMatchingTools) {
+                                // It matches! Replace the last message with this authoritative update
+                                console.log('[CHAT] Updating assistant message with completed tools');
+                                return [...prev.slice(0, -1), msg];
                             }
-                            return m;
-                        });
-                        console.log('[TOOL RESULT] Updated messages:', updated);
-                        // Don't add the Tool message itself - it's shown in the tool call display
-                        return updated;
-                    }
-                    
-                    if (last && last.role === msg.role && last.role === 'Assistant') {
-                        // Only update if this is a streaming continuation (no tool_calls completed yet)
-                        // If the last message has completed tool calls, this is a NEW response, so append
-                        const hasCompletedTools = last.tool_calls?.some(tc => 
-                            tc.status === 'complete' || tc.status === 'error' || tc.status === 'skipped'
+
+                            // If it doesn't match, it might be a NEW response that just happens to have tools immediately?
+                            // Or we entered a new turn.
+                        }
+
+                        // CASE B: Streaming content update (msg.content is a chunk or full new content)
+                        // If the last message already has completed tools, and this new message has content,
+                        // it's likely a *new* reasoning/text block AFTER the tool execution.
+                        const lastHadCompletedTools = last.tool_calls?.some(tc =>
+                            tc.status === 'complete' || tc.status === 'error'
                         );
-                        
-                        if (hasCompletedTools) {
-                            // This is a new AI response after tool execution - append it
+
+                        if (lastHadCompletedTools) {
+                            // If the previous message was "done" with tools, and we get more content,
+                            // usually models generate text -> tool -> tool_result -> MORE text.
+                            // In standard Chat (OpenAI), that "MORE text" is a NEW message (Assistant).
+                            // OR it's the SAME message being appended to? 
+                            // Usually: Assistant(Content + ToolCall) -> Tool(Result) -> Assistant(Content).
+                            // So it should be a NEW message.
                             console.log('[CHAT] New AI response after tool completion - appending');
                             return [...prev, msg];
                         }
-                        
-                        // This is a streaming update to the current message - merge it
+
+                        // CASE C: Standard streaming merge (appending content)
                         const mergedToolCalls = msg.tool_calls || last.tool_calls;
-                        const updatedToolCalls = mergedToolCalls?.map(call => ({
-                            ...call,
-                            status: call.status || 'executing' as const
-                        }));
-                        
-                        const finalContent = msg.content !== undefined ? msg.content : last.content;
-                        
-                        const updatedMsg = {
-                            ...last,
-                            content: finalContent,
-                            tool_calls: updatedToolCalls,
-                            reasoning: msg.reasoning || last.reasoning,
-                            progress: msg.progress || last.progress
-                        };
-                        
-                        return [...prev.slice(0, -1), updatedMsg];
-                    } else if (last && last.role === msg.role && last.role === 'User') {
-                        if (last.content === msg.content) return prev;
+
+                        // Use the new content if provided, else keep old. 
+                        // Note: If msg.content is just a chunk, we need to append. 
+                        // But Backend `DrainResult::Update` sends chunks? 
+                        // Let's check `lib.rs`: `DrainResult::Update(ChatMessage)`. 
+                        // `chat_manager.rs` line 1009 `msg.content += chunk`. It accumulates in `updated_assistant_message`.
+                        // So `msg` is the FULL ACCUMULATED message if using `updated_assistant_message`, OR just the chunk?
+                        // `process_chat_event` in `chat_manager.rs` (lines 600+) accumulates `self.updated_assistant_message`.
+                        // AND it emits `DrainResult::Update(self.updated_assistant_message.clone())`.
+                        // So `msg` is the FULL message so far. We can just replace.
+
+                        return [...prev.slice(0, -1), msg];
+
+                    } else if (msg.role === 'Tool') {
+                        // We still receive Tool messages for history, but we don't need to use them to patch the array
+                        // if the Assistant message update handles the UI state.
+                        // We just append them to history so the context is correct.
+                        return [...prev, msg];
+                    } else if (msg.role === 'User') {
+                        // Deduplicate user messages (sometimes echoed back)
+                        if (last && last.role === 'User' && last.content === msg.content) return prev;
                         return [...prev, msg];
                     }
+
                     return [...prev, msg];
                 });
             });
@@ -165,7 +169,6 @@ export function useChat() {
             const u2 = await listen('chat-done', () => {
                 setLoading(false);
                 setPendingActions(null); // Clear any hanging dialogs
-                researchTabCreatedRef.current = false; // Reset for next research
             });
             unlistenDone = u2;
 
@@ -188,12 +191,12 @@ export function useChat() {
                 console.log('[PROPOSE CHANGES] received', event.payload.map(c => ({ id: c.id, type: c.change_type, path: c.path })));
                 setPendingChanges(prev => {
                     // Filter out duplicates
-                    const newChanges = event.payload.filter(newChange => 
+                    const newChanges = event.payload.filter(newChange =>
                         !prev.some(c => c.id === newChange.id)
                     );
                     return [...prev, ...newChanges];
                 });
-                
+
                 // Automatically open new files as ephemeral tabs
                 event.payload.forEach(change => {
                     if (change.change_type === 'new_file') {
@@ -239,29 +242,7 @@ export function useChat() {
             });
             unlistenCommand = u6;
 
-            // Listen for tool execution completion events (backend emits even without Tool message)
-            const u7 = await listen<ToolExecutionCompletedPayload>(EventNames.TOOL_EXECUTION_COMPLETED, (event) => {
-                const { tool_call_id, success, tool_name } = event.payload;
-                console.log('[TOOL COMPLETED EVENT]', event.payload);
-                setMessages((prev): ChatMessage[] =>
-                    prev.map((msg): ChatMessage => {
-                        if (msg.role === 'Assistant' && msg.tool_calls?.some(tc => tc.id === tool_call_id)) {
-                            const updatedCalls = msg.tool_calls.map(tc =>
-                                tc.id === tool_call_id
-                                    ? {
-                                          ...tc,
-                                          status: success ? 'complete' : 'error',
-                                          result: tc.result ?? (success ? 'Completed' : `Failed: ${tool_name}`),
-                                      }
-                                    : tc
-                            ) as ToolCall[];
-                            return { ...msg, tool_calls: updatedCalls };
-                        }
-                        return msg;
-                    })
-                );
-            });
-            unlistenToolCompleted = u7;
+            // u7 removed - redundant with chat-update logic
 
             // Listen for change applied signal (from individual or batch approval)
             const u8 = await listen<ChangeAppliedPayload>(EventNames.CHANGE_APPLIED, (event) => {
@@ -297,7 +278,7 @@ export function useChat() {
                 });
             });
             const unlistenTodoUpdated = u10;
-            
+
             return () => {
                 if (unlistenUpdate) unlistenUpdate();
                 if (unlistenDone) unlistenDone();
@@ -305,7 +286,7 @@ export function useChat() {
                 if (unlistenPerm) unlistenPerm();
                 if (unlistenChanges) unlistenChanges();
                 if (unlistenCommand) unlistenCommand();
-                if (unlistenToolCompleted) unlistenToolCompleted();
+                // if (unlistenToolCompleted) unlistenToolCompleted(); // Removed
                 if (unlistenApplied) unlistenApplied();
                 if (unlistenAllApplied) unlistenAllApplied();
                 if (unlistenTodoUpdated) unlistenTodoUpdated();
@@ -323,28 +304,33 @@ export function useChat() {
         try {
             setLoading(true);
             setError(null);
-            
+
             // Get editor state from context
             const activeFile = editorState.activeFile;
+            // activeFile might be null/undefined, ensure we pass string or null
+            const safeActiveFile = activeFile || null;
             const openFiles = activeFile ? [activeFile] : [];
-            const cursorLine = editorState.cursorLine;
-            const cursorColumn = editorState.cursorColumn;
-            const selectionStartLine = editorState.selectionStartLine;
-            const selectionEndLine = editorState.selectionEndLine;
-            
-            await invoke('send_message', { 
-                message: text, 
-                modelId: selectedModelId,
-                activeFile,
-                openFiles,
-                cursorLine,
-                cursorColumn,
-                selectionStartLine,
-                selectionEndLine
+
+            // Dispatch via Blade Protocol
+            await BladeDispatcher.chat({
+                type: 'SendMessage',
+                payload: {
+                    content: text,
+                    model: selectedModelId,
+                    context: {
+                        active_file: safeActiveFile,
+                        open_files: openFiles,
+                        cursor_line: editorState.cursorLine ?? null,
+                        cursor_column: editorState.cursorColumn ?? null,
+                        selection_start: editorState.selectionStartLine ?? null,
+                        selection_end: editorState.selectionEndLine ?? null
+                    }
+                }
             });
+
         } catch (e) {
-            console.error(e);
-            console.error('Failed to approve tool decision:', e);
+            console.error('Failed to send message:', e);
+            setError(e instanceof Error ? e.message : String(e));
         }
     }, [
         editorState.activeFile,
@@ -354,10 +340,9 @@ export function useChat() {
         editorState.selectionEndLine,
         selectedModelId
     ]);
-
     const stopGeneration = useCallback(async () => {
         try {
-            await invoke('stop_generation');
+            await BladeDispatcher.chat({ type: 'StopGeneration' });
             setLoading(false);
             // Clear any pending command approvals when stopping
             setPendingActions(null);
@@ -374,12 +359,15 @@ export function useChat() {
             const change = pendingChanges.find(c => c.id === changeId);
             console.log('[useChat] Found change:', change);
             logFrontend(`[approveChange] found change path=${change?.path ?? 'n/a'} type=${change?.change_type ?? 'n/a'}`);
-            
+
             // Tauri command expects snake_case param name
-            await invoke('approve_change', { change_id: changeId });
+            await BladeDispatcher.workflow({
+                type: 'ApproveChange',
+                payload: { change_id: changeId }
+            });
             console.log('[useChat] Backend approve_change completed');
             logFrontend(`[approveChange] backend completed changeId=${changeId}`);
-            
+
             // Remove the approved change and any other changes for the same file
             // (since applying one patch invalidates others for the same file)
             setPendingChanges(prev => {
@@ -400,7 +388,10 @@ export function useChat() {
     const rejectChange = useCallback(async (changeId: string) => {
         try {
             // Tauri command expects snake_case param name
-            await invoke('reject_change', { change_id: changeId });
+            await BladeDispatcher.workflow({
+                type: 'RejectChange',
+                payload: { change_id: changeId }
+            });
             setPendingChanges(prev => prev.filter(c => c.id !== changeId));
         } catch (e) {
             console.error("Failed to reject change:", e);
@@ -411,7 +402,10 @@ export function useChat() {
         try {
             console.log('[useChat] approveAllChanges called; pendingChanges:', pendingChanges.map(c => ({ id: c.id, path: c.path, type: c.change_type })));
             logFrontend(`[approveAllChanges] count=${pendingChanges.length} ids=${pendingChanges.map(c => c.id).join(',')}`);
-            await invoke('approve_all_changes');
+            await BladeDispatcher.workflow({
+                type: 'ApproveAllChanges',
+                payload: {}
+            });
             console.log('[useChat] Backend approve_all_changes completed');
             logFrontend('[approveAllChanges] backend completed');
             setPendingChanges([]);
@@ -426,7 +420,10 @@ export function useChat() {
 
     const approveTool = useCallback(async (approved: boolean) => {
         try {
-            await invoke('approve_tool', { approved });
+            await BladeDispatcher.workflow({
+                type: 'ApproveTool',
+                payload: { approved }
+            });
             setPendingActions(null);
         } catch (e) {
             console.error('Failed to approve tool:', e);
@@ -435,7 +432,10 @@ export function useChat() {
 
     const approveToolDecision = useCallback(async (decision: string) => {
         try {
-            await invoke('approve_tool_decision', { decision });
+            await BladeDispatcher.workflow({
+                type: 'ApproveToolDecision',
+                payload: { decision }
+            });
             setPendingActions(null);
         } catch (e) {
             console.error('Failed to approve tool decision:', e);

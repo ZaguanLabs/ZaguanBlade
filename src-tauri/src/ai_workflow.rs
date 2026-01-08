@@ -3,11 +3,11 @@ mod tool_defs;
 
 use change_parser::parse_change_args;
 
+use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use serde_json::Value;
 
 // use eframe::egui; // Removed for Tauri migration
 
@@ -33,8 +33,13 @@ fn normalize_json_string(input: &str) -> String {
 
 #[derive(Clone)]
 pub enum ChangeType {
-    Patch { old_content: String, new_content: String },
-    NewFile { content: String },
+    Patch {
+        old_content: String,
+        new_content: String,
+    },
+    NewFile {
+        content: String,
+    },
     DeleteFile,
 }
 
@@ -103,12 +108,12 @@ impl AiWorkflow {
             .unwrap_or(false)
     }
 
-    pub fn handle_tool_calls(
+    pub fn handle_tool_calls<R: tauri::Runtime>(
         &mut self,
         workspace_root: &Path,
         calls: Vec<ToolCall>,
         content: Option<String>,
-        context: &ToolExecutionContext,
+        context: &ToolExecutionContext<R>,
     ) -> Option<PendingToolBatch> {
         // Tool-spam / no-progress guardrail:
         // If the assistant message content doesn't materially change across tool turns,
@@ -146,10 +151,11 @@ impl AiWorkflow {
                             "[AI WORKFLOW] Tool-spam detected: assistant content unchanged for {} tool turns",
                             self.stagnant_tool_turns
                         );
-                        
+
                         // Check if any of the calls are run_command - these must go through approval
-                        let has_run_command = calls.iter().any(|c| c.function.name == "run_command");
-                        
+                        let has_run_command =
+                            calls.iter().any(|c| c.function.name == "run_command");
+
                         if has_run_command {
                             eprintln!(
                                 "[AI WORKFLOW] run_command detected in spam batch - allowing through for approval"
@@ -199,11 +205,11 @@ impl AiWorkflow {
         let mut loop_detected = false;
         let mut seen_in_batch: HashMap<(String, String), usize> = HashMap::new();
 
-        struct PendingRead {
+        struct PendingRead<R: tauri::Runtime> {
             call: ToolCall,
-            context: crate::tool_execution::ToolExecutionContext,
+            context: crate::tool_execution::ToolExecutionContext<R>,
         }
-        let mut pending_read_tasks: Vec<PendingRead> = Vec::new();
+        let mut pending_read_tasks: Vec<PendingRead<R>> = Vec::new();
 
         for call in &calls {
             // Normalize arguments for comparison
@@ -280,9 +286,11 @@ impl AiWorkflow {
             if call.function.name == "run_command" {
                 match parse_run_command_args(&call.function.arguments) {
                     Ok((command, cwd)) => {
-                        if let Some(err) =
-                            should_block_irrelevant_language_scan(&command, workspace_root, cwd.as_deref())
-                        {
+                        if let Some(err) = should_block_irrelevant_language_scan(
+                            &command,
+                            workspace_root,
+                            cwd.as_deref(),
+                        ) {
                             file_results.push((call.clone(), tools::ToolResult::err(err)));
                             continue;
                         }
@@ -298,7 +306,11 @@ impl AiWorkflow {
                 call.function.name.as_str(),
                 "edit_file" | "apply_edit" | "apply_patch" | "write_file" | "create_file"
             ) {
-                match parse_change_args(&call.function.arguments, workspace_root, &call.function.name) {
+                match parse_change_args(
+                    &call.function.arguments,
+                    workspace_root,
+                    &call.function.name,
+                ) {
                     Ok(mut change) => {
                         // Do NOT push a result yet - we want the agentic loop to block until user approves/rejects
                         change.call = call.clone();
@@ -307,7 +319,11 @@ impl AiWorkflow {
                     Err(e) => file_results.push((call.clone(), tools::ToolResult::err(e))),
                 }
             } else if call.function.name == "delete_file" {
-                match parse_change_args(&call.function.arguments, workspace_root, &call.function.name) {
+                match parse_change_args(
+                    &call.function.arguments,
+                    workspace_root,
+                    &call.function.name,
+                ) {
                     Ok(mut change) => {
                         change.call = call.clone();
                         changes.push(change);
@@ -474,7 +490,10 @@ impl AiWorkflow {
                         && matches!(call.function.name.as_str(), "read_file" | "read_file_range")
                     {
                         self.recent_file_tool_cache.push((
-                            (call.function.name.clone(), normalize_json_string(&call.function.arguments)),
+                            (
+                                call.function.name.clone(),
+                                normalize_json_string(&call.function.arguments),
+                            ),
                             res.clone(),
                         ));
                         if self.recent_file_tool_cache.len() > 10 {
@@ -485,7 +504,11 @@ impl AiWorkflow {
             }
         }
 
-        if !file_results.is_empty() || !commands.is_empty() || !changes.is_empty() || !confirms.is_empty() {
+        if !file_results.is_empty()
+            || !commands.is_empty()
+            || !changes.is_empty()
+            || !confirms.is_empty()
+        {
             return Some(PendingToolBatch {
                 calls,
                 file_results,

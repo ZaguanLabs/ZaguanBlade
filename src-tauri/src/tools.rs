@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use regex::Regex;
 use serde::Deserialize;
-use walkdir::WalkDir;
 use tauri::Emitter;
+use walkdir::WalkDir;
 
 use crate::events;
 
@@ -75,15 +75,15 @@ pub struct EditorState {
 }
 
 pub fn execute_tool(workspace_root: &Path, tool_name: &str, raw_args: &str) -> ToolResult {
-    execute_tool_with_editor(workspace_root, tool_name, raw_args, None, None)
+    execute_tool_with_editor::<tauri::Wry>(workspace_root, tool_name, raw_args, None, None)
 }
 
-pub fn execute_tool_with_editor(
+pub fn execute_tool_with_editor<R: tauri::Runtime>(
     workspace_root: &Path,
     tool_name: &str,
     raw_args: &str,
     editor_state: Option<&EditorState>,
-    app_handle: Option<&tauri::AppHandle>,
+    app_handle: Option<&tauri::AppHandle<R>>,
 ) -> ToolResult {
     // Claude models sometimes prefix arguments with {} - strip it
     // But don't strip if the entire string is just "{}"
@@ -154,8 +154,8 @@ pub fn execute_tool_with_editor(
     }
 }
 
-fn todo_write(
-    app_handle: Option<&tauri::AppHandle>,
+fn todo_write<R: tauri::Runtime>(
+    app_handle: Option<&tauri::AppHandle<R>>,
     args: &HashMap<String, serde_json::Value>,
 ) -> ToolResult {
     // Parse todos array
@@ -188,7 +188,9 @@ fn todo_write(
     if let Some(handle) = app_handle {
         let _ = handle.emit(
             events::event_names::TODO_UPDATED,
-            events::TodoUpdatedPayload { todos: todos.clone() },
+            events::TodoUpdatedPayload {
+                todos: todos.clone(),
+            },
         );
     }
 

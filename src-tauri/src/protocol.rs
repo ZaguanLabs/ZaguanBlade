@@ -9,7 +9,7 @@ pub enum ChatRole {
     Tool,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: ChatRole,
     pub content: String,
@@ -40,7 +40,7 @@ impl ChatMessage {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProgressInfo {
     pub message: String,
     pub stage: String,

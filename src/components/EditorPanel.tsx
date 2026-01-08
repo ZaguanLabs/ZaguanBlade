@@ -4,6 +4,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import CodeEditor, { type CodeEditorHandle } from './CodeEditor';
 import { useEditor } from '../contexts/EditorContext';
+import { BladeDispatcher } from '../services/blade';
+import { BladeEvent, FileEvent } from '../types/blade';
 import { EditorDiffOverlay } from './editor/EditorDiffOverlay';
 import { EventNames, type ChangeAppliedPayload, type AllEditsAppliedPayload } from '../types/events';
 import type { Change } from '../types/change';
@@ -39,10 +41,9 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({ activeFile, highlightL
             unlistenEditApplied = await listen<ChangeAppliedPayload>(EventNames.CHANGE_APPLIED, (event) => {
                 if (event.payload.file_path === activeFile) {
                     console.log('[EDITOR] Change applied, reloading:', activeFile);
-                    // Clear any diff widgets in CodeMirror
-                    if (editorRef.current) {
-                        editorRef.current.clearDiffs();
-                    }
+                    if (editorRef.current) editorRef.current.clearDiffs();
+                    // Instead of trigger reload, we can just let the content update via FileEvent if backend emits it
+                    // But for now, we'll keep the reload trigger to force a fresh read intent
                     setReloadTrigger(prev => prev + 1);
                 }
             });
@@ -50,10 +51,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({ activeFile, highlightL
             unlistenAllApplied = await listen<AllEditsAppliedPayload>(EventNames.ALL_EDITS_APPLIED, (event) => {
                 if (event.payload.file_paths.includes(activeFile || '')) {
                     console.log('[EDITOR] All edits applied, reloading:', activeFile);
-                    // Clear any diff widgets in CodeMirror
-                    if (editorRef.current) {
-                        editorRef.current.clearDiffs();
-                    }
+                    if (editorRef.current) editorRef.current.clearDiffs();
                     setReloadTrigger(prev => prev + 1);
                 }
             });
@@ -67,6 +65,51 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({ activeFile, highlightL
         };
     }, [activeFile]);
 
+    // File Content Listener (Blade Protocol)
+    useEffect(() => {
+        if (!activeFile) return;
+
+        let unlistenSys: (() => void) | undefined;
+
+        const setupSysListener = async () => {
+            unlistenSys = await listen<BladeEvent>('sys-event', (event) => {
+                const bladeEvent = event.payload;
+                if (bladeEvent.type === 'File') {
+                    const fileEvent = bladeEvent.payload;
+                    if (fileEvent.type === 'Content' && fileEvent.payload.path === activeFile) {
+                        console.log('[EDITOR] Received content for:', activeFile);
+                        setContent(fileEvent.payload.data);
+                        setLoading(false);
+                        setError(null);
+                    } else if (fileEvent.type === 'Written' && fileEvent.payload.path === activeFile) {
+                        console.log('[EDITOR] Confirmed written:', activeFile);
+                        // Optional: Show toast
+                    }
+                } else if (bladeEvent.type === 'System') {
+                    const sysEvent = bladeEvent.payload;
+                    if (sysEvent.type === 'IntentFailed') {
+                        // We can't easily match intent ID here without tracking it, 
+                        // but if we are loading and get an error referencing the file, we can assume.
+                        if (loading) {
+                            // Ideally check sysEvent.payload.error
+                            const err = sysEvent.payload.error;
+                            if ('details' in err && (err.details as any).id?.includes(activeFile)) {
+                                setError(`Failed to load: ${JSON.stringify(err)}`);
+                                setLoading(false);
+                            }
+                        }
+                    }
+                }
+            });
+        };
+
+        setupSysListener();
+
+        return () => {
+            if (unlistenSys) unlistenSys();
+        };
+    }, [activeFile, loading]);
+
     useEffect(() => {
         async function loadFile() {
             if (!activeFile) {
@@ -78,8 +121,12 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({ activeFile, highlightL
             setError(null);
             try {
                 if (typeof window !== 'undefined') {
-                    const text = await invoke<string>('read_file_content', { path: activeFile });
-                    setContent(text);
+                    // Send Read Intent
+                    await BladeDispatcher.file({
+                        type: 'Read',
+                        payload: { path: activeFile }
+                    });
+                    // Content will be set by the listener
                 }
             } catch (e) {
                 console.error(e);
@@ -95,8 +142,11 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({ activeFile, highlightL
     const handleSave = async (text: string) => {
         if (activeFile) {
             try {
-                await invoke('write_file_content', { path: activeFile, content: text });
-                console.log("Saved:", activeFile);
+                await BladeDispatcher.file({
+                    type: 'Write',
+                    payload: { path: activeFile, content: text }
+                });
+                console.log("Save intent dispatched:", activeFile);
                 // ToDo: Toast notification
             } catch (e) {
                 console.error("Save failed:", e);

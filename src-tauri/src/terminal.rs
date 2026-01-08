@@ -32,7 +32,7 @@ impl TerminalManager {
 
 // Commands to be exposed to Tauri
 
-#[tauri::command]
+// #[tauri::command]
 pub fn create_terminal<R: Runtime>(
     id: String,
     cwd: Option<String>,
@@ -106,7 +106,7 @@ pub fn create_terminal<R: Runtime>(
     Ok(())
 }
 
-#[tauri::command]
+// #[tauri::command]
 pub fn write_to_terminal(
     id: String,
     data: String,
@@ -119,7 +119,7 @@ pub fn write_to_terminal(
     Ok(())
 }
 
-#[tauri::command]
+// #[tauri::command]
 pub fn resize_terminal(
     id: String,
     rows: u16,
@@ -157,7 +157,7 @@ struct TerminalExit {
 }
 
 // Execute a command in a terminal (non-interactive, for AI command execution)
-#[tauri::command]
+// #[tauri::command]
 pub fn execute_command_in_terminal<R: Runtime>(
     id: String,
     command: String,
@@ -184,9 +184,11 @@ pub fn execute_command_in_terminal<R: Runtime>(
     // Use provided cwd, or fall back to workspace path
     let working_dir = cwd.or_else(|| {
         let ws = state.workspace.lock().unwrap();
-        ws.workspace.as_ref().map(|p| p.to_string_lossy().to_string())
+        ws.workspace
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
     });
-    
+
     if let Some(path) = working_dir {
         cmd.cwd(path);
     }
@@ -200,7 +202,7 @@ pub fn execute_command_in_terminal<R: Runtime>(
     // Create cancel flag for this command
     let cancel_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let cancel_flag_clone = cancel_flag.clone();
-    
+
     // Store the cancel flag so stop_generation can cancel this command
     {
         let mut executing = state.executing_commands.lock().unwrap();
@@ -214,26 +216,26 @@ pub fn execute_command_in_terminal<R: Runtime>(
     thread::spawn(move || {
         let mut buffer = [0u8; 1024];
         let mut accumulated_output = String::new();
-        
+
         loop {
             // Check if cancelled
             if cancel_flag_clone.load(std::sync::atomic::Ordering::Relaxed) {
                 eprintln!("[EXEC] Command {} cancelled, killing process", id_clone);
                 let _ = child.kill();
-                
+
                 // Emit exit with special code for cancelled
                 let exit_payload = TerminalExit {
                     id: id_clone.clone(),
                     exit_code: 130, // Standard SIGINT exit code
                 };
                 let _ = app_handle.emit("terminal-exit", exit_payload);
-                
+
                 // Remove from executing commands
                 let mut executing = executing_commands.lock().unwrap();
                 executing.remove(&id_clone);
                 return;
             }
-            
+
             match reader.read(&mut buffer) {
                 Ok(n) if n > 0 => {
                     let output = String::from_utf8_lossy(&buffer[..n]).to_string();
@@ -261,7 +263,7 @@ pub fn execute_command_in_terminal<R: Runtime>(
             exit_code,
         };
         let _ = app_handle.emit("terminal-exit", exit_payload);
-        
+
         // Remove from executing commands
         let mut executing = executing_commands.lock().unwrap();
         executing.remove(&id_clone);

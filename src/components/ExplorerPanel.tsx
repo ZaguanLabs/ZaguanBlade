@@ -1,8 +1,9 @@
 'use client';
 import React, { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { BladeDispatcher } from '../services/blade';
+import { BladeEvent, FileEntry } from '../types/blade';
 import { listen } from '@tauri-apps/api/event';
-import { FileEntry } from '../types/explorer';
+// import { FileEntry } from '../types/explorer'; // Replaced by blade types
 import { Folder, FileBox, ChevronRight, FileCode, FileText } from 'lucide-react';
 
 interface ExplorerPanelProps {
@@ -26,6 +27,32 @@ const FileItem: React.FC<{
         setExpanded(false);
     }, [refreshKey]);
 
+    // Listener for Listing events
+    useEffect(() => {
+        if (!expanded && !entry.is_dir) return;
+
+        let unlisten: (() => void) | undefined;
+        const setupListener = async () => {
+            unlisten = await listen<BladeEvent>('sys-event', (event) => {
+                const bladeEvent = event.payload;
+                if (bladeEvent.type === 'File') {
+                    const fileEvent = bladeEvent.payload;
+                    if (fileEvent.type === 'Listing' && fileEvent.payload.path === entry.path) {
+                        setChildren(fileEvent.payload.entries);
+                    }
+                }
+            });
+        };
+
+        if (expanded) {
+            setupListener();
+        }
+
+        return () => {
+            if (unlisten) unlisten();
+        };
+    }, [expanded, entry.path, entry.is_dir]);
+
     const toggleExpand = async () => {
         if (!entry.is_dir) {
             onSelect(entry.path);
@@ -37,11 +64,11 @@ const FileItem: React.FC<{
         } else {
             setExpanded(true);
             if (!children) {
-                try {
-                    const files = await invoke<FileEntry[]>('list_files', { path: entry.path });
-                    setChildren(files);
-                } catch (e) {
-                    console.error("Failed to list dir:", e);
+                if (!children) {
+                    BladeDispatcher.file({
+                        type: 'List',
+                        payload: { path: entry.path }
+                    }).catch(e => console.error("Failed to dispatch list:", e));
                 }
             }
         }
@@ -104,18 +131,33 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
         if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
         try {
             // List workspace root
-            const files = await invoke<FileEntry[]>('list_files', { path: null });
-            setRoots(files);
+            await BladeDispatcher.file({
+                type: 'List',
+                payload: { path: null }
+            });
             setError(null);
         } catch (e) {
-            console.warn("Failed to load root (likely no workspace open):", e);
-            // Don't show critical error overlay for "No workspace open"
-            if (typeof e === 'string' && e.includes("No workspace open")) {
-                setRoots([]);
-                return;
-            }
+            console.warn("Failed to load root:", e);
             setError(String(e));
         }
+    }, []);
+
+    // Root Listener
+    useEffect(() => {
+        let unlisten: (() => void) | undefined;
+        const setupListener = async () => {
+            unlisten = await listen<BladeEvent>('sys-event', (event) => {
+                const bladeEvent = event.payload;
+                if (bladeEvent.type === 'File') {
+                    const fileEvent = bladeEvent.payload;
+                    if (fileEvent.type === 'Listing' && fileEvent.payload.path === null) {
+                        setRoots(fileEvent.payload.entries);
+                    }
+                }
+            });
+        };
+        setupListener();
+        return () => { if (unlisten) unlisten(); };
     }, []);
 
     useEffect(() => {
@@ -143,7 +185,11 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
     const [pathInput, setPathInput] = useState('');
     const openSpecificPath = async () => {
         try {
-            await invoke('open_folder', { path: pathInput });
+            // Still using invoke for 'open_folder' as it is a workspace state change, not just a File Read
+            // But we need to check if 'invoke' import is available.
+            // We removed it from top. We need to re-add it or use @tauri-apps/api/core dynamically
+            const { invoke } = await import('@tauri-apps/api/core');
+            await invoke('open_workspace', { path: pathInput });
             loadRoot();
         } catch (e) {
             console.error(e);

@@ -4,6 +4,7 @@ import { Terminal as XTerm } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { BladeDispatcher } from '../services/blade';
 import { Terminal } from 'lucide-react';
 
 interface ChatTerminalProps {
@@ -13,11 +14,11 @@ interface ChatTerminalProps {
     onComplete?: (output: string, exitCode: number) => void;
 }
 
-export const ChatTerminal: React.FC<ChatTerminalProps> = ({ 
-    commandId, 
-    command, 
+export const ChatTerminal: React.FC<ChatTerminalProps> = ({
+    commandId,
+    command,
     cwd,
-    onComplete 
+    onComplete
 }) => {
     const terminalRef = useRef<HTMLDivElement>(null);
     const xtermRef = useRef<XTerm | null>(null);
@@ -55,7 +56,7 @@ export const ChatTerminal: React.FC<ChatTerminalProps> = ({
         const executeCommand = async () => {
             try {
                 const terminalId = `chat-cmd-${commandId}`;
-                
+
                 // Listen for output
                 const unlistenOutput = await listen<{ id: string; data: string }>(
                     'terminal-output',
@@ -74,7 +75,7 @@ export const ChatTerminal: React.FC<ChatTerminalProps> = ({
                         if (event.payload.id === terminalId) {
                             isRunningRef.current = false;
                             const exitCode = event.payload.exit_code;
-                            
+
                             if (exitCode === 0) {
                                 term.write(`\r\n\x1b[1;32m✓ Command completed successfully\x1b[0m\r\n`);
                                 setStatusText('Completed');
@@ -93,11 +94,15 @@ export const ChatTerminal: React.FC<ChatTerminalProps> = ({
                     }
                 );
 
-                // Execute the command
-                await invoke('execute_command_in_terminal', {
-                    id: terminalId,
-                    command,
-                    cwd: cwd || undefined,
+                // Execute the command via Blade Protocol (Spawn, non-interactive)
+                await BladeDispatcher.terminal({
+                    type: 'Spawn',
+                    payload: {
+                        id: terminalId,
+                        command,
+                        cwd: cwd || undefined,
+                        interactive: false // Explicitly non-interactive
+                    }
                 });
 
             } catch (err) {
@@ -132,10 +137,10 @@ export const ChatTerminal: React.FC<ChatTerminalProps> = ({
             </div>
 
             {/* Terminal - Fixed height to prevent flickering */}
-            <div 
+            <div
                 ref={terminalRef}
                 className="w-full"
-                style={{ 
+                style={{
                     height: '200px',
                     overflow: 'hidden'
                 }}

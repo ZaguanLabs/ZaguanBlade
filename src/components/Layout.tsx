@@ -12,6 +12,7 @@ import { DocumentViewer } from './DocumentViewer';
 import { Settings } from 'lucide-react';
 import { EditorProvider } from '../contexts/EditorContext';
 import { useChat } from '../hooks/useChat';
+import { ProtocolExplorer } from './dev/ProtocolExplorer';
 
 interface Tab {
     id: string;
@@ -56,11 +57,11 @@ const AppLayoutInner: React.FC = () => {
         let unlisten: (() => void) | undefined;
 
         const setupListener = async () => {
-            unlisten = await listen<{id: string; path: string; old_content: string; new_content: string}[]>('propose-edit', (event) => {
+            unlisten = await listen<{ id: string; path: string; old_content: string; new_content: string }[]>('propose-edit', (event) => {
                 if (event.payload.length > 0) {
                     const firstEdit = event.payload[0];
                     const existingTab = tabs.find(t => t.type === 'file' && t.path === firstEdit.path);
-                    
+
                     if (existingTab) {
                         setActiveTabId(existingTab.id);
                     } else {
@@ -115,7 +116,7 @@ const AppLayoutInner: React.FC = () => {
         setTabs(prev => {
             const ephemeralTab = prev.find(t => t.id === ephemeralTabId);
             if (!ephemeralTab) return prev;
-            
+
             const filename = savedPath.split('/').pop() || savedPath;
             const newTab: Tab = {
                 id: `file-${savedPath}`,
@@ -123,14 +124,14 @@ const AppLayoutInner: React.FC = () => {
                 type: 'file',
                 path: savedPath,
             };
-            
+
             // Remove ephemeral tab and add file tab
             return [...prev.filter(t => t.id !== ephemeralTabId), newTab];
         });
-        
+
         // Switch to the new file tab
         setActiveTabId(`file-${savedPath}`);
-        
+
         // No-op here; approval handled by caller
     };
 
@@ -180,14 +181,14 @@ const AppLayoutInner: React.FC = () => {
             const handleOpenFile = (path: string, sourceEvent: string) => {
                 console.log(`Opening file from backend (${sourceEvent}):`, path);
                 const tabId = `file-${path}`;
-                
+
                 // Prevent duplicate processing
                 if (processingFilesRef.current.has(path)) {
                     console.log('[LAYOUT] Ignoring duplicate file open event for:', path);
                     return;
                 }
                 processingFilesRef.current.add(path);
-                
+
                 setTabs(prev => {
                     const existingTab = prev.find(t => t.type === 'file' && t.path === path);
                     if (existingTab) {
@@ -217,15 +218,15 @@ const AppLayoutInner: React.FC = () => {
                 handleOpenFile(event.payload, 'file-opened');
             });
 
-            unlistenFileWithHighlight = await listen<{path: string; start_line: number; end_line: number}>('open-file-with-highlight', (event) => {
+            unlistenFileWithHighlight = await listen<{ path: string; start_line: number; end_line: number }>('open-file-with-highlight', (event) => {
                 console.log('Opening file with highlight from backend:', event.payload);
                 const { path, start_line, end_line } = event.payload;
                 const tabId = `file-${path}`;
                 setTabs(prev => {
                     const existingTab = prev.find(t => t.type === 'file' && t.path === path);
                     if (existingTab) {
-                        return prev.map(t => 
-                            t.id === existingTab.id 
+                        return prev.map(t =>
+                            t.id === existingTab.id
                                 ? { ...t, highlightLines: { startLine: start_line, endLine: end_line } }
                                 : t
                         );
@@ -243,16 +244,16 @@ const AppLayoutInner: React.FC = () => {
                 setActiveTabId(tabId);
             });
 
-            unlistenEphemeral = await listen<{id: string; title: string; content: string; suggestedName: string}>('open-ephemeral-document', (event) => {
+            unlistenEphemeral = await listen<{ id: string; title: string; content: string; suggestedName: string }>('open-ephemeral-document', (event) => {
                 console.log('[LAYOUT] 📥 Received open-ephemeral-document event:', {
                     id: event.payload.id,
                     title: event.payload.title,
                     contentLength: event.payload.content.length,
                     suggestedName: event.payload.suggestedName
                 });
-                
+
                 const { id, title, content, suggestedName } = event.payload;
-                
+
                 setTabs(prev => {
                     // Check if tab already exists
                     const existingTab = prev.find(t => t.id === id);
@@ -260,7 +261,7 @@ const AppLayoutInner: React.FC = () => {
                         console.log('[LAYOUT] ⚠️ Tab already exists, just activating:', id);
                         return prev;
                     }
-                    
+
                     console.log('[LAYOUT] ✅ Creating new tab with ID:', id);
                     const newTab: Tab = {
                         id,
@@ -274,18 +275,18 @@ const AppLayoutInner: React.FC = () => {
                 });
                 setActiveTabId(id);
             });
-            
+
             // Listen for change-applied events to convert ephemeral tabs to file tabs
-            const unlistenChangeApplied = await listen<{change_id: string; file_path: string}>('change-applied', (event) => {
+            const unlistenChangeApplied = await listen<{ change_id: string; file_path: string }>('change-applied', (event) => {
                 console.log('[LAYOUT] Change applied:', event.payload);
                 const { change_id, file_path } = event.payload;
-                
+
                 // Find ephemeral tab associated with this change
                 const ephemeralTabId = `new-file-${change_id}`;
                 setTabs(prev => {
                     const ephemeralTab = prev.find(t => t.id === ephemeralTabId);
                     if (!ephemeralTab) return prev;
-                    
+
                     console.log('[LAYOUT] Converting ephemeral tab to file tab:', ephemeralTabId, '→', file_path);
                     const filename = file_path.split('/').pop() || file_path;
                     const newTab: Tab = {
@@ -294,11 +295,11 @@ const AppLayoutInner: React.FC = () => {
                         type: 'file',
                         path: file_path,
                     };
-                    
+
                     // Remove ephemeral tab and add file tab
                     return [...prev.filter(t => t.id !== ephemeralTabId), newTab];
                 });
-                
+
                 // Switch to the new file tab
                 setActiveTabId(`file-${file_path}`);
             });
@@ -374,19 +375,19 @@ const AppLayoutInner: React.FC = () => {
                             {(() => {
                                 const activeTab = tabs.find(t => t.id === activeTabId);
                                 if (!activeTab) return <EditorPanel activeFile={null} highlightLines={null} />;
-                                
+
                                 if (activeTab.type === 'ephemeral') {
                                     // Check if this is a new file proposal
                                     const isNewFileProposal = activeTab.id.startsWith('new-file-');
                                     const changeId = isNewFileProposal ? activeTab.id.replace('new-file-', '') : undefined;
-                                    
+
                                     console.log('[Layout] Rendering ephemeral tab:', {
                                         tabId: activeTab.id,
                                         isNewFileProposal,
                                         changeId,
                                         pendingChangesCount: pendingChanges.length
                                     });
-                                    
+
                                     return (
                                         <DocumentViewer
                                             documentId={activeTab.id}
@@ -401,12 +402,12 @@ const AppLayoutInner: React.FC = () => {
                                         />
                                     );
                                 }
-                                
+
                                 // Find pending change for this file
                                 const pendingChange = pendingChanges.find(c => c.path === activeTab.path);
                                 return (
-                                    <EditorPanel 
-                                        activeFile={activeTab.path || null} 
+                                    <EditorPanel
+                                        activeFile={activeTab.path || null}
                                         highlightLines={activeTab.highlightLines || null}
                                         pendingEdit={pendingChange}
                                         onAcceptEdit={approveChange}
@@ -451,6 +452,9 @@ const AppLayoutInner: React.FC = () => {
                     <span>{t('app.name')}</span>
                 </div>
             </div>
+
+            {/* Dev Tools */}
+            <ProtocolExplorer />
         </div>
     );
 };

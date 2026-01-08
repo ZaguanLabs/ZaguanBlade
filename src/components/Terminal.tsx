@@ -4,8 +4,9 @@ import { useEffect, useRef } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core"; // Still needed for get_current_workspace
 import { listen } from "@tauri-apps/api/event";
+import { BladeDispatcher } from "../services/blade";
 
 interface TerminalProps {
     id?: string;
@@ -46,16 +47,23 @@ export default function Terminal({ id = "main-terminal" }: TerminalProps) {
             try {
                 // Get workspace root to set as starting directory
                 const workspaceRoot = await invoke<string | null>("get_current_workspace");
-                
-                await invoke("create_terminal", { 
-                    id, 
-                    cwd: workspaceRoot || undefined 
+
+                await BladeDispatcher.terminal({
+                    type: "Spawn",
+                    payload: {
+                        id,
+                        cwd: workspaceRoot || undefined,
+                        interactive: true,
+                    }
                 });
 
                 // Initial resize
                 const dims = fitAddon.proposeDimensions();
                 if (dims) {
-                    await invoke("resize_terminal", { id, rows: dims.rows, cols: dims.cols });
+                    await BladeDispatcher.terminal({
+                        type: "Resize",
+                        payload: { id, rows: dims.rows, cols: dims.cols }
+                    });
                 }
             } catch (err) {
                 console.error("Failed to create terminal:", err);
@@ -77,7 +85,10 @@ export default function Terminal({ id = "main-terminal" }: TerminalProps) {
 
         // 4. Send input to backend
         term.onData((data) => {
-            invoke("write_to_terminal", { id, data }).catch(console.error);
+            BladeDispatcher.terminal({
+                type: "Input",
+                payload: { id, data }
+            }).catch(console.error);
         });
 
         // 5. Handle Resize
@@ -88,7 +99,10 @@ export default function Terminal({ id = "main-terminal" }: TerminalProps) {
                 const dims = fitAddonRef.current.proposeDimensions();
                 if (dims) {
                     console.log("XTerm Resize:", dims);
-                    invoke("resize_terminal", { id, rows: dims.rows, cols: dims.cols }).catch(e => console.error("Resize failed", e));
+                    BladeDispatcher.terminal({
+                        type: "Resize",
+                        payload: { id, rows: dims.rows, cols: dims.cols }
+                    }).catch(e => console.error("Resize failed", e));
                 }
             } catch (e) {
                 console.error("Resize logic error", e);
