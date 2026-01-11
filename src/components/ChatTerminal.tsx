@@ -26,6 +26,12 @@ export const ChatTerminal: React.FC<ChatTerminalProps> = ({
     const isRunningRef = useRef<boolean>(true);
     const [statusText, setStatusText] = useState('Running...');
 
+    // Keep reference to latest callback to avoid effect re-triggers
+    const onCompleteRef = useRef(onComplete);
+    useEffect(() => {
+        onCompleteRef.current = onComplete;
+    }, [onComplete]);
+
     useEffect(() => {
         if (!terminalRef.current) return;
         if (xtermRef.current) return;
@@ -84,8 +90,8 @@ export const ChatTerminal: React.FC<ChatTerminalProps> = ({
                                 setStatusText(`Failed (exit ${exitCode})`);
                             }
 
-                            if (onComplete) {
-                                onComplete(outputBufferRef.current, exitCode);
+                            if (onCompleteRef.current) {
+                                onCompleteRef.current(outputBufferRef.current, exitCode);
                             }
 
                             unlistenOutput();
@@ -110,8 +116,8 @@ export const ChatTerminal: React.FC<ChatTerminalProps> = ({
                 term.write(`\r\n\x1b[31mFailed to execute command: ${err}\x1b[0m\r\n`);
                 isRunningRef.current = false;
                 setStatusText('Error');
-                if (onComplete) {
-                    onComplete(outputBufferRef.current, 1);
+                if (onCompleteRef.current) {
+                    onCompleteRef.current(outputBufferRef.current, 1);
                 }
             }
         };
@@ -122,7 +128,7 @@ export const ChatTerminal: React.FC<ChatTerminalProps> = ({
             term.dispose();
             xtermRef.current = null;
         };
-    }, [commandId, command, cwd, onComplete]);
+    }, [commandId, command, cwd]);
 
     return (
         <div className="my-2 border border-zinc-800 rounded-lg overflow-hidden bg-[#0a0a0a]">

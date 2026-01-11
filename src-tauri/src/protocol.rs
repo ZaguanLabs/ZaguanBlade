@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use uuid::Uuid;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum ChatRole {
@@ -11,6 +12,7 @@ pub enum ChatRole {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
+    pub id: Option<String>,
     pub role: ChatRole,
     pub content: String,
     pub reasoning: Option<String>,
@@ -28,6 +30,7 @@ pub struct ChatMessage {
 impl ChatMessage {
     pub fn new(role: ChatRole, content: String) -> Self {
         Self {
+            id: Some(Uuid::new_v4().to_string()),
             role,
             content,
             reasoning: None,
@@ -53,6 +56,7 @@ pub enum ChatEvent {
         model: String,
     },
     Chunk(String),
+    ReasoningChunk(String),
     Research {
         content: String,
         suggested_name: String,

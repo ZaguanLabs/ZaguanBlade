@@ -3,6 +3,7 @@ import { TodoItem } from './events';
 export type ChatRole = 'User' | 'Assistant' | 'System' | 'Tool';
 
 export interface ChatMessage {
+    id?: string;
     role: 'User' | 'Assistant' | 'System' | 'Tool';
     content: string;
     reasoning?: string;

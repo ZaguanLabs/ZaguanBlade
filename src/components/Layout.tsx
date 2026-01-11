@@ -405,6 +405,45 @@ const AppLayoutInner: React.FC = () => {
 
                                 // Find pending change for this file
                                 const pendingChange = pendingChanges.find(c => c.path === activeTab.path);
+
+                                // Calculate file navigation info
+                                const filesWithChanges = [...new Set(pendingChanges.map(c => c.path))];
+                                const currentFileIndex = activeTab.path
+                                    ? filesWithChanges.indexOf(activeTab.path) + 1
+                                    : 0;
+
+                                // Navigation callbacks
+                                const navigateToFile = (path: string) => {
+                                    const tabId = `file-${path}`;
+                                    const existingTab = tabs.find(t => t.type === 'file' && t.path === path);
+                                    if (existingTab) {
+                                        setActiveTabId(existingTab.id);
+                                    } else {
+                                        // Open the file if not already open
+                                        const filename = path.split('/').pop() || path;
+                                        const newTab = {
+                                            id: tabId,
+                                            title: filename,
+                                            type: 'file' as const,
+                                            path,
+                                        };
+                                        setTabs(prev => [...prev, newTab]);
+                                        setActiveTabId(tabId);
+                                    }
+                                };
+
+                                const onNextFile = () => {
+                                    if (currentFileIndex < filesWithChanges.length) {
+                                        navigateToFile(filesWithChanges[currentFileIndex]);
+                                    }
+                                };
+
+                                const onPrevFile = () => {
+                                    if (currentFileIndex > 1) {
+                                        navigateToFile(filesWithChanges[currentFileIndex - 2]);
+                                    }
+                                };
+
                                 return (
                                     <EditorPanel
                                         activeFile={activeTab.path || null}
@@ -412,6 +451,10 @@ const AppLayoutInner: React.FC = () => {
                                         pendingEdit={pendingChange}
                                         onAcceptEdit={approveChange}
                                         onRejectEdit={rejectChange}
+                                        totalPendingFiles={filesWithChanges.length}
+                                        currentFileIndex={currentFileIndex || 1}
+                                        onNextFile={filesWithChanges.length > 1 ? onNextFile : undefined}
+                                        onPrevFile={filesWithChanges.length > 1 ? onPrevFile : undefined}
                                     />
                                 );
                             })()}

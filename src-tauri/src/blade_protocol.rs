@@ -2,6 +2,37 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // ==============================================================================
+// 0. Version (v1.1)
+// ==============================================================================
+
+/// Semantic version for protocol compatibility checking
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub struct Version {
+    pub major: u16,
+    pub minor: u16,
+    pub patch: u16,
+}
+
+impl Version {
+    pub const CURRENT: Version = Version {
+        major: 1,
+        minor: 1,
+        patch: 0,
+    };
+
+    /// Check if two versions are compatible (same major version)
+    pub fn is_compatible(&self, other: &Version) -> bool {
+        self.major == other.major
+    }
+}
+
+impl std::fmt::Display for Version {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
+    }
+}
+
+// ==============================================================================
 // 1. Envelopes
 // ==============================================================================
 
@@ -9,7 +40,7 @@ use uuid::Uuid;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BladeEnvelope<T> {
     pub protocol: String, // Must be "BCP"
-    pub version: u16,     // Must be 1
+    pub version: Version, // Semantic version
     pub domain: String,
     pub message: T,
 }
@@ -17,17 +48,18 @@ pub struct BladeEnvelope<T> {
 /// The causality envelope for Intents.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BladeIntentEnvelope {
-    pub id: Uuid,       // Correlation ID
-    pub timestamp: u64, // Client-side timestamp
+    pub id: Uuid,                        // Correlation ID
+    pub timestamp: u64,                  // Client-side timestamp (ms since epoch)
+    pub idempotency_key: Option<String>, // Optional: prevents double-execution on retry
     pub intent: BladeIntent,
 }
 
 /// The causality envelope for Events.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BladeEventEnvelope {
-    pub id: Uuid,                   // Event ID
-    pub timestamp: u64,             // Server-side timestamp
-    pub causality_id: Option<Uuid>, // ID of the Intent that caused this
+    pub id: Uuid,                     // Event ID
+    pub timestamp: u64,               // Server-side timestamp
+    pub causality_id: Option<String>, // ID of the Intent that caused this (String to support non-UUID legacy IDs)
     pub event: BladeEvent,
 }
 
@@ -96,11 +128,24 @@ pub struct FileEntry {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", content = "payload")]
 pub enum WorkflowIntent {
+    ApproveAction { action_id: String },
+    ApproveAll { batch_id: String },
+    RejectAction { action_id: String },
+    RejectAll { batch_id: String },
+    // Legacy support
     ApproveChange { change_id: String },
     RejectChange { change_id: String },
     ApproveAllChanges,
     ApproveTool { approved: bool },
     ApproveToolDecision { decision: String },
+}
+
+/// Terminal ownership for tracking who spawned a terminal
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(tag = "type", content = "data")]
+pub enum TerminalOwner {
+    User,
+    Agent { task_id: String },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -112,6 +157,8 @@ pub enum TerminalIntent {
         command: Option<String>,
         #[serde(default)]
         cwd: Option<String>,
+        #[serde(default)]
+        owner: Option<TerminalOwner>, // v1.1: typed owner
         #[serde(default)]
         interactive: bool, // true = shell (create_terminal), false = command (execute_command)
     },
@@ -159,8 +206,27 @@ pub enum ChatEvent {
     }, // Full State
     MessageDelta {
         id: String,
+        seq: u64, // Monotonic sequence number
         chunk: String,
+        is_final: bool, // True on last chunk
     }, // Streaming
+    ReasoningDelta {
+        id: String,
+        seq: u64,
+        chunk: String,
+        is_final: bool,
+    },
+    MessageCompleted {
+        id: String, // Explicit end-of-stream signal
+    },
+    ToolUpdate {
+        message_id: String,
+        tool_call_id: String,
+        status: String,
+        result: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tool_call: Option<crate::protocol::ToolCall>,
+    },
     GenerationSignal {
         is_generating: bool,
     }, // Signal
@@ -196,6 +262,17 @@ pub enum WorkflowEvent {
         batch_id: Uuid,
         items: Vec<String>, // Simplified for now, will hold structured actions
     },
+    ActionCompleted {
+        action_id: String,
+        success: bool,
+        result: Option<String>,
+    },
+    BatchCompleted {
+        batch_id: String,
+        succeeded: usize,
+        failed: usize,
+    },
+    // Legacy support
     TaskCompleted {
         task_id: Uuid,
         success: bool,
@@ -205,16 +282,44 @@ pub enum WorkflowEvent {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", content = "payload")]
 pub enum TerminalEvent {
-    Output { id: String, data: String },
-    Exit { id: String, code: i32 },
+    Spawned {
+        id: String,
+        owner: TerminalOwner,
+    },
+    Output {
+        id: String,
+        seq: u64, // v1.1: sequence number for ordering
+        data: String,
+    },
+    Exit {
+        id: String,
+        code: i32,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", content = "payload")]
 pub enum SystemEvent {
-    IntentFailed { intent_id: Uuid, error: BladeError },
-    ProcessStarted { intent_id: Uuid },
-    ProcessCompleted { intent_id: Uuid },
+    // v1.1: Protocol version negotiation
+    ProtocolVersion {
+        supported: Vec<Version>,
+        current: Version,
+    },
+    IntentFailed {
+        intent_id: Uuid,
+        error: BladeError,
+    },
+    ProcessStarted {
+        intent_id: Uuid,
+    },
+    ProcessProgress {
+        intent_id: Uuid,
+        progress: f32,           // 0.0 to 1.0
+        message: Option<String>, // Optional status message
+    },
+    ProcessCompleted {
+        intent_id: Uuid,
+    },
 }
 
 // ==============================================================================
@@ -224,14 +329,31 @@ pub enum SystemEvent {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "code", content = "details")]
 pub enum BladeError {
-    ValidationError { field: String, message: String },
+    ValidationError {
+        field: String,
+        message: String,
+    },
     PermissionDenied,
-    ResourceNotFound { id: String },
-    Conflict { reason: String },
-    Internal { trace_id: String, message: String },
-    VersionMismatch { version: u16 },
-    Timeout { timeout_ms: u64 },
-    RateLimited { retry_after_ms: u64 },
+    ResourceNotFound {
+        id: String,
+    },
+    Conflict {
+        reason: String,
+    },
+    Internal {
+        trace_id: String,
+        message: String,
+    },
+    VersionMismatch {
+        expected: Version,
+        received: Version,
+    },
+    Timeout {
+        timeout_ms: u64,
+    },
+    RateLimited {
+        retry_after_ms: u64,
+    },
 }
 
 #[cfg(test)]
@@ -282,7 +404,7 @@ mod tests {
         let envelope = BladeEventEnvelope {
             id,
             timestamp,
-            causality_id: Some(causality_id),
+            causality_id: Some(causality_id.to_string()),
             event: event.clone(),
         };
 

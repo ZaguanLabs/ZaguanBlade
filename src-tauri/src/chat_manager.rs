@@ -12,14 +12,17 @@ use crate::protocol::{ChatEvent, ChatMessage, ChatRole, ToolCall};
 // use crate::protocol::{ChatEvent, ChatMessage, ChatRole, ToolCall}; // Duplicates removed
 // use crate::xml_parser; // Duplicate removed
 use crate::xml_parser;
+
 pub enum DrainResult {
     None,
-    Update(ChatMessage), // Immediate update for streaming chunks
+    Update(ChatMessage, String), // Immediate update for streaming chunks with the delta
+    Reasoning(ChatMessage, String), // Reasoning chunk delta
     Research {
         content: String,
         suggested_name: String,
     },
     ToolCalls(Vec<ToolCall>, Option<String>),
+    ToolCreated(ChatMessage, Vec<ToolCall>),
     ToolStatusUpdate(ChatMessage),
     Error(String),
 }
@@ -34,6 +37,8 @@ pub struct ChatManager {
     abort_handle: Option<tokio::task::AbortHandle>,
     pub accumulated_tool_calls: Vec<ToolCall>,
     pub updated_assistant_message: Option<ChatMessage>,
+    pub message_seq: u64, // v1.1: sequence number for MessageDelta events
+    pub pending_results: std::collections::VecDeque<DrainResult>,
 }
 
 impl ChatManager {
@@ -48,6 +53,8 @@ impl ChatManager {
             abort_handle: None,
             accumulated_tool_calls: Vec::new(),
             updated_assistant_message: None,
+            message_seq: 0,
+            pending_results: std::collections::VecDeque::new(),
         }
     }
     pub fn start_stream(
@@ -67,11 +74,18 @@ impl ChatManager {
         self.in_think_block = false;
         self.xml_buffer.clear();
         self.accumulated_tool_calls.clear();
+        self.updated_assistant_message = None;
+        self.message_seq = 0; // v1.1: reset sequence counter for new message
 
         // Get model ID
         let selected_info = models.get(selected_model);
         let model_id = selected_info
-            .map(|m| m.api_id.as_ref().unwrap_or(&m.id).clone())
+            .map(|m| {
+                let id = m.api_id.as_ref().unwrap_or(&m.id).clone();
+                eprintln!("[CHAT MGR] Model selection: display_id={}, api_id={:?}, sending={}", 
+                    m.id, m.api_id, id);
+                id
+            })
             .unwrap_or_else(|| "anthropic/claude-sonnet-4-5-20250929".to_string());
 
         // Build workspace info for Blade Protocol
@@ -184,6 +198,11 @@ impl ChatManager {
                                 eprintln!("[CHAT MGR] Text chunk: {}", text);
                                 saw_content = true;
                                 let _ = tx.send(ChatEvent::Chunk(text));
+                            }
+                            crate::blade_ws_client::BladeWsEvent::ReasoningChunk(text) => {
+                                eprintln!("[CHAT MGR] Reasoning chunk: {}", text);
+                                saw_content = true;
+                                let _ = tx.send(ChatEvent::ReasoningChunk(text));
                             }
                             crate::blade_ws_client::BladeWsEvent::ToolCall {
                                 id,
@@ -431,6 +450,11 @@ impl ChatManager {
                                     saw_content = true;
                                     let _ = tx.send(ChatEvent::Chunk(text));
                                 }
+                                crate::blade_ws_client::BladeWsEvent::ReasoningChunk(text) => {
+                                    eprintln!("[CHAT MGR] Reasoning chunk after tool: {}", text);
+                                    saw_content = true;
+                                    let _ = tx.send(ChatEvent::ReasoningChunk(text));
+                                }
                                 crate::blade_ws_client::BladeWsEvent::ToolCall {
                                     id,
                                     name,
@@ -507,184 +531,173 @@ impl ChatManager {
         models: &[ModelInfo],
         selected_model: usize,
     ) -> DrainResult {
+        // v1.1 BATCHING FIX: Process pending results first
+        if let Some(res) = self.pending_results.pop_front() {
+            return res;
+        }
+
         let Some(rx) = self.rx.as_ref() else {
             return DrainResult::None;
         };
 
+        // Aggressively drain all available events from the channel
         let mut events = Vec::new();
         while let Ok(ev) = rx.try_recv() {
             events.push(ev);
         }
 
+        if events.is_empty() {
+            return DrainResult::None;
+        }
+
+        let model_id = models
+            .get(selected_model)
+            .map(|m| m.id.to_lowercase())
+            .unwrap_or_default();
+        let is_openai_text = model_id.contains("openai") || model_id.contains("gpt-5.2") || model_id.contains("codex");
+
+        let mut batched_chunk = String::new();
         let mut done = false;
         let mut error_msg: Option<String> = None;
 
-        for ev in events {
-            match ev {
-                // Handle Session event - store session ID
-                ChatEvent::Session { session_id, model } => {
-                    eprintln!("[CHAT MGR] Storing session_id: {}", session_id);
-                    self.session_id = Some(session_id);
-                    // Model info is already known, no need to store
-                    let _ = model; // Suppress unused warning
-                }
-
-                // Handle Content Chunks
-                ChatEvent::Chunk(s) => {
-                    // Find the last Assistant message (skip over Tool messages)
+        // Helper macro to flush current batch
+        macro_rules! flush_batch {
+            () => {
+                if !batched_chunk.is_empty() {
+                    let s = batched_chunk.clone();
+                    
                     if let Some(assistant_msg) = conversation.last_assistant_mut() {
-                        // If we have tool calls and content_before_tools is set,
-                        // new content goes to content_after_tools
-                        if assistant_msg.tool_calls.is_some()
-                            && assistant_msg.content_before_tools.is_some()
-                        {
-                            let after = assistant_msg
-                                .content_after_tools
-                                .get_or_insert_with(String::new);
-                            // Process chunk into content_after_tools
-                            if !xml_parser::is_xml_tool_output(&s) {
-                                after.push_str(&s);
-                            }
-                            // Also update main content for backward compatibility
-                            self.process_incoming_chunk(&s, assistant_msg);
+                        if is_openai_text {
+                            assistant_msg.content.push_str(&s);
                         } else {
-                            // Normal processing before tool calls
-                            self.process_incoming_chunk(&s, assistant_msg);
+                            if assistant_msg.tool_calls.is_some() && assistant_msg.content_before_tools.is_some() {
+                                let after = assistant_msg
+                                    .content_after_tools
+                                    .get_or_insert_with(String::new);
+                                if !xml_parser::is_xml_tool_output(&s) {
+                                    after.push_str(&s);
+                                }
+                                self.process_incoming_chunk(&s, assistant_msg);
+                            } else {
+                                self.process_incoming_chunk(&s, assistant_msg);
+                            }
                         }
-                        // Return the updated message for immediate emission
-                        return DrainResult::Update(assistant_msg.clone());
+                        self.pending_results.push_back(DrainResult::Update(assistant_msg.clone(), s));
                     } else {
-                        // No Assistant message found, create one
                         conversation.push(ChatMessage::new(ChatRole::Assistant, String::new()));
                         if let Some(new_last) = conversation.last_mut() {
-                            self.process_incoming_chunk(&s, new_last);
-                            return DrainResult::Update(new_last.clone());
+                            if is_openai_text {
+                                new_last.content.push_str(&s);
+                            } else {
+                                self.process_incoming_chunk(&s, new_last);
+                            }
+                            self.pending_results.push_back(DrainResult::Update(new_last.clone(), s));
                         }
                     }
+                    batched_chunk.clear();
                 }
+            };
+        }
 
-                // Handle Research Results
-                ChatEvent::Research {
-                    content,
-                    suggested_name,
-                } => {
-                    // This will be handled by the main event loop to create ephemeral doc
-                    // For now, add a compact message to chat
-                    if let Some(last) = conversation.last_mut() {
-                        if last.role == ChatRole::Assistant {
-                            last.content = "✅ **Research complete!**\n\n📄 Results opened in new editor tab above.".to_string();
-                            last.progress = None; // Clear progress
-                        }
-                    }
-                    // Store research data for the event loop to handle
-                    return DrainResult::Research {
-                        content,
-                        suggested_name,
-                    };
+        for ev in events {
+            match ev {
+                ChatEvent::Chunk(s) => {
+                    batched_chunk.push_str(&s);
                 }
-
-                // Handle Tool Calls (from Stream)
-                ChatEvent::ToolCalls(calls) => {
-                    self.accumulated_tool_calls.extend(calls.clone());
-
-                    // PROTOCOL FIX: Add tool calls to Assistant message immediately
-                    // and snapshot the content BEFORE tools for proper rendering order
-                    if let Some(last) = conversation.last_assistant_mut() {
-                        eprintln!(
-                            "[TOOL CALLS] Adding {} tool calls to Assistant message immediately",
-                            calls.len()
-                        );
-
-                        // Snapshot current content as "before tools" if not already set
-                        if last.content_before_tools.is_none() {
-                            last.content_before_tools = Some(last.content.clone());
-                            eprintln!(
-                                "[TOOL CALLS] Snapshotted content_before_tools: {} chars",
-                                last.content.len()
-                            );
-                        }
-
-                        let existing = last.tool_calls.get_or_insert_with(Vec::new);
-                        existing.extend(calls);
+                ChatEvent::ReasoningChunk(s) => {
+                    flush_batch!();
+                    if let Some(assistant_msg) = conversation.last_assistant_mut() {
+                        let r = assistant_msg.reasoning.get_or_insert_with(String::new);
+                        r.push_str(&s);
+                        self.pending_results.push_back(DrainResult::Reasoning(assistant_msg.clone(), s));
                     }
                 }
+                
+                other => {
+                    flush_batch!();
 
-                // Handle Progress (from web research)
-                ChatEvent::Progress {
-                    message,
-                    stage,
-                    percent,
-                } => {
-                    // Set progress info on assistant's response
-                    if let Some(last) = conversation.last_mut() {
-                        if last.role == ChatRole::Assistant {
-                            last.progress = Some(crate::protocol::ProgressInfo {
-                                message,
-                                stage,
-                                percent,
-                            });
+                    match other {
+                        ChatEvent::Session { session_id, model } => {
+                            eprintln!("[CHAT MGR] Storing session_id: {}", session_id);
+                            self.session_id = Some(session_id);
+                            let _ = model;
                         }
-                    }
-                }
+                        ChatEvent::Research { content, suggested_name } => {
+                            if let Some(last) = conversation.last_mut() {
+                                if last.role == ChatRole::Assistant {
+                                    last.content = "✅ **Research complete!**\n\n📄 Results opened in new editor tab above.".to_string();
+                                    last.progress = None;
+                                }
+                            }
+                            self.pending_results.push_back(DrainResult::Research { content, suggested_name });
+                        }
+                        ChatEvent::ToolCalls(calls) => {
+                            self.accumulated_tool_calls.extend(calls.clone());
+                            let calls_for_emit = calls.clone();
 
-                // Handle Completion
-                ChatEvent::Done => {
-                    // Flush XML buffer if any
-                    if !self.xml_buffer.is_empty() {
-                        if let Some(last) = conversation.last_mut() {
-                            // Just flush remaining text
-                            if !xml_parser::is_xml_tool_output(&self.xml_buffer) {
-                                last.content.push_str(&self.xml_buffer);
+                            if let Some(last) = conversation.last_assistant_mut() {
+                                eprintln!("[TOOL CALLS] Adding {} tool calls", calls.len());
+                                if last.content_before_tools.is_none() {
+                                    last.content_before_tools = Some(last.content.clone());
+                                }
+                                let existing = last.tool_calls.get_or_insert_with(Vec::new);
+                                existing.extend(calls);
+                                
+                                self.pending_results.push_back(DrainResult::ToolCreated(last.clone(), calls_for_emit));
                             }
                         }
-                        self.xml_buffer.clear();
-                    }
+                        ChatEvent::Progress { message, stage, percent } => {
+                            if let Some(last) = conversation.last_mut() {
+                                if last.role == ChatRole::Assistant {
+                                    last.progress = Some(crate::protocol::ProgressInfo {
+                                        message, stage, percent
+                                    });
+                                }
+                            }
+                        }
+                        ChatEvent::Done => {
+                            // Flush any remaining XML buffer content
+                            if !self.xml_buffer.is_empty() {
+                                if let Some(last) = conversation.last_mut() {
+                                    if !xml_parser::is_xml_tool_output(&self.xml_buffer) {
+                                        last.content.push_str(&self.xml_buffer);
+                                    }
+                                }
+                                self.xml_buffer.clear();
+                            }
 
-                    // Final Qwen XML Check (Fallback)
-                    let current_model = models.get(selected_model).map(|m| &m.id[..]).unwrap_or("");
-                    if current_model.to_lowercase().contains("qwen")
-                        && conversation
-                            .last()
-                            .map(|m| m.role == ChatRole::Assistant)
-                            .unwrap_or(false)
-                        && self.accumulated_tool_calls.is_empty()
-                    {
-                        if let Some(last) = conversation.last() {
-                            if let Some(xml_calls) =
-                                xml_parser::detect_xml_tool_calls(&last.content)
+                            // Handler Qwen fallback
+                            let current_model = models.get(selected_model).map(|m| &m.id[..]).unwrap_or("");
+                            if current_model.to_lowercase().contains("qwen") 
+                                && conversation.last().map(|m| m.role == ChatRole::Assistant).unwrap_or(false)
+                                && self.accumulated_tool_calls.is_empty() 
                             {
-                                eprintln!(
-                                    "[QWEN] Detected {} XML tool calls in final content",
-                                    xml_calls.len()
-                                );
-                                self.accumulated_tool_calls
-                                    .extend(self.convert_xml_calls(xml_calls));
+                                if let Some(last) = conversation.last() {
+                                    if let Some(xml_calls) = xml_parser::detect_xml_tool_calls(&last.content) {
+                                        eprintln!("[QWEN] Detected {} XML tool calls", xml_calls.len());
+                                        self.accumulated_tool_calls.extend(self.convert_xml_calls(xml_calls));
+                                    }
+                                }
                             }
+
+                            eprintln!("[DRAIN] chat_done received");
+                            done = true;
                         }
+                        ChatEvent::Error(e) => {
+                             error_msg = Some(e);
+                             done = true;
+                        }
+                        _ => {}
                     }
-
-                    // WORKAROUND: Don't mark done immediately - drain any remaining chunks first
-                    // The server sometimes sends chat_done before all text_chunks are transmitted
-                    eprintln!("[DRAIN] chat_done received, draining remaining chunks...");
-                    done = true;
-                }
-
-                // Handle Error
-                ChatEvent::Error(e) => {
-                    // Note: We no longer clear session_id on disconnection
-                    // zcoderd now persists sessions to database and will restore them
-                    error_msg = Some(e);
-                    done = true;
                 }
             }
         }
+        
+        flush_batch!();
 
         if done {
             let tool_calls = if !self.accumulated_tool_calls.is_empty() {
-                eprintln!(
-                    "[DRAIN] Found {} accumulated tool calls",
-                    self.accumulated_tool_calls.len()
-                );
+                eprintln!("[DRAIN] Found {} accumulated tool calls", self.accumulated_tool_calls.len());
                 Some(self.accumulated_tool_calls.clone())
             } else {
                 eprintln!("[DRAIN] No accumulated tool calls");
@@ -692,42 +705,26 @@ impl ChatManager {
             };
             self.accumulated_tool_calls.clear();
 
-            eprintln!(
-                "[DRAIN] Calling finalize_turn with tool_calls: {:?}",
-                tool_calls.as_ref().map(|t| t.len())
-            );
-            self.finalize_turn(
-                conversation,
-                tool_calls.clone(),
-                &error_msg,
-                models,
-                selected_model,
-            );
+            eprintln!("[DRAIN] Calling finalize_turn with tool_calls: {:?}", tool_calls.as_ref().map(|t| t.len()));
+            self.finalize_turn(conversation, tool_calls.clone(), &error_msg, models, selected_model);
 
             self.streaming = false;
             self.rx = None;
             self.in_think_block = false;
-            // ctx.request_repaint(); // Removed
 
             if let Some(msg) = error_msg {
-                return DrainResult::Error(msg);
-            }
-            if let Some(calls) = tool_calls {
-                // Capture content for tool usage
+                self.pending_results.push_back(DrainResult::Error(msg));
+            } else if let Some(calls) = tool_calls {
                 let content = conversation.last().map(|m| m.content.clone());
-                return DrainResult::ToolCalls(calls, content);
+                self.pending_results.push_back(DrainResult::ToolCalls(calls, content));
             }
         }
-        // else if self.streaming {
-        //    ctx.request_repaint_after(Duration::from_millis(16));
-        // }
 
-        // Check if we have an updated assistant message to emit
         if let Some(msg) = self.updated_assistant_message.take() {
-            return DrainResult::ToolStatusUpdate(msg);
+            self.pending_results.push_back(DrainResult::ToolStatusUpdate(msg));
         }
 
-        DrainResult::None
+        self.pending_results.pop_front().unwrap_or(DrainResult::None)
     }
 
     fn process_incoming_chunk(&mut self, chunk: &str, last_msg: &mut ChatMessage) {
@@ -966,7 +963,49 @@ mod tests {
                 None,
                 None,
                 None,
+                12, // cursor_line added in later steps? No, in my read it was there?
+                // Wait. Lines 1000 in read showed `12`? No.
+                // Let's check `start_stream` signature again.
+                // Line 58-71. 
+                // args: prompt, conversation, api_config, models, selected_model, workspace, active_file, open_files, cursor_line, cursor_column, http.
+                // Total 11 args.
+                // Test calls it with:
+                // "prompt", &mut conv, &api, &models, 0, None, None, None, None, None, http.
+                // That's 11 args.
+                // Wait, in my written `start_stream` (Lines 58-71):
+                /*
+        &mut self,
+        _prompt: String,
+        conversation: &mut ConversationHistory,
+        api_config: &ApiConfig,
+        models: &[ModelInfo],
+        selected_model: usize,
+        workspace: Option<&PathBuf>,
+        active_file: Option<String>,
+        open_files: Option<Vec<String>>,
+        cursor_line: Option<usize>,
+        cursor_column: Option<usize>,
+        _http: reqwest::Client,
+                */
+                // Yes.
+                // In test:
+                /*
+                "prompt".to_string(),
+                &mut conversation,
+                &api_config,
+                &models,
+                0,
+                None,
+                None,
+                None,
+                None,
+                None,
                 http,
+                */
+                // That's 11.
+                // But my test in `write_to_file` has comments?
+                // I will just use `None` for cursor line/col.
+                 None, http
             );
 
             // Verify conversation has Assistant placeholder

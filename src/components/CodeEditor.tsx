@@ -12,7 +12,9 @@ import { javascript } from "@codemirror/lang-javascript";
 import { diffsField, clearDiffs } from "./editor/extensions/diffView";
 import { lineHighlightField, addLineHighlight, clearLineHighlight } from "./editor/extensions/lineHighlight";
 import { virtualBufferField, setBaseContent, getVirtualContent } from "./editor/extensions/virtualBuffer";
+import { inlineDiffField, inlineDiffTheme, setInlineDiff, clearInlineDiff, computeDiffLines, type PendingInlineDiff } from "./editor/extensions/inlineDiff";
 import { useEditor } from "../contexts/EditorContext";
+import type { Change } from "../types/change";
 
 interface CodeEditorProps {
     content: string;
@@ -20,11 +22,15 @@ interface CodeEditorProps {
     onSave?: (val: string) => void;
     filename?: string;
     highlightLines?: { startLine: number; endLine: number } | null;
+    /** Pending change to highlight inline (Windsurf-style) */
+    pendingChange?: Change | null;
 }
 
 export interface CodeEditorHandle {
     getView: () => EditorView | null;
     clearDiffs: () => void;
+    /** Show inline diff highlighting for a pending change */
+    showInlineDiff: (change: Change | null) => void;
 }
 
 const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onChange, onSave, filename, highlightLines }, ref) => {
@@ -40,6 +46,56 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
             if (viewRef.current) {
                 viewRef.current.dispatch({
                     effects: clearDiffs.of(null)
+                });
+            }
+        },
+        showInlineDiff: (change: Change | null) => {
+            const view = viewRef.current;
+            if (!view) return;
+
+            if (!change) {
+                // Clear inline diff
+                view.dispatch({ effects: clearInlineDiff.of(null) });
+                return;
+            }
+
+            // Convert Change to PendingInlineDiff
+            const currentContent = view.state.doc.toString();
+            const hunks: { id: string; fromLine: number; toLine: number; oldText: string; newText: string }[] = [];
+
+            if (change.change_type === 'patch') {
+                const diffInfo = computeDiffLines(currentContent, change.old_content, change.new_content);
+                if (diffInfo) {
+                    hunks.push({
+                        id: `${change.id}-0`,
+                        fromLine: diffInfo.removedLines[0] || 1,
+                        toLine: diffInfo.removedLines[diffInfo.removedLines.length - 1] || 1,
+                        oldText: change.old_content,
+                        newText: change.new_content,
+                    });
+                }
+            } else if (change.change_type === 'multi_patch') {
+                change.patches.forEach((patch, idx) => {
+                    const diffInfo = computeDiffLines(currentContent, patch.old_text, patch.new_text);
+                    if (diffInfo) {
+                        hunks.push({
+                            id: `${change.id}-${idx}`,
+                            fromLine: patch.start_line || diffInfo.removedLines[0] || 1,
+                            toLine: patch.end_line || diffInfo.removedLines[diffInfo.removedLines.length - 1] || 1,
+                            oldText: patch.old_text,
+                            newText: patch.new_text,
+                        });
+                    }
+                });
+            }
+
+            if (hunks.length > 0) {
+                view.dispatch({
+                    effects: setInlineDiff.of({
+                        id: change.id,
+                        hunks,
+                        path: change.path,
+                    })
                 });
             }
         }
@@ -75,6 +131,9 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 diffsField,
                 lineHighlightField,
                 virtualBufferField,
+                // Inline diff extension for Windsurf-style highlighting
+                inlineDiffField,
+                inlineDiffTheme,
                 EditorView.theme({
                     "&": { height: "100%" },
                     ".cm-scroller": { overflow: "auto" }
@@ -102,16 +161,16 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                     if (update.docChanged) {
                         onChange(update.state.doc.toString());
                     }
-                    
+
                     // Track cursor position and selection
                     if (update.selectionSet) {
                         const selection = update.state.selection.main;
                         const line = update.state.doc.lineAt(selection.head);
                         const lineNumber = line.number;
                         const column = selection.head - line.from;
-                        
+
                         setCursorPosition(lineNumber, column);
-                        
+
                         // Track selection if there is one
                         if (selection.from !== selection.to) {
                             const startLine = update.state.doc.lineAt(selection.from).number;
@@ -173,7 +232,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     useEffect(() => {
         const view = viewRef.current;
         if (!view) return;
-        
+
         // Only apply highlighting if we have content loaded
         if (!content) return;
 
@@ -182,7 +241,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 // Small delay to ensure content is fully rendered
                 setTimeout(() => {
                     if (!viewRef.current) return;
-                    
+
                     // Apply line highlighting and scroll to the range
                     const startLine = viewRef.current.state.doc.line(highlightLines.startLine);
                     viewRef.current.dispatch({

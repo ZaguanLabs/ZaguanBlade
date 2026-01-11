@@ -42,7 +42,7 @@ export const ProtocolExplorer: React.FC = () => {
                 const entry: LogEntry = {
                     id: envelope.id,
                     timestamp: envelope.timestamp,
-                    causality_id: envelope.causality_id,
+                    causality_id: envelope.causality_id || undefined,
                     event: envelope.event,
                     receivedAt: Date.now()
                 };

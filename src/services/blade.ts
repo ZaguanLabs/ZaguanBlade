@@ -9,7 +9,8 @@ import type {
     EditorIntent,
     FileIntent,
     WorkflowIntent,
-    TerminalIntent
+    TerminalIntent,
+    Version
 } from '../types/blade';
 
 /**
@@ -17,16 +18,18 @@ import type {
  * Handles envelope wrapping, UUID generation, and error unwrapping.
  */
 export class BladeDispatcher {
-    private static readonly PROTOCOL_VERSION = 1;
+    // v1.1: Semantic versioning
+    private static readonly PROTOCOL_VERSION: Version = { major: 1, minor: 1, patch: 0 };
     private static readonly PROTOCOL_NAME = "BCP";
 
     /**
      * Dispatches an Intent to the Backend.
      * @param domain - The domain of the intent (e.g., "Chat", "Editor")
      * @param intent - The intent payload
+     * @param idempotencyKey - Optional idempotency key for critical operations
      * @returns Promise that resolves when the intent is ACCEPTED (not necessarily completed)
      */
-    static async dispatch(domain: string, intent: BladeIntent): Promise<void> {
+    static async dispatch(domain: string, intent: BladeIntent, idempotencyKey?: string): Promise<void> {
         const envelope: BladeEnvelope<BladeIntentEnvelope> = {
             protocol: this.PROTOCOL_NAME,
             version: this.PROTOCOL_VERSION,
@@ -34,6 +37,7 @@ export class BladeDispatcher {
             message: {
                 id: uuidv4(),
                 timestamp: Date.now(),
+                idempotency_key: idempotencyKey, // v1.1: Optional idempotency key
                 intent
             }
         };

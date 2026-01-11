@@ -31,11 +31,26 @@ fn normalize_json_string(input: &str) -> String {
         .to_string()
 }
 
+/// A single patch hunk within a multi-patch operation
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct PatchHunk {
+    pub old_text: String,
+    pub new_text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<usize>,
+}
+
 #[derive(Clone)]
 pub enum ChangeType {
     Patch {
         old_content: String,
         new_content: String,
+    },
+    /// Multi-hunk atomic patch (multiple changes applied together)
+    MultiPatch {
+        patches: Vec<PatchHunk>,
     },
     NewFile {
         content: String,
@@ -173,7 +188,7 @@ impl AiWorkflow {
                                         success: false,
                                         content: String::new(),
                                         error: Some(
-                                            "SYSTEM WARNING: Too many tool turns without progress. Stop calling tools and answer the user (or change approach)."
+                                            "SYSTEM WARNING: NO PROGRESS DETECTED - You have been calling tools for multiple turns without making progress. DO NOT call any more tools. Answer the user's question NOW using the information you have gathered."
                                                 .to_string(),
                                         ),
                                     },
@@ -269,7 +284,7 @@ impl AiWorkflow {
                         tools::ToolResult {
                             success: false,
                             content: String::new(),
-                            error: Some("SYSTEM WARNING: Tool repetition detected. Stop calling tools and answer the user (or change approach).".to_string()),
+                            error: Some("SYSTEM WARNING: LOOP DETECTED - You called this tool with identical arguments before. DO NOT call any more tools. Use the information from your previous tool calls to answer the user's question NOW.".to_string()),
                         },
                     ));
                     continue;

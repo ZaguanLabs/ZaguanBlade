@@ -1,13 +1,45 @@
-'use client';
-import React from 'react';
+import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { ChatMessage as ChatMessageType } from '../types/chat';
-import { User, Bot, Terminal } from 'lucide-react';
+import { User, Bot, Terminal, Brain, ChevronDown, ChevronRight } from 'lucide-react';
 import { ToolCallDisplay } from './ToolCallDisplay';
 import { ProgressIndicator } from './ProgressIndicator';
 import { CommandOutputDisplay } from './CommandOutputDisplay';
 import { CommandApprovalCard } from './CommandApprovalCard';
 import { TodoList } from './TodoList';
+
+const ReasoningBlock: React.FC<{ content: string }> = ({ content }) => {
+    const [isExpanded, setIsExpanded] = useState(false);
+
+    return (
+        <div className="my-2 select-none">
+            <button
+                onClick={() => setIsExpanded(!isExpanded)}
+                className="flex items-center gap-2 px-2 py-1 rounded hover:bg-zinc-800/50 transition-colors group/reasoning"
+            >
+                <div className="flex items-center gap-1.5 opacity-40 group-hover/reasoning:opacity-80 transition-opacity">
+                    <Brain className="w-3 h-3 text-emerald-500" />
+                    <span className="font-mono text-[9px] uppercase tracking-widest font-bold">Thoughts</span>
+                </div>
+                {isExpanded ? (
+                    <ChevronDown className="w-3 h-3 opacity-20" />
+                ) : (
+                    <ChevronRight className="w-3 h-3 opacity-20" />
+                )}
+            </button>
+
+            {isExpanded && (
+                <div className="mt-1 ml-2 pl-3 border-l border-zinc-800/50 py-1 transition-all duration-300">
+                    <div className="prose prose-invert prose-xs max-w-none text-zinc-500/70 font-mono text-[11px] leading-relaxed italic">
+                        <ReactMarkdown>
+                            {content}
+                        </ReactMarkdown>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
 
 interface ChatMessageProps {
     message: ChatMessageType;
@@ -21,7 +53,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, pendingAction
     const isSystem = message.role === 'System';
     const isTool = message.role === 'Tool';
     const isAssistant = message.role === 'Assistant';
-    
+
     // Don't render Tool messages separately - they're shown in the tool call display
     if (isTool) {
         return null;
@@ -39,30 +71,18 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, pendingAction
             <div className="flex-1 min-w-0 space-y-1 overflow-hidden">
                 <div className="flex items-center gap-2 h-5">
                     <span className="font-medium text-xs text-zinc-500 uppercase tracking-wider">
-                        {isUser ? 'Operator' : (isAssistant ? 'System' : message.role)}
+                        {isUser ? 'User' : (isAssistant ? 'Assistant' : message.role)}
                     </span>
                     {isTool && message.tool_call_id && (
                         <span className="text-[10px] font-mono text-zinc-600 bg-zinc-900 border border-zinc-800 px-1.5 rounded-sm">
                             {message.tool_call_id.slice(0, 8)}
                         </span>
                     )}
-                    {/* DEBUG: Show data state */}
-                    {isAssistant && (
-                        <span className="text-[9px] font-mono text-yellow-600 bg-yellow-950/20 border border-yellow-800/30 px-1.5 py-0.5 rounded">
-                            content:{message.content.length} tools:{message.tool_calls?.length || 0}
-                        </span>
-                    )}
+
                 </div>
 
                 {message.reasoning && (
-                    <div className="bg-zinc-950/30 border-l-2 border-zinc-800 pl-3 py-1 my-2">
-                        <div className="font-mono text-[10px] text-zinc-600 uppercase mb-0.5 flex items-center gap-1">
-                            <span>Process Logic</span>
-                        </div>
-                        <div className="prose prose-invert prose-xs max-w-none text-zinc-500/80 font-mono text-[11px] leading-relaxed">
-                            {message.reasoning}
-                        </div>
-                    </div>
+                    <ReasoningBlock content={message.reasoning} />
                 )}
 
                 {message.progress && (
@@ -75,27 +95,33 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, pendingAction
                         (call) => call.function.name !== 'todo_write'
                     );
                     const hasToolCalls = toolCalls.length > 0;
-                    
+
                     // Use explicit fields from protocol if available
                     // If content_before_tools and content_after_tools are both empty/missing,
                     // treat all content as final text (after tools)
                     const hasExplicitSplit = message.content_before_tools !== undefined || message.content_after_tools !== undefined;
-                    
+
                     let initialText = '';
                     let finalText = '';
-                    
+
                     if (hasExplicitSplit) {
                         // Protocol provided explicit split
                         initialText = message.content_before_tools || '';
                         finalText = message.content_after_tools || '';
-                    } else if (hasToolCalls) {
-                        // Has tool calls but no explicit split - all content is final
-                        finalText = message.content;
+
+                        // Fallback: If after_tools is empty/missing (e.g. strict OpenAI mode in backend),
+                        // but main content has grown beyond initialText, infer the difference as finalText.
+                        if (!finalText && message.content.length > initialText.length && message.content.startsWith(initialText)) {
+                            finalText = message.content.slice(initialText.length);
+                        }
                     } else {
-                        // No tool calls - all content is final
-                        finalText = message.content;
+                        // Default behavior: All content is considered "Pre-Tool" text (Reasoning/Explanation)
+                        // This ensures it renders BEFORE the tool calls, which matches the standard flow:
+                        // "I will do X" -> [Tool Call]
+                        initialText = message.content;
+                        finalText = '';
                     }
-                    
+
                     return (
                         <>
                             {/* 1. INITIAL TEXT - before tool execution */}
@@ -131,7 +157,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, pendingAction
                             {hasToolCalls && (
                                 <div className="mb-3 space-y-2">
                                     {toolCalls.map((call, idx) => (
-                                        <ToolCallDisplay 
+                                        <ToolCallDisplay
                                             key={`${call.id}-${idx}`}
                                             toolCall={call}
                                             status={call.status || 'executing'}
@@ -163,7 +189,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, pendingAction
                                     </ReactMarkdown>
                                 </div>
                             )}
-                            
+
                             {/* Command Executions */}
                             {message.commandExecutions && message.commandExecutions.length > 0 && (
                                 <div className="mt-3 space-y-2">

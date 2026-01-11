@@ -2,6 +2,8 @@ import React from 'react';
 import { useTranslations } from 'next-intl';
 import { Check, X, FilePlus, Trash2 } from 'lucide-react';
 import type { Change } from '../../types/change';
+import { MultiPatchDiff } from './MultiPatchDiff';
+import { isMultiPatchChange } from '../../utils/patchParser';
 
 interface EditorDiffOverlayProps {
     change: Change;
@@ -9,14 +11,25 @@ interface EditorDiffOverlayProps {
     onReject: () => void;
 }
 
-export const EditorDiffOverlay: React.FC<EditorDiffOverlayProps> = ({ 
+export const EditorDiffOverlay: React.FC<EditorDiffOverlayProps> = ({
     change,
-    onAccept, 
+    onAccept,
     onReject
 }) => {
     const t = useTranslations();
     const filename = change.path.split('/').pop() || change.path;
-    
+
+    // Delegate multi-patch changes to specialized component
+    if (isMultiPatchChange(change)) {
+        return (
+            <MultiPatchDiff
+                change={change}
+                onAcceptAll={onAccept}
+                onRejectAll={onReject}
+            />
+        );
+    }
+
     return (
         <div className="absolute top-4 left-4 right-4 max-h-[60vh] bg-[#1e1e1e] border border-purple-500/50 rounded-lg shadow-2xl z-50 flex flex-col overflow-hidden">
             {/* Compact header */}
@@ -76,7 +89,7 @@ export const EditorDiffOverlay: React.FC<EditorDiffOverlayProps> = ({
                             <p className="font-mono mt-2 text-red-300">{change.path}</p>
                         </div>
                     </div>
-                ) : (
+                ) : change.change_type === 'patch' ? (
                     /* Existing file: show diff */
                     <div className="flex flex-col">
                         {/* Original (removed) */}
@@ -95,7 +108,7 @@ export const EditorDiffOverlay: React.FC<EditorDiffOverlayProps> = ({
                             <pre className="px-3 py-2 font-mono text-xs text-emerald-200 whitespace-pre-wrap leading-relaxed">{change.new_content}</pre>
                         </div>
                     </div>
-                )}
+                ) : null}
             </div>
         </div>
     );

@@ -6,9 +6,10 @@ import CodeEditor, { type CodeEditorHandle } from './CodeEditor';
 import { useEditor } from '../contexts/EditorContext';
 import { BladeDispatcher } from '../services/blade';
 import { BladeEvent, FileEvent } from '../types/blade';
-import { EditorDiffOverlay } from './editor/EditorDiffOverlay';
+import { ChangeActionBar } from './editor/ChangeActionBar';
 import { EventNames, type ChangeAppliedPayload, type AllEditsAppliedPayload } from '../types/events';
 import type { Change } from '../types/change';
+
 
 interface EditorPanelProps {
     activeFile: string | null;
@@ -16,9 +17,27 @@ interface EditorPanelProps {
     pendingEdit?: Change | null;
     onAcceptEdit?: (changeId: string) => void;
     onRejectEdit?: (changeId: string) => void;
+    /** Total number of files with pending changes */
+    totalPendingFiles?: number;
+    /** Current file index (1-based) among files with pending changes */
+    currentFileIndex?: number;
+    /** Callback to navigate to next file with pending changes */
+    onNextFile?: () => void;
+    /** Callback to navigate to previous file with pending changes */
+    onPrevFile?: () => void;
 }
 
-export const EditorPanel: React.FC<EditorPanelProps> = ({ activeFile, highlightLines, pendingEdit, onAcceptEdit, onRejectEdit }) => {
+export const EditorPanel: React.FC<EditorPanelProps> = ({
+    activeFile,
+    highlightLines,
+    pendingEdit,
+    onAcceptEdit,
+    onRejectEdit,
+    totalPendingFiles = 1,
+    currentFileIndex = 1,
+    onNextFile,
+    onPrevFile,
+}) => {
     const [content, setContent] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -183,9 +202,11 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({ activeFile, highlightL
                 filename={activeFile}
                 highlightLines={highlightLines || undefined}
             />
+            {/* Non-invasive bottom action bar for pending changes */}
             {pendingEdit && pendingEdit.path === activeFile && onAcceptEdit && onRejectEdit && (
-                <EditorDiffOverlay
-                    change={pendingEdit}
+                <ChangeActionBar
+                    currentFileIndex={currentFileIndex}
+                    totalFiles={totalPendingFiles}
                     onAccept={async () => {
                         await onAcceptEdit(pendingEdit.id);
                         setTimeout(() => setReloadTrigger(prev => prev + 1), 100);
@@ -193,6 +214,9 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({ activeFile, highlightL
                     onReject={() => {
                         onRejectEdit(pendingEdit.id);
                     }}
+                    onNextFile={onNextFile}
+                    onPrevFile={onPrevFile}
+                    filename={pendingEdit.path.split('/').pop()}
                 />
             )}
         </div>

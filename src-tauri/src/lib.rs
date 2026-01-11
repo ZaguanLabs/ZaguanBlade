@@ -12,6 +12,7 @@ pub mod ephemeral_commands;
 pub mod ephemeral_documents;
 pub mod events;
 pub mod explorer;
+pub mod idempotency; // [NEW] v1.1: Idempotency cache
 pub mod models;
 pub mod project;
 pub mod protocol;
@@ -113,6 +114,7 @@ pub struct AppState {
     pub executing_commands: std::sync::Arc<
         Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>>,
     >,
+    pub idempotency_cache: crate::idempotency::IdempotencyCache, // v1.1: Idempotency support
 }
 
 impl AppState {
@@ -183,6 +185,7 @@ impl AppState {
             virtual_buffers: Mutex::new(std::collections::HashMap::new()),
             approved_command_roots: Mutex::new(std::collections::HashSet::new()),
             executing_commands: std::sync::Arc::new(Mutex::new(std::collections::HashMap::new())),
+            idempotency_cache: crate::idempotency::IdempotencyCache::default(), // 24h TTL
         }
     }
 }
@@ -627,6 +630,38 @@ pub async fn approve_changes_for_file<R: Runtime>(
                     break;
                 }
             },
+            ChangeType::MultiPatch { patches } => {
+                // Apply each patch sequentially
+                let mut all_ok = true;
+                let patch_count = patches.len();
+                for (idx, patch) in patches.iter().enumerate() {
+                    match crate::tools::apply_patch_to_string(&content, &patch.old_text, &patch.new_text) {
+                        Ok(new_content) => {
+                            content = new_content;
+                        }
+                        Err(e) => {
+                            results.push((
+                                change.call.clone(),
+                                crate::tools::ToolResult::err(format!(
+                                    "Multi-patch failed at hunk {}/{}: {}",
+                                    idx + 1, patch_count, e
+                                )),
+                            ));
+                            all_ok = false;
+                            break;
+                        }
+                    }
+                }
+                if all_ok {
+                    results.push((
+                        change.call.clone(),
+                        crate::tools::ToolResult::ok(format!(
+                            "Applied {} patches atomically to {}",
+                            patch_count, change.path
+                        )),
+                    ));
+                }
+            }
             ChangeType::DeleteFile => {
                 // Delete file - don't update content, just mark for deletion
                 results.push((
@@ -713,15 +748,39 @@ pub async fn approve_all_changes(
 
     let results: Vec<Result<(), String>> = join_all(futures).await;
 
+    let mut succeeded = 0;
+    let mut failed = 0;
+    
     for (idx, res) in results.into_iter().enumerate() {
         if let Err(e) = res {
+            failed += 1;
             if let Some(path) = files_to_process.get(idx) {
                 errors.push(format!("{}: {}", path, e));
             } else {
                 errors.push(e);
             }
+        } else {
+            succeeded += 1;
         }
     }
+
+    // v1.1: Emit BatchCompleted event
+    let batch_id = uuid::Uuid::new_v4().to_string();
+    let _ = window.emit("blade-event", blade_protocol::BladeEventEnvelope {
+        id: uuid::Uuid::new_v4(),
+        timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64,
+        causality_id: None,
+        event: blade_protocol::BladeEvent::Workflow(
+            blade_protocol::WorkflowEvent::BatchCompleted {
+                batch_id,
+                succeeded,
+                failed,
+            }
+        ),
+    });
 
     if errors.is_empty() {
         Ok(())
@@ -844,10 +903,12 @@ async fn handle_send_message<R: Runtime>(
             actual_message.clone(),
         ));
 
-        // Emit update immediately
+        // Emit update immediately - REMOVED for v1.1 (Frontend handles optimistic updates)
+        /*
         if let Some(msg) = conversation.last() {
-            window.emit("chat-update", msg).unwrap_or_default();
+             window.emit("chat-update", msg).unwrap_or_default();
         }
+        */
     }
 
     // Commands like @research, @search, @web are now handled directly by zcoderd
@@ -906,8 +967,8 @@ async fn handle_send_message<R: Runtime>(
 
     tauri::async_runtime::spawn(async move {
         let mut last_session_id: Option<String> = None;
-        let mut last_emit_fp: Option<String> = None;
-        let mut repeat_emits: u32 = 0;
+        let mut _last_emit_fp: Option<String> = None;
+        let mut _repeat_emits: u32 = 0;
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(32)).await; // 30 FPS
 
@@ -947,6 +1008,9 @@ async fn handle_send_message<R: Runtime>(
             }
 
             // Emit update
+            // Emit update - DISABLED in favor of explicit DrainResult events
+            // This prevents double-emission and race conditions with blade-event
+            /*
             {
                 let conversation = state.conversation.lock().unwrap();
                 // We emit the last Assistant message (skip Tool messages)
@@ -957,49 +1021,7 @@ async fn handle_send_message<R: Runtime>(
                     .find(|m| m.role == crate::protocol::ChatRole::Assistant)
                 {
                     let content_len = msg.content.len();
-                    let before_len = msg
-                        .content_before_tools
-                        .as_ref()
-                        .map(|c| c.len())
-                        .unwrap_or(0);
-                    let after_len = msg
-                        .content_after_tools
-                        .as_ref()
-                        .map(|c| c.len())
-                        .unwrap_or(0);
-                    let tool_calls_len = msg.tool_calls.as_ref().map(|tc| tc.len()).unwrap_or(0);
-
-                    // Avoid emitting empty placeholder messages (no content and no tool calls)
-                    if content_len == 0 && before_len == 0 && after_len == 0 && tool_calls_len == 0
-                    {
-                        // eprintln!("[EMIT] Suppressed empty assistant message");
-                    } else {
-                        let fp = format!(
-                            "{}|{}|{}|{}|{}",
-                            content_len,
-                            before_len,
-                            after_len,
-                            tool_calls_len,
-                            msg.content_before_tools
-                                .as_ref()
-                                .map(|c| c.len())
-                                .unwrap_or(0)
-                        );
-
-                        if let Some(prev) = &last_emit_fp {
-                            if prev == &fp {
-                                repeat_emits = repeat_emits.saturating_add(1);
-                                if repeat_emits > 50 {
-                                    // eprintln!(
-                                    //     "[EMIT] Suppressing repeated assistant emit (count={}, fp={})",
-                                    //     repeat_emits, fp
-                                    // );
-                                    continue;
-                                }
-                            } else {
-                                repeat_emits = 0;
-                            }
-                        }
+                    // ... (rest of logic) ...
                         last_emit_fp = Some(fp);
 
                         eprintln!(
@@ -1009,10 +1031,12 @@ async fn handle_send_message<R: Runtime>(
                             after_len,
                             tool_calls_len
                         );
+                        eprintln!("[EMIT] Content preview: {:?}", &msg.content);
                         window.emit("chat-update", msg).unwrap_or_default();
                     }
                 }
             }
+            */
 
             if let DrainResult::None = result {
                 if !is_streaming {
@@ -1028,6 +1052,33 @@ async fn handle_send_message<R: Runtime>(
                         }
                     }
 
+                    // v1.1: Emit MessageCompleted event for explicit end-of-stream
+                    let msg_id = {
+                        let conversation = state.conversation.lock().unwrap();
+                        conversation.last().and_then(|msg| {
+                            if msg.role == crate::protocol::ChatRole::Assistant {
+                                // Use existing ID if available (v1.1 compliant), else fallback to new
+                                msg.id.clone().or_else(|| Some(uuid::Uuid::new_v4().to_string()))
+                            } else {
+                                None
+                            }
+                        })
+                    };
+                    
+                    if let Some(id) = msg_id {
+                        let _ = window.emit("blade-event", blade_protocol::BladeEventEnvelope {
+                            id: uuid::Uuid::new_v4(),
+                            timestamp: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64,
+                            causality_id: None,
+                            event: blade_protocol::BladeEvent::Chat(
+                                blade_protocol::ChatEvent::MessageCompleted { id }
+                            ),
+                        });
+                    }
+                    
                     window.emit("chat-done", ()).unwrap_or_default();
                     break;
                 }
@@ -1065,15 +1116,112 @@ async fn handle_send_message<R: Runtime>(
                     .unwrap_or_default();
 
                 // Continue polling for done event
-            } else if let DrainResult::Update(msg) = result {
+            } else if let DrainResult::Update(msg, chunk) = result {
                 // Emit streaming chunk immediately for real-time updates
-                window.emit("chat-update", msg).unwrap_or_default();
+                // v1.1: Use MessageDelta with sequence number
+                let mut mgr = state.chat_manager.lock().unwrap();
+                let seq = mgr.message_seq;
+                mgr.message_seq += 1;
+                // Get the message ID if possible, otherwise use a temporary one (chat manager should track this properly in future)
+                // For now, we assume the frontend can correlate by expecting a stream
+                let msg_id = msg.id.clone().unwrap_or_else(|| "streaming-msg".to_string());
+                drop(mgr);
+
+                // 1. Emit legacy format for compatibility - REMOVED for v1.1
+                // window.emit("chat-update", msg).unwrap_or_default();
+
+                // 2. Emit Blade v1.1 MessageDelta
+                let _ = window.emit("blade-event", blade_protocol::BladeEventEnvelope {
+                    id: uuid::Uuid::new_v4(),
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                    causality_id: Some(msg_id.clone()),
+                    event: blade_protocol::BladeEvent::Chat(
+                        blade_protocol::ChatEvent::MessageDelta {
+                            id: msg_id,
+                            seq,
+                            chunk,
+                            is_final: false, // Will be set in MessageCompleted
+                        }
+                    ),
+                });
+            } else if let DrainResult::Reasoning(msg, chunk) = result {
+                let mut mgr = state.chat_manager.lock().unwrap();
+                let seq = mgr.message_seq;
+                mgr.message_seq += 1;
+                let msg_id = msg.id.clone().unwrap_or_else(|| "streaming-msg".to_string());
+                drop(mgr);
+
+                let _ = window.emit("blade-event", blade_protocol::BladeEventEnvelope {
+                    id: uuid::Uuid::new_v4(),
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                    causality_id: Some(msg_id.clone()),
+                    event: blade_protocol::BladeEvent::Chat(
+                        blade_protocol::ChatEvent::ReasoningDelta {
+                            id: msg_id,
+                            seq,
+                            chunk,
+                            is_final: false,
+                        }
+                    ),
+                });
             } else if let DrainResult::Error(e) = result {
                 window.emit("chat-error", e).unwrap_or_default();
                 break;
+            } else if let DrainResult::ToolCreated(msg, new_calls) = result {
+                 let msg_id = msg.id.clone().unwrap_or_else(|| "unknown".to_string());
+                 for tc in new_calls {
+                     let _ = window.emit("blade-event", blade_protocol::BladeEventEnvelope {
+                        id: uuid::Uuid::new_v4(),
+                        timestamp: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64,
+                        causality_id: Some(msg_id.clone()),
+                        event: blade_protocol::BladeEvent::Chat(
+                            blade_protocol::ChatEvent::ToolUpdate {
+                                message_id: msg_id.clone(),
+                                tool_call_id: tc.id.clone(),
+                                status: "executing".to_string(),
+                                result: None,
+                                tool_call: Some(tc.clone()),
+                            }
+                        ),
+                     });
+                 }
             } else if let DrainResult::ToolStatusUpdate(msg) = result {
-                // Emit the updated assistant message with completed tool call status
-                window.emit("chat-update", msg).unwrap_or_default();
+                // v1.1: Emit ToolUpdate events via blade-event
+                if let Some(tool_calls) = &msg.tool_calls {
+                    let msg_id = msg.id.clone().unwrap_or_else(|| "unknown".to_string());
+                    for tc in tool_calls {
+                        // Emit update for each tool call
+                        // We emit indiscriminately here because the frontend will merge/update state based on ID
+                        let status = tc.status.clone().unwrap_or_else(|| "unknown".to_string());
+                        
+                        let _ = window.emit("blade-event", blade_protocol::BladeEventEnvelope {
+                            id: uuid::Uuid::new_v4(),
+                            timestamp: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64,
+                            causality_id: Some(msg_id.clone()),
+                            event: blade_protocol::BladeEvent::Chat(
+                                blade_protocol::ChatEvent::ToolUpdate {
+                                    message_id: msg_id.clone(),
+                                    tool_call_id: tc.id.clone(),
+                                    status,
+                                    result: tc.result.clone(),
+                                    tool_call: Some(tc.clone()),
+                                }
+                            ),
+                        });
+                    }
+                }
             } else if let DrainResult::ToolCalls(calls, content) = result {
                 println!("Tools requested: {:?}. Executing...", calls.len());
                 let state = app_handle.state::<AppState>();
@@ -1202,6 +1350,12 @@ async fn handle_send_message<R: Runtime>(
                                     old_content: String,
                                     new_content: String,
                                 },
+                                #[serde(rename = "multi_patch")]
+                                MultiPatch {
+                                    id: String,
+                                    path: String,
+                                    patches: Vec<crate::ai_workflow::PatchHunk>,
+                                },
                                 #[serde(rename = "new_file")]
                                 NewFile {
                                     id: String,
@@ -1225,6 +1379,13 @@ async fn handle_send_message<R: Runtime>(
                                         old_content: old_content.clone(),
                                         new_content: new_content.clone(),
                                     },
+                                    crate::ai_workflow::ChangeType::MultiPatch { patches } => {
+                                        ChangeProposal::MultiPatch {
+                                            id: change.call.id.clone(),
+                                            path: change.path.clone(),
+                                            patches: patches.clone(),
+                                        }
+                                    }
                                     crate::ai_workflow::ChangeType::NewFile { content } => {
                                         ChangeProposal::NewFile {
                                             id: change.call.id.clone(),
@@ -1738,12 +1899,13 @@ async fn dispatch(
     state: State<'_, AppState>,
     terminal_manager: State<'_, crate::terminal::TerminalManager>,
 ) -> Result<(), blade_protocol::BladeError> {
-    use blade_protocol::{BladeError, BladeIntent, SystemEvent};
+    use blade_protocol::{BladeError, BladeIntent, SystemEvent, Version};
 
-    // 1. Version Check
-    if envelope.version != 1 {
+    // 1. Version Check (v1.1: semantic versioning)
+    if !Version::CURRENT.is_compatible(&envelope.version) {
         let error = BladeError::VersionMismatch {
-            version: envelope.version,
+            expected: Version::CURRENT,
+            received: envelope.version,
         };
         use blade_protocol::BladeEventEnvelope;
 
@@ -1758,7 +1920,7 @@ async fn dispatch(
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
-            causality_id: Some(envelope.message.id),
+            causality_id: Some(envelope.message.id.to_string()),
             event: blade_protocol::BladeEvent::System(system_event),
         };
 
@@ -1767,6 +1929,7 @@ async fn dispatch(
     }
 
     let intent_id = envelope.message.id;
+    let idempotency_key = envelope.message.idempotency_key.clone();
     let intent = envelope.message.intent;
 
     println!(
@@ -1774,7 +1937,52 @@ async fn dispatch(
         intent, intent_id
     );
 
-    // 2. Ack (Process Started)
+    // 2. Idempotency Check (v1.1)
+    if let Some(ref key) = idempotency_key {
+        if let Some((cached_intent_id, cached_result)) = state.idempotency_cache.check(key) {
+            println!(
+                "[BladeProtocol] Idempotency hit for key '{}' (original intent_id: {})",
+                key, cached_intent_id
+            );
+            
+            // Return cached result
+            match cached_result {
+                crate::idempotency::IdempotencyResult::Success => {
+                    let _ = window.emit("sys-event", SystemEvent::ProcessCompleted { intent_id });
+                    return Ok(());
+                }
+                crate::idempotency::IdempotencyResult::Failed { error } => {
+                    let blade_error = BladeError::Internal {
+                        trace_id: cached_intent_id.to_string(),
+                        message: error,
+                    };
+                    let _ = window.emit("sys-event", SystemEvent::IntentFailed {
+                        intent_id,
+                        error: blade_error.clone(),
+                    });
+                    return Err(blade_error);
+                }
+            }
+        }
+    }
+
+    // 3. Emit ProtocolVersion on first dispatch (optional: track in state)
+    // For now, emit on every dispatch - frontend can dedupe
+    let protocol_version_event = SystemEvent::ProtocolVersion {
+        supported: vec![Version::CURRENT],
+        current: Version::CURRENT,
+    };
+    let _ = window.emit("blade-event", blade_protocol::BladeEventEnvelope {
+        id: uuid::Uuid::new_v4(),
+        timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64,
+        causality_id: None,
+        event: blade_protocol::BladeEvent::System(protocol_version_event),
+    });
+
+    // 4. Ack (Process Started)
     let _ = window.emit("sys-event", SystemEvent::ProcessStarted { intent_id });
 
     // 3. Route Intent (Placeholder Implementation)
@@ -1818,8 +2026,8 @@ async fn dispatch(
                         selection_start,
                         selection_end,
                         window.clone(),
-                        state,
-                        app_handle,
+                        state.clone(),
+                        app_handle.clone(),
                     )
                     .await
                     .map_err(|e| blade_protocol::BladeError::Internal {
@@ -1830,7 +2038,7 @@ async fn dispatch(
                 blade_protocol::ChatIntent::StopGeneration => {
                     // Logic for stop generation
                     // reusing stop_generation command logic
-                    stop_generation(state, app_handle);
+                    stop_generation(state.clone(), app_handle.clone());
                     Ok(())
                 }
                 blade_protocol::ChatIntent::ClearHistory => {
@@ -1929,6 +2137,36 @@ async fn dispatch(
             Ok(())
         }
         BladeIntent::Workflow(workflow_intent) => match workflow_intent {
+            // v1.1 variants
+            blade_protocol::WorkflowIntent::ApproveAction { action_id } => {
+                approve_change(action_id, window.clone(), state.clone())
+                    .await
+                    .map_err(|e| blade_protocol::BladeError::Internal {
+                        trace_id: intent_id.to_string(),
+                        message: e,
+                    })
+            }
+            blade_protocol::WorkflowIntent::ApproveAll { batch_id: _ } => {
+                approve_all_changes(window.clone(), state.clone())
+                    .await
+                    .map_err(|e| blade_protocol::BladeError::Internal {
+                        trace_id: intent_id.to_string(),
+                        message: e,
+                    })
+            }
+            blade_protocol::WorkflowIntent::RejectAction { action_id } => {
+                reject_change(action_id, state.clone()).await.map_err(|e| {
+                    blade_protocol::BladeError::Internal {
+                        trace_id: intent_id.to_string(),
+                        message: e,
+                    }
+                })
+            }
+            blade_protocol::WorkflowIntent::RejectAll { batch_id: _ } => {
+                // TODO: Implement batch rejection
+                Ok(())
+            }
+            // Legacy v1.0 variants (for backward compatibility)
             blade_protocol::WorkflowIntent::ApproveChange { change_id } => {
                 approve_change(change_id, window.clone(), state.clone())
                     .await
@@ -1968,6 +2206,7 @@ async fn dispatch(
                     id,
                     command,
                     cwd,
+                    owner: _,
                     interactive,
                 } => {
                     if interactive {
@@ -2032,13 +2271,21 @@ async fn dispatch(
         }
     };
 
-    // 4. Handle Result
+    // 5. Handle Result & Store Idempotency (v1.1)
     match result {
         Ok(_) => {
+            // Store success in idempotency cache if key provided
+            if let Some(key) = idempotency_key {
+                state.idempotency_cache.store_success(key, intent_id);
+            }
             let _ = window.emit("sys-event", SystemEvent::ProcessCompleted { intent_id });
             Ok(())
         }
         Err(e) => {
+            // Store failure in idempotency cache if key provided
+            if let Some(key) = idempotency_key {
+                state.idempotency_cache.store_failure(key, intent_id, format!("{:?}", e));
+            }
             let _ = window.emit(
                 "sys-event",
                 SystemEvent::IntentFailed {
