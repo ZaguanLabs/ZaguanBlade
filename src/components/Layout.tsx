@@ -1,6 +1,5 @@
-'use client';
 import React, { useState, useEffect, useRef } from 'react';
-import { useTranslations } from 'next-intl';
+import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { ChatPanel } from './ChatPanel';
@@ -25,7 +24,7 @@ interface Tab {
 }
 
 const AppLayoutInner: React.FC = () => {
-    const t = useTranslations();
+    const { t } = useTranslation();
     const [activeTabId, setActiveTabId] = useState<string | null>(null);
     const [tabs, setTabs] = useState<Tab[]>([]);
     const [terminalHeight, setTerminalHeight] = useState(300);
@@ -277,7 +276,7 @@ const AppLayoutInner: React.FC = () => {
             });
 
             // Listen for change-applied events to convert ephemeral tabs to file tabs
-            const unlistenChangeApplied = await listen<{ change_id: string; file_path: string }>('change-applied', (event) => {
+            unlistenChangeApplied = await listen<{ change_id: string; file_path: string }>('change-applied', (event) => {
                 console.log('[LAYOUT] Change applied:', event.payload);
                 const { change_id, file_path } = event.payload;
 
@@ -317,44 +316,40 @@ const AppLayoutInner: React.FC = () => {
     }, [tabs]);
 
     return (
-        <div className="h-screen w-screen bg-black overflow-hidden flex flex-col font-sans">
-            {/* Activity Bar / Title Bar placeholder */}
-            <div className="h-9 bg-[#09090b] border-b border-zinc-800 flex items-center justify-between px-3 select-none -webkit-app-region-drag">
-                <div className="text-xs font-mono text-zinc-500 font-medium tracking-tight">Zaguán Blade</div>
-                <div className="flex items-center gap-3">
-                    {/* Window Controls would go here on custom titlebar */}
-                </div>
+        <div className="h-screen w-screen bg-[var(--bg-app)] overflow-hidden flex flex-col font-sans text-[var(--fg-primary)]">
+            {/* Title Bar (Custom, minimal) */}
+            <div className="h-8 bg-[var(--bg-app)] flex items-center justify-center px-4 select-none -webkit-app-region-drag border-b border-[var(--border-subtle)] relative z-50">
+                <div className="text-[10px] font-medium text-[var(--fg-tertiary)] tracking-widest uppercase opacity-70">Zaguán Blade</div>
             </div>
 
             <div className="flex-1 flex overflow-hidden">
                 {/* Activity Bar (Vertical) */}
-                <div className="w-12 bg-[#09090b] border-r border-black flex flex-col items-center py-3 gap-2 z-20">
-                    <div className="p-2.5 bg-zinc-800/80 rounded-sm text-zinc-200 shadow-sm border border-zinc-700/50">
-                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <div className="w-[50px] bg-[var(--bg-app)] border-r border-[var(--border-subtle)] flex flex-col items-center py-4 gap-6 z-20 shrink-0">
+                    <div className="p-2 rounded-md bg-[var(--bg-surface)] text-[var(--fg-primary)] shadow-sm border border-[var(--border-subtle)] group cursor-pointer hover:border-[var(--border-focus)] transition-colors">
+                        <svg className="w-5 h-5 opacity-90 group-hover:opacity-100 transition-opacity" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
                         </svg>
                     </div>
-                    <div className="p-2.5 text-zinc-600 hover:text-zinc-400 transition-colors cursor-pointer">
+                    <div className="p-2 rounded-md text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)] transition-all cursor-pointer">
                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                         </svg>
                     </div>
-                    <div className="mt-auto p-2.5 text-zinc-600 hover:text-zinc-400 cursor-pointer">
+                    <div className="mt-auto p-2 rounded-md text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)] transition-all cursor-pointer">
                         <Settings className="w-5 h-5" />
                     </div>
                 </div>
 
                 {/* Content Area */}
-                <div className="flex-1 flex w-full">
-
+                <div className="flex-1 flex w-full relative">
 
                     {/* Explorer */}
-                    <div className="w-64 min-w-[200px] flex flex-col border-r border-black bg-[#101012]">
+                    <div className="w-64 min-w-[200px] flex flex-col border-r border-[var(--border-subtle)] bg-[var(--bg-panel)]">
                         <ExplorerPanel onFileSelect={handleFileSelect} activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
                     </div>
 
                     {/* Editor & Terminal */}
-                    <div className="flex-1 flex flex-col min-w-[300px] bg-[#1e1e1e]">
+                    <div className="flex-1 flex flex-col min-w-[300px] bg-[var(--bg-app)] relative">
                         {/* Document Tabs */}
                         {tabs.length > 0 && (
                             <DocumentTabs
@@ -371,22 +366,14 @@ const AppLayoutInner: React.FC = () => {
                             />
                         )}
 
-                        <div className="flex-1 overflow-hidden">
+                        <div className="flex-1 overflow-hidden relative">
                             {(() => {
                                 const activeTab = tabs.find(t => t.id === activeTabId);
                                 if (!activeTab) return <EditorPanel activeFile={null} highlightLines={null} />;
 
                                 if (activeTab.type === 'ephemeral') {
-                                    // Check if this is a new file proposal
                                     const isNewFileProposal = activeTab.id.startsWith('new-file-');
                                     const changeId = isNewFileProposal ? activeTab.id.replace('new-file-', '') : undefined;
-
-                                    console.log('[Layout] Rendering ephemeral tab:', {
-                                        tabId: activeTab.id,
-                                        isNewFileProposal,
-                                        changeId,
-                                        pendingChangesCount: pendingChanges.length
-                                    });
 
                                     return (
                                         <DocumentViewer
@@ -403,44 +390,18 @@ const AppLayoutInner: React.FC = () => {
                                     );
                                 }
 
-                                // Find pending change for this file
                                 const pendingChange = pendingChanges.find(c => c.path === activeTab.path);
-
-                                // Calculate file navigation info
                                 const filesWithChanges = [...new Set(pendingChanges.map(c => c.path))];
-                                const currentFileIndex = activeTab.path
-                                    ? filesWithChanges.indexOf(activeTab.path) + 1
-                                    : 0;
+                                const currentFileIndex = activeTab.path ? filesWithChanges.indexOf(activeTab.path) + 1 : 0;
 
-                                // Navigation callbacks
                                 const navigateToFile = (path: string) => {
                                     const tabId = `file-${path}`;
                                     const existingTab = tabs.find(t => t.type === 'file' && t.path === path);
-                                    if (existingTab) {
-                                        setActiveTabId(existingTab.id);
-                                    } else {
-                                        // Open the file if not already open
+                                    if (existingTab) setActiveTabId(existingTab.id);
+                                    else {
                                         const filename = path.split('/').pop() || path;
-                                        const newTab = {
-                                            id: tabId,
-                                            title: filename,
-                                            type: 'file' as const,
-                                            path,
-                                        };
-                                        setTabs(prev => [...prev, newTab]);
+                                        setTabs(prev => [...prev, { id: tabId, title: filename, type: 'file', path }]);
                                         setActiveTabId(tabId);
-                                    }
-                                };
-
-                                const onNextFile = () => {
-                                    if (currentFileIndex < filesWithChanges.length) {
-                                        navigateToFile(filesWithChanges[currentFileIndex]);
-                                    }
-                                };
-
-                                const onPrevFile = () => {
-                                    if (currentFileIndex > 1) {
-                                        navigateToFile(filesWithChanges[currentFileIndex - 2]);
                                     }
                                 };
 
@@ -453,24 +414,27 @@ const AppLayoutInner: React.FC = () => {
                                         onRejectEdit={rejectChange}
                                         totalPendingFiles={filesWithChanges.length}
                                         currentFileIndex={currentFileIndex || 1}
-                                        onNextFile={filesWithChanges.length > 1 ? onNextFile : undefined}
-                                        onPrevFile={filesWithChanges.length > 1 ? onPrevFile : undefined}
+                                        onNextFile={filesWithChanges.length > 1 && currentFileIndex < filesWithChanges.length ? () => navigateToFile(filesWithChanges[currentFileIndex]) : undefined}
+                                        onPrevFile={filesWithChanges.length > 1 && currentFileIndex > 1 ? () => navigateToFile(filesWithChanges[currentFileIndex - 2]) : undefined}
                                     />
                                 );
                             })()}
                         </div>
-                        {/* Terminal Resizer & Pane */}
+
+                        {/* Terminal Resizer */}
                         <div
-                            className={`h-1 cursor-row-resize bg-[#2d2d2d] hover:bg-blue-500 transition-colors ${isDragging ? 'bg-blue-500' : ''}`}
+                            className={`h-[1px] cursor-row-resize bg-[var(--border-subtle)] hover:bg-[var(--accent-secondary)] hover:h-[2px] transition-all z-20 ${isDragging ? 'bg-[var(--accent-secondary)] h-[2px]' : ''}`}
                             onMouseDown={handleMouseDown}
                         />
-                        <div style={{ height: terminalHeight }} className="border-t border-[#3c3c3c]">
+
+                        {/* Terminal Pane */}
+                        <div style={{ height: terminalHeight }} className="bg-[var(--term-bg)]">
                             <TerminalPane />
                         </div>
                     </div>
 
                     {/* AI Chat */}
-                    <div className="w-96 min-w-[300px] border-l border-zinc-800 bg-[#09090b] flex flex-col shadow-2xl z-10">
+                    <div className="w-[400px] min-w-[320px] border-l border-[var(--border-subtle)] bg-[var(--bg-panel)] flex flex-col shadow-xl z-30">
                         <ChatPanel />
                     </div>
 
@@ -478,18 +442,18 @@ const AppLayoutInner: React.FC = () => {
             </div>
 
             {/* Status Bar */}
-            <div className="h-6 bg-[#007acc] text-white flex items-center px-3 text-[10px] font-mono justify-between select-none z-30">
+            <div className="h-6 bg-[var(--bg-app)] border-t border-[var(--border-subtle)] text-[var(--fg-tertiary)] flex items-center px-3 text-[10px] font-mono justify-between select-none z-40">
                 <div className="flex items-center gap-4">
-                    <span className="flex items-center gap-1">
+                    <span className="flex items-center gap-1.5 hover:text-[var(--fg-secondary)] cursor-pointer transition-colors">
                         <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></svg>
                         main*
                     </span>
-                    <span>{(() => {
+                    <span className="text-[var(--fg-secondary)]">{(() => {
                         const activeTab = tabs.find(tab => tab.id === activeTabId);
                         return activeTab ? activeTab.title : t('editor.noFileOpen');
                     })()}</span>
                 </div>
-                <div className="flex items-center gap-4 opacity-80">
+                <div className="flex items-center gap-4 opacity-70">
                     <span>{t('editor.encoding')}</span>
                     <span>Rust</span>
                     <span>{t('app.name')}</span>

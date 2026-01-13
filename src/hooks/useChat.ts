@@ -90,6 +90,7 @@ export function useChat() {
                     // console.log(`[v1.1 MessageBuffer] Chunk ${id} len=${chunk.length} type=${type}`);
                     setLoading(true);
 
+                    // Handle reasoning
                     if (type === 'reasoning') {
                         if (accumulatedReasoningRef.current.id !== id) {
                             accumulatedReasoningRef.current = { id, content: '' };
@@ -101,10 +102,32 @@ export function useChat() {
                             const existingIdx = prev.findIndex(m => m.id === id);
                             if (existingIdx !== -1) {
                                 const updated = [...prev];
-                                updated[existingIdx] = { ...updated[existingIdx], reasoning: fullReasoning };
+                                const msg = updated[existingIdx];
+
+                                // Update legacy field
+                                const newMsg = { ...msg, reasoning: fullReasoning };
+
+                                // Update blocks: Append to last 'reasoning' block or create new
+                                const blocks = [...(newMsg.blocks || [])];
+                                const lastBlock = blocks[blocks.length - 1];
+                                if (lastBlock && lastBlock.type === 'reasoning') {
+                                    blocks[blocks.length - 1] = { ...lastBlock, content: lastBlock.content + chunk };
+                                } else {
+                                    blocks.push({ type: 'reasoning', content: chunk, id: crypto.randomUUID() });
+                                }
+                                newMsg.blocks = blocks;
+
+                                updated[existingIdx] = newMsg;
                                 return updated;
                             }
-                            return [...prev, { id, role: 'Assistant', reasoning: fullReasoning, content: '' } as ChatMessage];
+                            // New message starting with reasoning
+                            return [...prev, {
+                                id,
+                                role: 'Assistant',
+                                reasoning: fullReasoning,
+                                content: '',
+                                blocks: [{ type: 'reasoning', content: fullReasoning, id: crypto.randomUUID() }]
+                            } as ChatMessage];
                         });
                     } else {
                         // Regular Content
@@ -118,16 +141,44 @@ export function useChat() {
                             const existingIdx = prev.findIndex(m => m.id === id);
                             if (existingIdx !== -1) {
                                 const updated = [...prev];
-                                updated[existingIdx] = { ...updated[existingIdx], content: fullContent };
+                                const msg = updated[existingIdx];
+
+                                // Update legacy field
+                                const newMsg = { ...msg, content: fullContent };
+
+                                // Update blocks: Append to last 'text' block or create new
+                                const blocks = [...(newMsg.blocks || [])];
+                                const lastBlock = blocks[blocks.length - 1];
+                                if (lastBlock && lastBlock.type === 'text') {
+                                    blocks[blocks.length - 1] = { ...lastBlock, content: lastBlock.content + chunk };
+                                } else {
+                                    blocks.push({ type: 'text', content: chunk, id: crypto.randomUUID() });
+                                }
+                                newMsg.blocks = blocks;
+
+                                updated[existingIdx] = newMsg;
                                 return updated;
                             }
+                            // New message starting with text (if reasoning was skipped/missing)
                             const last = prev[prev.length - 1];
                             if (last && last.role === 'Assistant' && !last.id) {
+                                // Update placeholder
                                 const updated = [...prev];
-                                updated[prev.length - 1] = { ...last, id, content: fullContent };
+                                const msg = updated[prev.length - 1];
+                                updated[prev.length - 1] = {
+                                    ...msg,
+                                    id,
+                                    content: fullContent,
+                                    blocks: [...(msg.blocks || []), { type: 'text', content: chunk, id: crypto.randomUUID() }]
+                                };
                                 return updated;
                             }
-                            return [...prev, { id, role: 'Assistant', content: fullContent } as ChatMessage];
+                            return [...prev, {
+                                id,
+                                role: 'Assistant',
+                                content: fullContent,
+                                blocks: [{ type: 'text', content: fullContent, id: crypto.randomUUID() }]
+                            } as ChatMessage];
                         });
                     }
                 },
@@ -314,12 +365,13 @@ export function useChat() {
                             const existingIdx = prev.findIndex(msg => msg.id === message_id);
 
                             if (existingIdx === -1) {
-                                console.log('[v1.1 Chat] Creating missing assistant message for tool call:', message_id);
+                                // Create new message for tool if missing
                                 const newMsg: ChatMessage = {
                                     id: message_id,
                                     role: 'Assistant',
                                     content: '',
-                                    tool_calls: tool_call ? [{ ...tool_call, status: status as any, result }] : []
+                                    tool_calls: tool_call ? [{ ...tool_call, status: status as any, result }] : [],
+                                    blocks: tool_call ? [{ type: 'tool_call', id: tool_call_id }] : []
                                 };
                                 return [...prev, newMsg];
                             }
@@ -328,33 +380,34 @@ export function useChat() {
                                 if (msg.id === message_id) {
                                     const existingTools = msg.tool_calls || [];
                                     const toolIndex = existingTools.findIndex(tc => tc.id === tool_call_id);
+                                    let newTools = [...existingTools];
+                                    let newBlocks = [...(msg.blocks || [])];
 
                                     if (toolIndex >= 0) {
-                                        // Update existing
-                                        const newTools = [...existingTools];
+                                        // Update existing tool
                                         newTools[toolIndex] = { ...newTools[toolIndex], status: status as any };
                                         if (result) newTools[toolIndex].result = result;
-                                        // Update properties if provided (e.g. arguments might change or full details arrived)
-                                        if (tool_call) {
-                                            newTools[toolIndex] = { ...newTools[toolIndex], ...tool_call };
-                                        }
-                                        return { ...msg, tool_calls: newTools };
+                                        if (tool_call) newTools[toolIndex] = { ...newTools[toolIndex], ...tool_call };
                                     } else {
                                         // Add new tool call
                                         if (tool_call) {
-                                            console.log('[v1.1 Chat] Adding new tool call:', tool_call);
-                                            // Snapshot content as "before tools" if this is the first tool call appearing
-                                            // This allows the UI to compute post-tool text by diffing valid content vs content_before_tools
                                             const contentBefore = msg.content_before_tools !== undefined ? msg.content_before_tools : msg.content;
+                                            // Check if block already exists (idempotency safety)
+                                            if (!newBlocks.some(b => b.type === 'tool_call' && b.id === tool_call_id)) {
+                                                newBlocks.push({ type: 'tool_call', id: tool_call_id });
+                                            }
+
                                             return {
                                                 ...msg,
                                                 content_before_tools: contentBefore,
-                                                tool_calls: [...existingTools, tool_call]
+                                                tool_calls: [...existingTools, tool_call],
+                                                blocks: newBlocks
                                             };
                                         } else {
                                             console.warn('[v1.1 Chat] Received ToolUpdate for unknown tool but no tool_call data provided:', tool_call_id);
                                         }
                                     }
+                                    return { ...msg, tool_calls: newTools, blocks: newBlocks }; // Return updated msg
                                 }
                                 return msg;
                             });

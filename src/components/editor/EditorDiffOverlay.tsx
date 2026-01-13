@@ -1,5 +1,5 @@
 import React from 'react';
-import { useTranslations } from 'next-intl';
+import { useTranslation } from 'react-i18next';
 import { Check, X, FilePlus, Trash2 } from 'lucide-react';
 import type { Change } from '../../types/change';
 import { MultiPatchDiff } from './MultiPatchDiff';
@@ -16,7 +16,7 @@ export const EditorDiffOverlay: React.FC<EditorDiffOverlayProps> = ({
     onAccept,
     onReject
 }) => {
-    const t = useTranslations();
+    const { t } = useTranslation();
     const filename = change.path.split('/').pop() || change.path;
 
     // Delegate multi-patch changes to specialized component

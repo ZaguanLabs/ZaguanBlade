@@ -41,6 +41,9 @@ pub enum BladeWsEvent {
         name: String,
         arguments: Value,
     },
+    ToolResultAck {
+        pending_count: i64,
+    },
     ChatDone {
         finish_reason: String,
     },
@@ -511,6 +514,20 @@ impl BladeWsClient {
 
                 eprintln!("[BLADE WS] Error: {} - {}", code, message);
                 let _ = tx.send(BladeWsEvent::Error { code, message });
+            }
+            "tool_result_ack" => {
+                // Tool result acknowledgment - zcoderd received our result but is waiting for more
+                let pending_count = msg
+                    .payload
+                    .get("pending_count")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+
+                eprintln!(
+                    "[BLADE WS] Tool result acknowledged, waiting for {} more result(s)",
+                    pending_count
+                );
+                let _ = tx.send(BladeWsEvent::ToolResultAck { pending_count });
             }
             _ => {
                 eprintln!("[BLADE WS] Unknown message type: {}", msg.msg_type);

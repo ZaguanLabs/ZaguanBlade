@@ -16,6 +16,7 @@ pub mod idempotency; // [NEW] v1.1: Idempotency cache
 pub mod models;
 pub mod project;
 pub mod protocol;
+pub mod reasoning_parser; // [NEW] v1.2: Multi-format reasoning extraction
 pub mod terminal;
 pub mod tool_execution;
 pub mod tools;

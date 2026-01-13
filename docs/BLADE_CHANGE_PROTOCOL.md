@@ -1,4 +1,4 @@
-# Blade Change Protocol (BCP) v1.1 [Hardened]
+# Blade Change Protocol (BCP) v1.2 [Hardened]
 
 > "The only constant is change. The only defense is structure."
 
@@ -42,7 +42,7 @@ pub struct Version {
 }
 
 impl Version {
-    pub const CURRENT: Version = Version { major: 1, minor: 1, patch: 0 };
+    pub const CURRENT: Version = Version { major: 1, minor: 2, patch: 0 };
     
     pub fn is_compatible(&self, other: &Version) -> bool {
         self.major == other.major
@@ -181,8 +181,39 @@ The frontend SHOULD buffer out-of-order events and apply them in sequence.
 *   **Events**:
     *   `ChatState { messages: Vec<Message> }` (Full sync)
     *   `MessageDelta { id: Uuid, seq: u64, chunk: String, is_final: bool }` (Streaming)
+    *   `ReasoningDelta { id: Uuid, seq: u64, chunk: String, is_final: bool }` (Reasoning blocks)
     *   `MessageCompleted { id: Uuid }` (Explicit end-of-stream)
     *   `GenerationSignal { is_generating: bool }` (UI spinner state)
+    *   `ToolCall { message_id: Uuid, tool_call_id: String, name: String, arguments: Value }`
+    *   `ToolUpdate { message_id: Uuid, tool_call_id: String, status: String, result: Option<String> }`
+
+#### Interleaved Reasoning + Tool Calls (v1.2)
+
+Models with reasoning capabilities (MiniMax M2.1, Kimi K2 Thinking) may emit 
+`ReasoningDelta` events interleaved with `ToolCall` and `ToolUpdate` events:
+
+**Example Event Sequence:**
+```
+1. ReasoningDelta (seq: 0) - "Let me search for information..."
+2. ToolCall (id: "call_1", name: "search", arguments: {...})
+3. ToolUpdate (id: "call_1", status: "completed", result: "...")
+4. ReasoningDelta (seq: 1) - "Based on the search results..."
+5. ToolCall (id: "call_2", name: "fetch_url", arguments: {...})
+6. ToolUpdate (id: "call_2", status: "completed", result: "...")
+7. ReasoningDelta (seq: 2) - "Now I can provide the answer..."
+8. MessageDelta (seq: 0) - Final answer text
+9. MessageCompleted
+```
+
+**Supported Reasoning Formats:**
+- `<think>...</think>` (DeepSeek R1, Qwen QwQ, MiniMax M2.1)
+- `<thinking>...</thinking>` (Alternative format)
+
+**Server-Executed Web Tools:**
+The following tools are executed by `zcoderd` and require no frontend action:
+- `fetch_url` (@web) - Fetch single URL content
+- `search` (@search) - Quick SearXNG search
+- `research` (@research) - Deep AI-powered research
 
 ### B. Editor Domain
 *   **Intents**: `OpenFile`, `SaveFile`, `BufferUpdate` (Virtual Buffers).
@@ -255,6 +286,13 @@ These namespaces are reserved in the Enum to ensure future extensibility without
 *   Added `cwd` field to `Spawn` intent for working directory control.
 *   Documented idempotency and event ordering rules.
 
+### v1.2 (2026-01-12)
+**Enhancements:**
+*   Added **Interleaved Reasoning + Tool Calls** pattern documentation.
+*   `ReasoningDelta` events may now be interleaved with `ToolCall` and `ToolUpdate` events.
+*   Documented web research tools (`fetch_url`, `search`, `research`) as server-executed tools.
+*   Added multi-format reasoning tag support (`<think>`, `<thinking>`) at protocol level.
+
 ### v1.0 (2026-01-08)
 *   Initial hardened protocol definition.
 *   Unified dispatcher pattern.
@@ -264,5 +302,5 @@ These namespaces are reserved in the Enum to ensure future extensibility without
 *   Reserved namespaces for future domains.
 
 ---
-*Status: Hardened v1.1*
-*Last Updated: 2026-01-08*
+*Status: Hardened v1.2*
+*Last Updated: 2026-01-12*

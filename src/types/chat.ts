@@ -14,7 +14,13 @@ export interface ChatMessage {
     content_after_tools?: string;
     commandExecutions?: CommandExecution[];
     todos?: TodoItem[];
+    blocks?: MessageBlock[];
 }
+
+export type MessageBlock =
+    | { type: 'text'; content: string; id: string }
+    | { type: 'reasoning'; content: string; id: string }
+    | { type: 'tool_call'; id: string };
 
 export interface ProgressInfo {
     message: string;

@@ -42,7 +42,7 @@ panic = "abort" # Strip expensive panic clean-up logic
 codegen-units = 1 # Compile more slowly, but better optimization
 lto = true # Enable Link Time Optimization
 opt-level = 3 # Optimize for speed
-strip = true # Strip symbols from binary
+strip = false # Do not strip symbols (required for Tauri bundler type injection)
 
 [dev-dependencies]
 tempfile = "3.24.0"

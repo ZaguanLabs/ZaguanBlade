@@ -753,6 +753,7 @@ pub fn apply_patch_to_string(
 
 /// Represents a single patch hunk for multi-patch operations
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct PatchHunk {
     old_text: String,
     new_text: String,

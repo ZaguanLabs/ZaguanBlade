@@ -16,7 +16,7 @@ pub struct Version {
 impl Version {
     pub const CURRENT: Version = Version {
         major: 1,
-        minor: 1,
+        minor: 2,
         patch: 0,
     };
 
@@ -374,6 +374,7 @@ mod tests {
         let envelope = BladeIntentEnvelope {
             id,
             timestamp,
+            idempotency_key: None,
             intent: intent.clone(),
         };
 

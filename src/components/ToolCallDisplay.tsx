@@ -129,7 +129,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                         return (
                             <div key={key} className="flex gap-3 text-xs items-start">
                                 <span className="font-mono text-zinc-500 min-w-[80px] shrink-0">{key}:</span>
-                                <span className="font-mono text-zinc-300 flex-1 break-all">
+                                <span className="font-mono text-zinc-300 flex-1 break-all select-text">
                                     {displayValue}
                                 </span>
                             </div>

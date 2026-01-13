@@ -1,6 +1,5 @@
-'use client';
 import React, { useEffect, useRef } from 'react';
-import { useTranslations } from 'next-intl';
+import { useTranslation } from 'react-i18next';
 import { Check, X } from 'lucide-react';
 import { useChat } from '../hooks/useChat';
 import { useCommandExecution } from '../hooks/useCommandExecution';
@@ -10,7 +9,7 @@ import { ModelSelector } from './ModelSelector';
 import { ChatTerminal } from './ChatTerminal';
 
 export const ChatPanel: React.FC = () => {
-    const t = useTranslations();
+    const { t } = useTranslation();
     const {
         messages,
         loading,
@@ -45,21 +44,17 @@ export const ChatPanel: React.FC = () => {
     }, [messages, loading, pendingChanges]);
 
     return (
-        <div className="flex flex-col h-full bg-[#09090b] text-zinc-300 font-sans tracking-tight">
+        <div className="flex flex-col h-full bg-[var(--bg-app)] text-[var(--fg-primary)] font-sans tracking-tight">
             {/* Header */}
-            <header className="h-10 border-b border-zinc-800/50 flex items-center px-4 bg-zinc-950/80 backdrop-blur justify-between select-none shrink-0">
-                <div className="font-medium text-zinc-400 text-sm tracking-tight flex items-center gap-2">
-                    <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full shadow-[0_0_8px_rgba(16,185,129,0.4)]"></span>
-                    {t('app.name')}
-                </div>
-                <div className="text-[10px] uppercase tracking-wider text-zinc-600 font-mono flex items-center gap-3">
+            {/* Header */}
+            <header className="h-10 border-b border-[var(--border-subtle)] flex items-center px-2 bg-[var(--bg-app)] select-none shrink-0 z-30">
+                <div className="w-full">
                     <ModelSelector
                         models={models}
-                        selectedId={selectedModelId}
+                        selectedId={selectedModelId || ''}
                         onSelect={setSelectedModelId}
                         disabled={loading}
                     />
-                    <span>{messages.length} OPS</span>
                 </div>
             </header>
 
@@ -74,11 +69,11 @@ export const ChatPanel: React.FC = () => {
             >
                 <div className="max-w-4xl mx-auto py-6">
                     {messages.length === 0 && (
-                        <div className="flex flex-col items-center justify-center p-12 text-zinc-600 text-center space-y-4 select-none">
+                        <div className="flex flex-col items-center justify-center p-12 text-[var(--fg-tertiary)] text-center space-y-4 select-none">
                             <div className="text-4xl opacity-20 filter grayscale">
                                 🗡️
                             </div>
-                            <h2 className="text-sm font-medium text-zinc-500 tracking-wide uppercase">System Ready</h2>
+                            <h2 className="text-sm font-medium text-[var(--fg-secondary)] tracking-wide uppercase">System Ready</h2>
                             <p className="max-w-xs text-xs font-mono opacity-50">
                                 Awaiting input. Surgical precision engaged.
                             </p>
@@ -87,26 +82,45 @@ export const ChatPanel: React.FC = () => {
 
                     {messages.map((msg, idx) => {
                         // Show pending actions on the last assistant message
-                        const isLastAssistant = idx === messages.length - 1 && msg.role === 'Assistant';
+                        const isLast = idx === messages.length - 1;
+                        const isLastAssistant = isLast && msg.role === 'Assistant';
                         const showPendingActions = isLastAssistant && pendingActions && pendingActions.length > 0;
-                        
+
+                        // Calculate visual grouping props
+                        const prevMsg = idx > 0 ? messages[idx - 1] : null;
+
+                        // Treat "Tool" messages (if any visible) as part of Assistant flow if previous was Assistant
+                        // Currently we hide Tool messages in ChatMessage, but if they were shown or if we have
+                        // consecutive Assistant messages (split reasoning/tool calls), we group them.
+                        const isAssistant = msg.role === 'Assistant';
+                        const prevWasAssistant = prevMsg?.role === 'Assistant';
+
+                        // Simple grouping: If current is assistant and previous was assistant
+                        const isContinued = isAssistant && prevWasAssistant;
+
+                        // Determine if this message is actively streaming/reasoning
+                        // We assume the last message is active if global loading state is true
+                        const isActive = isLast && loading;
+
                         // Find active executions for this message's tool calls
                         const messageExecutions = msg.tool_calls
                             ?.map(tc => executions.get(tc.id))
                             .filter(Boolean) || [];
-                        
+
                         return (
                             <React.Fragment key={idx}>
-                                <ChatMessage 
+                                <ChatMessage
                                     message={msg}
                                     pendingActions={showPendingActions ? pendingActions : undefined}
                                     onApproveCommand={showPendingActions ? () => approveToolDecision('approve_once') : undefined}
                                     onSkipCommand={showPendingActions ? () => approveToolDecision('reject') : undefined}
+                                    isContinued={isContinued}
+                                    isActive={isActive}
                                 />
-                                
+
                                 {/* Show terminals right after the message they belong to */}
                                 {messageExecutions.map((exec) => exec && (
-                                    <div key={exec.callId} className="px-4 py-2">
+                                    <div key={exec.callId} className="px-4 py-2 pl-[44px]"> {/* Increased indent for continued look */}
                                         <ChatTerminal
                                             commandId={exec.commandId}
                                             command={exec.command}
@@ -127,10 +141,10 @@ export const ChatPanel: React.FC = () => {
                             <div className="text-xs text-purple-300 font-semibold mb-1">
                                 📝 {pendingChanges.length} change{pendingChanges.length > 1 ? 's' : ''} pending review
                             </div>
-                            <div className="text-xs text-zinc-400">
+                            <div className="text-xs text-[var(--fg-secondary)]">
                                 {pendingChanges.map(c => c.path?.split('/').pop() || 'unknown').join(', ')}
                             </div>
-                            <div className="text-xs text-zinc-500 mt-2">
+                            <div className="text-xs text-[var(--fg-tertiary)] mt-2">
                                 Open the file in the editor to review changes, or use the buttons below.
                             </div>
                         </div>
@@ -149,11 +163,11 @@ export const ChatPanel: React.FC = () => {
 
             {/* Global Accept/Reject All Buttons */}
             {pendingChanges.length > 0 && (
-                <div className="shrink-0 px-3 py-2 bg-zinc-900/30 border-t border-zinc-800/50">
+                <div className="shrink-0 px-3 py-2 bg-[var(--bg-panel)] border-t border-[var(--border-subtle)]">
                     <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
                             <div className="w-2 h-2 rounded-full bg-purple-400 animate-pulse" />
-                            <span className="text-[10px] text-zinc-400 font-mono uppercase tracking-wide">
+                            <span className="text-[10px] text-[var(--fg-secondary)] font-mono uppercase tracking-wide">
                                 {pendingChanges.length} {pendingChanges.length === 1 ? 'change' : 'changes'} pending review
                             </span>
                         </div>

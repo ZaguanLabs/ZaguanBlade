@@ -11,6 +11,7 @@ use crate::protocol::ToolFunction;
 use crate::protocol::{ChatEvent, ChatMessage, ChatRole, ToolCall};
 // use crate::protocol::{ChatEvent, ChatMessage, ChatRole, ToolCall}; // Duplicates removed
 // use crate::xml_parser; // Duplicate removed
+use crate::reasoning_parser::ReasoningParser;
 use crate::xml_parser;
 
 pub enum DrainResult {
@@ -31,7 +32,7 @@ pub struct ChatManager {
     pub streaming: bool,
     pub rx: Option<mpsc::Receiver<ChatEvent>>,
     pub xml_buffer: String,
-    pub in_think_block: bool,
+    pub reasoning_parser: ReasoningParser, // v1.2: Multi-format reasoning extraction
     pub agentic_loop: AgenticLoop,
     pub session_id: Option<String>,
     abort_handle: Option<tokio::task::AbortHandle>,
@@ -47,7 +48,7 @@ impl ChatManager {
             streaming: false,
             rx: None,
             xml_buffer: String::new(),
-            in_think_block: false,
+            reasoning_parser: ReasoningParser::new(),
             agentic_loop: AgenticLoop::new(max_turns),
             session_id: None,
             abort_handle: None,
@@ -71,7 +72,7 @@ impl ChatManager {
         cursor_column: Option<usize>,
         _http: reqwest::Client,
     ) -> Result<(), String> {
-        self.in_think_block = false;
+        self.reasoning_parser.reset();
         self.xml_buffer.clear();
         self.accumulated_tool_calls.clear();
         self.updated_assistant_message = None;
@@ -223,6 +224,15 @@ impl ChatManager {
                                 };
                                 let _ = tx.send(ChatEvent::ToolCalls(vec![tool_call]));
                             }
+                            crate::blade_ws_client::BladeWsEvent::ToolResultAck { pending_count } => {
+                                // zcoderd acknowledged our tool result but is waiting for more
+                                // This is informational - keep connection alive and wait for real response
+                                eprintln!(
+                                    "[CHAT MGR] Tool result acknowledged, {} more pending",
+                                    pending_count
+                                );
+                                // Continue listening - don't close connection or emit Done
+                            }
                             crate::blade_ws_client::BladeWsEvent::ChatDone { finish_reason } => {
                                 eprintln!("[CHAT MGR] Chat done: {}", finish_reason);
                                 saw_chat_done = true;
@@ -325,203 +335,135 @@ impl ChatManager {
             .ok_or_else(|| "No session ID available".to_string())?;
 
         eprintln!(
-            "[CHAT MGR] Sending {} tool results via WebSocket",
+            "[CHAT MGR] Sending {} tool results via WebSocket (Sequential/Single-Connection)",
             batch.file_results.len()
         );
 
-        // Send all tool results except the last one without waiting for response
-        for (call, result) in batch
-            .file_results
-            .iter()
-            .take(batch.file_results.len().saturating_sub(1))
-        {
-            let ws_client = crate::blade_ws_client::BladeWsClient::new(blade_url.clone(), api_key.clone());
-            let tool_content = result.to_tool_content();
-            eprintln!("[TOOL RESULT SEND] call_id={}, success={}, content_len={}, content_preview={}", 
-                call.id, result.success, tool_content.len(), 
-                &tool_content.chars().take(200).collect::<String>());
-            let tool_result = crate::blade_ws_client::ToolResult {
-                success: result.success,
-                content: tool_content,
-                error: if result.success {
-                    None
-                } else {
-                    Some("Tool execution failed".to_string())
-                },
-            };
-            let call_id = call.id.clone();
-            let session_id_clone = session_id.clone();
+        // Create the client once
+        let ws_client = crate::blade_ws_client::BladeWsClient::new(blade_url, api_key);
+        let results = batch.file_results.clone(); // Clone for the task
+        
+        // Channel for the main thread
+        let (tx, rx) = mpsc::channel();
+        
+        // Spawn a SINGLE task to handle the entire batch interaction
+        tokio::spawn(async move {
+            eprintln!("[CHAT MGR] Connecting to WebSocket for batch tool submission");
+            
+            match ws_client.connect().await {
+                Ok(mut ws_rx) => {
+                    let mut authenticated = false;
+                    let mut results_sent_count = 0;
+                    let total_results = results.len();
+                    let mut saw_final_chat_done = false;
+                    let mut saw_content = false;
+                    
+                    // Event loop
+                    while let Some(event) = ws_rx.recv().await {
+                        match event {
+                            crate::blade_ws_client::BladeWsEvent::Connected { .. } => {
+                                eprintln!("[CHAT MGR] Authenticated, starting batch submission");
+                                authenticated = true;
 
-            eprintln!(
-                "[CHAT MGR] Sending intermediate tool result via WebSocket: call_id={}, success={}",
-                call_id, result.success
-            );
+                                // Send ALL results sequentially
+                                for (call, result) in &results {
+                                    let tool_content = result.to_tool_content();
+                                    eprintln!("[TOOL RESULT SEND] call_id={}, success={}", call.id, result.success);
+                                    
+                                    let tool_result = crate::blade_ws_client::ToolResult {
+                                        success: result.success,
+                                        content: tool_content,
+                                        error: if result.success { None } else { Some("Tool execution failed".to_string()) },
+                                    };
 
-            // Send this tool result without waiting for streaming response
-            tokio::spawn(async move {
-                match ws_client.connect().await {
-                    Ok(mut ws_rx) => {
-                        while let Some(event) = ws_rx.recv().await {
-                            if let crate::blade_ws_client::BladeWsEvent::Connected { .. } = event {
-                                if let Err(e) = ws_client
-                                    .send_tool_result(
-                                        session_id_clone.clone(),
-                                        call_id.clone(),
-                                        tool_result.clone(),
-                                    )
-                                    .await
-                                {
-                                    eprintln!(
-                                        "[CHAT MGR] Failed to send intermediate tool result: {}",
-                                        e
-                                    );
+                                    if let Err(e) = ws_client.send_tool_result(
+                                        session_id.clone(),
+                                        call.id.clone(),
+                                        tool_result
+                                    ).await {
+                                        eprintln!("[CHAT MGR] Failed to send tool result {}: {}", call.id, e);
+                                        // We continue trying to send others? Or break? 
+                                        // Creating an error here might be fatal for the turn.
+                                        let _ = tx.send(ChatEvent::Error(format!("Failed to send tool result: {}", e)));
+                                        break; 
+                                    }
+                                    results_sent_count += 1;
+                                }
+                                eprintln!("[CHAT MGR] All {} results sent. Listening for response...", results_sent_count);
+                            }
+                            crate::blade_ws_client::BladeWsEvent::TextChunk(text) => {
+                                saw_content = true;
+                                let _ = tx.send(ChatEvent::Chunk(text));
+                            }
+                            crate::blade_ws_client::BladeWsEvent::ReasoningChunk(text) => {
+                                saw_content = true;
+                                let _ = tx.send(ChatEvent::ReasoningChunk(text));
+                            }
+                            crate::blade_ws_client::BladeWsEvent::ToolCall { id, name, arguments } => {
+                                saw_content = true;
+                                let tool_call = ToolCall {
+                                    id,
+                                    typ: "function".to_string(),
+                                    function: ToolFunction { name, arguments: arguments.to_string() },
+                                    status: Some("executing".to_string()),
+                                    result: None,
+                                };
+                                let _ = tx.send(ChatEvent::ToolCalls(vec![tool_call]));
+                            }
+                            crate::blade_ws_client::BladeWsEvent::ToolResultAck { pending_count } => {
+                                // zcoderd acknowledged our tool result but is waiting for more
+                                eprintln!(
+                                    "[CHAT MGR] Tool result acknowledged, {} more pending",
+                                    pending_count
+                                );
+                                // Continue listening - don't close connection or emit Done
+                            }
+                            crate::blade_ws_client::BladeWsEvent::ChatDone { finish_reason } => {
+                                eprintln!("[CHAT MGR] Chat done received: {}", finish_reason);
+                                // CRITICAL: Only consider the turn done if we have sent all results
+                                // AND if we have received some content (chunks/tools) from the new generation.
+                                // zcoderd/Protocol v2 can send ChatDone immediately as an ACK for tool results,
+                                // which we must ignore to catch the actual response stream.
+                                
+                                if results_sent_count >= total_results && saw_content {
+                                    saw_final_chat_done = true;
+                                    let _ = tx.send(ChatEvent::Done);
+                                } else {
+                                    eprintln!("[CHAT MGR] Ignoring premature ChatDone (sent {}/{}, saw_content={})", 
+                                        results_sent_count, total_results, saw_content);
+                                }
+                            }
+                            crate::blade_ws_client::BladeWsEvent::Error { code, message } => {
+                                eprintln!("[CHAT MGR] Error: {} - {}", code, message);
+                                if authenticated && (saw_final_chat_done || saw_content) {
+                                     let _ = tx.send(ChatEvent::Done);
+                                } else {
+                                     let _ = tx.send(ChatEvent::Error(message));
                                 }
                                 break;
                             }
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "[CHAT MGR] Failed to connect for intermediate tool result: {}",
-                            e
-                        );
-                    }
-                }
-            });
-        }
-
-        // Send the last tool result and wait for the streaming response
-        if let Some((call, result)) = batch.file_results.last() {
-            let ws_client = crate::blade_ws_client::BladeWsClient::new(blade_url, api_key);
-            let tool_content = result.to_tool_content();
-            eprintln!("[TOOL RESULT SEND FINAL] call_id={}, success={}, content_len={}, content_preview={}", 
-                call.id, result.success, tool_content.len(), 
-                &tool_content.chars().take(200).collect::<String>());
-            let tool_result = crate::blade_ws_client::ToolResult {
-                success: result.success,
-                content: tool_content,
-                error: if result.success {
-                    None
-                } else {
-                    Some("Tool execution failed".to_string())
-                },
-            };
-            let call_id = call.id.clone();
-
-            eprintln!(
-                "[CHAT MGR] Sending final tool result via WebSocket: call_id={}, success={}",
-                call_id, result.success
-            );
-
-            // Convert WebSocket events to ChatEvent channel
-            let (tx, rx) = mpsc::channel();
-
-            // Spawn async task to send tool result and handle events
-            tokio::spawn(async move {
-                eprintln!("[CHAT MGR] Connecting to WebSocket for tool result");
-                match ws_client.connect().await {
-                    Ok(mut ws_rx) => {
-                        // Wait for authentication
-                        let mut authenticated = false;
-                        let mut saw_chat_done = false;
-                        let mut saw_content = false;
-                        while let Some(event) = ws_rx.recv().await {
-                            match event {
-                                crate::blade_ws_client::BladeWsEvent::Connected { .. } => {
-                                    eprintln!("[CHAT MGR] Authenticated, sending tool result");
-                                    authenticated = true;
-
-                                    // Send tool result
-                                    if let Err(e) = ws_client
-                                        .send_tool_result(
-                                            session_id.clone(),
-                                            call_id.clone(),
-                                            tool_result.clone(),
-                                        )
-                                        .await
-                                    {
-                                        eprintln!("[CHAT MGR] Failed to send tool result: {}", e);
-                                        let _ = tx.send(ChatEvent::Error(e));
-                                        break;
-                                    }
-                                }
-                                crate::blade_ws_client::BladeWsEvent::TextChunk(text) => {
-                                    eprintln!("[CHAT MGR] Text chunk after tool: {}", text);
-                                    saw_content = true;
-                                    let _ = tx.send(ChatEvent::Chunk(text));
-                                }
-                                crate::blade_ws_client::BladeWsEvent::ReasoningChunk(text) => {
-                                    eprintln!("[CHAT MGR] Reasoning chunk after tool: {}", text);
-                                    saw_content = true;
-                                    let _ = tx.send(ChatEvent::ReasoningChunk(text));
-                                }
-                                crate::blade_ws_client::BladeWsEvent::ToolCall {
-                                    id,
-                                    name,
-                                    arguments,
-                                } => {
-                                    eprintln!("[CHAT MGR] Tool call after tool result: {}", name);
-                                    saw_content = true;
-                                    let tool_call = ToolCall {
-                                        id,
-                                        typ: "function".to_string(),
-                                        function: ToolFunction {
-                                            name,
-                                            arguments: arguments.to_string(),
-                                        },
-                                        status: Some("executing".to_string()),
-                                        result: None,
-                                    };
-                                    let _ = tx.send(ChatEvent::ToolCalls(vec![tool_call]));
-                                }
-                                crate::blade_ws_client::BladeWsEvent::ChatDone {
-                                    finish_reason,
-                                } => {
-                                    eprintln!("[CHAT MGR] Chat done after tool: {}", finish_reason);
-                                    saw_chat_done = true;
+                            crate::blade_ws_client::BladeWsEvent::Disconnected => {
+                                eprintln!("[CHAT MGR] Disconnected");
+                                if authenticated && (saw_final_chat_done || saw_content) {
                                     let _ = tx.send(ChatEvent::Done);
-                                    // Don't break - keep listening for more events
-                                    // Connection will close naturally or on next request
                                 }
-                                crate::blade_ws_client::BladeWsEvent::Error { code, message } => {
-                                    eprintln!("[CHAT MGR] Error: {} - {}", code, message);
-                                    if authenticated && (saw_chat_done || saw_content) {
-                                        let _ = tx.send(ChatEvent::Done);
-                                    } else {
-                                        let _ = tx.send(ChatEvent::Error(message));
-                                    }
-                                    break;
-                                }
-                                crate::blade_ws_client::BladeWsEvent::Disconnected => {
-                                    eprintln!("[CHAT MGR] Disconnected");
-                                    if authenticated && (saw_chat_done || saw_content) {
-                                        let _ = tx.send(ChatEvent::Done);
-                                    }
-                                    break;
-                                }
-                                _ => {}
+                                break;
                             }
-
-                            if !authenticated {
-                                continue;
-                            }
+                            _ => {}
                         }
-                        eprintln!("[CHAT MGR] Event loop ended after tool result");
-                    }
-                    Err(e) => {
-                        eprintln!("[CHAT MGR] WebSocket connection failed: {}", e);
-                        let _ = tx.send(ChatEvent::Error(e));
+                        
+                        if !authenticated { continue; }
                     }
                 }
-            });
+                Err(e) => {
+                    eprintln!("[CHAT MGR] WebSocket connection failed: {}", e);
+                    let _ = tx.send(ChatEvent::Error(e));
+                }
+            }
+        });
 
-            // Add assistant placeholder for next response
-            conversation.push(ChatMessage::new(ChatRole::Assistant, String::new()));
-
-            self.rx = Some(rx);
-            self.streaming = true;
-        }
-
+        self.rx = Some(rx);
+        self.streaming = true;
         Ok(())
     }
 
@@ -710,7 +652,7 @@ impl ChatManager {
 
             self.streaming = false;
             self.rx = None;
-            self.in_think_block = false;
+            self.reasoning_parser.reset();
 
             if let Some(msg) = error_msg {
                 self.pending_results.push_back(DrainResult::Error(msg));
@@ -728,44 +670,21 @@ impl ChatManager {
     }
 
     fn process_incoming_chunk(&mut self, chunk: &str, last_msg: &mut ChatMessage) {
-        let mut part = chunk;
+        // v1.2: Use ReasoningParser for multi-format reasoning extraction
+        let result = self.reasoning_parser.process(chunk);
 
-        loop {
-            if part.is_empty() {
-                break;
-            }
+        // Append text content (non-reasoning)
+        if !result.text.is_empty() {
+            self.append_content(&result.text, last_msg);
+        }
 
-            if !self.in_think_block {
-                if let Some(idx) = part.find("<think>") {
-                    let before = &part[..idx];
-                    self.append_content(before, last_msg);
-
-                    self.in_think_block = true;
-                    if last_msg.reasoning.is_none() {
-                        last_msg.reasoning = Some(String::new());
-                    }
-                    part = &part[idx + 7..];
-                } else {
-                    self.append_content(part, last_msg);
-                    break;
-                }
-            } else {
-                if let Some(idx) = part.find("</think>") {
-                    let reasoning = &part[..idx];
-                    if let Some(r) = last_msg.reasoning.as_mut() {
-                        r.push_str(reasoning);
-                    }
-                    self.in_think_block = false;
-                    part = &part[idx + 8..];
-                } else {
-                    if let Some(r) = last_msg.reasoning.as_mut() {
-                        r.push_str(part);
-                    }
-                    break;
-                }
-            }
+        // Append reasoning content
+        if !result.reasoning.is_empty() {
+            let r = last_msg.reasoning.get_or_insert_with(String::new);
+            r.push_str(&result.reasoning);
         }
     }
+
 
     fn append_content(&mut self, text: &str, last_msg: &mut ChatMessage) {
         // XML buffering for tool call detection (Qwen/GLM models)
@@ -882,7 +801,7 @@ impl ChatManager {
             handle.abort();
             self.streaming = false;
             self.rx = None;
-            self.in_think_block = false;
+            self.reasoning_parser.reset();
             // Also stop agentic loop
             self.agentic_loop.stop("User requested stop");
             true
@@ -929,16 +848,7 @@ mod tests {
     fn test_start_stream_adds_assistant_placeholder() {
         let mut chat_manager = ChatManager::new(10);
         let mut conversation = ConversationHistory::new();
-        conversation.push(ChatMessage {
-            role: ChatRole::User,
-            content: "Test".to_string(),
-            tool_calls: None,
-            reasoning: None,
-            tool_call_id: None,
-            progress: None,
-            content_before_tools: None,
-            content_after_tools: None,
-        });
+        conversation.push(ChatMessage::new(ChatRole::User, "Test".to_string()));
 
         let api_config = ApiConfig {
             api_key: "test_key".to_string(),
@@ -958,54 +868,12 @@ mod tests {
                 &api_config,
                 &models,
                 0,
-                None,
-                None,
-                None,
-                None,
-                None,
-                12, // cursor_line added in later steps? No, in my read it was there?
-                // Wait. Lines 1000 in read showed `12`? No.
-                // Let's check `start_stream` signature again.
-                // Line 58-71. 
-                // args: prompt, conversation, api_config, models, selected_model, workspace, active_file, open_files, cursor_line, cursor_column, http.
-                // Total 11 args.
-                // Test calls it with:
-                // "prompt", &mut conv, &api, &models, 0, None, None, None, None, None, http.
-                // That's 11 args.
-                // Wait, in my written `start_stream` (Lines 58-71):
-                /*
-        &mut self,
-        _prompt: String,
-        conversation: &mut ConversationHistory,
-        api_config: &ApiConfig,
-        models: &[ModelInfo],
-        selected_model: usize,
-        workspace: Option<&PathBuf>,
-        active_file: Option<String>,
-        open_files: Option<Vec<String>>,
-        cursor_line: Option<usize>,
-        cursor_column: Option<usize>,
-        _http: reqwest::Client,
-                */
-                // Yes.
-                // In test:
-                /*
-                "prompt".to_string(),
-                &mut conversation,
-                &api_config,
-                &models,
-                0,
-                None,
-                None,
-                None,
-                None,
-                None,
+                None, // workspace
+                None, // active_file
+                None, // open_files
+                None, // cursor_line
+                None, // cursor_column
                 http,
-                */
-                // That's 11.
-                // But my test in `write_to_file` has comments?
-                // I will just use `None` for cursor line/col.
-                 None, http
             );
 
             // Verify conversation has Assistant placeholder
@@ -1026,3 +894,4 @@ mod tests {
         });
     }
 }
+

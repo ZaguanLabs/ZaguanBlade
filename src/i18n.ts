@@ -1,18 +1,23 @@
-import { getRequestConfig } from 'next-intl/server';
-import { notFound } from 'next/navigation';
+import i18n from 'i18next';
+import { initReactI18next } from 'react-i18next';
+import LanguageDetector from 'i18next-browser-languagedetector';
+import HttpBackend from 'i18next-http-backend';
 
-// Supported locales
-export const locales = ['en'] as const;
-export type Locale = (typeof locales)[number];
+i18n
+  .use(HttpBackend)
+  .use(LanguageDetector)
+  .use(initReactI18next)
+  .init({
+    fallbackLng: 'en',
+    debug: import.meta.env.DEV,
 
-export const defaultLocale: Locale = 'en';
+    interpolation: {
+      escapeValue: false, // React already safes from xss
+    },
 
-export default getRequestConfig(async ({ locale }) => {
-  // Validate that the incoming `locale` parameter is valid
-  if (!locales.includes(locale as Locale)) notFound();
+    backend: {
+      loadPath: '/locales/{{lng}}/{{ns}}.json',
+    }
+  });
 
-  return {
-    locale: locale as string,
-    messages: (await import(`../messages/${locale}.json`)).default
-  };
-});
+export default i18n;
