@@ -2,8 +2,10 @@ use crate::tools::{self, ToolResult};
 use std::path::Path;
 use tauri::AppHandle;
 
+use tauri::Runtime;
+
 /// Context for IDE-aware tool execution
-pub struct ToolExecutionContext {
+pub struct ToolExecutionContext<R: Runtime> {
     pub workspace_root: Option<String>,
     pub active_file: Option<String>,
     pub open_files: Vec<String>,
@@ -12,10 +14,10 @@ pub struct ToolExecutionContext {
     pub cursor_column: Option<usize>,
     pub selection_start_line: Option<usize>,
     pub selection_end_line: Option<usize>,
-    pub app_handle: Option<AppHandle>,
+    pub app_handle: Option<AppHandle<R>>,
 }
 
-impl ToolExecutionContext {
+impl<R: Runtime> ToolExecutionContext<R> {
     pub fn new(
         workspace_root: Option<String>,
         active_file: Option<String>,
@@ -25,7 +27,7 @@ impl ToolExecutionContext {
         cursor_column: Option<usize>,
         selection_start_line: Option<usize>,
         selection_end_line: Option<usize>,
-        app_handle: Option<tauri::AppHandle>,
+        app_handle: Option<tauri::AppHandle<R>>,
     ) -> Self {
         Self {
             workspace_root,
@@ -42,8 +44,8 @@ impl ToolExecutionContext {
 }
 
 /// Execute a tool with IDE context
-pub fn execute_tool_with_context(
-    context: &ToolExecutionContext,
+pub fn execute_tool_with_context<R: Runtime>(
+    context: &ToolExecutionContext<R>,
     tool_name: &str,
     args: &str,
 ) -> ToolResult {

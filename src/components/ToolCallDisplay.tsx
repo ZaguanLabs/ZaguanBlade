@@ -9,8 +9,8 @@ interface ToolCallDisplayProps {
     result?: string;
 }
 
-export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({ 
-    toolCall, 
+export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
+    toolCall,
     status = 'pending'
 }) => {
     const getStatusIcon = () => {
@@ -59,7 +59,15 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     };
 
     // Get friendly tool name
-    const getFriendlyToolName = (name: string): string => {
+    const getFriendlyToolName = (name: string, args?: Record<string, unknown>): string => {
+        // Special handling for apply_patch to show patch count
+        if (name === 'apply_patch' && args) {
+            const patches = args.patches as Array<unknown> | undefined;
+            if (patches && patches.length > 1) {
+                return `📝 Applying ${patches.length} Code Changes`;
+            }
+        }
+
         const nameMap: Record<string, string> = {
             'apply_patch': '📝 Applying Code Changes',
             'edit_file': '✏️ Editing File',
@@ -94,18 +102,17 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                 <div className="flex items-center gap-2">
                     {getStatusIcon()}
                     <span className="text-xs font-medium text-zinc-200">
-                        {getFriendlyToolName(toolCall.function.name)}
+                        {getFriendlyToolName(toolCall.function.name, parsedArgs)}
                     </span>
                     <span className="text-[9px] font-mono text-zinc-600 bg-zinc-900/80 px-1.5 py-0.5 rounded border border-zinc-800/50">
                         {toolCall.id?.slice(0, 8) || 'unknown'}
                     </span>
                 </div>
-                <span className={`text-[9px] font-mono uppercase tracking-wider font-semibold ${
-                    status === 'complete' ? 'text-emerald-400' : 
-                    status === 'executing' ? 'text-blue-400' : 
-                    status === 'error' ? 'text-red-400' : 
-                    status === 'skipped' ? 'text-yellow-400' : 'text-zinc-500'
-                }`}>
+                <span className={`text-[9px] font-mono uppercase tracking-wider font-semibold ${status === 'complete' ? 'text-emerald-400' :
+                    status === 'executing' ? 'text-blue-400' :
+                        status === 'error' ? 'text-red-400' :
+                            status === 'skipped' ? 'text-yellow-400' : 'text-zinc-500'
+                    }`}>
                     {getStatusText()}
                 </span>
             </div>
@@ -122,7 +129,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                         return (
                             <div key={key} className="flex gap-3 text-xs items-start">
                                 <span className="font-mono text-zinc-500 min-w-[80px] shrink-0">{key}:</span>
-                                <span className="font-mono text-zinc-300 flex-1 break-all">
+                                <span className="font-mono text-zinc-300 flex-1 break-all select-text">
                                     {displayValue}
                                 </span>
                             </div>

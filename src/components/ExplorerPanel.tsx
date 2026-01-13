@@ -1,8 +1,12 @@
 'use client';
 import React, { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { BladeDispatcher } from '../services/blade';
+import { BladeEvent, FileEntry } from '../types/blade';
 import { listen } from '@tauri-apps/api/event';
-import { FileEntry } from '../types/explorer';
+// import { FileEntry } from '../types/explorer'; // Replaced by blade types
+// import { FileEntry } from '../types/explorer'; // Replaced by blade types
+import { FileExplorer } from './FileExplorer';
+import { ErrorBoundary } from './ErrorBoundary';
 import { Folder, FileBox, ChevronRight, FileCode, FileText } from 'lucide-react';
 
 interface ExplorerPanelProps {
@@ -26,6 +30,32 @@ const FileItem: React.FC<{
         setExpanded(false);
     }, [refreshKey]);
 
+    // Listener for Listing events
+    useEffect(() => {
+        if (!expanded && !entry.is_dir) return;
+
+        let unlisten: (() => void) | undefined;
+        const setupListener = async () => {
+            unlisten = await listen<BladeEvent>('sys-event', (event) => {
+                const bladeEvent = event.payload;
+                if (bladeEvent.type === 'File') {
+                    const fileEvent = bladeEvent.payload;
+                    if (fileEvent.type === 'Listing' && fileEvent.payload.path === entry.path) {
+                        setChildren(fileEvent.payload.entries);
+                    }
+                }
+            });
+        };
+
+        if (expanded) {
+            setupListener();
+        }
+
+        return () => {
+            if (unlisten) unlisten();
+        };
+    }, [expanded, entry.path, entry.is_dir]);
+
     const toggleExpand = async () => {
         if (!entry.is_dir) {
             onSelect(entry.path);
@@ -37,11 +67,11 @@ const FileItem: React.FC<{
         } else {
             setExpanded(true);
             if (!children) {
-                try {
-                    const files = await invoke<FileEntry[]>('list_files', { path: entry.path });
-                    setChildren(files);
-                } catch (e) {
-                    console.error("Failed to list dir:", e);
+                if (!children) {
+                    BladeDispatcher.file({
+                        type: 'List',
+                        payload: { path: entry.path }
+                    }).catch(e => console.error("Failed to dispatch list:", e));
                 }
             }
         }
@@ -104,18 +134,33 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
         if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
         try {
             // List workspace root
-            const files = await invoke<FileEntry[]>('list_files', { path: null });
-            setRoots(files);
+            await BladeDispatcher.file({
+                type: 'List',
+                payload: { path: null }
+            });
             setError(null);
         } catch (e) {
-            console.warn("Failed to load root (likely no workspace open):", e);
-            // Don't show critical error overlay for "No workspace open"
-            if (typeof e === 'string' && e.includes("No workspace open")) {
-                setRoots([]);
-                return;
-            }
+            console.warn("Failed to load root:", e);
             setError(String(e));
         }
+    }, []);
+
+    // Root Listener
+    useEffect(() => {
+        let unlisten: (() => void) | undefined;
+        const setupListener = async () => {
+            unlisten = await listen<BladeEvent>('sys-event', (event) => {
+                const bladeEvent = event.payload;
+                if (bladeEvent.type === 'File') {
+                    const fileEvent = bladeEvent.payload;
+                    if (fileEvent.type === 'Listing' && fileEvent.payload.path === null) {
+                        setRoots(fileEvent.payload.entries);
+                    }
+                }
+            });
+        };
+        setupListener();
+        return () => { if (unlisten) unlisten(); };
     }, []);
 
     useEffect(() => {
@@ -143,7 +188,11 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
     const [pathInput, setPathInput] = useState('');
     const openSpecificPath = async () => {
         try {
-            await invoke('open_folder', { path: pathInput });
+            // Still using invoke for 'open_folder' as it is a workspace state change, not just a File Read
+            // But we need to check if 'invoke' import is available.
+            // We removed it from top. We need to re-add it or use @tauri-apps/api/core dynamically
+            const { invoke } = await import('@tauri-apps/api/core');
+            await invoke('open_workspace', { path: pathInput });
             loadRoot();
         } catch (e) {
             console.error(e);
@@ -152,10 +201,10 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
     };
 
     return (
-        <div className="h-full bg-[#18181b] border-r border-black flex flex-col text-zinc-400">
-            <div className="h-9 px-4 flex items-center bg-[#09090b] border-b border-black text-[10px] uppercase tracking-wider font-semibold select-none justify-between">
+        <div className="h-full bg-[var(--bg-panel)] border-r border-[var(--border-subtle)] flex flex-col text-[var(--fg-secondary)]">
+            <div className="h-9 px-4 flex items-center bg-[var(--bg-panel)] border-b border-[var(--border-subtle)] text-[10px] uppercase tracking-wider font-semibold select-none justify-between text-[var(--fg-tertiary)]">
                 <span>Explorer</span>
-                <button onClick={loadRoot} className="hover:text-white" title="Refresh">
+                <button onClick={loadRoot} className="hover:text-[var(--fg-primary)]" title="Refresh">
                     <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
                 </button>
             </div>
@@ -163,32 +212,34 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
             <div className="flex-1 overflow-y-auto pt-2 scrollbar-thin scrollbar-thumb-zinc-800">
                 {roots.length === 0 ? (
                     <div className="p-4 flex flex-col gap-2">
-                        <p className="text-xs text-zinc-500 italic text-center">No workspace open.</p>
+                        <p className="text-xs text-[var(--fg-tertiary)] italic text-center">No workspace open.</p>
                         <div className="flex gap-1">
                             <input
-                                className="bg-zinc-900 border border-zinc-700 text-xs p-1 w-full rounded-sm"
+                                className="bg-[var(--bg-surface)] border border-[var(--border-subtle)] text-xs p-1 w-full rounded-sm text-[var(--fg-primary)]"
                                 placeholder="/path/to/folder"
                                 value={pathInput}
                                 onChange={e => setPathInput(e.target.value)}
                                 onKeyDown={e => e.key === 'Enter' && openSpecificPath()}
                             />
-                            <button onClick={openSpecificPath} className="p-1.5 bg-zinc-800 hover:bg-zinc-700 rounded-sm">
+                            <button onClick={openSpecificPath} className="p-1.5 bg-[var(--bg-surface)] hover:bg-[var(--bg-surface-hover)] rounded-sm text-[var(--fg-primary)]">
                                 <ChevronRight className="w-3 h-3" />
                             </button>
                         </div>
-                        {error && <p className="text-[10px] text-red-500 break-all">{error}</p>}
+                        {error && <p className="text-[10px] text-[var(--accent-error)] break-all">{error}</p>}
                     </div>
                 ) : (
-                    roots.map(file => (
-                        <FileItem
-                            key={file.path}
-                            entry={file}
-                            depth={0}
-                            onSelect={onFileSelect}
+                    // New Headless File Explorer
+                    // We need to import FileExplorer first
+                    // New Headless File Explorer
+                    // We need to import FileExplorer first
+                    <ErrorBoundary>
+                        <FileExplorer
+                            onFileSelect={onFileSelect}
                             activeFile={activeFile}
+                            roots={roots}
                             refreshKey={refreshKey}
                         />
-                    ))
+                    </ErrorBoundary>
                 )}
             </div>
         </div>

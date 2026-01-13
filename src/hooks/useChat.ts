@@ -1,16 +1,25 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { listen, emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
+import { BladeDispatcher } from '../services/blade';
 import type { ChatMessage, ModelInfo, ToolCall } from '../types/chat';
 import type { Change } from '../types/change';
 import { EventNames, type RequestConfirmationPayload, type StructuredAction, type ChangeAppliedPayload, type AllEditsAppliedPayload, type ToolExecutionCompletedPayload } from '../types/events';
 import { useEditor } from '../contexts/EditorContext';
+import { MessageBuffer } from '../utils/eventBuffer';
+import type { BladeEventEnvelope } from '../types/blade';
+import { getOrCreateIdempotencyKey, IDEMPOTENT_OPERATIONS } from '../utils/idempotency';
 
 export function useChat() {
     const { editorState } = useEditor();
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+
+    // v1.1: Message buffer and accumulation ref for atomic updates
+    const messageBufferRef = useRef<MessageBuffer | null>(null);
+    const accumulatedContentRef = useRef<{ id: string; content: string }>({ id: '', content: '' });
+    const accumulatedReasoningRef = useRef<{ id: string; content: string }>({ id: '', content: '' });
 
     const [models, setModels] = useState<ModelInfo[]>([]);
     const [selectedModelId, setSelectedModelId] = useState<string>('anthropic/claude-sonnet-4-5-20250929');
@@ -26,15 +35,6 @@ export function useChat() {
     // Permission Logic
     const [pendingActions, setPendingActions] = useState<StructuredAction[] | null>(null);
     const [pendingChanges, setPendingChanges] = useState<Change[]>([]);
-    const [pendingActionErrors, setPendingActionErrors] = useState<string | null>(null);
-    const pendingActionsRef = useRef<StructuredAction[] | null>(null);
-    const [pendingToolCallId, setPendingToolCallId] = useState<string | null>(null);
-    const [pendingBatchId, setPendingBatchId] = useState<string | null>(null);
-    const [pendingTools, setPendingTools] = useState<any[]>([]);
-    const [pendingActionsLoading, setPendingActionsLoading] = useState(false);
-
-    // Track if we've created a research tab for current message
-    const researchTabCreatedRef = useRef(false);
 
     // Load initial conversation and models
     useEffect(() => {
@@ -81,91 +81,133 @@ export function useChat() {
         let unlistenChanges: (() => void) | undefined;
         let unlistenCommand: (() => void) | undefined;
         let unlistenToolCompleted: (() => void) | undefined;
+        let unlistenV11: (() => void) | undefined;
+
+        // Initialize v1.1 message buffer
+        if (!messageBufferRef.current) {
+            messageBufferRef.current = new MessageBuffer(
+                (id, chunk, is_final, type) => {
+                    // console.log(`[v1.1 MessageBuffer] Chunk ${id} len=${chunk.length} type=${type}`);
+                    setLoading(true);
+
+                    // Handle reasoning
+                    if (type === 'reasoning') {
+                        if (accumulatedReasoningRef.current.id !== id) {
+                            accumulatedReasoningRef.current = { id, content: '' };
+                        }
+                        accumulatedReasoningRef.current.content += chunk;
+                        const fullReasoning = accumulatedReasoningRef.current.content;
+
+                        setMessages((prev) => {
+                            const existingIdx = prev.findIndex(m => m.id === id);
+                            if (existingIdx !== -1) {
+                                const updated = [...prev];
+                                const msg = updated[existingIdx];
+
+                                // Update legacy field
+                                const newMsg = { ...msg, reasoning: fullReasoning };
+
+                                // Update blocks: Append to last 'reasoning' block or create new
+                                const blocks = [...(newMsg.blocks || [])];
+                                const lastBlock = blocks[blocks.length - 1];
+                                if (lastBlock && lastBlock.type === 'reasoning') {
+                                    blocks[blocks.length - 1] = { ...lastBlock, content: lastBlock.content + chunk };
+                                } else {
+                                    blocks.push({ type: 'reasoning', content: chunk, id: crypto.randomUUID() });
+                                }
+                                newMsg.blocks = blocks;
+
+                                updated[existingIdx] = newMsg;
+                                return updated;
+                            }
+                            // New message starting with reasoning
+                            return [...prev, {
+                                id,
+                                role: 'Assistant',
+                                reasoning: fullReasoning,
+                                content: '',
+                                blocks: [{ type: 'reasoning', content: fullReasoning, id: crypto.randomUUID() }]
+                            } as ChatMessage];
+                        });
+                    } else {
+                        // Regular Content
+                        if (accumulatedContentRef.current.id !== id) {
+                            accumulatedContentRef.current = { id, content: '' };
+                        }
+                        accumulatedContentRef.current.content += chunk;
+                        const fullContent = accumulatedContentRef.current.content;
+
+                        setMessages((prev) => {
+                            const existingIdx = prev.findIndex(m => m.id === id);
+                            if (existingIdx !== -1) {
+                                const updated = [...prev];
+                                const msg = updated[existingIdx];
+
+                                // Update legacy field
+                                const newMsg = { ...msg, content: fullContent };
+
+                                // Update blocks: Append to last 'text' block or create new
+                                const blocks = [...(newMsg.blocks || [])];
+                                const lastBlock = blocks[blocks.length - 1];
+                                if (lastBlock && lastBlock.type === 'text') {
+                                    blocks[blocks.length - 1] = { ...lastBlock, content: lastBlock.content + chunk };
+                                } else {
+                                    blocks.push({ type: 'text', content: chunk, id: crypto.randomUUID() });
+                                }
+                                newMsg.blocks = blocks;
+
+                                updated[existingIdx] = newMsg;
+                                return updated;
+                            }
+                            // New message starting with text (if reasoning was skipped/missing)
+                            const last = prev[prev.length - 1];
+                            if (last && last.role === 'Assistant' && !last.id) {
+                                // Update placeholder
+                                const updated = [...prev];
+                                const msg = updated[prev.length - 1];
+                                updated[prev.length - 1] = {
+                                    ...msg,
+                                    id,
+                                    content: fullContent,
+                                    blocks: [...(msg.blocks || []), { type: 'text', content: chunk, id: crypto.randomUUID() }]
+                                };
+                                return updated;
+                            }
+                            return [...prev, {
+                                id,
+                                role: 'Assistant',
+                                content: fullContent,
+                                blocks: [{ type: 'text', content: fullContent, id: crypto.randomUUID() }]
+                            } as ChatMessage];
+                        });
+                    }
+                },
+                (id) => {
+                    console.log(`[v1.1 MessageBuffer] Message ${id} completed`);
+                    setLoading(false);
+                }
+            );
+        }
 
         const setupListeners = async () => {
+            // v1.1 MIGRATION: Legacy chat-update listener removed.
+            // We now rely entirely on blade-event for text (MessageDelta) and tool status (ToolUpdate).
+            /*
             const u1 = await listen<ChatMessage>('chat-update', (event) => {
                 const msg = event.payload;
                 console.log('[CHAT UPDATE]', msg);
-                
-                setMessages((prev) => {
-                    const last = prev[prev.length - 1];
-                    
-                    // Only set loading if we're adding a new assistant message (streaming started)
-                    if (!last || last.role !== 'Assistant') {
-                        setLoading(true);
-                    }
-                    
-                    // Handle Tool messages - match them with tool calls in previous assistant message
-                    if (msg.role === 'Tool' && msg.tool_call_id) {
-                        console.log('[TOOL RESULT] Matching tool_call_id:', msg.tool_call_id);
-                        // Find the assistant message with this tool call and update its status
-                        const updated = prev.map((m) => {
-                            if (m.role === 'Assistant' && m.tool_calls) {
-                                console.log('[TOOL RESULT] Checking assistant message with tool calls:', m.tool_calls.map(c => c.id));
-                                const updatedCalls = m.tool_calls.map(call => {
-                                    if (call.id === msg.tool_call_id) {
-                                        console.log('[TOOL RESULT] MATCH! Updating status to complete');
-                                        return {
-                                            ...call,
-                                            status: 'complete' as const,
-                                            result: msg.content
-                                        };
-                                    }
-                                    return call;
-                                });
-                                return { ...m, tool_calls: updatedCalls };
-                            }
-                            return m;
-                        });
-                        console.log('[TOOL RESULT] Updated messages:', updated);
-                        // Don't add the Tool message itself - it's shown in the tool call display
-                        return updated;
-                    }
-                    
-                    if (last && last.role === msg.role && last.role === 'Assistant') {
-                        // Only update if this is a streaming continuation (no tool_calls completed yet)
-                        // If the last message has completed tool calls, this is a NEW response, so append
-                        const hasCompletedTools = last.tool_calls?.some(tc => 
-                            tc.status === 'complete' || tc.status === 'error' || tc.status === 'skipped'
-                        );
-                        
-                        if (hasCompletedTools) {
-                            // This is a new AI response after tool execution - append it
-                            console.log('[CHAT] New AI response after tool completion - appending');
-                            return [...prev, msg];
-                        }
-                        
-                        // This is a streaming update to the current message - merge it
-                        const mergedToolCalls = msg.tool_calls || last.tool_calls;
-                        const updatedToolCalls = mergedToolCalls?.map(call => ({
-                            ...call,
-                            status: call.status || 'executing' as const
-                        }));
-                        
-                        const finalContent = msg.content !== undefined ? msg.content : last.content;
-                        
-                        const updatedMsg = {
-                            ...last,
-                            content: finalContent,
-                            tool_calls: updatedToolCalls,
-                            reasoning: msg.reasoning || last.reasoning,
-                            progress: msg.progress || last.progress
-                        };
-                        
-                        return [...prev.slice(0, -1), updatedMsg];
-                    } else if (last && last.role === msg.role && last.role === 'User') {
-                        if (last.content === msg.content) return prev;
-                        return [...prev, msg];
-                    }
-                    return [...prev, msg];
-                });
+                // ... legacy logic ...
+                 setMessages((prev) => {
+                     // ... 
+                     return prev;
+                 });
             });
             unlistenUpdate = u1;
+            */
 
             const u2 = await listen('chat-done', () => {
                 setLoading(false);
                 setPendingActions(null); // Clear any hanging dialogs
-                researchTabCreatedRef.current = false; // Reset for next research
             });
             unlistenDone = u2;
 
@@ -188,12 +230,12 @@ export function useChat() {
                 console.log('[PROPOSE CHANGES] received', event.payload.map(c => ({ id: c.id, type: c.change_type, path: c.path })));
                 setPendingChanges(prev => {
                     // Filter out duplicates
-                    const newChanges = event.payload.filter(newChange => 
+                    const newChanges = event.payload.filter(newChange =>
                         !prev.some(c => c.id === newChange.id)
                     );
                     return [...prev, ...newChanges];
                 });
-                
+
                 // Automatically open new files as ephemeral tabs
                 event.payload.forEach(change => {
                     if (change.change_type === 'new_file') {
@@ -239,29 +281,7 @@ export function useChat() {
             });
             unlistenCommand = u6;
 
-            // Listen for tool execution completion events (backend emits even without Tool message)
-            const u7 = await listen<ToolExecutionCompletedPayload>(EventNames.TOOL_EXECUTION_COMPLETED, (event) => {
-                const { tool_call_id, success, tool_name } = event.payload;
-                console.log('[TOOL COMPLETED EVENT]', event.payload);
-                setMessages((prev): ChatMessage[] =>
-                    prev.map((msg): ChatMessage => {
-                        if (msg.role === 'Assistant' && msg.tool_calls?.some(tc => tc.id === tool_call_id)) {
-                            const updatedCalls = msg.tool_calls.map(tc =>
-                                tc.id === tool_call_id
-                                    ? {
-                                          ...tc,
-                                          status: success ? 'complete' : 'error',
-                                          result: tc.result ?? (success ? 'Completed' : `Failed: ${tool_name}`),
-                                      }
-                                    : tc
-                            ) as ToolCall[];
-                            return { ...msg, tool_calls: updatedCalls };
-                        }
-                        return msg;
-                    })
-                );
-            });
-            unlistenToolCompleted = u7;
+            // u7 removed - redundant with chat-update logic
 
             // Listen for change applied signal (from individual or batch approval)
             const u8 = await listen<ChangeAppliedPayload>(EventNames.CHANGE_APPLIED, (event) => {
@@ -297,7 +317,106 @@ export function useChat() {
                 });
             });
             const unlistenTodoUpdated = u10;
-            
+
+            // v1.1: blade-event listener for MessageDelta with sequence numbers
+            const u11 = await listen<BladeEventEnvelope>('blade-event', (event) => {
+                const envelope = event.payload;
+
+                if (envelope.event.type === 'Chat') {
+                    const chatEvent = envelope.event.payload;
+
+                    if (chatEvent.type === 'MessageDelta') {
+                        const { id, seq, chunk, is_final } = chatEvent.payload;
+                        console.log(`[v1.1 Chat] MessageDelta: id=${id}, seq=${seq}, is_final=${is_final}, chunk_len=${chunk.length}`);
+
+                        // Use buffer to handle out-of-order chunks
+                        if (messageBufferRef.current) {
+                            messageBufferRef.current.addMessageDelta(id, seq, chunk, is_final);
+                        }
+                    } else if (chatEvent.type === 'ReasoningDelta') {
+                        const { id, seq, chunk, is_final } = chatEvent.payload;
+                        console.log(`[v1.1 Chat] ReasoningDelta: id=${id}, seq=${seq}, is_final=${is_final}, chunk_len=${chunk.length}`);
+
+                        if (messageBufferRef.current) {
+                            messageBufferRef.current.addReasoningDelta(id, seq, chunk, is_final);
+                        }
+                    } else if (chatEvent.type === 'MessageCompleted') {
+                        const { id } = chatEvent.payload;
+                        console.log(`[v1.1 Chat] MessageCompleted: id=${id}`);
+
+                        // Clear buffer for this message to prevent memory leaks or sequence issues
+                        if (messageBufferRef.current) {
+                            messageBufferRef.current.clear(id);
+                        }
+                        if (accumulatedContentRef.current.id === id) {
+                            accumulatedContentRef.current = { id: '', content: '' };
+                        }
+                        if (accumulatedReasoningRef.current.id === id) {
+                            accumulatedReasoningRef.current = { id: '', content: '' };
+                        }
+
+                        setLoading(false);
+                        // Buffer will auto-clear on is_final, but this provides explicit confirmation
+                    } else if (chatEvent.type === 'ToolUpdate') {
+                        const { message_id, tool_call_id, status, result, tool_call } = chatEvent.payload;
+                        console.log(`[v1.1 Chat] ToolUpdate: msg=${message_id} tool=${tool_call_id} status=${status}`);
+
+                        setMessages(prev => {
+                            const existingIdx = prev.findIndex(msg => msg.id === message_id);
+
+                            if (existingIdx === -1) {
+                                // Create new message for tool if missing
+                                const newMsg: ChatMessage = {
+                                    id: message_id,
+                                    role: 'Assistant',
+                                    content: '',
+                                    tool_calls: tool_call ? [{ ...tool_call, status: status as any, result }] : [],
+                                    blocks: tool_call ? [{ type: 'tool_call', id: tool_call_id }] : []
+                                };
+                                return [...prev, newMsg];
+                            }
+
+                            return prev.map(msg => {
+                                if (msg.id === message_id) {
+                                    const existingTools = msg.tool_calls || [];
+                                    const toolIndex = existingTools.findIndex(tc => tc.id === tool_call_id);
+                                    let newTools = [...existingTools];
+                                    let newBlocks = [...(msg.blocks || [])];
+
+                                    if (toolIndex >= 0) {
+                                        // Update existing tool
+                                        newTools[toolIndex] = { ...newTools[toolIndex], status: status as any };
+                                        if (result) newTools[toolIndex].result = result;
+                                        if (tool_call) newTools[toolIndex] = { ...newTools[toolIndex], ...tool_call };
+                                    } else {
+                                        // Add new tool call
+                                        if (tool_call) {
+                                            const contentBefore = msg.content_before_tools !== undefined ? msg.content_before_tools : msg.content;
+                                            // Check if block already exists (idempotency safety)
+                                            if (!newBlocks.some(b => b.type === 'tool_call' && b.id === tool_call_id)) {
+                                                newBlocks.push({ type: 'tool_call', id: tool_call_id });
+                                            }
+
+                                            return {
+                                                ...msg,
+                                                content_before_tools: contentBefore,
+                                                tool_calls: [...existingTools, tool_call],
+                                                blocks: newBlocks
+                                            };
+                                        } else {
+                                            console.warn('[v1.1 Chat] Received ToolUpdate for unknown tool but no tool_call data provided:', tool_call_id);
+                                        }
+                                    }
+                                    return { ...msg, tool_calls: newTools, blocks: newBlocks }; // Return updated msg
+                                }
+                                return msg;
+                            });
+                        });
+                    }
+                }
+            });
+            unlistenV11 = u11;
+
             return () => {
                 if (unlistenUpdate) unlistenUpdate();
                 if (unlistenDone) unlistenDone();
@@ -305,10 +424,11 @@ export function useChat() {
                 if (unlistenPerm) unlistenPerm();
                 if (unlistenChanges) unlistenChanges();
                 if (unlistenCommand) unlistenCommand();
-                if (unlistenToolCompleted) unlistenToolCompleted();
+                // if (unlistenToolCompleted) unlistenToolCompleted(); // Removed
                 if (unlistenApplied) unlistenApplied();
                 if (unlistenAllApplied) unlistenAllApplied();
                 if (unlistenTodoUpdated) unlistenTodoUpdated();
+                if (unlistenV11) unlistenV11();
             };
         };
 
@@ -323,28 +443,41 @@ export function useChat() {
         try {
             setLoading(true);
             setError(null);
-            
+
+            // Optimistically add user message
+            const userMsg: ChatMessage = {
+                id: crypto.randomUUID(),
+                role: 'User',
+                content: text
+            };
+            setMessages(prev => [...prev, userMsg]);
+
             // Get editor state from context
             const activeFile = editorState.activeFile;
+            // activeFile might be null/undefined, ensure we pass string or null
+            const safeActiveFile = activeFile || null;
             const openFiles = activeFile ? [activeFile] : [];
-            const cursorLine = editorState.cursorLine;
-            const cursorColumn = editorState.cursorColumn;
-            const selectionStartLine = editorState.selectionStartLine;
-            const selectionEndLine = editorState.selectionEndLine;
-            
-            await invoke('send_message', { 
-                message: text, 
-                modelId: selectedModelId,
-                activeFile,
-                openFiles,
-                cursorLine,
-                cursorColumn,
-                selectionStartLine,
-                selectionEndLine
+
+            // Dispatch via Blade Protocol
+            await BladeDispatcher.chat({
+                type: 'SendMessage',
+                payload: {
+                    content: text,
+                    model: selectedModelId,
+                    context: {
+                        active_file: safeActiveFile,
+                        open_files: openFiles,
+                        cursor_line: editorState.cursorLine ?? null,
+                        cursor_column: editorState.cursorColumn ?? null,
+                        selection_start: editorState.selectionStartLine ?? null,
+                        selection_end: editorState.selectionEndLine ?? null
+                    }
+                }
             });
+
         } catch (e) {
-            console.error(e);
-            console.error('Failed to approve tool decision:', e);
+            console.error('Failed to send message:', e);
+            setError(e instanceof Error ? e.message : String(e));
         }
     }, [
         editorState.activeFile,
@@ -354,10 +487,9 @@ export function useChat() {
         editorState.selectionEndLine,
         selectedModelId
     ]);
-
     const stopGeneration = useCallback(async () => {
         try {
-            await invoke('stop_generation');
+            await BladeDispatcher.chat({ type: 'StopGeneration' });
             setLoading(false);
             // Clear any pending command approvals when stopping
             setPendingActions(null);
@@ -374,12 +506,22 @@ export function useChat() {
             const change = pendingChanges.find(c => c.id === changeId);
             console.log('[useChat] Found change:', change);
             logFrontend(`[approveChange] found change path=${change?.path ?? 'n/a'} type=${change?.change_type ?? 'n/a'}`);
-            
-            // Tauri command expects snake_case param name
-            await invoke('approve_change', { change_id: changeId });
-            console.log('[useChat] Backend approve_change completed');
+
+            // v1.1: Generate idempotency key for this critical operation
+            const idempotencyKey = getOrCreateIdempotencyKey(
+                IDEMPOTENT_OPERATIONS.APPROVE_CHANGE,
+                changeId
+            );
+
+            // Use v1.1 ApproveAction intent with idempotency
+            await BladeDispatcher.dispatch(
+                'Workflow',
+                { type: 'Workflow', payload: { type: 'ApproveAction', payload: { action_id: changeId } } },
+                idempotencyKey
+            );
+            console.log('[useChat] Backend approve_action completed');
             logFrontend(`[approveChange] backend completed changeId=${changeId}`);
-            
+
             // Remove the approved change and any other changes for the same file
             // (since applying one patch invalidates others for the same file)
             setPendingChanges(prev => {
@@ -399,8 +541,18 @@ export function useChat() {
 
     const rejectChange = useCallback(async (changeId: string) => {
         try {
-            // Tauri command expects snake_case param name
-            await invoke('reject_change', { change_id: changeId });
+            // v1.1: Generate idempotency key for this critical operation
+            const idempotencyKey = getOrCreateIdempotencyKey(
+                IDEMPOTENT_OPERATIONS.REJECT_CHANGE,
+                changeId
+            );
+
+            // Use v1.1 RejectAction intent with idempotency
+            await BladeDispatcher.dispatch(
+                'Workflow',
+                { type: 'Workflow', payload: { type: 'RejectAction', payload: { action_id: changeId } } },
+                idempotencyKey
+            );
             setPendingChanges(prev => prev.filter(c => c.id !== changeId));
         } catch (e) {
             console.error("Failed to reject change:", e);
@@ -411,8 +563,21 @@ export function useChat() {
         try {
             console.log('[useChat] approveAllChanges called; pendingChanges:', pendingChanges.map(c => ({ id: c.id, path: c.path, type: c.change_type })));
             logFrontend(`[approveAllChanges] count=${pendingChanges.length} ids=${pendingChanges.map(c => c.id).join(',')}`);
-            await invoke('approve_all_changes');
-            console.log('[useChat] Backend approve_all_changes completed');
+
+            // v1.1: Generate idempotency key using batch ID (timestamp-based)
+            const batchId = `batch-${Date.now()}`;
+            const idempotencyKey = getOrCreateIdempotencyKey(
+                IDEMPOTENT_OPERATIONS.APPROVE_ALL,
+                batchId
+            );
+
+            // Use v1.1 ApproveAll intent with idempotency
+            await BladeDispatcher.dispatch(
+                'Workflow',
+                { type: 'Workflow', payload: { type: 'ApproveAll', payload: { batch_id: batchId } } },
+                idempotencyKey
+            );
+            console.log('[useChat] Backend approve_all completed');
             logFrontend('[approveAllChanges] backend completed');
             setPendingChanges([]);
         } catch (e) {
@@ -426,7 +591,10 @@ export function useChat() {
 
     const approveTool = useCallback(async (approved: boolean) => {
         try {
-            await invoke('approve_tool', { approved });
+            await BladeDispatcher.workflow({
+                type: 'ApproveTool',
+                payload: { approved }
+            });
             setPendingActions(null);
         } catch (e) {
             console.error('Failed to approve tool:', e);
@@ -435,7 +603,10 @@ export function useChat() {
 
     const approveToolDecision = useCallback(async (decision: string) => {
         try {
-            await invoke('approve_tool_decision', { decision });
+            await BladeDispatcher.workflow({
+                type: 'ApproveToolDecision',
+                payload: { decision }
+            });
             setPendingActions(null);
         } catch (e) {
             console.error('Failed to approve tool decision:', e);

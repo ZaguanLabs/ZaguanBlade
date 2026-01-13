@@ -35,10 +35,14 @@ pub enum BladeWsEvent {
         model_id: String,
     },
     TextChunk(String),
+    ReasoningChunk(String),
     ToolCall {
         id: String,
         name: String,
         arguments: Value,
+    },
+    ToolResultAck {
+        pending_count: i64,
     },
     ChatDone {
         finish_reason: String,
@@ -437,6 +441,11 @@ impl BladeWsClient {
                     let _ = tx.send(BladeWsEvent::TextChunk(content.to_string()));
                 }
             }
+            "reasoning_chunk" => {
+                if let Some(content) = msg.payload.get("content").and_then(|v| v.as_str()) {
+                    let _ = tx.send(BladeWsEvent::ReasoningChunk(content.to_string()));
+                }
+            }
             "tool_call" => {
                 let id = msg
                     .payload
@@ -450,7 +459,26 @@ impl BladeWsClient {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let arguments = msg.payload.get("arguments").cloned().unwrap_or(Value::Null);
+                
+                // Handle arguments: if it's a string (which it is now from server), parse it to JSON Value
+                // This ensures ChatManager's to_string() produces clean JSON, not an escaped string
+                let raw_args = msg.payload.get("arguments");
+                let arguments = if let Some(str_args) = raw_args.and_then(|v| v.as_str()) {
+                    eprintln!("[BLADE WS] Parsing string arguments: {}", str_args);
+                    match serde_json::from_str::<Value>(str_args) {
+                        Ok(v) => {
+                            eprintln!("[BLADE WS] Successfully parsed arguments to JSON object");
+                            v
+                        },
+                        Err(e) => {
+                            eprintln!("[BLADE WS] Failed to parse arguments as JSON: {}", e);
+                            Value::String(str_args.to_string())
+                        },
+                    }
+                } else {
+                    eprintln!("[BLADE WS] Arguments are not a string, using raw value");
+                    raw_args.cloned().unwrap_or(Value::Null)
+                };
 
                 eprintln!("[BLADE WS] Tool call: {} ({})", name, id);
                 let _ = tx.send(BladeWsEvent::ToolCall {
@@ -486,6 +514,20 @@ impl BladeWsClient {
 
                 eprintln!("[BLADE WS] Error: {} - {}", code, message);
                 let _ = tx.send(BladeWsEvent::Error { code, message });
+            }
+            "tool_result_ack" => {
+                // Tool result acknowledgment - zcoderd received our result but is waiting for more
+                let pending_count = msg
+                    .payload
+                    .get("pending_count")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+
+                eprintln!(
+                    "[BLADE WS] Tool result acknowledged, waiting for {} more result(s)",
+                    pending_count
+                );
+                let _ = tx.send(BladeWsEvent::ToolResultAck { pending_count });
             }
             _ => {
                 eprintln!("[BLADE WS] Unknown message type: {}", msg.msg_type);

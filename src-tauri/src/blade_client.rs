@@ -110,6 +110,7 @@ struct BladeToolResultRequest {
 
 /// SSE event structure from zcoderd
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct SSEEvent {
     #[serde(default)]
     event: String,

@@ -15,6 +15,8 @@ pub struct PtyState {
     // though portable-pty child doesn't always strictly need to be held if we just kill it.
     // However, for proper cleanup it's good.
     pub child: Box<dyn portable_pty::Child + Send + Sync>,
+    pub seq: Arc<Mutex<u64>>, // v1.1: sequence number for TerminalOutput events
+    pub owner: crate::blade_protocol::TerminalOwner, // v1.1: ownership tracking
 }
 
 pub struct TerminalManager {
@@ -32,7 +34,7 @@ impl TerminalManager {
 
 // Commands to be exposed to Tauri
 
-#[tauri::command]
+// #[tauri::command]
 pub fn create_terminal<R: Runtime>(
     id: String,
     cwd: Option<String>,
@@ -69,6 +71,8 @@ pub fn create_terminal<R: Runtime>(
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
 
     // Store state
+    let seq_counter = Arc::new(Mutex::new(0u64));
+    let owner = crate::blade_protocol::TerminalOwner::User; // Default to User for interactive terminals
     {
         let mut ptys = state.ptys.lock().unwrap();
         ptys.insert(
@@ -77,9 +81,27 @@ pub fn create_terminal<R: Runtime>(
                 writer,
                 master: pair.master,
                 child,
+                seq: seq_counter.clone(),
+                owner: owner.clone(),
             },
         );
     }
+    
+    // v1.1: Emit TerminalSpawned event
+    let _ = app_handle.emit("blade-event", crate::blade_protocol::BladeEventEnvelope {
+        id: uuid::Uuid::new_v4(),
+        timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64,
+        causality_id: None,
+        event: crate::blade_protocol::BladeEvent::Terminal(
+            crate::blade_protocol::TerminalEvent::Spawned {
+                id: id.clone(),
+                owner,
+            }
+        ),
+    });
 
     // Spawn a thread to read output and emit to frontend
     let id_clone = id.clone();
@@ -89,11 +111,21 @@ pub fn create_terminal<R: Runtime>(
             match reader.read(&mut buffer) {
                 Ok(n) if n > 0 => {
                     let output = String::from_utf8_lossy(&buffer[..n]).to_string();
+                    
+                    // v1.1: Increment sequence number
+                    let _seq = {
+                        let mut seq_guard = seq_counter.lock().unwrap();
+                        let current = *seq_guard;
+                        *seq_guard += 1;
+                        current
+                    };
+                    
                     let payload = TerminalOutput {
                         id: id_clone.clone(),
                         data: output,
                     };
-                    // Emit 'terminal-output' event
+                    // Emit 'terminal-output' event (legacy format)
+                    // TODO: Migrate to BladeEvent::Terminal(TerminalEvent::Output { id, seq, data })
                     let _ = app_handle.emit("terminal-output", payload);
                 }
                 Ok(_) => break,  // EOF
@@ -106,7 +138,7 @@ pub fn create_terminal<R: Runtime>(
     Ok(())
 }
 
-#[tauri::command]
+// #[tauri::command]
 pub fn write_to_terminal(
     id: String,
     data: String,
@@ -119,7 +151,7 @@ pub fn write_to_terminal(
     Ok(())
 }
 
-#[tauri::command]
+// #[tauri::command]
 pub fn resize_terminal(
     id: String,
     rows: u16,
@@ -157,7 +189,7 @@ struct TerminalExit {
 }
 
 // Execute a command in a terminal (non-interactive, for AI command execution)
-#[tauri::command]
+// #[tauri::command]
 pub fn execute_command_in_terminal<R: Runtime>(
     id: String,
     command: String,
@@ -184,9 +216,11 @@ pub fn execute_command_in_terminal<R: Runtime>(
     // Use provided cwd, or fall back to workspace path
     let working_dir = cwd.or_else(|| {
         let ws = state.workspace.lock().unwrap();
-        ws.workspace.as_ref().map(|p| p.to_string_lossy().to_string())
+        ws.workspace
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
     });
-    
+
     if let Some(path) = working_dir {
         cmd.cwd(path);
     }
@@ -200,7 +234,7 @@ pub fn execute_command_in_terminal<R: Runtime>(
     // Create cancel flag for this command
     let cancel_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let cancel_flag_clone = cancel_flag.clone();
-    
+
     // Store the cancel flag so stop_generation can cancel this command
     {
         let mut executing = state.executing_commands.lock().unwrap();
@@ -211,37 +245,48 @@ pub fn execute_command_in_terminal<R: Runtime>(
     let id_clone = id.clone();
     // Clone the Arc to the Mutex so we can access it from the thread
     let executing_commands = state.executing_commands.clone();
+    let seq_counter = Arc::new(Mutex::new(0u64)); // v1.1: sequence counter
     thread::spawn(move || {
         let mut buffer = [0u8; 1024];
         let mut accumulated_output = String::new();
-        
+
         loop {
             // Check if cancelled
             if cancel_flag_clone.load(std::sync::atomic::Ordering::Relaxed) {
                 eprintln!("[EXEC] Command {} cancelled, killing process", id_clone);
                 let _ = child.kill();
-                
+
                 // Emit exit with special code for cancelled
                 let exit_payload = TerminalExit {
                     id: id_clone.clone(),
                     exit_code: 130, // Standard SIGINT exit code
                 };
                 let _ = app_handle.emit("terminal-exit", exit_payload);
-                
+
                 // Remove from executing commands
                 let mut executing = executing_commands.lock().unwrap();
                 executing.remove(&id_clone);
                 return;
             }
-            
+
             match reader.read(&mut buffer) {
                 Ok(n) if n > 0 => {
                     let output = String::from_utf8_lossy(&buffer[..n]).to_string();
                     accumulated_output.push_str(&output);
+                    
+                    // v1.1: Increment sequence number
+                    let _seq = {
+                        let mut seq_guard = seq_counter.lock().unwrap();
+                        let current = *seq_guard;
+                        *seq_guard += 1;
+                        current
+                    };
+                    
                     let payload = TerminalOutput {
                         id: id_clone.clone(),
                         data: output,
                     };
+                    // Legacy format for compatibility
                     let _ = app_handle.emit("terminal-output", payload);
                 }
                 Ok(_) => break,
@@ -261,7 +306,7 @@ pub fn execute_command_in_terminal<R: Runtime>(
             exit_code,
         };
         let _ = app_handle.emit("terminal-exit", exit_payload);
-        
+
         // Remove from executing commands
         let mut executing = executing_commands.lock().unwrap();
         executing.remove(&id_clone);

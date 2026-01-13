@@ -1,6 +1,7 @@
 pub mod agentic_loop;
 pub mod ai_workflow;
 pub mod blade_client;
+pub mod blade_protocol; // [NEW] Blade Protocol v1.0
 pub mod blade_ws_client;
 pub mod chat;
 pub mod chat_manager;
@@ -11,9 +12,11 @@ pub mod ephemeral_commands;
 pub mod ephemeral_documents;
 pub mod events;
 pub mod explorer;
+pub mod idempotency; // [NEW] v1.1: Idempotency cache
 pub mod models;
 pub mod project;
 pub mod protocol;
+pub mod reasoning_parser; // [NEW] v1.2: Multi-format reasoning extraction
 pub mod terminal;
 pub mod tool_execution;
 pub mod tools;
@@ -22,7 +25,7 @@ pub mod xml_parser;
 
 use crate::chat_manager::{ChatManager, DrainResult};
 use std::sync::Mutex;
-use tauri::{Emitter, Manager, State};
+use tauri::{Emitter, Manager, Runtime, State};
 
 /// Parse @command syntax and extract tool name and query
 /// Returns (actual_message, Option<(tool_name, query)>)
@@ -50,14 +53,8 @@ fn extract_root_command(command: &str) -> Option<String> {
         .split(|c| c == '|' || c == ';')
         .next()
         .unwrap_or(command);
-    let first_segment = first_segment
-        .split("&&")
-        .next()
-        .unwrap_or(first_segment);
-    let first_segment = first_segment
-        .split("||")
-        .next()
-        .unwrap_or(first_segment);
+    let first_segment = first_segment.split("&&").next().unwrap_or(first_segment);
+    let first_segment = first_segment.split("||").next().unwrap_or(first_segment);
 
     let mut it = first_segment.split_whitespace().peekable();
     while let Some(tok) = it.peek().copied() {
@@ -79,7 +76,11 @@ fn is_cwd_outside_workspace(ws_root: Option<&str>, cwd: Option<&str>) -> Option<
     let cwd = cwd?;
     let ws = std::fs::canonicalize(std::path::Path::new(ws_root)).ok()?;
     let p = std::path::Path::new(cwd);
-    let candidate = if p.is_absolute() { p.to_path_buf() } else { ws.join(p) };
+    let candidate = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        ws.join(p)
+    };
     let candidate = std::fs::canonicalize(&candidate).ok()?;
     Some(!candidate.starts_with(&ws))
 }
@@ -111,7 +112,10 @@ pub struct AppState {
     pub selection_end_line: Mutex<Option<usize>>,
     pub virtual_buffers: Mutex<std::collections::HashMap<String, String>>, // path -> virtual content
     pub approved_command_roots: Mutex<std::collections::HashSet<String>>,
-    pub executing_commands: std::sync::Arc<Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>>>,
+    pub executing_commands: std::sync::Arc<
+        Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>>,
+    >,
+    pub idempotency_cache: crate::idempotency::IdempotencyCache, // v1.1: Idempotency support
 }
 
 impl AppState {
@@ -182,6 +186,7 @@ impl AppState {
             virtual_buffers: Mutex::new(std::collections::HashMap::new()),
             approved_command_roots: Mutex::new(std::collections::HashSet::new()),
             executing_commands: std::sync::Arc::new(Mutex::new(std::collections::HashMap::new())),
+            idempotency_cache: crate::idempotency::IdempotencyCache::default(), // 24h TTL
         }
     }
 }
@@ -216,8 +221,12 @@ fn check_batch_completion(state: &State<'_, AppState>) {
     }
 }
 
-#[tauri::command]
-fn approve_tool(approved: bool, window: tauri::Window, state: State<'_, AppState>) {
+// #[tauri::command]
+pub fn approve_tool<R: Runtime>(
+    approved: bool,
+    window: tauri::Window<R>,
+    state: tauri::State<'_, AppState>,
+) {
     let app_handle = window.app_handle();
     // Legacy support for shell commands and generic tools
     {
@@ -237,7 +246,10 @@ fn approve_tool(approved: bool, window: tauri::Window, state: State<'_, AppState
                     // Only emit if not already result
                     if !batch.file_results.iter().any(|(c, _)| c.id == cmd.call.id) {
                         let command_id = format!("cmd-{}", cmd.call.id);
-                        eprintln!("[COMMAND EXEC] Emitting command-execution-started for: {}", cmd.command);
+                        eprintln!(
+                            "[COMMAND EXEC] Emitting command-execution-started for: {}",
+                            cmd.command
+                        );
                         let _ = window.emit(
                             crate::events::event_names::COMMAND_EXECUTION_STARTED,
                             crate::events::CommandExecutionStartedPayload {
@@ -249,7 +261,7 @@ fn approve_tool(approved: bool, window: tauri::Window, state: State<'_, AppState
                         );
                     }
                 }
-                
+
                 // Commands will complete asynchronously via terminal
                 // Results will be submitted via submit_command_result command
                 // Don't add to file_results here - wait for terminal completion
@@ -297,56 +309,63 @@ fn approve_tool(approved: bool, window: tauri::Window, state: State<'_, AppState
                             "User skipped: '{}'. This command was not executed.",
                             cmd.command
                         );
-                        batch.file_results.push((
-                            cmd.call.clone(),
-                            crate::tools::ToolResult::err(&error_msg),
-                        ));
+                        batch
+                            .file_results
+                            .push((cmd.call.clone(), crate::tools::ToolResult::err(&error_msg)));
                     }
                 }
                 for conf in &batch.confirms {
                     if !batch.file_results.iter().any(|(c, _)| c.id == conf.call.id) {
-                        eprintln!("[SKIP] Adding error result for action: {}", conf.description);
+                        eprintln!(
+                            "[SKIP] Adding error result for action: {}",
+                            conf.description
+                        );
                         let error_msg = format!(
                             "User skipped: '{}'. This action was not executed.",
                             conf.description
                         );
-                        batch.file_results.push((
-                            conf.call.clone(),
-                            crate::tools::ToolResult::err(&error_msg),
-                        ));
+                        batch
+                            .file_results
+                            .push((conf.call.clone(), crate::tools::ToolResult::err(&error_msg)));
                     }
                 }
             }
         }
     }
-    
+
     // Only check batch completion if there are no pending command executions
     // Commands execute asynchronously via terminal and submit results via submit_command_result
     let has_pending_commands = {
         let batch_guard = state.pending_batch.lock().unwrap();
         if let Some(batch) = batch_guard.as_ref() {
-            batch.commands.iter().any(|cmd| {
-                !batch.file_results.iter().any(|(c, _)| c.id == cmd.call.id)
-            })
+            batch
+                .commands
+                .iter()
+                .any(|cmd| !batch.file_results.iter().any(|(c, _)| c.id == cmd.call.id))
         } else {
             false
         }
     };
-    
+
     if !has_pending_commands {
         eprintln!("[APPROVAL] No pending commands, checking batch completion");
         check_batch_completion(&state);
     } else {
-        eprintln!("[APPROVAL] Waiting for {} command(s) to complete via terminal", 
+        eprintln!(
+            "[APPROVAL] Waiting for {} command(s) to complete via terminal",
             {
                 let batch_guard = state.pending_batch.lock().unwrap();
                 batch_guard.as_ref().map(|b| b.commands.len()).unwrap_or(0)
-            });
+            }
+        );
     }
 }
 
-#[tauri::command]
-fn approve_tool_decision(decision: String, window: tauri::Window, state: State<'_, AppState>) {
+pub fn approve_tool_decision<R: Runtime>(
+    decision: String,
+    window: tauri::Window<R>,
+    state: tauri::State<'_, AppState>,
+) {
     let approved = decision == "approve_once" || decision == "approve_always";
 
     if decision == "approve_always" {
@@ -383,10 +402,16 @@ fn submit_command_result(
                 } else if exit_code == 130 {
                     // Exit code 130 means the command was cancelled (SIGINT)
                     // Treat it as a skip
-                    eprintln!("[SUBMIT] Command {} was cancelled (exit 130), treating as skip", call_id);
+                    eprintln!(
+                        "[SUBMIT] Command {} was cancelled (exit 130), treating as skip",
+                        call_id
+                    );
                     crate::tools::ToolResult {
                         success: false,
-                        content: format!("User skipped: '{}'. This command was not executed.", cmd.command),
+                        content: format!(
+                            "User skipped: '{}'. This command was not executed.",
+                            cmd.command
+                        ),
                         error: Some("Tool execution failed".to_string()),
                     }
                 } else {
@@ -399,33 +424,35 @@ fn submit_command_result(
                     crate::tools::ToolResult::err(error_msg)
                 };
                 batch.file_results.push((cmd.call.clone(), result));
-                
+
                 // Emit tool-execution-completed event for UI to update status
-                let _ = app_handle.emit("tool-execution-completed", events::ToolExecutionCompletedPayload {
-                    tool_name: "run_command".to_string(),
-                    tool_call_id: call_id.clone(),
-                    success: exit_code == 0,
-                });
+                let _ = app_handle.emit(
+                    "tool-execution-completed",
+                    events::ToolExecutionCompletedPayload {
+                        tool_name: "run_command".to_string(),
+                        tool_call_id: call_id.clone(),
+                        success: exit_code == 0,
+                    },
+                );
             }
         }
     }
     drop(batch_guard);
-    
+
     check_batch_completion(&state);
     Ok(())
 }
 
-// Simple bridge to surface frontend logs to the Tauri stdout/stderr for debugging
 #[tauri::command]
 fn log_frontend(message: String) {
     println!("[FRONTEND] {}", message);
 }
 
-#[tauri::command]
-async fn approve_change(
+// #[tauri::command]
+pub async fn approve_change<R: Runtime>(
     change_id: String,
-    window: tauri::Window,
-    state: State<'_, AppState>,
+    window: tauri::Window<R>,
+    state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let app_handle = window.app_handle();
     let change_opt = {
@@ -487,7 +514,9 @@ async fn approve_change(
         {
             let mut batch_guard = state.pending_batch.lock().unwrap();
             if let Some(batch) = batch_guard.as_mut() {
-                batch.file_results.push((change.call.clone(), result.clone()));
+                batch
+                    .file_results
+                    .push((change.call.clone(), result.clone()));
                 // Remove the processed change from the batch to avoid lingering "has_changes"
                 batch.changes.retain(|c| c.call.id != change.call.id);
                 // Emit tool-execution-completed so UI updates tool call status
@@ -514,15 +543,18 @@ async fn approve_change(
     }
 }
 
-#[tauri::command]
-async fn approve_changes_for_file(
+// #[tauri::command]
+pub async fn approve_changes_for_file<R: Runtime>(
     file_path: String,
-    window: tauri::Window,
-    state: State<'_, AppState>,
+    window: tauri::Window<R>,
+    state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     use std::fs;
 
-    println!("[CHANGE APPROVED] Applying all changes for file: {}", file_path);
+    println!(
+        "[CHANGE APPROVED] Applying all changes for file: {}",
+        file_path
+    );
 
     // Get workspace root
     let workspace_root = {
@@ -569,35 +601,76 @@ async fn approve_changes_for_file(
     let mut results = Vec::new();
     for change in &changes_for_file {
         use crate::ai_workflow::ChangeType;
-        
+
         match &change.change_type {
-            ChangeType::NewFile { content: new_content } => {
+            ChangeType::NewFile {
+                content: new_content,
+            } => {
                 content = new_content.clone();
                 results.push((
                     change.call.clone(),
                     crate::tools::ToolResult::ok(format!("File created: {}", change.path)),
                 ));
             }
-            ChangeType::Patch { old_content, new_content } => {
-                match crate::tools::apply_patch_to_string(&content, old_content, new_content) {
-                    Ok(new_content) => {
-                        content = new_content;
-                        results.push((
-                            change.call.clone(),
-                            crate::tools::ToolResult::ok(format!("Patch applied to {}", change.path)),
-                        ));
+            ChangeType::Patch {
+                old_content,
+                new_content,
+            } => match crate::tools::apply_patch_to_string(&content, old_content, new_content) {
+                Ok(new_content) => {
+                    content = new_content;
+                    results.push((
+                        change.call.clone(),
+                        crate::tools::ToolResult::ok(format!("Patch applied to {}", change.path)),
+                    ));
+                }
+                Err(e) => {
+                    results.push((
+                        change.call.clone(),
+                        crate::tools::ToolResult::err(e.clone()),
+                    ));
+                    break;
+                }
+            },
+            ChangeType::MultiPatch { patches } => {
+                // Apply each patch sequentially
+                let mut all_ok = true;
+                let patch_count = patches.len();
+                for (idx, patch) in patches.iter().enumerate() {
+                    match crate::tools::apply_patch_to_string(&content, &patch.old_text, &patch.new_text) {
+                        Ok(new_content) => {
+                            content = new_content;
+                        }
+                        Err(e) => {
+                            results.push((
+                                change.call.clone(),
+                                crate::tools::ToolResult::err(format!(
+                                    "Multi-patch failed at hunk {}/{}: {}",
+                                    idx + 1, patch_count, e
+                                )),
+                            ));
+                            all_ok = false;
+                            break;
+                        }
                     }
-                    Err(e) => {
-                        results.push((change.call.clone(), crate::tools::ToolResult::err(e.clone())));
-                        break;
-                    }
+                }
+                if all_ok {
+                    results.push((
+                        change.call.clone(),
+                        crate::tools::ToolResult::ok(format!(
+                            "Applied {} patches atomically to {}",
+                            patch_count, change.path
+                        )),
+                    ));
                 }
             }
             ChangeType::DeleteFile => {
                 // Delete file - don't update content, just mark for deletion
                 results.push((
                     change.call.clone(),
-                    crate::tools::ToolResult::ok(format!("File marked for deletion: {}", change.path)),
+                    crate::tools::ToolResult::ok(format!(
+                        "File marked for deletion: {}",
+                        change.path
+                    )),
                 ));
             }
         }
@@ -646,10 +719,10 @@ async fn approve_changes_for_file(
     Ok(())
 }
 
-#[tauri::command]
-async fn approve_all_changes(
-    window: tauri::Window,
-    state: State<'_, AppState>,
+// #[tauri::command]
+pub async fn approve_all_changes(
+    window: tauri::Window<tauri::Wry>, // Wait, uses Window so needs R or Wry?
+    state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let files_to_process: Vec<String> = {
         let pending = state.pending_changes.lock().unwrap();
@@ -676,25 +749,55 @@ async fn approve_all_changes(
 
     let results: Vec<Result<(), String>> = join_all(futures).await;
 
+    let mut succeeded = 0;
+    let mut failed = 0;
+    
     for (idx, res) in results.into_iter().enumerate() {
         if let Err(e) = res {
+            failed += 1;
             if let Some(path) = files_to_process.get(idx) {
                 errors.push(format!("{}: {}", path, e));
             } else {
                 errors.push(e);
             }
+        } else {
+            succeeded += 1;
         }
     }
+
+    // v1.1: Emit BatchCompleted event
+    let batch_id = uuid::Uuid::new_v4().to_string();
+    let _ = window.emit("blade-event", blade_protocol::BladeEventEnvelope {
+        id: uuid::Uuid::new_v4(),
+        timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64,
+        causality_id: None,
+        event: blade_protocol::BladeEvent::Workflow(
+            blade_protocol::WorkflowEvent::BatchCompleted {
+                batch_id,
+                succeeded,
+                failed,
+            }
+        ),
+    });
 
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(format!("Failed to apply some changes: {}", errors.join("; ")))
+        Err(format!(
+            "Failed to apply some changes: {}",
+            errors.join("; ")
+        ))
     }
 }
 
-#[tauri::command]
-async fn reject_change(change_id: String, state: State<'_, AppState>) -> Result<(), String> {
+// #[tauri::command]
+pub async fn reject_change(
+    change_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
     let change_opt = {
         let mut changes = state.pending_changes.lock().unwrap();
         if let Some(pos) = changes.iter().position(|c| c.call.id == change_id) {
@@ -730,8 +833,9 @@ async fn list_models() -> Vec<crate::models::registry::ModelInfo> {
     crate::models::registry::get_models().await
 }
 
-#[tauri::command]
-async fn send_message(
+// Legacy wrapper removed from handler, keeping generic function for dispatch if needed
+// #[tauri::command]
+pub async fn send_message<R: Runtime>(
     message: String,
     model_id: Option<String>,
     active_file: Option<String>,
@@ -740,9 +844,38 @@ async fn send_message(
     cursor_column: Option<usize>,
     selection_start_line: Option<usize>,
     selection_end_line: Option<usize>,
-    window: tauri::Window,
-    state: State<'_, AppState>,
-    app: tauri::AppHandle,
+    window: tauri::Window<R>,
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle<R>,
+) -> Result<(), String> {
+    handle_send_message(
+        message,
+        model_id,
+        active_file,
+        open_files,
+        cursor_line,
+        cursor_column,
+        selection_start_line,
+        selection_end_line,
+        window,
+        state,
+        app,
+    )
+    .await
+}
+
+async fn handle_send_message<R: Runtime>(
+    message: String,
+    model_id: Option<String>,
+    active_file: Option<String>,
+    open_files: Option<Vec<String>>,
+    cursor_line: Option<usize>,
+    cursor_column: Option<usize>,
+    selection_start_line: Option<usize>,
+    selection_end_line: Option<usize>,
+    window: tauri::Window<R>,
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle<R>,
 ) -> Result<(), String> {
     println!("Received message from frontend: {}", message);
     eprintln!(
@@ -771,10 +904,12 @@ async fn send_message(
             actual_message.clone(),
         ));
 
-        // Emit update immediately
+        // Emit update immediately - REMOVED for v1.1 (Frontend handles optimistic updates)
+        /*
         if let Some(msg) = conversation.last() {
-            window.emit("chat-update", msg).unwrap_or_default();
+             window.emit("chat-update", msg).unwrap_or_default();
         }
+        */
     }
 
     // Commands like @research, @search, @web are now handled directly by zcoderd
@@ -833,8 +968,8 @@ async fn send_message(
 
     tauri::async_runtime::spawn(async move {
         let mut last_session_id: Option<String> = None;
-        let mut last_emit_fp: Option<String> = None;
-        let mut repeat_emits: u32 = 0;
+        let mut _last_emit_fp: Option<String> = None;
+        let mut _repeat_emits: u32 = 0;
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(32)).await; // 30 FPS
 
@@ -857,7 +992,10 @@ async fn send_message(
             // (e.g., read_file blocked immediately in a fresh session).
             if session_id != last_session_id {
                 if let Some(ref sid) = session_id {
-                    eprintln!("[AI WORKFLOW] Session changed: clearing tool history (session_id={})", sid);
+                    eprintln!(
+                        "[AI WORKFLOW] Session changed: clearing tool history (session_id={})",
+                        sid
+                    );
                 }
                 {
                     let mut workflow = state.workflow.lock().unwrap();
@@ -871,6 +1009,9 @@ async fn send_message(
             }
 
             // Emit update
+            // Emit update - DISABLED in favor of explicit DrainResult events
+            // This prevents double-emission and race conditions with blade-event
+            /*
             {
                 let conversation = state.conversation.lock().unwrap();
                 // We emit the last Assistant message (skip Tool messages)
@@ -881,48 +1022,7 @@ async fn send_message(
                     .find(|m| m.role == crate::protocol::ChatRole::Assistant)
                 {
                     let content_len = msg.content.len();
-                    let before_len = msg
-                        .content_before_tools
-                        .as_ref()
-                        .map(|c| c.len())
-                        .unwrap_or(0);
-                    let after_len = msg
-                        .content_after_tools
-                        .as_ref()
-                        .map(|c| c.len())
-                        .unwrap_or(0);
-                    let tool_calls_len = msg.tool_calls.as_ref().map(|tc| tc.len()).unwrap_or(0);
-
-                    // Avoid emitting empty placeholder messages (no content and no tool calls)
-                    if content_len == 0 && before_len == 0 && after_len == 0 && tool_calls_len == 0 {
-                        // eprintln!("[EMIT] Suppressed empty assistant message");
-                    } else {
-                        let fp = format!(
-                            "{}|{}|{}|{}|{}",
-                            content_len,
-                            before_len,
-                            after_len,
-                            tool_calls_len,
-                            msg.content_before_tools
-                                .as_ref()
-                                .map(|c| c.len())
-                                .unwrap_or(0)
-                        );
-
-                        if let Some(prev) = &last_emit_fp {
-                            if prev == &fp {
-                                repeat_emits = repeat_emits.saturating_add(1);
-                                if repeat_emits > 50 {
-                                    // eprintln!(
-                                    //     "[EMIT] Suppressing repeated assistant emit (count={}, fp={})",
-                                    //     repeat_emits, fp
-                                    // );
-                                    continue;
-                                }
-                            } else {
-                                repeat_emits = 0;
-                            }
-                        }
+                    // ... (rest of logic) ...
                         last_emit_fp = Some(fp);
 
                         eprintln!(
@@ -932,10 +1032,12 @@ async fn send_message(
                             after_len,
                             tool_calls_len
                         );
+                        eprintln!("[EMIT] Content preview: {:?}", &msg.content);
                         window.emit("chat-update", msg).unwrap_or_default();
                     }
                 }
             }
+            */
 
             if let DrainResult::None = result {
                 if !is_streaming {
@@ -951,6 +1053,33 @@ async fn send_message(
                         }
                     }
 
+                    // v1.1: Emit MessageCompleted event for explicit end-of-stream
+                    let msg_id = {
+                        let conversation = state.conversation.lock().unwrap();
+                        conversation.last().and_then(|msg| {
+                            if msg.role == crate::protocol::ChatRole::Assistant {
+                                // Use existing ID if available (v1.1 compliant), else fallback to new
+                                msg.id.clone().or_else(|| Some(uuid::Uuid::new_v4().to_string()))
+                            } else {
+                                None
+                            }
+                        })
+                    };
+                    
+                    if let Some(id) = msg_id {
+                        let _ = window.emit("blade-event", blade_protocol::BladeEventEnvelope {
+                            id: uuid::Uuid::new_v4(),
+                            timestamp: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64,
+                            causality_id: None,
+                            event: blade_protocol::BladeEvent::Chat(
+                                blade_protocol::ChatEvent::MessageCompleted { id }
+                            ),
+                        });
+                    }
+                    
                     window.emit("chat-done", ()).unwrap_or_default();
                     break;
                 }
@@ -988,15 +1117,112 @@ async fn send_message(
                     .unwrap_or_default();
 
                 // Continue polling for done event
-            } else if let DrainResult::Update(msg) = result {
+            } else if let DrainResult::Update(msg, chunk) = result {
                 // Emit streaming chunk immediately for real-time updates
-                window.emit("chat-update", msg).unwrap_or_default();
+                // v1.1: Use MessageDelta with sequence number
+                let mut mgr = state.chat_manager.lock().unwrap();
+                let seq = mgr.message_seq;
+                mgr.message_seq += 1;
+                // Get the message ID if possible, otherwise use a temporary one (chat manager should track this properly in future)
+                // For now, we assume the frontend can correlate by expecting a stream
+                let msg_id = msg.id.clone().unwrap_or_else(|| "streaming-msg".to_string());
+                drop(mgr);
+
+                // 1. Emit legacy format for compatibility - REMOVED for v1.1
+                // window.emit("chat-update", msg).unwrap_or_default();
+
+                // 2. Emit Blade v1.1 MessageDelta
+                let _ = window.emit("blade-event", blade_protocol::BladeEventEnvelope {
+                    id: uuid::Uuid::new_v4(),
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                    causality_id: Some(msg_id.clone()),
+                    event: blade_protocol::BladeEvent::Chat(
+                        blade_protocol::ChatEvent::MessageDelta {
+                            id: msg_id,
+                            seq,
+                            chunk,
+                            is_final: false, // Will be set in MessageCompleted
+                        }
+                    ),
+                });
+            } else if let DrainResult::Reasoning(msg, chunk) = result {
+                let mut mgr = state.chat_manager.lock().unwrap();
+                let seq = mgr.message_seq;
+                mgr.message_seq += 1;
+                let msg_id = msg.id.clone().unwrap_or_else(|| "streaming-msg".to_string());
+                drop(mgr);
+
+                let _ = window.emit("blade-event", blade_protocol::BladeEventEnvelope {
+                    id: uuid::Uuid::new_v4(),
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                    causality_id: Some(msg_id.clone()),
+                    event: blade_protocol::BladeEvent::Chat(
+                        blade_protocol::ChatEvent::ReasoningDelta {
+                            id: msg_id,
+                            seq,
+                            chunk,
+                            is_final: false,
+                        }
+                    ),
+                });
             } else if let DrainResult::Error(e) = result {
                 window.emit("chat-error", e).unwrap_or_default();
                 break;
+            } else if let DrainResult::ToolCreated(msg, new_calls) = result {
+                 let msg_id = msg.id.clone().unwrap_or_else(|| "unknown".to_string());
+                 for tc in new_calls {
+                     let _ = window.emit("blade-event", blade_protocol::BladeEventEnvelope {
+                        id: uuid::Uuid::new_v4(),
+                        timestamp: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64,
+                        causality_id: Some(msg_id.clone()),
+                        event: blade_protocol::BladeEvent::Chat(
+                            blade_protocol::ChatEvent::ToolUpdate {
+                                message_id: msg_id.clone(),
+                                tool_call_id: tc.id.clone(),
+                                status: "executing".to_string(),
+                                result: None,
+                                tool_call: Some(tc.clone()),
+                            }
+                        ),
+                     });
+                 }
             } else if let DrainResult::ToolStatusUpdate(msg) = result {
-                // Emit the updated assistant message with completed tool call status
-                window.emit("chat-update", msg).unwrap_or_default();
+                // v1.1: Emit ToolUpdate events via blade-event
+                if let Some(tool_calls) = &msg.tool_calls {
+                    let msg_id = msg.id.clone().unwrap_or_else(|| "unknown".to_string());
+                    for tc in tool_calls {
+                        // Emit update for each tool call
+                        // We emit indiscriminately here because the frontend will merge/update state based on ID
+                        let status = tc.status.clone().unwrap_or_else(|| "unknown".to_string());
+                        
+                        let _ = window.emit("blade-event", blade_protocol::BladeEventEnvelope {
+                            id: uuid::Uuid::new_v4(),
+                            timestamp: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64,
+                            causality_id: Some(msg_id.clone()),
+                            event: blade_protocol::BladeEvent::Chat(
+                                blade_protocol::ChatEvent::ToolUpdate {
+                                    message_id: msg_id.clone(),
+                                    tool_call_id: tc.id.clone(),
+                                    status,
+                                    result: tc.result.clone(),
+                                    tool_call: Some(tc.clone()),
+                                }
+                            ),
+                        });
+                    }
+                }
             } else if let DrainResult::ToolCalls(calls, content) = result {
                 println!("Tools requested: {:?}. Executing...", calls.len());
                 let state = app_handle.state::<AppState>();
@@ -1046,10 +1272,12 @@ async fn send_message(
                     let has_cmds = workflow.has_pending_commands();
                     let has_changes = workflow.has_pending_changes();
                     let has_confirms = workflow.has_pending_confirms();
-                    
-                    eprintln!("[PENDING CHECK] commands={} changes={} confirms={}", 
-                        has_cmds, has_changes, has_confirms);
-                    
+
+                    eprintln!(
+                        "[PENDING CHECK] commands={} changes={} confirms={}",
+                        has_cmds, has_changes, has_confirms
+                    );
+
                     if has_cmds || has_changes || has_confirms {
                         let pending = workflow.take_pending();
                         if let Some(ref p) = pending {
@@ -1067,21 +1295,27 @@ async fn send_message(
                 // so we need to check batch_opt first before checking pending_opt
                 let mut batch_to_run = None;
                 let pending = pending_opt.or(batch_opt);
-                
+
                 if let Some(batch) = pending {
                     let has_pending_changes = !batch.changes.is_empty();
-                    let has_pending_actions = !batch.commands.is_empty()
-                        || !batch.confirms.is_empty();
+                    let has_pending_actions =
+                        !batch.commands.is_empty() || !batch.confirms.is_empty();
 
-                    eprintln!("[APPROVAL CHECK] has_changes={} has_actions={}", 
-                        has_pending_changes, has_pending_actions);
+                    eprintln!(
+                        "[APPROVAL CHECK] has_changes={} has_actions={}",
+                        has_pending_changes, has_pending_actions
+                    );
                     eprintln!("[APPROVAL CHECK] batch.commands.len={} batch.confirms.len={} batch.file_results.len={}", 
                         batch.commands.len(), batch.confirms.len(), batch.file_results.len());
-                    
+
                     // Debug: Print command details
                     for (idx, cmd) in batch.commands.iter().enumerate() {
-                        let has_result = batch.file_results.iter().any(|(c, _)| c.id == cmd.call.id);
-                        eprintln!("[APPROVAL CHECK] Command {}: '{}' has_result={}", idx, cmd.command, has_result);
+                        let has_result =
+                            batch.file_results.iter().any(|(c, _)| c.id == cmd.call.id);
+                        eprintln!(
+                            "[APPROVAL CHECK] Command {}: '{}' has_result={}",
+                            idx, cmd.command, has_result
+                        );
                     }
 
                     // If there are NO pending items requiring approval, run immediately
@@ -1117,6 +1351,12 @@ async fn send_message(
                                     old_content: String,
                                     new_content: String,
                                 },
+                                #[serde(rename = "multi_patch")]
+                                MultiPatch {
+                                    id: String,
+                                    path: String,
+                                    patches: Vec<crate::ai_workflow::PatchHunk>,
+                                },
                                 #[serde(rename = "new_file")]
                                 NewFile {
                                     id: String,
@@ -1124,20 +1364,27 @@ async fn send_message(
                                     content: String,
                                 },
                                 #[serde(rename = "delete_file")]
-                                DeleteFile {
-                                    id: String,
-                                    path: String,
-                                },
+                                DeleteFile { id: String, path: String },
                             }
 
-                            let proposals: Vec<ChangeProposal> = batch.changes.iter().map(|change| {
-                                match &change.change_type {
-                                    crate::ai_workflow::ChangeType::Patch { old_content, new_content } => {
-                                        ChangeProposal::Patch {
+                            let proposals: Vec<ChangeProposal> = batch
+                                .changes
+                                .iter()
+                                .map(|change| match &change.change_type {
+                                    crate::ai_workflow::ChangeType::Patch {
+                                        old_content,
+                                        new_content,
+                                    } => ChangeProposal::Patch {
+                                        id: change.call.id.clone(),
+                                        path: change.path.clone(),
+                                        old_content: old_content.clone(),
+                                        new_content: new_content.clone(),
+                                    },
+                                    crate::ai_workflow::ChangeType::MultiPatch { patches } => {
+                                        ChangeProposal::MultiPatch {
                                             id: change.call.id.clone(),
                                             path: change.path.clone(),
-                                            old_content: old_content.clone(),
-                                            new_content: new_content.clone(),
+                                            patches: patches.clone(),
                                         }
                                     }
                                     crate::ai_workflow::ChangeType::NewFile { content } => {
@@ -1153,10 +1400,12 @@ async fn send_message(
                                             path: change.path.clone(),
                                         }
                                     }
-                                }
-                            }).collect();
+                                })
+                                .collect();
 
-                            window.emit("propose-changes", proposals).unwrap_or_default();
+                            window
+                                .emit("propose-changes", proposals)
+                                .unwrap_or_default();
                         }
 
                         // Handle Commands and Confirms
@@ -1167,8 +1416,10 @@ async fn send_message(
                                     continue;
                                 }
                                 let root_command = extract_root_command(&cmd.command);
-                                let cwd_outside_workspace =
-                                    is_cwd_outside_workspace(ws_root.as_deref(), cmd.cwd.as_deref());
+                                let cwd_outside_workspace = is_cwd_outside_workspace(
+                                    ws_root.as_deref(),
+                                    cmd.cwd.as_deref(),
+                                );
                                 actions.push(crate::events::StructuredAction {
                                     id: cmd.call.id.clone(),
                                     command: cmd.command.clone(),
@@ -1324,13 +1575,13 @@ async fn send_message(
                             )
                             .unwrap_or_else(|e| eprintln!("Continue batch failed: {}", e));
                         }
-                        
+
                         // Clear approved command roots after loop detection
                         {
                             let mut cache = state.approved_command_roots.lock().unwrap();
                             cache.clear();
                         }
-                        
+
                         // Don't continue the loop - let it finish naturally
                     } else {
                         // Fetch models before acquiring locks
@@ -1382,16 +1633,16 @@ fn get_conversation(state: State<'_, AppState>) -> Vec<crate::protocol::ChatMess
 }
 
 #[tauri::command]
-async fn open_folder(path: String, state: State<'_, AppState>) -> Result<(), String> {
+async fn open_workspace(path: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
     let mut ws = state.workspace.lock().unwrap();
     ws.set_workspace(std::path::PathBuf::from(&path));
     Ok(())
 }
 
-#[tauri::command]
-async fn list_files(
+// #[tauri::command]
+pub async fn list_files(
     path: Option<String>,
-    state: State<'_, AppState>,
+    state: tauri::State<'_, AppState>,
 ) -> Result<Vec<crate::explorer::FileEntry>, String> {
     let ws = state.workspace.lock().unwrap();
     let root = if let Some(p) = path {
@@ -1405,8 +1656,11 @@ async fn list_files(
     Ok(crate::explorer::list_directory(&root))
 }
 
-#[tauri::command]
-async fn read_file_content(path: String, state: State<'_, AppState>) -> Result<String, String> {
+// #[tauri::command]
+pub async fn read_file_content(
+    path: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
     // Check if there's virtual content for this file
     let virtual_buffers = state.virtual_buffers.lock().unwrap();
     if let Some(virtual_content) = virtual_buffers.get(&path) {
@@ -1454,11 +1708,11 @@ async fn read_file_content(path: String, state: State<'_, AppState>) -> Result<S
     }
 }
 
-#[tauri::command]
-async fn write_file_content(
+// #[tauri::command]
+pub async fn write_file_content(
     path: String,
     content: String,
-    state: State<'_, AppState>,
+    state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let p = std::path::PathBuf::from(&path);
     let resolved_path = if p.is_absolute() {
@@ -1513,25 +1767,28 @@ fn get_virtual_files(state: State<'_, AppState>) -> Vec<String> {
 fn stop_generation(state: State<'_, AppState>, app_handle: tauri::AppHandle) -> bool {
     let mut mgr = state.chat_manager.lock().unwrap();
     let stopped = mgr.request_stop();
-    
+
     // Clear any pending command batch when stopping
     let mut batch_guard = state.pending_batch.lock().unwrap();
     *batch_guard = None;
-    
+
     // Cancel all executing commands and emit events immediately
     let mut executing = state.executing_commands.lock().unwrap();
     for (call_id, cancel_flag) in executing.drain() {
         cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
         eprintln!("[STOP] Cancelled executing command: {}", call_id);
-        
+
         // Emit tool-execution-completed event immediately so UI updates
-        let _ = app_handle.emit("tool-execution-completed", events::ToolExecutionCompletedPayload {
-            tool_name: "run_command".to_string(),
-            tool_call_id: call_id.clone(),
-            success: false,
-        });
+        let _ = app_handle.emit(
+            "tool-execution-completed",
+            events::ToolExecutionCompletedPayload {
+                tool_name: "run_command".to_string(),
+                tool_call_id: call_id.clone(),
+                success: false,
+            },
+        );
     }
-    
+
     stopped
 }
 
@@ -1631,6 +1888,417 @@ fn get_selected_model(state: State<'_, AppState>) -> Option<String> {
     config.selected_model.clone()
 }
 
+// ==============================================================================
+// Blade Protocol v1.0 Dispatcher
+// ==============================================================================
+
+#[tauri::command]
+async fn dispatch(
+    envelope: blade_protocol::BladeEnvelope<blade_protocol::BladeIntentEnvelope>,
+    window: tauri::Window,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+    terminal_manager: State<'_, crate::terminal::TerminalManager>,
+) -> Result<(), blade_protocol::BladeError> {
+    use blade_protocol::{BladeError, BladeIntent, SystemEvent, Version};
+
+    // 1. Version Check (v1.1: semantic versioning)
+    if !Version::CURRENT.is_compatible(&envelope.version) {
+        let error = BladeError::VersionMismatch {
+            expected: Version::CURRENT,
+            received: envelope.version,
+        };
+        use blade_protocol::BladeEventEnvelope;
+
+        let system_event = SystemEvent::IntentFailed {
+            intent_id: envelope.message.id,
+            error: error.clone(),
+        };
+
+        let event_envelope = BladeEventEnvelope {
+            id: uuid::Uuid::new_v4(),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            causality_id: Some(envelope.message.id.to_string()),
+            event: blade_protocol::BladeEvent::System(system_event),
+        };
+
+        let _ = window.emit("blade-event", event_envelope);
+        return Err(error);
+    }
+
+    let intent_id = envelope.message.id;
+    let idempotency_key = envelope.message.idempotency_key.clone();
+    let intent = envelope.message.intent;
+
+    println!(
+        "[BladeProtocol] Dispatching Intent: {:?} (ID: {})",
+        intent, intent_id
+    );
+
+    // 2. Idempotency Check (v1.1)
+    if let Some(ref key) = idempotency_key {
+        if let Some((cached_intent_id, cached_result)) = state.idempotency_cache.check(key) {
+            println!(
+                "[BladeProtocol] Idempotency hit for key '{}' (original intent_id: {})",
+                key, cached_intent_id
+            );
+            
+            // Return cached result
+            match cached_result {
+                crate::idempotency::IdempotencyResult::Success => {
+                    let _ = window.emit("sys-event", SystemEvent::ProcessCompleted { intent_id });
+                    return Ok(());
+                }
+                crate::idempotency::IdempotencyResult::Failed { error } => {
+                    let blade_error = BladeError::Internal {
+                        trace_id: cached_intent_id.to_string(),
+                        message: error,
+                    };
+                    let _ = window.emit("sys-event", SystemEvent::IntentFailed {
+                        intent_id,
+                        error: blade_error.clone(),
+                    });
+                    return Err(blade_error);
+                }
+            }
+        }
+    }
+
+    // 3. Emit ProtocolVersion on first dispatch (optional: track in state)
+    // For now, emit on every dispatch - frontend can dedupe
+    let protocol_version_event = SystemEvent::ProtocolVersion {
+        supported: vec![Version::CURRENT],
+        current: Version::CURRENT,
+    };
+    let _ = window.emit("blade-event", blade_protocol::BladeEventEnvelope {
+        id: uuid::Uuid::new_v4(),
+        timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64,
+        causality_id: None,
+        event: blade_protocol::BladeEvent::System(protocol_version_event),
+    });
+
+    // 4. Ack (Process Started)
+    let _ = window.emit("sys-event", SystemEvent::ProcessStarted { intent_id });
+
+    // 3. Route Intent (Placeholder Implementation)
+    let result: Result<(), blade_protocol::BladeError> = match intent {
+        BladeIntent::Chat(chat_intent) => {
+            match chat_intent {
+                blade_protocol::ChatIntent::SendMessage {
+                    content,
+                    model,
+                    context,
+                } => {
+                    // Extract context if available
+                    let (
+                        active_file,
+                        open_files,
+                        cursor_line,
+                        cursor_column,
+                        selection_start,
+                        selection_end,
+                    ) = if let Some(ctx) = context {
+                        (
+                            ctx.active_file,
+                            Some(ctx.open_files),
+                            ctx.cursor_line.map(|l| l as usize),
+                            ctx.cursor_column.map(|c| c as usize),
+                            ctx.selection_start.map(|l| l as usize),
+                            ctx.selection_end.map(|l| l as usize),
+                        )
+                    } else {
+                        let state_af = state.active_file.lock().unwrap().clone();
+                        (state_af, None, None, None, None, None)
+                    };
+
+                    handle_send_message(
+                        content,
+                        Some(model),
+                        active_file,
+                        open_files,
+                        cursor_line,
+                        cursor_column,
+                        selection_start,
+                        selection_end,
+                        window.clone(),
+                        state.clone(),
+                        app_handle.clone(),
+                    )
+                    .await
+                    .map_err(|e| blade_protocol::BladeError::Internal {
+                        trace_id: intent_id.to_string(),
+                        message: e,
+                    })
+                }
+                blade_protocol::ChatIntent::StopGeneration => {
+                    // Logic for stop generation
+                    // reusing stop_generation command logic
+                    stop_generation(state.clone(), app_handle.clone());
+                    Ok(())
+                }
+                blade_protocol::ChatIntent::ClearHistory => {
+                    // Logic for clear history
+                    let mut conversation = state.conversation.lock().unwrap();
+                    conversation.clear();
+                    // emit update?
+                    let _ = window.emit(
+                        "chat-update",
+                        blade_protocol::BladeEvent::Chat(blade_protocol::ChatEvent::ChatState {
+                            messages: Vec::new(),
+                        }),
+                    );
+                    Ok(())
+                }
+            }
+        }
+        BladeIntent::File(file_intent) => {
+            match file_intent {
+                blade_protocol::FileIntent::Read { path } => {
+                    // Reuse read_file_content command
+                    match read_file_content(path.clone(), state.clone()).await {
+                        Ok(content) => {
+                            let _ = window.emit(
+                                "sys-event",
+                                blade_protocol::BladeEvent::File(
+                                    blade_protocol::FileEvent::Content {
+                                        path: path,
+                                        data: content,
+                                    },
+                                ),
+                            );
+                            Ok(())
+                        }
+                        Err(e) => Err(blade_protocol::BladeError::ResourceNotFound {
+                            id: path + " (" + &e + ")",
+                        }),
+                    }
+                }
+                blade_protocol::FileIntent::Write { path, content } => {
+                    // Reuse write_file_content command
+                    match write_file_content(path.clone(), content, state.clone()).await {
+                        Ok(_) => {
+                            let _ = window.emit(
+                                "sys-event",
+                                blade_protocol::BladeEvent::File(
+                                    blade_protocol::FileEvent::Written { path: path },
+                                ),
+                            );
+                            Ok(())
+                        }
+                        Err(e) => Err(blade_protocol::BladeError::Internal {
+                            trace_id: intent_id.to_string(),
+                            message: e,
+                        }),
+                    }
+                }
+                blade_protocol::FileIntent::List { path } => {
+                    // Reuse list_files command
+                    match list_files(path.clone(), state.clone()).await {
+                        Ok(entries) => {
+                            // Convert crate::explorer::FileEntry to blade_protocol::FileEntry
+                            // We need a helper or map manually.
+                            // Since structs are identical but distinct types, we must map.
+                            let protocol_entries = entries
+                                .into_iter()
+                                .map(|e| blade_protocol::FileEntry {
+                                    name: e.name,
+                                    path: e.path,
+                                    is_dir: e.is_dir,
+                                    children: None, // Simplified for now (shallow)
+                                })
+                                .collect();
+
+                            let _ = window.emit(
+                                "sys-event",
+                                blade_protocol::BladeEvent::File(
+                                    blade_protocol::FileEvent::Listing {
+                                        path: path,
+                                        entries: protocol_entries,
+                                    },
+                                ),
+                            );
+                            Ok(())
+                        }
+                        Err(e) => Err(blade_protocol::BladeError::Internal {
+                            trace_id: intent_id.to_string(),
+                            message: e,
+                        }),
+                    }
+                }
+            }
+        }
+        BladeIntent::Editor(editor_intent) => {
+            println!("Editor Intent: {:?}", editor_intent);
+            Ok(())
+        }
+        BladeIntent::Workflow(workflow_intent) => match workflow_intent {
+            // v1.1 variants
+            blade_protocol::WorkflowIntent::ApproveAction { action_id } => {
+                approve_change(action_id, window.clone(), state.clone())
+                    .await
+                    .map_err(|e| blade_protocol::BladeError::Internal {
+                        trace_id: intent_id.to_string(),
+                        message: e,
+                    })
+            }
+            blade_protocol::WorkflowIntent::ApproveAll { batch_id: _ } => {
+                approve_all_changes(window.clone(), state.clone())
+                    .await
+                    .map_err(|e| blade_protocol::BladeError::Internal {
+                        trace_id: intent_id.to_string(),
+                        message: e,
+                    })
+            }
+            blade_protocol::WorkflowIntent::RejectAction { action_id } => {
+                reject_change(action_id, state.clone()).await.map_err(|e| {
+                    blade_protocol::BladeError::Internal {
+                        trace_id: intent_id.to_string(),
+                        message: e,
+                    }
+                })
+            }
+            blade_protocol::WorkflowIntent::RejectAll { batch_id: _ } => {
+                // TODO: Implement batch rejection
+                Ok(())
+            }
+            // Legacy v1.0 variants (for backward compatibility)
+            blade_protocol::WorkflowIntent::ApproveChange { change_id } => {
+                approve_change(change_id, window.clone(), state.clone())
+                    .await
+                    .map_err(|e| blade_protocol::BladeError::Internal {
+                        trace_id: intent_id.to_string(),
+                        message: e,
+                    })
+            }
+            blade_protocol::WorkflowIntent::RejectChange { change_id } => {
+                reject_change(change_id, state.clone()).await.map_err(|e| {
+                    blade_protocol::BladeError::Internal {
+                        trace_id: intent_id.to_string(),
+                        message: e,
+                    }
+                })
+            }
+            blade_protocol::WorkflowIntent::ApproveAllChanges => {
+                approve_all_changes(window.clone(), state.clone())
+                    .await
+                    .map_err(|e| blade_protocol::BladeError::Internal {
+                        trace_id: intent_id.to_string(),
+                        message: e,
+                    })
+            }
+            blade_protocol::WorkflowIntent::ApproveTool { approved } => {
+                approve_tool(approved, window.clone(), state.clone());
+                Ok(())
+            }
+            blade_protocol::WorkflowIntent::ApproveToolDecision { decision } => {
+                approve_tool_decision(decision, window.clone(), state.clone());
+                Ok(())
+            }
+        },
+        BladeIntent::Terminal(terminal_intent) => {
+            match terminal_intent {
+                blade_protocol::TerminalIntent::Spawn {
+                    id,
+                    command,
+                    cwd,
+                    owner: _,
+                    interactive,
+                } => {
+                    if interactive {
+                        crate::terminal::create_terminal(
+                            id,
+                            cwd,
+                            app_handle.clone(),
+                            terminal_manager.clone(),
+                        )
+                        .map_err(|e| {
+                            blade_protocol::BladeError::Internal {
+                                trace_id: intent_id.to_string(),
+                                message: e,
+                            }
+                        })
+                    } else {
+                        match command {
+                            Some(cmd) => crate::terminal::execute_command_in_terminal(
+                                id,
+                                cmd,
+                                cwd,
+                                app_handle.clone(),
+                                state.clone(),
+                            )
+                            .map_err(|e| {
+                                blade_protocol::BladeError::Internal {
+                                    trace_id: intent_id.to_string(),
+                                    message: e,
+                                }
+                            }),
+                            None => Err(blade_protocol::BladeError::ValidationError {
+                                field: "command".into(),
+                                message: "Command required for non-interactive spawn".into(),
+                            }),
+                        }
+                    }
+                }
+                blade_protocol::TerminalIntent::Input { id, data } => {
+                    crate::terminal::write_to_terminal(id, data, terminal_manager.clone()).map_err(
+                        |e| blade_protocol::BladeError::Internal {
+                            trace_id: intent_id.to_string(),
+                            message: e,
+                        },
+                    )
+                }
+                blade_protocol::TerminalIntent::Resize { id, rows, cols } => {
+                    crate::terminal::resize_terminal(id, rows, cols, terminal_manager.clone())
+                        .map_err(|e| blade_protocol::BladeError::Internal {
+                            trace_id: intent_id.to_string(),
+                            message: e,
+                        })
+                }
+                blade_protocol::TerminalIntent::Kill { id: _ } => {
+                    // TODO: Implement kill
+                    Ok(())
+                }
+            }
+        }
+        BladeIntent::System(system_intent) => {
+            println!("System Intent: {:?}", system_intent);
+            Ok(())
+        }
+    };
+
+    // 5. Handle Result & Store Idempotency (v1.1)
+    match result {
+        Ok(_) => {
+            // Store success in idempotency cache if key provided
+            if let Some(key) = idempotency_key {
+                state.idempotency_cache.store_success(key, intent_id);
+            }
+            let _ = window.emit("sys-event", SystemEvent::ProcessCompleted { intent_id });
+            Ok(())
+        }
+        Err(e) => {
+            // Store failure in idempotency cache if key provided
+            if let Some(key) = idempotency_key {
+                state.idempotency_cache.store_failure(key, intent_id, format!("{:?}", e));
+            }
+            let _ = window.emit(
+                "sys-event",
+                SystemEvent::IntentFailed {
+                    intent_id,
+                    error: e.clone(),
+                },
+            );
+            Err(e)
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1640,23 +2308,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             log_frontend,
-            send_message,
             get_conversation,
             list_models,
-            approve_tool,
-            approve_tool_decision,
-            open_folder,
-            list_files,
-            read_file_content,
-            write_file_content,
+            open_workspace,
             set_virtual_buffer,
             clear_virtual_buffer,
             has_virtual_buffer,
             get_virtual_files,
-            stop_generation,
-            approve_change,
-            approve_changes_for_file,
-            reject_change,
             list_conversations,
             load_conversation,
             new_conversation,
@@ -1664,20 +2322,16 @@ pub fn run() {
             save_conversation,
             get_recent_workspaces,
             get_current_workspace,
-            approve_all_changes,
             set_selected_model,
             get_selected_model,
             submit_command_result,
-            terminal::create_terminal,
-            terminal::write_to_terminal,
-            terminal::resize_terminal,
-            terminal::execute_command_in_terminal,
             ephemeral_commands::create_ephemeral_document,
             ephemeral_commands::get_ephemeral_document,
             ephemeral_commands::update_ephemeral_document,
             ephemeral_commands::close_ephemeral_document,
             ephemeral_commands::list_ephemeral_documents,
-            ephemeral_commands::save_ephemeral_document
+            ephemeral_commands::save_ephemeral_document,
+            dispatch,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

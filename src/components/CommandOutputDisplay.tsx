@@ -34,7 +34,7 @@ export const CommandOutputDisplay: React.FC<CommandOutputDisplayProps> = ({
                         <XCircle className="w-4 h-4 text-red-500" />
                     )}
                 </div>
-                
+
                 <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
                         <Terminal className="w-3.5 h-3.5 text-zinc-400" />
@@ -56,11 +56,10 @@ export const CommandOutputDisplay: React.FC<CommandOutputDisplayProps> = ({
                             <span>{duration}ms</span>
                         </div>
                     )}
-                    <div className={`px-2 py-0.5 rounded text-xs font-medium ${
-                        isSuccess 
-                            ? 'bg-emerald-500/10 text-emerald-400' 
+                    <div className={`px-2 py-0.5 rounded text-xs font-medium ${isSuccess
+                            ? 'bg-emerald-500/10 text-emerald-400'
                             : 'bg-red-500/10 text-red-400'
-                    }`}>
+                        }`}>
                         Exit {exitCode}
                     </div>
                     {isExpanded ? (
@@ -74,7 +73,7 @@ export const CommandOutputDisplay: React.FC<CommandOutputDisplayProps> = ({
             {/* Output */}
             {isExpanded && output && (
                 <div className="border-t border-[#3e3e42]">
-                    <pre className="p-4 text-xs font-mono text-zinc-300 overflow-x-auto max-h-[400px] overflow-y-auto bg-[#1e1e1e]">
+                    <pre className="p-4 text-xs font-mono text-zinc-300 overflow-x-auto max-h-[400px] overflow-y-auto bg-[#1e1e1e] select-text">
                         {output}
                     </pre>
                 </div>

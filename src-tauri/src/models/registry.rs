@@ -22,6 +22,7 @@ struct BladeModelsResponse {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct BladeModel {
     id: String,
     name: String,

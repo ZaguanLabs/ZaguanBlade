@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use regex::Regex;
 use serde::Deserialize;
-use walkdir::WalkDir;
 use tauri::Emitter;
+use walkdir::WalkDir;
 
 use crate::events;
 
@@ -75,15 +75,15 @@ pub struct EditorState {
 }
 
 pub fn execute_tool(workspace_root: &Path, tool_name: &str, raw_args: &str) -> ToolResult {
-    execute_tool_with_editor(workspace_root, tool_name, raw_args, None, None)
+    execute_tool_with_editor::<tauri::Wry>(workspace_root, tool_name, raw_args, None, None)
 }
 
-pub fn execute_tool_with_editor(
+pub fn execute_tool_with_editor<R: tauri::Runtime>(
     workspace_root: &Path,
     tool_name: &str,
     raw_args: &str,
     editor_state: Option<&EditorState>,
-    app_handle: Option<&tauri::AppHandle>,
+    app_handle: Option<&tauri::AppHandle<R>>,
 ) -> ToolResult {
     // Claude models sometimes prefix arguments with {} - strip it
     // But don't strip if the entire string is just "{}"
@@ -154,8 +154,8 @@ pub fn execute_tool_with_editor(
     }
 }
 
-fn todo_write(
-    app_handle: Option<&tauri::AppHandle>,
+fn todo_write<R: tauri::Runtime>(
+    app_handle: Option<&tauri::AppHandle<R>>,
     args: &HashMap<String, serde_json::Value>,
 ) -> ToolResult {
     // Parse todos array
@@ -188,7 +188,9 @@ fn todo_write(
     if let Some(handle) = app_handle {
         let _ = handle.emit(
             events::event_names::TODO_UPDATED,
-            events::TodoUpdatedPayload { todos: todos.clone() },
+            events::TodoUpdatedPayload {
+                todos: todos.clone(),
+            },
         );
     }
 
@@ -749,15 +751,117 @@ pub fn apply_patch_to_string(
     }
 }
 
+/// Represents a single patch hunk for multi-patch operations
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct PatchHunk {
+    old_text: String,
+    new_text: String,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+}
+
+/// Result of applying multiple patches atomically
+#[derive(Debug)]
+#[allow(dead_code)]
+struct MultiPatchResult {
+    success: bool,
+    applied_count: usize,
+    total_count: usize,
+    error: Option<String>,
+    failed_index: Option<usize>,
+}
+
+/// Apply multiple patches atomically to a file content string.
+/// All patches are validated before any are applied.
+/// If any patch fails validation, the operation is aborted and no changes are made.
+fn apply_multi_patch_to_string(content: &str, patches: &[PatchHunk]) -> Result<String, String> {
+    if patches.is_empty() {
+        return Err("No patches provided".to_string());
+    }
+
+    // Phase 1: Validate ALL patches before applying any
+    // This ensures atomicity - we either apply all or none
+    let mut validation_errors = Vec::new();
+
+    for (idx, patch) in patches.iter().enumerate() {
+        // Count occurrences of old_text
+        let count = content.matches(&patch.old_text).count();
+
+        if count == 0 {
+            // Try fuzzy match to give better error message
+            let norm_old: Vec<String> = patch
+                .old_text
+                .lines()
+                .map(|l| l.trim().to_string())
+                .collect();
+            let content_lines: Vec<&str> = content.lines().collect();
+            let norm_content: Vec<String> =
+                content_lines.iter().map(|l| l.trim().to_string()).collect();
+
+            let mut fuzzy_count = 0;
+            if !norm_old.is_empty() && content_lines.len() >= norm_old.len() {
+                for i in 0..=(content_lines.len() - norm_old.len()) {
+                    if norm_content[i..i + norm_old.len()] == norm_old[..] {
+                        fuzzy_count += 1;
+                    }
+                }
+            }
+
+            if fuzzy_count == 1 {
+                // Will succeed with fuzzy matching - continue
+            } else if fuzzy_count > 1 {
+                validation_errors.push(format!(
+                    "Patch {}: old_text matches {} times (fuzzy). Add start_line hint or more context.",
+                    idx + 1, fuzzy_count
+                ));
+            } else {
+                validation_errors.push(format!("Patch {}: old_text not found in file", idx + 1));
+            }
+        } else if count > 1 {
+            // TODO: Use start_line/end_line hints to disambiguate
+            validation_errors.push(format!(
+                "Patch {}: old_text matches {} times. Add start_line hint or more context.",
+                idx + 1,
+                count
+            ));
+        }
+        // count == 1 is perfect, no error
+    }
+
+    if !validation_errors.is_empty() {
+        return Err(format!(
+            "Multi-patch validation failed (no changes made):\n{}",
+            validation_errors.join("\n")
+        ));
+    }
+
+    // Phase 2: Apply patches sequentially
+    // Since we validated all patches, we apply them in order
+    let mut working = content.to_string();
+
+    for (idx, patch) in patches.iter().enumerate() {
+        match apply_patch_to_string(&working, &patch.old_text, &patch.new_text) {
+            Ok(new_content) => {
+                working = new_content;
+            }
+            Err(e) => {
+                // This shouldn't happen since we validated, but handle gracefully
+                return Err(format!(
+                    "Patch {} failed unexpectedly after validation: {}",
+                    idx + 1,
+                    e
+                ));
+            }
+        }
+    }
+
+    Ok(working)
+}
+
 fn apply_edit_tool(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {
     let Some(path) = get_str_arg(args, &["path", "file_path", "filepath", "filename"]) else {
         return ToolResult::err("missing required arg: path (or file_path)");
-    };
-    let Some(old_text) = get_str_arg(args, &["old_text", "old_content", "old", "from"]) else {
-        return ToolResult::err("missing required arg: old_text (or old_content/old/from)");
-    };
-    let Some(new_text) = get_str_arg(args, &["new_text", "new_content", "new", "to"]) else {
-        return ToolResult::err("missing required arg: new_text (or new_content/new/to)");
     };
 
     let abs = match validate_path_under_workspace(workspace_root, Path::new(&path)) {
@@ -770,21 +874,92 @@ fn apply_edit_tool(workspace_root: &Path, args: &HashMap<String, serde_json::Val
         Err(e) => return ToolResult::err(e.to_string()),
     };
 
-    match apply_patch_to_string(&content, &old_text, &new_text) {
-        Ok(new_content) => match fs::write(&abs, new_content.as_bytes()) {
-            Ok(()) => ToolResult::ok(format!("Applied edit to {}", path)),
-            Err(e) => ToolResult::err(e.to_string()),
-        },
-        Err(e) => {
-            // Provide helpful debugging info
-            let _preview_len = 200.min(content.len());
-            let _old_preview = if old_text.len() > 100 {
-                format!("{}... ({} chars)", &old_text[..100], old_text.len())
-            } else {
-                old_text.clone()
-            };
+    // Check for new multi-patch format first
+    if let Some(patches_value) = args.get("patches") {
+        if let Some(patches_array) = patches_value.as_array() {
+            // Parse patches array
+            let mut patches = Vec::new();
 
-            ToolResult::err(e)
+            for (idx, patch_value) in patches_array.iter().enumerate() {
+                let Some(patch_obj) = patch_value.as_object() else {
+                    return ToolResult::err(format!("Patch {} is not an object", idx + 1));
+                };
+
+                let Some(old_text) = patch_obj.get("old_text").and_then(|v| v.as_str()) else {
+                    return ToolResult::err(format!("Patch {} missing old_text", idx + 1));
+                };
+
+                let Some(new_text) = patch_obj.get("new_text").and_then(|v| v.as_str()) else {
+                    return ToolResult::err(format!("Patch {} missing new_text", idx + 1));
+                };
+
+                let start_line = patch_obj
+                    .get("start_line")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as usize);
+                let end_line = patch_obj
+                    .get("end_line")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as usize);
+
+                patches.push(PatchHunk {
+                    old_text: old_text.to_string(),
+                    new_text: new_text.to_string(),
+                    start_line,
+                    end_line,
+                });
+            }
+
+            if patches.is_empty() {
+                return ToolResult::err("patches array is empty");
+            }
+
+            // Apply multi-patch atomically
+            match apply_multi_patch_to_string(&content, &patches) {
+                Ok(new_content) => match fs::write(&abs, new_content.as_bytes()) {
+                    Ok(()) => {
+                        let count = patches.len();
+                        ToolResult::ok(format!(
+                            "Applied {} patch{} atomically to {}",
+                            count,
+                            if count == 1 { "" } else { "es" },
+                            path
+                        ))
+                    }
+                    Err(e) => ToolResult::err(format!("Failed to write file: {}", e)),
+                },
+                Err(e) => ToolResult::err(e),
+            }
+        } else {
+            ToolResult::err("patches must be an array")
+        }
+    } else {
+        // Legacy single-patch format
+        let Some(old_text) = get_str_arg(args, &["old_text", "old_content", "old", "from"]) else {
+            return ToolResult::err(
+                "missing required arg: old_text (or old_content/old/from) or patches array",
+            );
+        };
+        let Some(new_text) = get_str_arg(args, &["new_text", "new_content", "new", "to"]) else {
+            return ToolResult::err("missing required arg: new_text (or new_content/new/to)");
+        };
+
+        match apply_patch_to_string(&content, &old_text, &new_text) {
+            Ok(new_content) => match fs::write(&abs, new_content.as_bytes()) {
+                Ok(()) => ToolResult::ok(format!("Applied edit to {}", path)),
+                Err(e) => ToolResult::err(e.to_string()),
+            },
+            Err(e) => {
+                // Provide helpful debugging info
+                let _preview_len = 200.min(content.len());
+                let _old_preview = if old_text.len() > 100 {
+                    format!("{}... ({} chars)", &old_text[..100], old_text.len())
+                } else {
+                    old_text.clone()
+                };
+
+                ToolResult::err(e)
+            }
         }
     }
 }

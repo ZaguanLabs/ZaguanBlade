@@ -1,4 +1,4 @@
-'use client';
+
 import React, { createContext, useContext, useState, useCallback } from 'react';
 
 interface EditorState {
@@ -33,36 +33,36 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }, []);
 
     const setCursorPosition = useCallback((line: number, column: number) => {
-        setEditorState(prev => ({ 
-            ...prev, 
-            cursorLine: line, 
-            cursorColumn: column 
+        setEditorState(prev => ({
+            ...prev,
+            cursorLine: line,
+            cursorColumn: column
         }));
     }, []);
 
     const setSelection = useCallback((startLine: number, endLine: number) => {
-        setEditorState(prev => ({ 
-            ...prev, 
-            selectionStartLine: startLine, 
-            selectionEndLine: endLine 
+        setEditorState(prev => ({
+            ...prev,
+            selectionStartLine: startLine,
+            selectionEndLine: endLine
         }));
     }, []);
 
     const clearSelection = useCallback(() => {
-        setEditorState(prev => ({ 
-            ...prev, 
-            selectionStartLine: null, 
-            selectionEndLine: null 
+        setEditorState(prev => ({
+            ...prev,
+            selectionStartLine: null,
+            selectionEndLine: null
         }));
     }, []);
 
     return (
-        <EditorContext.Provider value={{ 
-            editorState, 
-            setActiveFile, 
-            setCursorPosition, 
-            setSelection, 
-            clearSelection 
+        <EditorContext.Provider value={{
+            editorState,
+            setActiveFile,
+            setCursorPosition,
+            setSelection,
+            clearSelection
         }}>
             {children}
         </EditorContext.Provider>

@@ -1,0 +1,64 @@
+/* Font Declarations */
+@font-face {
+  font-family: 'Symbols Nerd Font Mono';
+  src: url('/fonts/SymbolsNerdFontMono-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+}
+
+:root {
+  /* Surgical Dark Theme - Core Palette */
+  --bg-app: #09090b;
+  /* Zinc 950 - Main background */
+  --bg-panel: #0c0c0e;
+  /* Slightly lighter than app bg for panels */
+  --bg-surface: #18181b;
+  /* Zinc 900 - Cards/Inputs */
+  --bg-surface-hover: #27272a;
+  /* Zinc 800 */
+  --bg-selection: #27272a;
+  /* Zinc 800 */
+
+  --fg-primary: #e4e4e7;
+  /* Zinc 200 - Main Text */
+  --fg-secondary: #a1a1aa;
+  /* Zinc 400 - Muted Text */
+  --fg-tertiary: #52525b;
+  /* Zinc 600 - Disabled/Subtle */
+  --fg-nav: #71717a;
+  /* Zinc 500 - Navigation icons */
+
+  --border-subtle: #1f1f22;
+  /* Very subtle border */
+  --border-focus: #3f3f46;
+  /* Zinc 700 */
+  --border-active: #52525b;
+  /* Zinc 600 */
+
+  --accent-primary: #f4f4f5;
+  /* Zinc 100 - High Contrast Action */
+  --accent-secondary: #10b981;
+  /* Emerald 500 - Success/Run */
+  --accent-warning: #f59e0b;
+  /* Amber 500 */
+  --accent-error: #ef4444;
+  /* Red 500 */
+
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "Fira Code", "Symbols Nerd Font Mono", monospace;
+
+  /* Terminal Specifics */
+  --term-bg: #09090b;
+  --term-fg: #d4d4d8;
+  --term-selection: rgba(255, 255, 255, 0.1);
+
+  /* Utilities */
+  --shadow-premium: 0 4px 20px -2px rgba(0, 0, 0, 0.5);
+  --glass-bg: rgba(9, 9, 11, 0.8);
+}
+
+.dark {
+  /* Ensure these variables are active in dark mode class too */
+  --bg-app: #09090b;
+  --bg-panel: #0c0c0e;
+}

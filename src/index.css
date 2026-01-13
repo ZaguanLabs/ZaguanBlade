@@ -1,0 +1,54 @@
+@import "./styles/theme.css";
+@import "tailwindcss";
+
+@theme {
+    --color-app-bg: var(--bg-app);
+    --color-panel-bg: var(--bg-panel);
+    --color-surface-bg: var(--bg-surface);
+
+    --color-primary: var(--fg-primary);
+    --color-secondary: var(--fg-secondary);
+    --color-tertiary: var(--fg-tertiary);
+
+    --color-border-subtle: var(--border-subtle);
+    --color-border-focus: var(--border-focus);
+
+    --color-accent: var(--accent-primary);
+    --color-run: var(--accent-secondary);
+
+    --font-sans: var(--font-sans);
+    --font-mono: var(--font-mono);
+}
+
+body {
+    background-color: var(--bg-app);
+    color: var(--fg-primary);
+    font-family: var(--font-sans);
+    width: 100vw;
+    height: 100vh;
+    margin: 0;
+    overflow: hidden;
+    /* App-like feel */
+    user-select: none;
+    /* Desktop app feel */
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--bg-surface-hover);
+    border-radius: 5px;
+    border: 2px solid var(--bg-app);
+}
+
+::-webkit-scrollbar-corner {
+    background: transparent;
+}
