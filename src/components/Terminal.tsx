@@ -11,9 +11,10 @@ import type { BladeEventEnvelope } from "../types/blade";
 
 interface TerminalProps {
     id?: string;
+    cwd?: string;
 }
 
-export default function Terminal({ id = "main-terminal" }: TerminalProps) {
+export default function Terminal({ id = "main-terminal", cwd }: TerminalProps) {
     const terminalRef = useRef<HTMLDivElement>(null);
     const xtermRef = useRef<XTerm | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
@@ -79,13 +80,18 @@ export default function Terminal({ id = "main-terminal" }: TerminalProps) {
         // 2. Setup backend PTY
         const initBackend = async () => {
             try {
-                const workspaceRoot = await invoke<string | null>("get_current_workspace");
+                // Use provided cwd or fall back to workspace root
+                let terminalCwd = cwd;
+                if (!terminalCwd) {
+                    const workspaceRoot = await invoke<string | null>("get_current_workspace");
+                    terminalCwd = workspaceRoot || undefined;
+                }
 
                 await BladeDispatcher.terminal({
                     type: "Spawn",
                     payload: {
                         id,
-                        cwd: workspaceRoot || undefined,
+                        cwd: terminalCwd,
                         interactive: true,
                     }
                 });

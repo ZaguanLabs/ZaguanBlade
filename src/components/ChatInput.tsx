@@ -42,11 +42,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSend, onStop, disabled, 
                     placeholder={t('chat.inputPlaceholder')}
                     className="w-full bg-transparent text-[var(--fg-primary)] p-3 pr-10 outline-none resize-none min-h-[42px] max-h-[200px] text-xs font-mono placeholder-[var(--fg-tertiary)]"
                     rows={1}
-                    disabled={disabled || loading}
+                    disabled={disabled}
                 />
                 <button
                     onClick={() => {
-                        if (loading && onStop) {
+                        const showStop = loading && !text.trim();
+                        if (showStop && onStop) {
                             onStop();
                         } else if (text.trim() && !disabled) {
                             onSend(text);
@@ -54,12 +55,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSend, onStop, disabled, 
                         }
                     }}
                     disabled={(!text.trim() && !loading) || disabled}
-                    className={`absolute right-2 bottom-2 p-1.5 transition-colors rounded hover:bg-[var(--bg-surface-hover)] ${loading
+                    className={`absolute right-2 bottom-2 p-1.5 transition-colors rounded hover:bg-[var(--bg-surface-hover)] ${loading && !text.trim()
                         ? 'text-red-400'
                         : 'text-[var(--fg-tertiary)] hover:text-[var(--fg-primary)] disabled:opacity-30 disabled:cursor-not-allowed'
                         }`}
                 >
-                    {loading ? (
+                    {loading && !text.trim() ? (
                         <Square className="w-3.5 h-3.5 fill-current animate-pulse" />
                     ) : (
                         <Send className="w-3.5 h-3.5" />

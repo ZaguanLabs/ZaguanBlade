@@ -36,6 +36,8 @@ lazy_static = "1.4"
 dirs = "6.0.0"
 tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+clap = { version = "4", features = ["derive"] }
+glob = "0.3"
 
 [profile.release]
 panic = "abort" # Strip expensive panic clean-up logic

@@ -67,7 +67,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ models, selectedId
             </button>
 
             {isOpen && (
-                <div className="absolute top-full left-0 right-0 mt-1.5 py-1 bg-[var(--bg-panel)] border border-[var(--border-subtle)] rounded shadow-xl z-50 max-h-[300px] overflow-y-auto flex flex-col gap-0.5 animate-in fade-in zoom-in-95 duration-100 origin-top">
+                <div className="absolute top-full left-0 right-0 mt-1.5 py-1.5 bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded-lg shadow-xl z-50 max-h-[300px] overflow-y-auto flex flex-col gap-0.5 animate-in fade-in zoom-in-95 duration-100 origin-top" style={{ boxShadow: '0 8px 30px rgba(0, 0, 0, 0.4), 0 0 1px rgba(255, 255, 255, 0.1)' }}>
                     {models.length === 0 && (
                         <div className="px-3 py-2 text-xs text-[var(--fg-tertiary)] text-center italic">
                             No models available

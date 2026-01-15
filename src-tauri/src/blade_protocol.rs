@@ -115,6 +115,9 @@ pub enum FileIntent {
     Read { path: String },
     Write { path: String, content: String },
     List { path: Option<String> }, // None = root workspace
+    Create { path: String, is_dir: bool },
+    Delete { path: String },
+    Rename { old_path: String, new_path: String },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -252,6 +255,17 @@ pub enum FileEvent {
     Listing {
         path: Option<String>,
         entries: Vec<FileEntry>,
+    },
+    Created {
+        path: String,
+        is_dir: bool,
+    },
+    Deleted {
+        path: String,
+    },
+    Renamed {
+        old_path: String,
+        new_path: String,
     },
 }
 

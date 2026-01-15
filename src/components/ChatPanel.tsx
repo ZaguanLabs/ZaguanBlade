@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, X } from 'lucide-react';
 import { useChat } from '../hooks/useChat';
@@ -43,8 +43,14 @@ export const ChatPanel: React.FC = () => {
         }
     }, [messages, loading, pendingChanges]);
 
+    // Prevent default context menu on empty areas
+    const handleContextMenu = useCallback((e: React.MouseEvent) => {
+        // Always prevent default to avoid native Tauri menu
+        e.preventDefault();
+    }, []);
+
     return (
-        <div className="flex flex-col h-full bg-[var(--bg-app)] text-[var(--fg-primary)] font-sans tracking-tight">
+        <div className="flex flex-col h-full bg-[var(--bg-app)] text-[var(--fg-primary)] font-sans tracking-tight" onContextMenu={handleContextMenu}>
             {/* Header */}
             {/* Header */}
             <header className="h-10 border-b border-[var(--border-subtle)] flex items-center px-2 bg-[var(--bg-app)] select-none shrink-0 z-30">
@@ -53,7 +59,6 @@ export const ChatPanel: React.FC = () => {
                         models={models}
                         selectedId={selectedModelId || ''}
                         onSelect={setSelectedModelId}
-                        disabled={loading}
                     />
                 </div>
             </header>

@@ -8,6 +8,7 @@ import { EditorPanel } from './EditorPanel';
 import { TerminalPane } from './TerminalPane';
 import { DocumentTabs } from './DocumentTabs';
 import { DocumentViewer } from './DocumentViewer';
+import { TitleBar } from './TitleBar';
 import { Settings } from 'lucide-react';
 import { EditorProvider } from '../contexts/EditorContext';
 import { useChat } from '../hooks/useChat';
@@ -317,10 +318,8 @@ const AppLayoutInner: React.FC = () => {
 
     return (
         <div className="h-screen w-screen bg-[var(--bg-app)] overflow-hidden flex flex-col font-sans text-[var(--fg-primary)]">
-            {/* Title Bar (Custom, minimal) */}
-            <div className="h-8 bg-[var(--bg-app)] flex items-center justify-center px-4 select-none -webkit-app-region-drag border-b border-[var(--border-subtle)] relative z-50">
-                <div className="text-[10px] font-medium text-[var(--fg-tertiary)] tracking-widest uppercase opacity-70">Zaguán Blade</div>
-            </div>
+            {/* Custom Title Bar with Window Controls */}
+            <TitleBar />
 
             <div className="flex-1 flex overflow-hidden">
                 {/* Activity Bar (Vertical) */}

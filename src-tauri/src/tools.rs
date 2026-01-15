@@ -123,8 +123,10 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
         "apply_edit" | "apply_patch" => apply_edit_tool(workspace_root, &args),
         "get_workspace_structure" => get_workspace_structure(workspace_root, &args),
 
+
         // New file system tools
         "find_files" => find_files(workspace_root, &args),
+        "find_files_glob" | "glob" => find_files_glob(workspace_root, &args),
         "create_directory" => create_directory(workspace_root, &args),
         "delete_file" => delete_file(workspace_root, &args),
         "move_file" => move_file(workspace_root, &args),
@@ -1103,6 +1105,82 @@ fn find_files(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) 
     }
 
     ToolResult::ok(results.join("\n"))
+}
+
+fn find_files_glob(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {
+    let Some(pattern) = get_str_arg(args, &["pattern", "glob"]) else {
+        return ToolResult::err("missing required arg: pattern");
+    };
+
+    // Optional base path within workspace
+    let search_base = get_str_arg(args, &["path"])
+        .map(|p| workspace_root.join(p))
+        .unwrap_or_else(|| workspace_root.to_path_buf());
+
+    // Resolve base path
+    let abs_base = match fs::canonicalize(&search_base) {
+        Ok(p) => p,
+        Err(_) => search_base,
+    };
+
+    // Safest way:
+    // If pattern starts with /, assume it's relative to workspace root (ignore leading /)
+    let clean_pattern = pattern.trim_start_matches('/');
+
+    // Combine base and pattern
+    let full_pattern = abs_base.join(clean_pattern);
+    let pattern_str = full_pattern.to_string_lossy();
+
+    let case_sensitive = args
+        .get("case_sensitive")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let mut matches = Vec::new();
+    let mut count = 0;
+    const MAX_RESULTS: usize = 200;
+
+    let options = glob::MatchOptions {
+        case_sensitive: case_sensitive,
+        require_literal_separator: false,
+        require_literal_leading_dot: false,
+    };
+
+    match glob::glob_with(&pattern_str, options) {
+        Ok(paths) => {
+            for entry in paths {
+                match entry {
+                    Ok(path) => {
+                        if path.is_file() {
+                            let rel = path
+                                .strip_prefix(workspace_root)
+                                .unwrap_or(&path)
+                                .to_string_lossy()
+                                .to_string();
+                            matches.push(rel);
+                            count += 1;
+                        }
+                    }
+                    Err(e) => eprintln!("Glob error: {:?}", e),
+                }
+                if count >= MAX_RESULTS {
+                    break;
+                }
+            }
+        }
+        Err(e) => return ToolResult::err(format!("Invalid glob pattern: {}", e)),
+    }
+
+    if matches.is_empty() {
+        return ToolResult::ok("No matching files found.");
+    }
+
+    let mut output = matches.join("\n");
+    if count >= MAX_RESULTS {
+        output.push_str(&format!("\n... (truncated after {} results)", MAX_RESULTS));
+    }
+
+    ToolResult::ok(output)
 }
 
 fn create_directory(

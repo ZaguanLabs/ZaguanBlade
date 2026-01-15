@@ -2,6 +2,7 @@ import React, { Suspense } from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import App from './App';
+import { ContextMenuProvider } from './components/ui/ContextMenu';
 import './index.css';
 import './i18n'; // Initialize i18n
 import "@fontsource/fira-code"; // Defaults to weight 400
@@ -12,9 +13,11 @@ import "@fontsource/fira-code/700.css"; // Bold
 ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
         <BrowserRouter>
-            <Suspense fallback={<div className="h-screen w-screen bg-[var(--bg-app)]" />}>
-                <App />
-            </Suspense>
+            <ContextMenuProvider>
+                <Suspense fallback={<div className="h-screen w-screen bg-[var(--bg-app)]" />}>
+                    <App />
+                </Suspense>
+            </ContextMenuProvider>
         </BrowserRouter>
     </React.StrictMode>
 );

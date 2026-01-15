@@ -1,19 +1,38 @@
 "use client";
-import React, { useEffect, useRef, forwardRef, useImperativeHandle } from "react";
+import React, { useEffect, useRef, forwardRef, useImperativeHandle, useCallback } from "react";
 import { EditorState, Compartment } from "@codemirror/state";
-import { EditorView, keymap, lineNumbers, highlightActiveLineGutter } from "@codemirror/view";
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { bracketMatching, indentOnInput, syntaxHighlighting, defaultHighlightStyle, foldGutter } from "@codemirror/language";
+import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightActiveLine, drawSelection, dropCursor, rectangularSelection, crosshairCursor } from "@codemirror/view";
+import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { bracketMatching, indentOnInput, foldGutter, foldKeymap } from "@codemirror/language";
 import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from "@codemirror/autocomplete";
-import { oneDark } from "@codemirror/theme-one-dark";
-import { rust } from "@codemirror/lang-rust";
-import { javascript } from "@codemirror/lang-javascript";
-import { diffsField, clearDiffs } from "./editor/extensions/diffView";
-import { lineHighlightField, addLineHighlight, clearLineHighlight } from "./editor/extensions/lineHighlight";
-import { virtualBufferField, setBaseContent, getVirtualContent } from "./editor/extensions/virtualBuffer";
-import { inlineDiffField, inlineDiffTheme, setInlineDiff, clearInlineDiff, computeDiffLines, type PendingInlineDiff } from "./editor/extensions/inlineDiff";
+import { lintGutter } from "@codemirror/lint";
+
+// Custom theme and extensions
+import { zaguanTheme } from "./editor/theme/zaguanTheme";
+import { getLanguageExtension } from "./editor/languages";
+import {
+    diffsField,
+    clearDiffs,
+    lineHighlightField,
+    addLineHighlight,
+    clearLineHighlight,
+    virtualBufferField,
+    setBaseContent,
+    getVirtualContent,
+    inlineDiffField,
+    inlineDiffTheme,
+    setInlineDiff,
+    clearInlineDiff,
+    computeDiffLines,
+    indentGuides,
+    rainbowBrackets,
+    smoothCursor,
+    scrollPastEnd,
+} from "./editor/extensions";
 import { useEditor } from "../contexts/EditorContext";
+import { useContextMenu, type ContextMenuItem } from "./ui/ContextMenu";
+import { Copy, Scissors, Clipboard, Undo2, Redo2, Search } from "lucide-react";
 import type { Change } from "../types/change";
 
 interface CodeEditorProps {
@@ -38,6 +57,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     const viewRef = useRef<EditorView | null>(null);
     const languageConf = useRef(new Compartment());
     const { setCursorPosition, setSelection, clearSelection } = useEditor();
+    const { showMenu } = useContextMenu();
 
     // Expose methods to parent via ref
     useImperativeHandle(ref, () => ({
@@ -101,14 +121,6 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
         }
     }));
 
-    const getLanguageExtension = (fname?: string) => {
-        if (!fname) return [];
-        if (fname.endsWith('.rs')) return rust();
-        if (fname.endsWith('.js') || fname.endsWith('.jsx')) return javascript();
-        if (fname.endsWith('.ts') || fname.endsWith('.tsx')) return javascript({ typescript: true });
-        return [];
-    };
-
     // Initial setup
     useEffect(() => {
         if (!editorRef.current) return;
@@ -117,34 +129,57 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
         const state = EditorState.create({
             doc: content,
             extensions: [
+                // Core editor features
                 lineNumbers(),
                 highlightActiveLineGutter(),
+                highlightActiveLine(),
                 foldGutter(),
+                drawSelection(),
+                dropCursor(),
+                rectangularSelection(),
+                crosshairCursor(),
+                lintGutter(),
+                
+                // Editing features
                 history(),
                 bracketMatching(),
                 closeBrackets(),
                 autocompletion(),
                 highlightSelectionMatches(),
                 indentOnInput(),
-                syntaxHighlighting(defaultHighlightStyle),
-                oneDark,
+                
+                // Custom Zaguan theme (includes syntax highlighting)
+                zaguanTheme,
+                
+                // Custom extensions for enhanced UX
+                indentGuides,
+                rainbowBrackets,
+                smoothCursor,
+                scrollPastEnd,
+                
+                // Diff and virtual buffer extensions
                 diffsField,
                 lineHighlightField,
                 virtualBufferField,
-                // Inline diff extension for Windsurf-style highlighting
                 inlineDiffField,
                 inlineDiffTheme,
+                
+                // Layout
                 EditorView.theme({
                     "&": { height: "100%" },
                     ".cm-scroller": { overflow: "auto" }
                 }),
+                
+                // Language support (dynamic)
                 languageConf.current.of(getLanguageExtension(filename)),
+                
+                // Keymaps
                 keymap.of([
+                    indentWithTab,
                     {
                         key: "Mod-s",
                         run: (view) => {
                             if (onSave) {
-                                // Save virtual content (base + accepted diffs)
                                 const virtualContent = getVirtualContent(view);
                                 onSave(virtualContent);
                             }
@@ -155,6 +190,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                     ...defaultKeymap,
                     ...searchKeymap,
                     ...historyKeymap,
+                    ...foldKeymap,
                     ...completionKeymap,
                 ]),
                 EditorView.updateListener.of((update) => {
@@ -265,8 +301,88 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
         }
     }, [highlightLines, content]);
 
+    // Custom context menu for the editor
+    const handleContextMenu = useCallback((e: React.MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const view = viewRef.current;
+        if (!view) return;
+
+        const hasSelection = view.state.selection.main.from !== view.state.selection.main.to;
+
+        const items: ContextMenuItem[] = [
+            {
+                id: 'cut',
+                label: 'Cut',
+                icon: <Scissors className="w-4 h-4" />,
+                shortcut: 'Ctrl+X',
+                disabled: !hasSelection,
+                onClick: () => {
+                    document.execCommand('cut');
+                }
+            },
+            {
+                id: 'copy',
+                label: 'Copy',
+                icon: <Copy className="w-4 h-4" />,
+                shortcut: 'Ctrl+C',
+                disabled: !hasSelection,
+                onClick: () => {
+                    document.execCommand('copy');
+                }
+            },
+            {
+                id: 'paste',
+                label: 'Paste',
+                icon: <Clipboard className="w-4 h-4" />,
+                shortcut: 'Ctrl+V',
+                onClick: () => {
+                    document.execCommand('paste');
+                }
+            },
+            { id: 'div-1', label: '', divider: true },
+            {
+                id: 'undo',
+                label: 'Undo',
+                icon: <Undo2 className="w-4 h-4" />,
+                shortcut: 'Ctrl+Z',
+                onClick: () => {
+                    document.execCommand('undo');
+                }
+            },
+            {
+                id: 'redo',
+                label: 'Redo',
+                icon: <Redo2 className="w-4 h-4" />,
+                shortcut: 'Ctrl+Shift+Z',
+                onClick: () => {
+                    document.execCommand('redo');
+                }
+            },
+            { id: 'div-2', label: '', divider: true },
+            {
+                id: 'find',
+                label: 'Find',
+                icon: <Search className="w-4 h-4" />,
+                shortcut: 'Ctrl+F',
+                onClick: () => {
+                    // Trigger CodeMirror's search
+                    const event = new KeyboardEvent('keydown', {
+                        key: 'f',
+                        ctrlKey: true,
+                        bubbles: true
+                    });
+                    view.contentDOM.dispatchEvent(event);
+                }
+            },
+        ];
+
+        showMenu({ x: e.clientX, y: e.clientY }, items);
+    }, [showMenu]);
+
     return (
-        <div className="h-full w-full relative">
+        <div className="h-full w-full relative" onContextMenu={handleContextMenu}>
             <div ref={editorRef} className="h-full w-full overflow-hidden text-base" />
         </div>
     );

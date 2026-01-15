@@ -439,18 +439,12 @@ export function useChat() {
         };
     }, []);
 
-    const sendMessage = useCallback(async (text: string) => {
+    const [messageQueue, setMessageQueue] = useState<string[]>([]);
+
+    const dispatchToBackend = useCallback(async (text: string) => {
         try {
             setLoading(true);
             setError(null);
-
-            // Optimistically add user message
-            const userMsg: ChatMessage = {
-                id: crypto.randomUUID(),
-                role: 'User',
-                content: text
-            };
-            setMessages(prev => [...prev, userMsg]);
 
             // Get editor state from context
             const activeFile = editorState.activeFile;
@@ -465,7 +459,7 @@ export function useChat() {
                     content: text,
                     model: selectedModelId,
                     context: {
-                        active_file: safeActiveFile,
+                        active_file: safeActiveFile, // Use active tab file as context
                         open_files: openFiles,
                         cursor_line: editorState.cursorLine ?? null,
                         cursor_column: editorState.cursorColumn ?? null,
@@ -478,6 +472,7 @@ export function useChat() {
         } catch (e) {
             console.error('Failed to send message:', e);
             setError(e instanceof Error ? e.message : String(e));
+            setLoading(false); // Ensure loading is cleared on immediate error
         }
     }, [
         editorState.activeFile,
@@ -487,6 +482,28 @@ export function useChat() {
         editorState.selectionEndLine,
         selectedModelId
     ]);
+
+    // Queue processing effect
+    useEffect(() => {
+        if (!loading && messageQueue.length > 0) {
+            const nextMessage = messageQueue[0];
+            setMessageQueue(prev => prev.slice(1));
+            dispatchToBackend(nextMessage);
+        }
+    }, [loading, messageQueue, dispatchToBackend]);
+
+    const sendMessage = useCallback((text: string) => {
+        // Optimistically add user message
+        const userMsg: ChatMessage = {
+            id: crypto.randomUUID(),
+            role: 'User',
+            content: text
+        };
+        setMessages(prev => [...prev, userMsg]);
+
+        // Add to queue for processing
+        setMessageQueue(prev => [...prev, text]);
+    }, []);
     const stopGeneration = useCallback(async () => {
         try {
             await BladeDispatcher.chat({ type: 'StopGeneration' });

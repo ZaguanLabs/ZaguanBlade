@@ -1,12 +1,13 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { ChatMessage as ChatMessageType } from '../types/chat';
-import { User, Bot, Terminal, Brain, ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
+import { User, Bot, Terminal, Brain, ChevronDown, ChevronRight, Loader2, Copy, RotateCcw, Pencil, MessageSquare } from 'lucide-react';
 import { ToolCallDisplay } from './ToolCallDisplay';
 import { ProgressIndicator } from './ProgressIndicator';
 import { CommandOutputDisplay } from './CommandOutputDisplay';
 import { CommandApprovalCard } from './CommandApprovalCard';
 import { TodoList } from './TodoList';
+import { useContextMenu, ContextMenuItem } from './ui/ContextMenu';
 
 const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent?: boolean }> = ({ content, isActive, hasContent }) => {
     const [isExpanded, setIsExpanded] = useState(false);
@@ -86,6 +87,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
     const isSystem = message.role === 'System';
     const isTool = message.role === 'Tool';
     const isAssistant = message.role === 'Assistant';
+    const { showMenu } = useContextMenu();
 
     // Don't render Tool messages separately - they're shown in the tool call display
     // UNLESS this is a standalone tool message not handled by the previous assistant message.
@@ -122,8 +124,80 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
 
     const hasContent = initialText.length > 0 || finalText.length > 0;
 
+    // Context menu for chat messages
+    const handleContextMenu = useCallback((e: React.MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const items: ContextMenuItem[] = [
+            {
+                id: 'copy-message',
+                label: 'Copy Message',
+                icon: <Copy className="w-4 h-4" />,
+                shortcut: 'Ctrl+C',
+                onClick: async () => {
+                    try {
+                        await navigator.clipboard.writeText(message.content);
+                        console.log('[Context] Copied message');
+                    } catch (err) {
+                        console.error('[Context] Failed to copy:', err);
+                    }
+                }
+            },
+            {
+                id: 'copy-markdown',
+                label: 'Copy as Markdown',
+                icon: <MessageSquare className="w-4 h-4" />,
+                onClick: async () => {
+                    try {
+                        const markdown = `**${message.role}:**\n\n${message.content}`;
+                        await navigator.clipboard.writeText(markdown);
+                        console.log('[Context] Copied as markdown');
+                    } catch (err) {
+                        console.error('[Context] Failed to copy:', err);
+                    }
+                }
+            },
+        ];
+
+        if (isUser) {
+            items.push(
+                { id: 'div-1', label: '', divider: true },
+                {
+                    id: 'edit-message',
+                    label: 'Edit Message',
+                    icon: <Pencil className="w-4 h-4" />,
+                    onClick: () => {
+                        // TODO: Implement edit message functionality
+                        console.log('[Context] Edit message');
+                    }
+                }
+            );
+        }
+
+        if (isAssistant) {
+            items.push(
+                { id: 'div-1', label: '', divider: true },
+                {
+                    id: 'regenerate',
+                    label: 'Regenerate Response',
+                    icon: <RotateCcw className="w-4 h-4" />,
+                    onClick: () => {
+                        // TODO: Implement regenerate
+                        console.log('[Context] Regenerate response');
+                    }
+                }
+            );
+        }
+
+        showMenu({ x: e.clientX, y: e.clientY }, items);
+    }, [message, isUser, isAssistant, showMenu]);
+
     return (
-        <div className={`flex gap-3 px-4 group ${isContinued ? 'pt-1 pb-2' : 'pt-4 pb-4'} ${isUser ? 'bg-zinc-800/10' : ''} ${isTool ? 'opacity-70' : ''}`}>
+        <div
+            className={`flex gap-3 px-4 group ${isContinued ? 'pt-1 pb-2' : 'pt-4 pb-4'} ${isUser ? 'bg-zinc-800/10' : ''} ${isTool ? 'opacity-70' : ''}`}
+            onContextMenu={handleContextMenu}
+        >
             {/* Avatar Column */}
             <div className="w-5 shrink-0 flex flex-col items-center">
                 {!isContinued && (

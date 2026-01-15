@@ -1,12 +1,14 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Terminal from "./Terminal";
 import { Plus, X, Terminal as TerminalIcon } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
 
 interface TerminalTab {
     id: string;
     title: string;
+    cwd?: string;
 }
 
 export const TerminalPane: React.FC = () => {
@@ -14,6 +16,23 @@ export const TerminalPane: React.FC = () => {
         { id: "term-1", title: "Terminal 1" },
     ]);
     const [activeId, setActiveId] = useState<string>("term-1");
+
+    // Listen for open-terminal events from other components (e.g., File Explorer)
+    useEffect(() => {
+        const unlisten = listen<{ path: string }>('open-terminal', (event) => {
+            const { path } = event.payload;
+            const folderName = path.split('/').pop() || 'Terminal';
+            const newId = `term-${Date.now()}`;
+            const newTab = { id: newId, title: folderName, cwd: path };
+            setTerminals(prev => [...prev, newTab]);
+            setActiveId(newId);
+            console.log('[TerminalPane] Opening terminal at:', path);
+        });
+
+        return () => {
+            unlisten.then(fn => fn());
+        };
+    }, []);
 
     const addTerminal = () => {
         const newId = `term-${Date.now()}`;
@@ -49,7 +68,7 @@ export const TerminalPane: React.FC = () => {
                             zIndex: term.id === activeId ? 10 : 0
                         }}
                     >
-                        <Terminal id={term.id} />
+                        <Terminal id={term.id} cwd={term.cwd} />
                     </div>
                 ))}
             </div>

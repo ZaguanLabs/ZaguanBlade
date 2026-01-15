@@ -60,7 +60,10 @@ export type EditorIntent =
 export type FileIntent =
     | { type: "Read"; payload: { path: string } }
     | { type: "Write"; payload: { path: string; content: string } }
-    | { type: "List"; payload: { path: string | null } };
+    | { type: "List"; payload: { path: string | null } }
+    | { type: "Create"; payload: { path: string; is_dir: boolean } }
+    | { type: "Delete"; payload: { path: string } }
+    | { type: "Rename"; payload: { old_path: string; new_path: string } };
 
 export type FileEntry = {
     name: string;
@@ -122,7 +125,10 @@ export type EditorEvent =
 export type FileEvent =
     | { type: "Content"; payload: { path: string; data: string } }
     | { type: "Written"; payload: { path: string } }
-    | { type: "Listing"; payload: { path: string | null; entries: FileEntry[] } };
+    | { type: "Listing"; payload: { path: string | null; entries: FileEntry[] } }
+    | { type: "Created"; payload: { path: string; is_dir: boolean } }
+    | { type: "Deleted"; payload: { path: string } }
+    | { type: "Renamed"; payload: { old_path: string; new_path: string } };
 
 export type WorkflowEvent =
     | { type: "ApprovalRequested"; payload: { batch_id: string; items: string[] } }

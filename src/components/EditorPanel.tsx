@@ -175,7 +175,10 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 
     if (!activeFile) {
         return (
-            <div className="h-full flex flex-col items-center justify-center text-zinc-600 select-none bg-zinc-900/50">
+            <div 
+                className="h-full flex flex-col items-center justify-center text-zinc-600 select-none bg-zinc-900/50"
+                onContextMenu={(e) => e.preventDefault()}
+            >
                 <div className="text-4xl opacity-20 mb-4 font-thin">∅</div>
                 <p className="font-mono text-xs uppercase tracking-widest opacity-50">No Active Buffer</p>
             </div>

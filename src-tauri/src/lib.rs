@@ -26,6 +26,16 @@ pub mod xml_parser;
 use crate::chat_manager::{ChatManager, DrainResult};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, Runtime, State};
+use clap::Parser;
+
+/// ZaguanBlade - AI-Native Intelligent Code Editor
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+pub struct Cli {
+    /// Optional path to open as workspace root
+    #[arg(value_name = "PATH")]
+    pub path: Option<String>,
+}
 
 /// Parse @command syntax and extract tool name and query
 /// Returns (actual_message, Option<(tool_name, query)>)
@@ -119,7 +129,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new() -> Self {
+    pub fn new(initial_path: Option<String>) -> Self {
         // Load environment variables from .env file
         dotenv().ok();
 
@@ -164,12 +174,18 @@ impl AppState {
                 )
                 .expect("Failed to create conversation store in temp directory")
             });
+        
+        let mut workspace_manager = WorkspaceManager::new();
+        // Override workspace if provided via CLI
+        if let Some(path_str) = initial_path {
+             workspace_manager.set_workspace(std::path::PathBuf::from(path_str));
+        }
 
         Self {
             chat_manager: Mutex::new(ChatManager::new(10)),
             conversation: Mutex::new(ConversationHistory::new()),
             conversation_store: Mutex::new(conversation_store),
-            workspace: Mutex::new(WorkspaceManager::new()),
+            workspace: Mutex::new(workspace_manager),
             config: Mutex::new(config),
             workflow: Mutex::new(AiWorkflow::new()),
             pending_approval: Mutex::new(None),
@@ -1480,15 +1496,14 @@ async fn handle_send_message<R: Runtime>(
                 }
 
                 if let Some(batch) = batch_to_run {
-                    // Auto-open files in editor when read_file, read_file_range, write_file, or create_file tools are called
+                    // Auto-open files in editor only when write_file or create_file tools are called
+                    // (read_file operations don't auto-open to avoid disruptive UX)
                     for (call, result) in &batch.file_results {
                         if result.success
-                            && (call.function.name == "read_file"
-                                || call.function.name == "read_file_range"
-                                || call.function.name == "write_file"
+                            && (call.function.name == "write_file"
                                 || call.function.name == "create_file")
                         {
-                            // Extract path and line range from tool arguments
+                            // Extract path from tool arguments
                             if let Ok(args) = serde_json::from_str::<
                                 std::collections::HashMap<String, serde_json::Value>,
                             >(&call.function.arguments)
@@ -1497,50 +1512,11 @@ async fn handle_send_message<R: Runtime>(
                                     args.get("path").or_else(|| args.get("file_path"))
                                 {
                                     if let Some(path) = path_value.as_str() {
-                                        // For read_file_range, include line range for highlighting
-                                        if call.function.name == "read_file_range" {
-                                            let start_line = args
-                                                .get("start_line")
-                                                .and_then(|v| v.as_u64())
-                                                .map(|n| n as usize);
-                                            let end_line = args
-                                                .get("end_line")
-                                                .and_then(|v| v.as_u64())
-                                                .map(|n| n as usize);
-
-                                            if let (Some(start), Some(end)) = (start_line, end_line)
-                                            {
-                                                #[derive(serde::Serialize, Clone)]
-                                                struct OpenFileWithRange {
-                                                    path: String,
-                                                    start_line: usize,
-                                                    end_line: usize,
-                                                }
-                                                eprintln!("[AUTO OPEN] Opening file with highlight: {} (lines {}-{})", path, start, end);
-                                                window
-                                                    .emit(
-                                                        "open-file-with-highlight",
-                                                        OpenFileWithRange {
-                                                            path: path.to_string(),
-                                                            start_line: start,
-                                                            end_line: end,
-                                                        },
-                                                    )
-                                                    .unwrap_or_default();
-                                            } else {
-                                                eprintln!(
-                                                    "[AUTO OPEN] Opening file in editor: {}",
-                                                    path
-                                                );
-                                                window.emit("open-file", path).unwrap_or_default();
-                                            }
-                                        } else {
-                                            eprintln!(
-                                                "[AUTO OPEN] Opening file in editor: {}",
-                                                path
-                                            );
-                                            window.emit("open-file", path).unwrap_or_default();
-                                        }
+                                        eprintln!(
+                                            "[AUTO OPEN] Opening file in editor: {}",
+                                            path
+                                        );
+                                        window.emit("open-file", path).unwrap_or_default();
                                     }
                                 }
                             }
@@ -2131,6 +2107,139 @@ async fn dispatch(
                         }),
                     }
                 }
+                blade_protocol::FileIntent::Create { path, is_dir } => {
+                    // Resolve path relative to workspace
+                    let resolved_path = {
+                        let p = std::path::PathBuf::from(&path);
+                        if p.is_absolute() {
+                            p
+                        } else {
+                            let ws = state.workspace.lock().unwrap();
+                            if let Some(root) = ws.workspace.as_ref() {
+                                root.join(&path)
+                            } else {
+                                p
+                            }
+                        }
+                    };
+
+                    let result = if is_dir {
+                        std::fs::create_dir_all(&resolved_path)
+                    } else {
+                        // Create parent directories if needed
+                        if let Some(parent) = resolved_path.parent() {
+                            if let Err(e) = std::fs::create_dir_all(parent) {
+                                return Err(blade_protocol::BladeError::Internal {
+                                    trace_id: intent_id.to_string(),
+                                    message: format!("Failed to create parent directories: {}", e),
+                                });
+                            }
+                        }
+                        std::fs::File::create(&resolved_path).map(|_| ())
+                    };
+
+                    match result {
+                        Ok(_) => {
+                            let _ = window.emit(
+                                "sys-event",
+                                blade_protocol::BladeEvent::File(
+                                    blade_protocol::FileEvent::Created {
+                                        path: path.clone(),
+                                        is_dir,
+                                    },
+                                ),
+                            );
+                            // Trigger explorer refresh
+                            let _ = window.emit("refresh-explorer", ());
+                            Ok(())
+                        }
+                        Err(e) => Err(blade_protocol::BladeError::Internal {
+                            trace_id: intent_id.to_string(),
+                            message: e.to_string(),
+                        }),
+                    }
+                }
+                blade_protocol::FileIntent::Delete { path } => {
+                    // Resolve path relative to workspace
+                    let resolved_path = {
+                        let p = std::path::PathBuf::from(&path);
+                        if p.is_absolute() {
+                            p
+                        } else {
+                            let ws = state.workspace.lock().unwrap();
+                            if let Some(root) = ws.workspace.as_ref() {
+                                root.join(&path)
+                            } else {
+                                p
+                            }
+                        }
+                    };
+
+                    let result = if resolved_path.is_dir() {
+                        std::fs::remove_dir_all(&resolved_path)
+                    } else {
+                        std::fs::remove_file(&resolved_path)
+                    };
+
+                    match result {
+                        Ok(_) => {
+                            let _ = window.emit(
+                                "sys-event",
+                                blade_protocol::BladeEvent::File(
+                                    blade_protocol::FileEvent::Deleted { path: path.clone() },
+                                ),
+                            );
+                            // Trigger explorer refresh
+                            let _ = window.emit("refresh-explorer", ());
+                            Ok(())
+                        }
+                        Err(e) => Err(blade_protocol::BladeError::Internal {
+                            trace_id: intent_id.to_string(),
+                            message: e.to_string(),
+                        }),
+                    }
+                }
+                blade_protocol::FileIntent::Rename { old_path, new_path } => {
+                    // Resolve paths relative to workspace
+                    let (resolved_old, resolved_new) = {
+                        let ws = state.workspace.lock().unwrap();
+                        let root = ws.workspace.clone();
+                        
+                        let resolve = |p: &str| {
+                            let path = std::path::PathBuf::from(p);
+                            if path.is_absolute() {
+                                path
+                            } else if let Some(ref r) = root {
+                                r.join(p)
+                            } else {
+                                path
+                            }
+                        };
+                        
+                        (resolve(&old_path), resolve(&new_path))
+                    };
+
+                    match std::fs::rename(&resolved_old, &resolved_new) {
+                        Ok(_) => {
+                            let _ = window.emit(
+                                "sys-event",
+                                blade_protocol::BladeEvent::File(
+                                    blade_protocol::FileEvent::Renamed {
+                                        old_path: old_path.clone(),
+                                        new_path: new_path.clone(),
+                                    },
+                                ),
+                            );
+                            // Trigger explorer refresh
+                            let _ = window.emit("refresh-explorer", ());
+                            Ok(())
+                        }
+                        Err(e) => Err(blade_protocol::BladeError::Internal {
+                            trace_id: intent_id.to_string(),
+                            message: e.to_string(),
+                        }),
+                    }
+                }
             }
         }
         BladeIntent::Editor(editor_intent) => {
@@ -2301,9 +2410,11 @@ async fn dispatch(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let cli = Cli::parse();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .manage(AppState::new())
+        .manage(AppState::new(cli.path))
         .manage(terminal::TerminalManager::new())
         .invoke_handler(tauri::generate_handler![
             greet,

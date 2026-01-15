@@ -24,7 +24,7 @@ export default defineConfig(async () => ({
         },
     },
     build: {
-        chunkSizeWarningLimit: 800,
+        chunkSizeWarningLimit: 1000,
         rollupOptions: {
             output: {
                 manualChunks: (id) => {
@@ -33,12 +33,8 @@ export default defineConfig(async () => ({
                         if (id.includes('react-syntax-highlighter') || id.includes('refractor')) {
                             return 'vendor-syntax';
                         }
-                        // Markdown & Unified Ecosystem (Large & complex)
-                        if (id.includes('react-markdown') || id.includes('remark') || id.includes('unified') || id.includes('unist') || id.includes('vfile') || id.includes('micromark') || id.includes('mdast')) {
-                            return 'vendor-markdown';
-                        }
                         // CodeMirror (Editor)
-                        if (id.includes('@codemirror') || id.includes('codemirror')) {
+                        if (id.includes('@codemirror') || id.includes('codemirror') || id.includes('@lezer')) {
                             return 'vendor-codemirror';
                         }
                         // XTerm (Terminal)
@@ -50,8 +46,8 @@ export default defineConfig(async () => ({
                             return 'vendor-tree';
                         }
 
-                        // Core Framework & Common Libs
-                        // We group React, Router, i18n, and Icons together to avoid circular dependencies
+                        // Core Framework, Markdown, and Common Libs
+                        // Grouped together to avoid circular dependencies (react-markdown depends on React)
                         if (
                             id.includes('/react/') ||
                             id.includes('/react-dom/') ||
@@ -59,13 +55,17 @@ export default defineConfig(async () => ({
                             id.includes('@remix-run') ||
                             id.includes('/scheduler/') ||
                             id.includes('i18next') ||
-                            id.includes('lucide-react')
+                            id.includes('lucide-react') ||
+                            id.includes('react-markdown') ||
+                            id.includes('remark') ||
+                            id.includes('unified') ||
+                            id.includes('unist') ||
+                            id.includes('vfile') ||
+                            id.includes('micromark') ||
+                            id.includes('mdast')
                         ) {
                             return 'vendor-react';
                         }
-
-                        // Apps specific Tauri packages can stay in default vendor or be chunked if safe, 
-                        // but to fix black screen we avoid aggressive splitting here.
                     }
                 }
             }

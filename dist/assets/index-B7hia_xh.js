@@ -1,0 +1,1 @@
+import{i}from"./index-B83jYMm8.js";import"./vendor-react-bp43k5q3.js";import"./vendor-xterm-CT6HrMBF.js";import"./vendor-tree-DoaNKNYF.js";import"./vendor-codemirror-DCC_EBuB.js";import"./vendor-syntax-B8STJVFL.js";async function f(e={}){return typeof e=="object"&&Object.freeze(e),await i("plugin:dialog|save",{options:e})}export{f as save};
