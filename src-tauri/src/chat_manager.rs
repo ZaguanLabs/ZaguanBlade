@@ -25,6 +25,7 @@ pub enum DrainResult {
     ToolCalls(Vec<ToolCall>, Option<String>),
     ToolCreated(ChatMessage, Vec<ToolCall>),
     ToolStatusUpdate(ChatMessage),
+    TodoUpdated(Vec<crate::protocol::TodoItem>),
     Error(String),
 }
 
@@ -160,6 +161,7 @@ impl ChatManager {
                     let mut saw_chat_done = false;
                     let mut saw_content = false;
                     while let Some(event) = ws_rx.recv().await {
+                        eprintln!("[CHAT MGR] Received event: {:?}", std::mem::discriminant(&event));
                         match event {
                             crate::blade_ws_client::BladeWsEvent::Connected { .. } => {
                                 eprintln!("[CHAT MGR] Authenticated, sending chat message");
@@ -232,6 +234,19 @@ impl ChatManager {
                                     pending_count
                                 );
                                 // Continue listening - don't close connection or emit Done
+                            }
+                            crate::blade_ws_client::BladeWsEvent::TodoUpdated { todos } => {
+                                eprintln!("[CHAT MGR] Todo updated: {} items", todos.len());
+                                // Convert to protocol TodoItem
+                                let protocol_todos: Vec<crate::protocol::TodoItem> = todos
+                                    .into_iter()
+                                    .map(|t| crate::protocol::TodoItem {
+                                        content: t.content.clone(),
+                                        active_form: t.active_form,
+                                        status: t.status,
+                                    })
+                                    .collect();
+                                let _ = tx.send(ChatEvent::TodoUpdated(protocol_todos));
                             }
                             crate::blade_ws_client::BladeWsEvent::ChatDone { finish_reason } => {
                                 eprintln!("[CHAT MGR] Chat done: {}", finish_reason);
@@ -360,6 +375,7 @@ impl ChatManager {
                     
                     // Event loop
                     while let Some(event) = ws_rx.recv().await {
+                        eprintln!("[CHAT MGR BATCH] Received event: {:?}", std::mem::discriminant(&event));
                         match event {
                             crate::blade_ws_client::BladeWsEvent::Connected { .. } => {
                                 eprintln!("[CHAT MGR] Authenticated, starting batch submission");
@@ -417,6 +433,18 @@ impl ChatManager {
                                     pending_count
                                 );
                                 // Continue listening - don't close connection or emit Done
+                            }
+                            crate::blade_ws_client::BladeWsEvent::TodoUpdated { todos } => {
+                                eprintln!("[CHAT MGR] Todo updated: {} items", todos.len());
+                                let protocol_todos: Vec<crate::protocol::TodoItem> = todos
+                                    .into_iter()
+                                    .map(|t| crate::protocol::TodoItem {
+                                        content: t.content.clone(),
+                                        active_form: t.active_form,
+                                        status: t.status,
+                                    })
+                                    .collect();
+                                let _ = tx.send(ChatEvent::TodoUpdated(protocol_todos));
                             }
                             crate::blade_ws_client::BladeWsEvent::ChatDone { finish_reason } => {
                                 eprintln!("[CHAT MGR] Chat done received: {}", finish_reason);
@@ -597,6 +625,10 @@ impl ChatManager {
                                 }
                             }
                         }
+                        ChatEvent::TodoUpdated(todos) => {
+                            eprintln!("[DRAIN] Todo updated: {} items", todos.len());
+                            self.pending_results.push_back(DrainResult::TodoUpdated(todos));
+                        }
                         ChatEvent::Done => {
                             // Flush any remaining XML buffer content
                             if !self.xml_buffer.is_empty() {
@@ -666,7 +698,9 @@ impl ChatManager {
             self.pending_results.push_back(DrainResult::ToolStatusUpdate(msg));
         }
 
-        self.pending_results.pop_front().unwrap_or(DrainResult::None)
+        let result = self.pending_results.pop_front().unwrap_or(DrainResult::None);
+        eprintln!("[DRAIN] Returning result: {:?}", std::mem::discriminant(&result));
+        result
     }
 
     fn process_incoming_chunk(&mut self, chunk: &str, last_msg: &mut ChatMessage) {

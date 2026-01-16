@@ -1,30 +1,47 @@
 import React, { useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, X } from 'lucide-react';
-import { useChat } from '../hooks/useChat';
 import { useCommandExecution } from '../hooks/useCommandExecution';
+import type { ChatMessage as ChatMessageType, ModelInfo } from '../types/chat';
+import type { Change } from '../types/change';
+import type { StructuredAction } from '../types/events';
 import { ChatMessage } from './ChatMessage';
 import { ChatInput } from './ChatInput';
 import { ModelSelector } from './ModelSelector';
 import { ChatTerminal } from './ChatTerminal';
 
-export const ChatPanel: React.FC = () => {
+interface ChatPanelProps {
+    messages: ChatMessageType[];
+    loading: boolean;
+    error: string | null;
+    sendMessage: (text: string) => void;
+    stopGeneration: () => void;
+    models: ModelInfo[];
+    selectedModelId: string;
+    setSelectedModelId: (modelId: string) => void;
+    pendingActions: StructuredAction[] | null;
+    approveToolDecision: (decision: string) => void;
+    pendingChanges: Change[];
+    approveAllChanges: () => void;
+    rejectChange: (changeId: string) => void;
+}
+
+export const ChatPanel: React.FC<ChatPanelProps> = ({
+    messages,
+    loading,
+    error,
+    sendMessage,
+    stopGeneration,
+    models,
+    selectedModelId,
+    setSelectedModelId,
+    pendingActions,
+    approveToolDecision,
+    pendingChanges,
+    approveAllChanges,
+    rejectChange,
+}) => {
     const { t } = useTranslation();
-    const {
-        messages,
-        loading,
-        error,
-        sendMessage,
-        stopGeneration,
-        models,
-        selectedModelId,
-        setSelectedModelId,
-        pendingActions,
-        approveToolDecision,
-        pendingChanges,
-        approveAllChanges,
-        rejectChange,
-    } = useChat();
     const { executions, handleCommandComplete } = useCommandExecution();
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const isUserAtBottomRef = useRef(true);

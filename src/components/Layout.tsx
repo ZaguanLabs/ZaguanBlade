@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { ChatPanel } from './ChatPanel';
 import { ExplorerPanel } from './ExplorerPanel';
 import { EditorPanel } from './EditorPanel';
-import { TerminalPane } from './TerminalPane';
+import { TerminalPane, TerminalPaneHandle } from './TerminalPane';
 import { DocumentTabs } from './DocumentTabs';
 import { DocumentViewer } from './DocumentViewer';
 import { TitleBar } from './TitleBar';
@@ -13,6 +13,8 @@ import { Settings } from 'lucide-react';
 import { EditorProvider } from '../contexts/EditorContext';
 import { useChat } from '../hooks/useChat';
 import { ProtocolExplorer } from './dev/ProtocolExplorer';
+import { useProjectState, type ProjectState } from '../hooks/useProjectState';
+import { useWarmup } from '../hooks/useWarmup';
 
 interface Tab {
     id: string;
@@ -29,10 +31,101 @@ const AppLayoutInner: React.FC = () => {
     const [activeTabId, setActiveTabId] = useState<string | null>(null);
     const [tabs, setTabs] = useState<Tab[]>([]);
     const [terminalHeight, setTerminalHeight] = useState(300);
+    const [chatPanelWidth, setChatPanelWidth] = useState(400);
     const [isDragging, setIsDragging] = useState(false);
+    const [isChatDragging, setIsChatDragging] = useState(false);
     const [virtualFiles, setVirtualFiles] = useState<Set<string>>(new Set());
-    const { pendingChanges, approveChange, rejectChange } = useChat();
+    const chat = useChat();
+    const { pendingChanges, approveChange, rejectChange, selectedModelId, setSelectedModelId } = chat;
     const processingFilesRef = useRef<Set<string>>(new Set());
+    const terminalPaneRef = useRef<TerminalPaneHandle>(null);
+
+    // Workspace path for project state persistence
+    const [workspacePath, setWorkspacePath] = useState<string | null>(null);
+
+    // Fetch current workspace on mount
+    useEffect(() => {
+        const fetchWorkspace = async () => {
+            try {
+                const path = await invoke<string | null>('get_current_workspace');
+                setWorkspacePath(path);
+            } catch (e) {
+                console.error('[Layout] Failed to get workspace:', e);
+            }
+        };
+        fetchWorkspace();
+    }, []);
+
+    // Handle project state restoration
+    const handleStateLoaded = useCallback((state: ProjectState) => {
+        console.log('[Layout] Restoring project state:', state);
+
+        // Restore tabs
+        if (state.open_tabs && state.open_tabs.length > 0) {
+            const restoredTabs: Tab[] = state.open_tabs.map(t => ({
+                id: t.id,
+                title: t.title,
+                type: t.type as 'file' | 'ephemeral',
+                path: t.path,
+            }));
+            setTabs(restoredTabs);
+
+            // Restore active tab
+            if (state.active_file) {
+                const activeTab = restoredTabs.find(t => t.path === state.active_file);
+                if (activeTab) {
+                    setActiveTabId(activeTab.id);
+                }
+            } else if (restoredTabs.length > 0) {
+                setActiveTabId(restoredTabs[0].id);
+            }
+        }
+
+        // Restore terminal height
+        if (state.terminal_height) {
+            setTerminalHeight(state.terminal_height);
+        }
+
+        // Restore selected model
+        if (state.selected_model_id) {
+            setSelectedModelId(state.selected_model_id);
+        }
+
+        // Restore terminals via ref
+        if (state.terminals && state.terminals.length > 0 && terminalPaneRef.current) {
+            terminalPaneRef.current.restoreTerminals(
+                state.terminals,
+                state.active_terminal_id || undefined
+            );
+        }
+    }, [setSelectedModelId]);
+
+    // Get terminal state for persistence
+    const getTerminalState = useCallback(() => {
+        if (terminalPaneRef.current) {
+            return terminalPaneRef.current.getTerminalState();
+        }
+        return { terminals: [], activeId: 'term-1' };
+    }, []);
+
+    const terminalState = getTerminalState();
+
+    // Project state persistence
+    const { loaded: stateLoaded } = useProjectState({
+        projectPath: workspacePath,
+        tabs: tabs.map(t => ({ id: t.id, title: t.title, type: t.type, path: t.path })),
+        activeTabId,
+        selectedModelId,
+        terminals: terminalState.terminals,
+        activeTerminalId: terminalState.activeId,
+        terminalHeight,
+        onStateLoaded: handleStateLoaded,
+    });
+
+    // Cache warmup (Blade Protocol v2.1)
+    // Automatically warms cache on launch, model change, and workspace change
+    // Wait for stateLoaded to prevent multiple warmups during initialization
+    const { trackActivity } = useWarmup(workspacePath, selectedModelId, stateLoaded);
 
     // Poll for virtual buffer state
     useEffect(() => {
@@ -167,6 +260,71 @@ const AppLayoutInner: React.FC = () => {
         };
     }, [isDragging]);
 
+    // Chat panel resize handler
+    const handleChatMouseDown = (e: React.MouseEvent) => {
+        setIsChatDragging(true);
+        e.preventDefault();
+    };
+
+    useEffect(() => {
+        const handleChatMouseMove = (e: MouseEvent) => {
+            if (!isChatDragging) return;
+            // Calculate new width from right edge
+            const newWidth = window.innerWidth - e.clientX;
+            // Clamp width between 280 and 800
+            if (newWidth >= 280 && newWidth <= 800) {
+                setChatPanelWidth(newWidth);
+            }
+        };
+
+        const handleChatMouseUp = () => {
+            setIsChatDragging(false);
+        };
+
+        if (isChatDragging) {
+            document.addEventListener('mousemove', handleChatMouseMove);
+            document.addEventListener('mouseup', handleChatMouseUp);
+        }
+
+        return () => {
+            document.removeEventListener('mousemove', handleChatMouseMove);
+            document.removeEventListener('mouseup', handleChatMouseUp);
+        };
+    }, [isChatDragging]);
+
+    // Keyboard shortcuts for tab management
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            // Ctrl-W to close current tab
+            if (e.ctrlKey && e.key === 'w') {
+                e.preventDefault();
+                if (activeTabId) {
+                    handleTabClose(activeTabId);
+                }
+            }
+            
+            // Ctrl-Tab to cycle right through tabs
+            if (e.ctrlKey && e.key === 'Tab') {
+                e.preventDefault();
+                if (tabs.length > 1 && activeTabId) {
+                    const currentIndex = tabs.findIndex(t => t.id === activeTabId);
+                    if (e.shiftKey) {
+                        // Ctrl-Shift-Tab: cycle left
+                        const prevIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+                        setActiveTabId(tabs[prevIndex].id);
+                    } else {
+                        // Ctrl-Tab: cycle right
+                        const nextIndex = (currentIndex + 1) % tabs.length;
+                        setActiveTabId(tabs[nextIndex].id);
+                    }
+                }
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [activeTabId, tabs]);
+
     // Listen for open-file and open-ephemeral-document events
     useEffect(() => {
         if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
@@ -283,9 +441,16 @@ const AppLayoutInner: React.FC = () => {
 
                 // Find ephemeral tab associated with this change
                 const ephemeralTabId = `new-file-${change_id}`;
+                
+                // Mark this file as being processed to prevent duplicate tab creation from open-file event
+                processingFilesRef.current.add(file_path);
+                
                 setTabs(prev => {
                     const ephemeralTab = prev.find(t => t.id === ephemeralTabId);
-                    if (!ephemeralTab) return prev;
+                    if (!ephemeralTab) {
+                        processingFilesRef.current.delete(file_path);
+                        return prev;
+                    }
 
                     console.log('[LAYOUT] Converting ephemeral tab to file tab:', ephemeralTabId, '→', file_path);
                     const filename = file_path.split('/').pop() || file_path;
@@ -302,6 +467,11 @@ const AppLayoutInner: React.FC = () => {
 
                 // Switch to the new file tab
                 setActiveTabId(`file-${file_path}`);
+                
+                // Clear the processing flag after a short delay to allow the open-file event to be ignored
+                setTimeout(() => {
+                    processingFilesRef.current.delete(file_path);
+                }, 500);
             });
         };
 
@@ -428,13 +598,36 @@ const AppLayoutInner: React.FC = () => {
 
                         {/* Terminal Pane */}
                         <div style={{ height: terminalHeight }} className="bg-[var(--term-bg)]">
-                            <TerminalPane />
+                            <TerminalPane ref={terminalPaneRef} />
                         </div>
                     </div>
 
+                    {/* Chat Panel Resizer */}
+                    <div
+                        className={`w-[3px] cursor-col-resize bg-transparent hover:bg-[var(--accent-secondary)] transition-colors z-40 ${isChatDragging ? 'bg-[var(--accent-secondary)]' : ''}`}
+                        onMouseDown={handleChatMouseDown}
+                    />
+
                     {/* AI Chat */}
-                    <div className="w-[400px] min-w-[320px] border-l border-[var(--border-subtle)] bg-[var(--bg-panel)] flex flex-col shadow-xl z-30">
-                        <ChatPanel />
+                    <div 
+                        style={{ width: chatPanelWidth }} 
+                        className="min-w-[280px] max-w-[800px] border-l border-[var(--border-subtle)] bg-[var(--bg-panel)] flex flex-col shadow-xl z-30"
+                    >
+                        <ChatPanel
+                            messages={chat.messages}
+                            loading={chat.loading}
+                            error={chat.error}
+                            sendMessage={chat.sendMessage}
+                            stopGeneration={chat.stopGeneration}
+                            models={chat.models}
+                            selectedModelId={chat.selectedModelId}
+                            setSelectedModelId={chat.setSelectedModelId}
+                            pendingActions={chat.pendingActions}
+                            approveToolDecision={chat.approveToolDecision}
+                            pendingChanges={chat.pendingChanges}
+                            approveAllChanges={chat.approveAllChanges}
+                            rejectChange={chat.rejectChange}
+                        />
                     </div>
 
                 </div>
@@ -442,7 +635,7 @@ const AppLayoutInner: React.FC = () => {
 
             {/* Status Bar */}
             <div className="h-6 bg-[var(--bg-app)] border-t border-[var(--border-subtle)] text-[var(--fg-tertiary)] flex items-center px-3 text-[10px] font-mono justify-between select-none z-40">
-                <div className="flex items-center gap-4">
+                <div className="relative flex-1 flex flex-col">
                     <span className="flex items-center gap-1.5 hover:text-[var(--fg-secondary)] cursor-pointer transition-colors">
                         <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></svg>
                         main*

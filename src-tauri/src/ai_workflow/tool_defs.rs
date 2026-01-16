@@ -306,35 +306,6 @@ User: 'What's the structure of this project?'
                 }
             }
         }),
-        // 8. Todo Write (task progress)
-        serde_json::json!({
-            "type": "function",
-            "name": "todo_write",
-            "function": {
-                "name": "todo_write",
-                "description": "Update the task progress TODO list shown in the UI. Use to create or refresh the list of tasks and their statuses. Provide both content (imperative) and activeForm (present continuous).",
-                "strict": false,
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "todos": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "content": { "type": "string", "description": "Imperative form, e.g., 'Fix authentication bug'" },
-                                    "activeForm": { "type": "string", "description": "Present continuous, e.g., 'Fixing authentication bug'" },
-                                    "status": { "type": "string", "enum": ["pending", "in_progress", "completed", "cancelled"] }
-                                },
-                                "required": ["content", "activeForm", "status"],
-                                "additionalProperties": false
-                            }
-                        }
-                    },
-                    "required": ["todos"],
-                    "additionalProperties": false
-                }
-            }
-        }),
+        // Note: todo_write is now server-side only (handled by zcoderd)
     ]
 }

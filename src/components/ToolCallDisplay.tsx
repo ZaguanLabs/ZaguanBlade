@@ -1,7 +1,7 @@
 'use client';
-import React from 'react';
+import React, { useState, useCallback } from 'react';
 import { ToolCall } from '../types/chat';
-import { Zap, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
+import { Zap, CheckCircle2, XCircle, Loader2, Copy, Check, ChevronRight, ChevronDown } from 'lucide-react';
 
 interface ToolCallDisplayProps {
     toolCall: ToolCall;
@@ -13,6 +13,19 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     toolCall,
     status = 'pending'
 }) => {
+    const [copied, setCopied] = useState(false);
+    const [isExpanded, setIsExpanded] = useState(false);
+    const isRunCommand = toolCall.function.name === 'run_command';
+
+    const handleCopyCommand = useCallback(async (command: string) => {
+        try {
+            await navigator.clipboard.writeText(command);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        } catch (err) {
+            console.error('Failed to copy command:', err);
+        }
+    }, []);
     const getStatusIcon = () => {
         switch (status) {
             case 'executing':
@@ -92,53 +105,87 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
         parsedArgs = { raw: toolCall.function.arguments };
     }
 
-    // Hide arguments for certain tools
-    const shouldHideArgs = ['apply_patch'].includes(toolCall.function.name);
+    // For run_command, extract the command for display and copy
+    const commandText = isRunCommand ? (parsedArgs.command as string || parsedArgs.CommandLine as string || '') : '';
+    const cwdText = isRunCommand ? (parsedArgs.cwd as string || parsedArgs.Cwd as string || '') : '';
 
+    // Compact inline display for most tools, expanded for run_command
+    if (!isRunCommand) {
+        // Minimal inline display for non-command tools
+        return (
+            <div className="flex items-center gap-2 py-1 text-[11px] text-zinc-500 group/tool">
+                {getStatusIcon()}
+                <span className="font-medium text-zinc-400">
+                    {getFriendlyToolName(toolCall.function.name, parsedArgs)}
+                </span>
+                {status === 'executing' && (
+                    <span className="text-[9px] text-blue-400 animate-pulse">running...</span>
+                )}
+                {status === 'complete' && (
+                    <span className="text-[9px] text-emerald-500">✓</span>
+                )}
+                {status === 'error' && (
+                    <span className="text-[9px] text-red-400">failed</span>
+                )}
+                {/* Expand button for details */}
+                <button
+                    onClick={() => setIsExpanded(!isExpanded)}
+                    className="opacity-0 group-hover/tool:opacity-100 transition-opacity ml-auto"
+                >
+                    {isExpanded ? (
+                        <ChevronDown className="w-3 h-3 text-zinc-600" />
+                    ) : (
+                        <ChevronRight className="w-3 h-3 text-zinc-600" />
+                    )}
+                </button>
+            </div>
+        );
+    }
+
+    // Expanded display for run_command with copy button
     return (
         <div className={`border rounded-md overflow-hidden transition-all duration-200 ${getStatusColor()}`}>
             {/* Header */}
-            <div className="flex items-center justify-between px-3 py-2 bg-zinc-900/40">
+            <div className="flex items-center justify-between px-2.5 py-1.5 bg-zinc-900/40">
                 <div className="flex items-center gap-2">
                     {getStatusIcon()}
-                    <span className="text-xs font-medium text-zinc-200">
+                    <span className="text-[11px] font-medium text-zinc-300">
                         {getFriendlyToolName(toolCall.function.name, parsedArgs)}
                     </span>
-                    <span className="text-[9px] font-mono text-zinc-600 bg-zinc-900/80 px-1.5 py-0.5 rounded border border-zinc-800/50">
-                        {toolCall.id?.slice(0, 8) || 'unknown'}
+                </div>
+                <div className="flex items-center gap-2">
+                    <span className={`text-[9px] font-mono uppercase tracking-wider ${status === 'complete' ? 'text-emerald-400' :
+                        status === 'executing' ? 'text-blue-400' :
+                            status === 'error' ? 'text-red-400' :
+                                status === 'skipped' ? 'text-yellow-400' : 'text-zinc-500'
+                        }`}>
+                        {getStatusText()}
                     </span>
                 </div>
-                <span className={`text-[9px] font-mono uppercase tracking-wider font-semibold ${status === 'complete' ? 'text-emerald-400' :
-                    status === 'executing' ? 'text-blue-400' :
-                        status === 'error' ? 'text-red-400' :
-                            status === 'skipped' ? 'text-yellow-400' : 'text-zinc-500'
-                    }`}>
-                    {getStatusText()}
-                </span>
             </div>
 
-            {/* Arguments - Hide for verbose tools */}
-            {!shouldHideArgs && Object.keys(parsedArgs).length > 0 && (
-                <div className="px-3 py-2.5 space-y-1.5 bg-zinc-950/30">
-                    {Object.entries(parsedArgs).map(([key, value]) => {
-                        // Truncate very long values
-                        let displayValue = typeof value === 'string' ? value : JSON.stringify(value);
-                        if (displayValue.length > 200) {
-                            displayValue = displayValue.substring(0, 200) + '...';
-                        }
-                        return (
-                            <div key={key} className="flex gap-3 text-xs items-start">
-                                <span className="font-mono text-zinc-500 min-w-[80px] shrink-0">{key}:</span>
-                                <span className="font-mono text-zinc-300 flex-1 break-all select-text">
-                                    {displayValue}
-                                </span>
-                            </div>
-                        );
-                    })}
+            {/* Command display with copy button */}
+            {commandText && (
+                <div className="px-2.5 py-2 bg-zinc-950/50 border-t border-zinc-800/30">
+                    <div className="flex items-start gap-2">
+                        <code className="flex-1 text-[11px] font-mono text-zinc-300 break-all select-text leading-relaxed">
+                            {cwdText && <span className="text-zinc-600">{cwdText}$ </span>}
+                            {commandText}
+                        </code>
+                        <button
+                            onClick={() => handleCopyCommand(commandText)}
+                            className="shrink-0 p-1 rounded hover:bg-zinc-800 transition-colors group/copy"
+                            title="Copy command"
+                        >
+                            {copied ? (
+                                <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            ) : (
+                                <Copy className="w-3.5 h-3.5 text-zinc-500 group-hover/copy:text-zinc-300" />
+                            )}
+                        </button>
+                    </div>
                 </div>
             )}
-
-            {/* Results hidden - user only wants to see status indicators */}
         </div>
     );
 };

@@ -23,6 +23,16 @@ enum WsMessage {
     Close,
 }
 
+/// Todo item from zcoderd
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TodoItem {
+    pub content: String,
+    #[serde(default)]
+    pub active_form: Option<String>,
+    pub status: String,
+}
+
 /// Events from the Blade Protocol WebSocket stream
 #[derive(Debug, Clone)]
 pub enum BladeWsEvent {
@@ -43,6 +53,9 @@ pub enum BladeWsEvent {
     },
     ToolResultAck {
         pending_count: i64,
+    },
+    TodoUpdated {
+        todos: Vec<TodoItem>,
     },
     ChatDone {
         finish_reason: String,
@@ -210,10 +223,11 @@ impl BladeWsClient {
         });
 
         // Heartbeat: send websocket ping periodically to keep connection alive
+        // Use 10-second interval for aggressive keep-alive during long-running operations
         {
             let hb_tx = msg_tx.clone();
             tokio::spawn(async move {
-                let interval = std::time::Duration::from_secs(20);
+                let interval = std::time::Duration::from_secs(10);
                 loop {
                     tokio::time::sleep(interval).await;
                     if hb_tx.send(WsMessage::Ping).is_err() {
@@ -486,6 +500,23 @@ impl BladeWsClient {
                     name,
                     arguments,
                 });
+            }
+            "todo_updated" => {
+                // Parse todos array from payload
+                if let Some(todos_value) = msg.payload.get("todos") {
+                    match serde_json::from_value::<Vec<TodoItem>>(todos_value.clone()) {
+                        Ok(todos) => {
+                            eprintln!("[BLADE WS] Todo updated: {} items", todos.len());
+                            match tx.send(BladeWsEvent::TodoUpdated { todos }) {
+                                Ok(_) => eprintln!("[BLADE WS] TodoUpdated event sent to channel"),
+                                Err(e) => eprintln!("[BLADE WS] Failed to send TodoUpdated to channel: {}", e),
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("[BLADE WS] Failed to parse todos: {}", e);
+                        }
+                    }
+                }
             }
             "chat_done" => {
                 let finish_reason = msg

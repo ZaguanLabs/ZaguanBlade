@@ -50,6 +50,14 @@ pub struct ProgressInfo {
     pub percent: i32,
 }
 
+/// Todo item for task progress (from zcoderd)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TodoItem {
+    pub content: String,
+    pub active_form: Option<String>,
+    pub status: String,
+}
+
 pub enum ChatEvent {
     Session {
         session_id: String,
@@ -62,6 +70,7 @@ pub enum ChatEvent {
         suggested_name: String,
     },
     ToolCalls(Vec<ToolCall>),
+    TodoUpdated(Vec<TodoItem>),
     Progress {
         message: String,
         stage: String,

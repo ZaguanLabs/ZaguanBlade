@@ -1,13 +1,15 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { listen, emit } from "@tauri-apps/api/event";
 import { BladeDispatcher } from "../services/blade";
 import { TerminalBuffer } from "../utils/eventBuffer";
 import type { BladeEventEnvelope } from "../types/blade";
+import { useContextMenu, ContextMenuItem } from "./ui/ContextMenu";
+import { Copy, ClipboardPaste, Trash2, MessageSquare } from "lucide-react";
 
 interface TerminalProps {
     id?: string;
@@ -19,6 +21,80 @@ export default function Terminal({ id = "main-terminal", cwd }: TerminalProps) {
     const xtermRef = useRef<XTerm | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
     const terminalBufferRef = useRef<TerminalBuffer | null>(null);
+    const { showMenu } = useContextMenu();
+
+    // Context menu handler
+    const handleContextMenu = useCallback((e: React.MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const term = xtermRef.current;
+        const selection = term?.getSelection() || '';
+
+        const items: ContextMenuItem[] = [
+            {
+                id: 'copy',
+                label: 'Copy',
+                icon: <Copy className="w-4 h-4" />,
+                shortcut: 'Ctrl+Shift+C',
+                disabled: !selection,
+                onClick: async () => {
+                    if (selection) {
+                        try {
+                            await navigator.clipboard.writeText(selection);
+                        } catch (err) {
+                            console.error('Failed to copy:', err);
+                        }
+                    }
+                }
+            },
+            {
+                id: 'paste',
+                label: 'Paste',
+                icon: <ClipboardPaste className="w-4 h-4" />,
+                shortcut: 'Ctrl+Shift+V',
+                onClick: async () => {
+                    try {
+                        const text = await navigator.clipboard.readText();
+                        if (text && term) {
+                            BladeDispatcher.terminal({
+                                type: "Input",
+                                payload: { id, data: text }
+                            }).catch(console.error);
+                        }
+                    } catch (err) {
+                        console.error('Failed to paste:', err);
+                    }
+                }
+            },
+            { id: 'div-1', label: '', divider: true },
+            {
+                id: 'clear',
+                label: 'Clear Terminal',
+                icon: <Trash2 className="w-4 h-4" />,
+                onClick: () => {
+                    if (term) {
+                        term.clear();
+                    }
+                }
+            },
+            { id: 'div-2', label: '', divider: true },
+            {
+                id: 'send-to-chat',
+                label: 'Send to Chat',
+                icon: <MessageSquare className="w-4 h-4" />,
+                disabled: !selection,
+                onClick: async () => {
+                    if (selection) {
+                        // Emit event to send selection to chat input
+                        await emit('terminal-to-chat', { text: selection });
+                    }
+                }
+            },
+        ];
+
+        showMenu({ x: e.clientX, y: e.clientY }, items);
+    }, [id, showMenu]);
 
     useEffect(() => {
         if (!terminalRef.current) return;
@@ -225,6 +301,7 @@ export default function Terminal({ id = "main-terminal", cwd }: TerminalProps) {
             ref={terminalRef}
             className="w-full h-full bg-[var(--term-bg)]"
             style={{ overflow: "hidden" }}
+            onContextMenu={handleContextMenu}
         />
     );
 }

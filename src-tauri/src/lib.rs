@@ -15,11 +15,13 @@ pub mod explorer;
 pub mod idempotency; // [NEW] v1.1: Idempotency cache
 pub mod models;
 pub mod project;
+pub mod project_state;
 pub mod protocol;
 pub mod reasoning_parser; // [NEW] v1.2: Multi-format reasoning extraction
 pub mod terminal;
 pub mod tool_execution;
 pub mod tools;
+pub mod warmup; // [NEW] v2.1: Cache warmup
 pub mod workspace_manager;
 pub mod xml_parser;
 
@@ -126,6 +128,7 @@ pub struct AppState {
         Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>>,
     >,
     pub idempotency_cache: crate::idempotency::IdempotencyCache, // v1.1: Idempotency support
+    pub warmup_client: warmup::WarmupClient, // v2.1: Cache warmup
 }
 
 impl AppState {
@@ -181,6 +184,12 @@ impl AppState {
              workspace_manager.set_workspace(std::path::PathBuf::from(path_str));
         }
 
+        // Initialize warmup client with config values
+        let warmup_client = warmup::WarmupClient::new(
+            config.blade_url.clone(),
+            config.api_key.clone(),
+        );
+
         Self {
             chat_manager: Mutex::new(ChatManager::new(10)),
             conversation: Mutex::new(ConversationHistory::new()),
@@ -203,6 +212,7 @@ impl AppState {
             approved_command_roots: Mutex::new(std::collections::HashSet::new()),
             executing_commands: std::sync::Arc::new(Mutex::new(std::collections::HashMap::new())),
             idempotency_cache: crate::idempotency::IdempotencyCache::default(), // 24h TTL
+            warmup_client, // v2.1: Cache warmup
         }
     }
 }
@@ -1239,6 +1249,25 @@ async fn handle_send_message<R: Runtime>(
                         });
                     }
                 }
+            } else if let DrainResult::TodoUpdated(todos) = result {
+                // Emit todo_updated event to frontend
+                // Convert protocol::TodoItem to events::TodoItem
+                let event_todos: Vec<crate::events::TodoItem> = todos
+                    .into_iter()
+                    .map(|t| crate::events::TodoItem {
+                        content: t.content.clone(),
+                        active_form: t.active_form.unwrap_or_else(|| t.content.clone()),
+                        status: t.status,
+                    })
+                    .collect();
+                eprintln!("[LIB] Emitting TODO_UPDATED event with {} items", event_todos.len());
+                match window.emit(
+                    crate::events::event_names::TODO_UPDATED,
+                    crate::events::TodoUpdatedPayload { todos: event_todos },
+                ) {
+                    Ok(_) => eprintln!("[LIB] TODO_UPDATED event emitted successfully"),
+                    Err(e) => eprintln!("[LIB] Failed to emit TODO_UPDATED: {}", e),
+                }
             } else if let DrainResult::ToolCalls(calls, content) = result {
                 println!("Tools requested: {:?}. Executing...", calls.len());
                 let state = app_handle.state::<AppState>();
@@ -1841,17 +1870,12 @@ fn get_current_workspace(state: State<'_, AppState>) -> Option<String> {
 
 #[tauri::command]
 async fn set_selected_model(model_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    // Update the selected model index
+    // Update the selected model index (in-memory only)
+    // Model persistence is handled by project state, not main config
     let models = get_models().await;
     if let Some(idx) = models.iter().position(|m| m.id == model_id) {
         *state.selected_model_index.lock().unwrap() = idx;
-
-        // Save to config
-        let mut config = state.config.lock().unwrap();
-        config.selected_model = Some(model_id);
-        let config_path = config::default_api_config_path();
-        config::save_api_config(&config_path, &config)?;
-
+        eprintln!("[MODEL] Set selected model index to {} for {}", idx, model_id);
         Ok(())
     } else {
         Err(format!("Model not found: {}", model_id))
@@ -1859,9 +1883,60 @@ async fn set_selected_model(model_id: String, state: State<'_, AppState>) -> Res
 }
 
 #[tauri::command]
-fn get_selected_model(state: State<'_, AppState>) -> Option<String> {
-    let config = state.config.lock().unwrap();
-    config.selected_model.clone()
+fn get_selected_model(_state: State<'_, AppState>) -> Option<String> {
+    // Model is now stored in project state only, not main config
+    // Return None to let the frontend use project state or default
+    None
+}
+
+// ==============================================================================
+// Project State Persistence
+// ==============================================================================
+
+#[tauri::command]
+fn load_project_state(project_path: String) -> Option<project_state::ProjectState> {
+    project_state::load_project_state(&project_path)
+}
+
+#[tauri::command]
+fn save_project_state(state_data: project_state::ProjectState) -> Result<(), String> {
+    project_state::save_project_state(&state_data)
+}
+
+#[tauri::command]
+fn get_project_state_path(project_path: String) -> Option<String> {
+    project_state::get_project_state_path(&project_path)
+        .map(|p| p.to_string_lossy().to_string())
+}
+
+// ==============================================================================
+// Cache Warmup (Blade Protocol v2.1)
+// ==============================================================================
+
+#[tauri::command]
+async fn warmup_cache(
+    session_id: String,
+    model: String,
+    trigger: String,
+    state: State<'_, AppState>,
+) -> Result<warmup::WarmupResponse, String> {
+    let trigger = match trigger.as_str() {
+        "launch" => warmup::WarmupTrigger::Launch,
+        "model_change" => warmup::WarmupTrigger::ModelChange,
+        "workspace_change" => warmup::WarmupTrigger::WorkspaceChange,
+        "session_resume" => warmup::WarmupTrigger::SessionResume,
+        _ => warmup::WarmupTrigger::Launch,
+    };
+
+    state
+        .warmup_client
+        .warmup(&session_id, &model, trigger)
+        .await
+}
+
+#[tauri::command]
+fn should_rewarm_cache(state: State<'_, AppState>) -> bool {
+    state.warmup_client.should_rewarm()
 }
 
 // ==============================================================================
@@ -2412,9 +2487,28 @@ async fn dispatch(
 pub fn run() {
     let cli = Cli::parse();
 
+    // Resolve relative paths (like "." or "..") to absolute paths
+    let resolved_path = cli.path.map(|p| {
+        let path = std::path::PathBuf::from(&p);
+        if path.is_relative() {
+            // Resolve relative to current working directory
+            std::env::current_dir()
+                .ok()
+                .map(|cwd| cwd.join(&path))
+                .and_then(|full| std::fs::canonicalize(&full).ok())
+                .map(|abs| abs.to_string_lossy().to_string())
+                .unwrap_or(p)
+        } else {
+            // Already absolute, just canonicalize if possible
+            std::fs::canonicalize(&path)
+                .map(|abs| abs.to_string_lossy().to_string())
+                .unwrap_or(p)
+        }
+    });
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .manage(AppState::new(cli.path))
+        .manage(AppState::new(resolved_path))
         .manage(terminal::TerminalManager::new())
         .invoke_handler(tauri::generate_handler![
             greet,
@@ -2435,6 +2529,11 @@ pub fn run() {
             get_current_workspace,
             set_selected_model,
             get_selected_model,
+            load_project_state,
+            save_project_state,
+            get_project_state_path,
+            warmup_cache,
+            should_rewarm_cache,
             submit_command_result,
             ephemeral_commands::create_ephemeral_document,
             ephemeral_commands::get_ephemeral_document,

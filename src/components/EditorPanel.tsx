@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import CodeEditor, { type CodeEditorHandle } from './CodeEditor';
+import { MarkdownEditor } from './MarkdownEditor';
 import { useEditor } from '../contexts/EditorContext';
 import { BladeDispatcher } from '../services/blade';
 import { BladeEvent, FileEvent } from '../types/blade';
@@ -185,6 +186,9 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         );
     }
 
+    // Check if this is a Markdown file
+    const isMarkdownFile = activeFile.endsWith('.md') || activeFile.endsWith('.markdown');
+
     return (
         <div className="h-full flex flex-col relative bg-[#1e1e1e]">
             {loading && (
@@ -197,14 +201,23 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     ERR_LOAD: {error}
                 </div>
             )}
-            <CodeEditor
-                ref={editorRef}
-                content={content}
-                onChange={setContent}
-                onSave={handleSave}
-                filename={activeFile}
-                highlightLines={highlightLines || undefined}
-            />
+            {isMarkdownFile ? (
+                <MarkdownEditor
+                    content={content}
+                    onChange={setContent}
+                    onSave={handleSave}
+                    filename={activeFile}
+                />
+            ) : (
+                <CodeEditor
+                    ref={editorRef}
+                    content={content}
+                    onChange={setContent}
+                    onSave={handleSave}
+                    filename={activeFile}
+                    highlightLines={highlightLines || undefined}
+                />
+            )}
             {/* Non-invasive bottom action bar for pending changes */}
             {pendingEdit && pendingEdit.path === activeFile && onAcceptEdit && onRejectEdit && (
                 <ChangeActionBar

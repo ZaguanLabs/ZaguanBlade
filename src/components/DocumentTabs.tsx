@@ -1,6 +1,7 @@
 'use client';
 import React from 'react';
-import { X, FileText, File } from 'lucide-react';
+import { X, FileText } from 'lucide-react';
+import { getFileIcon } from '../lib/fileIcons';
 
 interface Tab {
   id: string;
@@ -29,6 +30,7 @@ export const DocumentTabs: React.FC<DocumentTabsProps> = ({
     <div className="flex items-center bg-[#252526] border-b border-[#3c3c3c] overflow-x-auto">
       {tabs.map((tab) => {
         const isActive = activeTabId === tab.id;
+        const { icon, color } = getFileIcon(tab.title, isActive);
         return (
           <div
             key={tab.id}
@@ -45,7 +47,7 @@ export const DocumentTabs: React.FC<DocumentTabsProps> = ({
             {tab.isEphemeral ? (
               <FileText className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-yellow-400' : 'text-yellow-500'}`} />
             ) : (
-              <File className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-blue-400' : 'text-zinc-500'}`} />
+              <span className={color}>{icon}</span>
             )}
             <span className={`text-xs truncate flex-1 ${isActive ? 'font-semibold' : ''}`}>
               {tab.title}
@@ -57,19 +59,17 @@ export const DocumentTabs: React.FC<DocumentTabsProps> = ({
               />
             )}
             {tab.isDirty && !tab.hasVirtualChanges && (
-              <span className="w-1.5 h-1.5 rounded-full bg-white shrink-0" />
+              <span className="w-1.5 h-1.5 rounded-full bg-white shrink-0 group-hover:hidden" />
             )}
-            {isActive && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onTabClose(tab.id);
-                }}
-                className="hover:bg-zinc-700 rounded p-0.5 transition-colors"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            )}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onTabClose(tab.id);
+              }}
+              className="opacity-0 group-hover:opacity-100 hover:bg-zinc-700 rounded p-0.5 transition-all"
+            >
+              <X className="w-3 h-3" />
+            </button>
           </div>
         );
       })}

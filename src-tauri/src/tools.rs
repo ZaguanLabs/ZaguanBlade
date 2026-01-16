@@ -4,10 +4,7 @@ use std::path::{Path, PathBuf};
 
 use regex::Regex;
 use serde::Deserialize;
-use tauri::Emitter;
 use walkdir::WalkDir;
-
-use crate::events;
 
 #[derive(Debug, Clone)]
 pub struct ToolResult {
@@ -83,7 +80,7 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
     tool_name: &str,
     raw_args: &str,
     editor_state: Option<&EditorState>,
-    app_handle: Option<&tauri::AppHandle<R>>,
+    _app_handle: Option<&tauri::AppHandle<R>>,
 ) -> ToolResult {
     // Claude models sometimes prefix arguments with {} - strip it
     // But don't strip if the entire string is just "{}"
@@ -140,11 +137,8 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
         "replace_selection" => replace_selection(&args),
         "insert_at_cursor" => insert_at_cursor(&args),
 
-        // Task management
-        "todo_write" => todo_write(app_handle, &args),
-
         // Server-side tools (handled by zcoderd, not zblade)
-        "ask_followup_question" | "attempt_completion" | "new_task" | "generate_image" => {
+        "ask_followup_question" | "attempt_completion" | "new_task" | "generate_image" | "todo_write" => {
             ToolResult::err(format!(
                 "Tool '{}' is a server-side tool that should be handled by zcoderd, not zblade. \
                 This error indicates a protocol issue - zblade should not receive execution requests for server-side tools.",
@@ -154,49 +148,6 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
 
         _ => ToolResult::err(format!("unknown tool: {tool_name}")),
     }
-}
-
-fn todo_write<R: tauri::Runtime>(
-    app_handle: Option<&tauri::AppHandle<R>>,
-    args: &HashMap<String, serde_json::Value>,
-) -> ToolResult {
-    // Parse todos array
-    let Some(raw_todos) = args.get("todos").and_then(|v| v.as_array()) else {
-        return ToolResult::err("missing required arg: todos (array)");
-    };
-
-    let mut todos = Vec::new();
-    for t in raw_todos {
-        let Some(obj) = t.as_object() else {
-            return ToolResult::err("invalid todo entry: expected object");
-        };
-        let Some(content) = obj.get("content").and_then(|v| v.as_str()) else {
-            return ToolResult::err("invalid todo entry: missing content");
-        };
-        let Some(active_form) = obj.get("activeForm").and_then(|v| v.as_str()) else {
-            return ToolResult::err("invalid todo entry: missing activeForm");
-        };
-        let status = obj
-            .get("status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("pending");
-        todos.push(events::TodoItem {
-            content: content.to_string(),
-            active_form: active_form.to_string(),
-            status: status.to_string(),
-        });
-    }
-
-    if let Some(handle) = app_handle {
-        let _ = handle.emit(
-            events::event_names::TODO_UPDATED,
-            events::TodoUpdatedPayload {
-                todos: todos.clone(),
-            },
-        );
-    }
-
-    ToolResult::ok("todo_write applied")
 }
 
 fn validate_path_under_workspace(workspace_root: &Path, path: &Path) -> Result<PathBuf, String> {

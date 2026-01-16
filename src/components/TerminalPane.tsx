@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, forwardRef, useImperativeHandle } from "react";
 import Terminal from "./Terminal";
 import { Plus, X, Terminal as TerminalIcon } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
@@ -11,11 +11,26 @@ interface TerminalTab {
     cwd?: string;
 }
 
-export const TerminalPane: React.FC = () => {
+export interface TerminalPaneHandle {
+    getTerminalState: () => { terminals: TerminalTab[]; activeId: string };
+    restoreTerminals: (terminals: TerminalTab[], activeId?: string) => void;
+}
+
+export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
     const [terminals, setTerminals] = useState<TerminalTab[]>([
         { id: "term-1", title: "Terminal 1" },
     ]);
     const [activeId, setActiveId] = useState<string>("term-1");
+
+    useImperativeHandle(ref, () => ({
+        getTerminalState: () => ({ terminals, activeId }),
+        restoreTerminals: (restoredTerminals: TerminalTab[], restoredActiveId?: string) => {
+            if (restoredTerminals.length > 0) {
+                setTerminals(restoredTerminals);
+                setActiveId(restoredActiveId || restoredTerminals[0].id);
+            }
+        },
+    }), [terminals, activeId]);
 
     // Listen for open-terminal events from other components (e.g., File Explorer)
     useEffect(() => {
@@ -113,4 +128,4 @@ export const TerminalPane: React.FC = () => {
             </div>
         </div>
     );
-};
+});

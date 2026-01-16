@@ -22,7 +22,22 @@ export function useChat() {
     const accumulatedReasoningRef = useRef<{ id: string; content: string }>({ id: '', content: '' });
 
     const [models, setModels] = useState<ModelInfo[]>([]);
-    const [selectedModelId, setSelectedModelId] = useState<string>('anthropic/claude-sonnet-4-5-20250929');
+    const [selectedModelId, setSelectedModelIdState] = useState<string>('anthropic/claude-sonnet-4-5-20250929');
+    const selectedModelIdRef = useRef<string>('anthropic/claude-sonnet-4-5-20250929');
+    const hasExplicitModelRef = useRef(false);
+
+    // Wrapper that syncs with backend when model changes
+    const setSelectedModelId = useCallback(async (modelId: string) => {
+        hasExplicitModelRef.current = true;
+        selectedModelIdRef.current = modelId;
+        setSelectedModelIdState(modelId);
+        try {
+            await invoke('set_selected_model', { modelId });
+            console.log('[useChat] Synced model to backend:', modelId);
+        } catch (e) {
+            console.error('[useChat] Failed to sync model to backend:', e);
+        }
+    }, []);
 
     const logFrontend = useCallback(async (message: string) => {
         try {
@@ -35,6 +50,7 @@ export function useChat() {
     // Permission Logic
     const [pendingActions, setPendingActions] = useState<StructuredAction[] | null>(null);
     const [pendingChanges, setPendingChanges] = useState<Change[]>([]);
+    const autoApproveAllRef = useRef(false);
 
     // Load initial conversation and models
     useEffect(() => {
@@ -48,18 +64,21 @@ export function useChat() {
 
                 const [history, modelList] = await Promise.all([
                     invoke<ChatMessage[]>('get_conversation'),
-                    invoke<ModelInfo[]>('list_models')
+                    invoke<ModelInfo[]>('list_models'),
                 ]);
 
                 console.log('Loaded conversation:', history);
                 setMessages(history);
                 setModels(modelList);
 
-                if (modelList.length > 0) {
-                    const dafault = modelList.find(m => m.id === 'anthropic/claude-sonnet-4-5-20250929')
+                // Set a default model - project state will override this if available
+                // This prevents the model from being undefined before project state loads
+                if (modelList.length > 0 && !hasExplicitModelRef.current) {
+                    const defaultModel = modelList.find(m => m.id === 'anthropic/claude-sonnet-4-5-20250929')
                         || modelList.find(m => m.id === 'openai/gpt-5.2')
                         || modelList[0];
-                    setSelectedModelId(dafault.id);
+                    setSelectedModelIdState(defaultModel.id);
+                    console.log('[useChat] Set initial default model:', defaultModel.id);
                 }
 
             } catch (e) {
@@ -69,6 +88,10 @@ export function useChat() {
         }
         init();
     }, []);
+
+    useEffect(() => {
+        selectedModelIdRef.current = selectedModelId;
+    }, [selectedModelId]);
 
     // Listen for updates
     useEffect(() => {
@@ -208,6 +231,7 @@ export function useChat() {
             const u2 = await listen('chat-done', () => {
                 setLoading(false);
                 setPendingActions(null); // Clear any hanging dialogs
+                autoApproveAllRef.current = false;
             });
             unlistenDone = u2;
 
@@ -215,6 +239,7 @@ export function useChat() {
                 setError(event.payload);
                 setLoading(false);
                 setPendingActions(null);
+                autoApproveAllRef.current = false;
             });
             unlistenError = u3;
 
@@ -228,8 +253,22 @@ export function useChat() {
             // Listen for change proposals (backend sends array of changes)
             const u5 = await listen<Change[]>('propose-changes', (event) => {
                 console.log('[PROPOSE CHANGES] received', event.payload.map(c => ({ id: c.id, type: c.change_type, path: c.path })));
+
+                if (autoApproveAllRef.current) {
+                    const batchId = `batch-${Date.now()}`;
+                    const idempotencyKey = getOrCreateIdempotencyKey(
+                        IDEMPOTENT_OPERATIONS.APPROVE_ALL,
+                        batchId
+                    );
+                    BladeDispatcher.dispatch(
+                        'Workflow',
+                        { type: 'Workflow', payload: { type: 'ApproveAll', payload: { batch_id: batchId } } },
+                        idempotencyKey
+                    ).catch(e => console.error('[useChat] Auto-approve all failed:', e));
+                    return;
+                }
+
                 setPendingChanges(prev => {
-                    // Filter out duplicates
                     const newChanges = event.payload.filter(newChange =>
                         !prev.some(c => c.id === newChange.id)
                     );
@@ -300,18 +339,24 @@ export function useChat() {
 
             // Listen for todo list updates
             const u10 = await listen<{ todos: import('../types/events').TodoItem[] }>(EventNames.TODO_UPDATED, (event) => {
-                console.log('[TODO UPDATED]', event.payload);
+                invoke('log_frontend', { message: `[FRONTEND] TODO_UPDATED received: ${event.payload.todos.length} items` });
                 setMessages((prev) => {
                     const updated = [...prev];
                     // Find the last assistant message and attach the todos
+                    let found = false;
                     for (let i = updated.length - 1; i >= 0; i--) {
                         if (updated[i].role === 'Assistant') {
                             updated[i] = {
                                 ...updated[i],
                                 todos: event.payload.todos
                             };
+                            found = true;
+                            invoke('log_frontend', { message: `[FRONTEND] Attached todos to message at index ${i}, message has ${updated[i].todos?.length} todos` });
                             break;
                         }
+                    }
+                    if (!found) {
+                        invoke('log_frontend', { message: `[FRONTEND] No assistant message found to attach todos! Messages: ${updated.length}` });
                     }
                     return updated;
                 });
@@ -457,7 +502,7 @@ export function useChat() {
                 type: 'SendMessage',
                 payload: {
                     content: text,
-                    model: selectedModelId,
+                    model: selectedModelIdRef.current,
                     context: {
                         active_file: safeActiveFile, // Use active tab file as context
                         open_files: openFiles,
@@ -480,7 +525,6 @@ export function useChat() {
         editorState.cursorColumn,
         editorState.selectionStartLine,
         editorState.selectionEndLine,
-        selectedModelId
     ]);
 
     // Queue processing effect
@@ -589,6 +633,7 @@ export function useChat() {
             );
 
             // Use v1.1 ApproveAll intent with idempotency
+            autoApproveAllRef.current = true;
             await BladeDispatcher.dispatch(
                 'Workflow',
                 { type: 'Workflow', payload: { type: 'ApproveAll', payload: { batch_id: batchId } } },

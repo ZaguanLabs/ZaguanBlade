@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import ReactMarkdown from 'react-markdown';
 import { ChatMessage as ChatMessageType } from '../types/chat';
 import { User, Bot, Terminal, Brain, ChevronDown, ChevronRight, Loader2, Copy, RotateCcw, Pencil, MessageSquare } from 'lucide-react';
 import { ToolCallDisplay } from './ToolCallDisplay';
@@ -8,57 +7,92 @@ import { CommandOutputDisplay } from './CommandOutputDisplay';
 import { CommandApprovalCard } from './CommandApprovalCard';
 import { TodoList } from './TodoList';
 import { useContextMenu, ContextMenuItem } from './ui/ContextMenu';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent?: boolean }> = ({ content, isActive, hasContent }) => {
-    const [isExpanded, setIsExpanded] = useState(false);
+    const [isExpanded, setIsExpanded] = useState(true); // Start expanded
+    const [userToggled, setUserToggled] = useState(false); // Track if user manually toggled
+    const contentRef = useRef<HTMLDivElement>(null);
     const wasActiveRef = useRef(isActive);
+    const hadContentRef = useRef(hasContent);
 
-    // Auto-expand/collapse logic
+    // Strip [THINKING] and [/THINKING] tags from content
+    const cleanContent = content
+        .replace(/\[THINKING\]/gi, '')
+        .replace(/\[\/THINKING\]/gi, '')
+        .trim();
+
+    // Auto-expand when streaming starts, auto-collapse when content arrives
     useEffect(() => {
-        // If message just became active (started streaming) and has no content yet, expand reasoning
-        if (isActive && !wasActiveRef.current && !hasContent) {
+        // If message just became active and has no content yet, expand (unless user toggled)
+        if (isActive && !wasActiveRef.current && !hasContent && !userToggled) {
             setIsExpanded(true);
         }
 
-        // If content starts arriving, collapse reasoning
-        if (hasContent && isExpanded && isActive) {
+        // If content starts arriving (transition from no content to content), collapse
+        // Only auto-collapse if user hasn't manually toggled
+        if (hasContent && !hadContentRef.current && isExpanded && !userToggled) {
             setIsExpanded(false);
         }
 
         wasActiveRef.current = isActive;
-    }, [isActive, hasContent, isExpanded]);
+        hadContentRef.current = hasContent;
+    }, [isActive, hasContent, isExpanded, userToggled]);
 
-    if (!content) return null;
+    // Auto-scroll to bottom while streaming
+    useEffect(() => {
+        if (isExpanded && isActive && contentRef.current) {
+            contentRef.current.scrollTop = contentRef.current.scrollHeight;
+        }
+    }, [cleanContent, isExpanded, isActive]);
+
+    if (!cleanContent) return null;
+
+    const handleToggle = () => {
+        setIsExpanded(!isExpanded);
+        setUserToggled(true); // Mark that user has manually controlled this
+    };
+
+    const isStreaming = isActive && !hasContent;
 
     return (
-        <div className="my-3 rounded-md border border-zinc-800 bg-zinc-900/40 overflow-hidden group/reasoning">
+        <div className={`my-2 rounded-md border overflow-hidden transition-all duration-200 ${
+            isStreaming 
+                ? 'border-purple-500/30 bg-purple-950/10' 
+                : 'border-zinc-800/50 bg-zinc-900/20'
+        }`}>
+            {/* Header - clickable to toggle */}
             <button
-                onClick={() => setIsExpanded(!isExpanded)}
-                className="w-full flex items-center gap-2 px-3 py-2 hover:bg-zinc-800/50 transition-colors text-left"
+                onClick={handleToggle}
+                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-zinc-800/30 transition-colors text-left"
             >
-                <div className="flex items-center gap-2 text-zinc-500 group-hover/reasoning:text-zinc-400 transition-colors">
-                    <Brain className={`w-3.5 h-3.5 ${isActive && !hasContent ? 'text-purple-400 animate-pulse' : ''}`} />
-                    <span className="font-mono text-[10px] uppercase tracking-wider font-semibold">
-                        {isActive && !hasContent ? 'Reasoning...' : 'Reasoning Process'}
+                <div className="flex items-center gap-2">
+                    <Brain className={`w-3 h-3 ${isStreaming ? 'text-purple-400 animate-pulse' : 'text-zinc-600'}`} />
+                    <span className={`font-mono text-[9px] uppercase tracking-wider ${
+                        isStreaming ? 'text-purple-400' : 'text-zinc-600'
+                    }`}>
+                        {isStreaming ? 'Thinking...' : 'Thought Process'}
                     </span>
                 </div>
                 <div className="flex-1" />
-                {isActive && !hasContent && (
-                    <Loader2 className="w-3 h-3 text-purple-500/50 animate-spin mr-2" />
+                {isStreaming && (
+                    <Loader2 className="w-2.5 h-2.5 text-purple-400/60 animate-spin mr-1" />
                 )}
                 {isExpanded ? (
-                    <ChevronDown className="w-3.5 h-3.5 text-zinc-600" />
+                    <ChevronDown className="w-3 h-3 text-zinc-600" />
                 ) : (
-                    <ChevronRight className="w-3.5 h-3.5 text-zinc-600" />
+                    <ChevronRight className="w-3 h-3 text-zinc-600" />
                 )}
             </button>
 
+            {/* Content - scrollable container */}
             {isExpanded && (
-                <div className="px-3 py-3 border-t border-zinc-800/50 bg-zinc-950/30">
-                    <div className="prose prose-invert prose-xs max-w-none text-zinc-400 font-mono text-[11px] leading-relaxed select-text">
-                        <ReactMarkdown>
-                            {content}
-                        </ReactMarkdown>
+                <div 
+                    ref={contentRef}
+                    className="px-3 py-2 border-t border-zinc-800/30 bg-zinc-950/20 max-h-48 overflow-y-auto"
+                >
+                    <div className="text-zinc-500 text-[10px] leading-relaxed select-text whitespace-pre-wrap font-mono">
+                        {cleanContent}
                     </div>
                 </div>
             )}
@@ -214,10 +248,10 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                 )}
             </div>
 
-            <div className="flex-1 min-w-0 space-y-1 overflow-hidden">
+            <div className="flex-1 min-w-0 space-y-0.5 overflow-hidden">
                 {!isContinued && (
-                    <div className="flex items-center gap-2 h-5 mb-1">
-                        <span className="font-semibold text-[11px] text-zinc-400">
+                    <div className="flex items-center gap-2 h-4 mb-0.5">
+                        <span className="font-semibold text-[10px] text-zinc-400">
                             {isUser ? 'User' : (isAssistant ? 'Assistant' : message.role)}
                         </span>
                         {isTool && message.tool_call_id && (
@@ -225,6 +259,19 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                                 {message.tool_call_id.slice(0, 8)}
                             </span>
                         )}
+                    </div>
+                )}
+
+                {/* Progress indicator from zcoderd */}
+                {message.progress && (
+                    <ProgressIndicator progress={message.progress} />
+                )}
+
+                {/* Thinking indicator for slow models - show when active but no content yet */}
+                {isActive && isAssistant && !hasContent && !hasReasoning && !message.progress && (
+                    <div className="flex items-center gap-2 py-2 text-zinc-500">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-500/70" />
+                        <span className="text-[11px] font-mono">Thinking...</span>
                     </div>
                 )}
 
@@ -243,17 +290,8 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                                 );
                             } else if (block.type === 'text') {
                                 return (
-                                    <div key={block.id || `text-${idx}`} className="prose prose-invert prose-xs max-w-none text-zinc-300 leading-relaxed mb-3 select-text blocks-text
-                                        prose-headings:text-zinc-200 prose-headings:font-semibold
-                                        prose-p:text-zinc-300 prose-p:leading-relaxed prose-p:my-2
-                                        prose-strong:text-zinc-100 prose-strong:font-semibold
-                                        prose-a:text-emerald-400 prose-a:no-underline hover:prose-a:underline
-                                        prose-code:text-emerald-400 prose-code:bg-zinc-900 prose-code:px-1 prose-code:py-0.5 prose-code:rounded
-                                        prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-800
-                                        prose-ul:text-zinc-300 prose-ul:my-2 prose-ol:text-zinc-300 prose-ol:my-2
-                                        prose-li:text-zinc-300 prose-li:leading-relaxed prose-li:my-1
-                                        prose-blockquote:border-l-emerald-500 prose-blockquote:text-zinc-400">
-                                        <ReactMarkdown>{block.content}</ReactMarkdown>
+                                    <div key={block.id || `text-${idx}`} className="mb-2 select-text">
+                                        <MarkdownRenderer content={block.content} />
                                     </div>
                                 );
                             } else if (block.type === 'tool_call') {
@@ -282,6 +320,8 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                                 />
                             </div>
                         )}
+
+                        {message.todos && message.todos.length > 0 && <TodoList todos={message.todos} />}
 
                         {/* Command Output/Executions are typically appended at end */}
                         {message.commandExecutions && message.commandExecutions.length > 0 && (
@@ -332,8 +372,8 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                                     />
                                 )}
                                 {initialText && (
-                                    <div className="prose prose-invert prose-xs max-w-none text-zinc-300 leading-relaxed mb-3 select-text">
-                                        <ReactMarkdown>{initialText}</ReactMarkdown>
+                                    <div className="mb-2 select-text">
+                                        <MarkdownRenderer content={initialText} />
                                     </div>
                                 )}
                                 {pendingActions && pendingActions.length > 0 && onApproveCommand && onSkipCommand && (
@@ -359,8 +399,8 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                                 )}
                                 {message.todos && message.todos.length > 0 && <TodoList todos={message.todos} />}
                                 {finalText && (
-                                    <div className="prose prose-invert prose-xs max-w-none text-zinc-300 leading-relaxed select-text">
-                                        <ReactMarkdown>{finalText}</ReactMarkdown>
+                                    <div className="select-text">
+                                        <MarkdownRenderer content={finalText} />
                                     </div>
                                 )}
                                 {message.commandExecutions && message.commandExecutions.length > 0 && (

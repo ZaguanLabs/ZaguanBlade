@@ -441,6 +441,46 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
         },
     });
 
+    // Auto-expand and select active file in the tree
+    React.useEffect(() => {
+        if (!activeFile) return;
+
+        const expandAndSelect = async () => {
+            try {
+                // Get all parent folders of the active file
+                const pathParts = activeFile.split('/');
+                const parentPaths: string[] = [];
+                
+                // Build parent paths (e.g., /a, /a/b, /a/b/c for file /a/b/c/file.txt)
+                for (let i = 1; i < pathParts.length - 1; i++) {
+                    const parentPath = pathParts.slice(0, i + 1).join('/');
+                    parentPaths.push(parentPath);
+                }
+
+                // Expand all parent folders
+                for (const parentPath of parentPaths) {
+                    const item = tree.getItems().find(item => item.getId() === parentPath);
+                    if (item && item.isFolder() && !item.isExpanded()) {
+                        await item.expand();
+                        // Wait a bit for children to load
+                        await new Promise(resolve => setTimeout(resolve, 50));
+                    }
+                }
+
+                // Select the active file
+                const fileItem = tree.getItems().find(item => item.getId() === activeFile);
+                if (fileItem && !fileItem.isSelected()) {
+                    fileItem.select();
+                }
+            } catch (err) {
+                console.error('[FileExplorer] Failed to expand/select active file:', err);
+            }
+        };
+
+        // Small delay to ensure tree is ready
+        setTimeout(expandAndSelect, 150);
+    }, [activeFile, tree]);
+
     return (
         <div className="flex flex-col h-full w-full">
             {/* Search Bar */}

@@ -12,8 +12,6 @@ pub struct ApiConfig {
     pub api_key: String,
     pub theme: String,
     pub markdown_view: String,
-    #[serde(default)]
-    pub selected_model: Option<String>,
 }
 
 fn default_blade_url() -> String {
