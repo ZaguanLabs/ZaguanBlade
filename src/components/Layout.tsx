@@ -13,6 +13,8 @@ import { Settings } from 'lucide-react';
 import { EditorProvider } from '../contexts/EditorContext';
 import { useChat } from '../hooks/useChat';
 import { ProtocolExplorer } from './dev/ProtocolExplorer';
+import { SettingsModal } from './SettingsModal';
+import { StorageSetupModal } from './StorageSetupModal';
 import { useProjectState, type ProjectState } from '../hooks/useProjectState';
 import { useWarmup } from '../hooks/useWarmup';
 
@@ -48,6 +50,13 @@ const AppLayoutInner: React.FC = () => {
         percent: number;
         isActive: boolean;
     } | null>(null);
+
+    // Settings modal state
+    const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+    
+    // First-time setup modal state (RFC-002)
+    const [showStorageSetup, setShowStorageSetup] = useState(false);
+    const [hasCheckedZblade, setHasCheckedZblade] = useState(false);
 
     // Sync chatMessages with chat.messages from useChat
     useEffect(() => {
@@ -103,6 +112,26 @@ const AppLayoutInner: React.FC = () => {
         
         return () => clearInterval(userIdInterval);
     }, [userId]);
+
+    // RFC-002: Check if .zblade directory exists for first-time setup
+    useEffect(() => {
+        const checkZbladeDir = async () => {
+            if (!workspacePath || hasCheckedZblade) return;
+            
+            try {
+                const exists = await invoke<boolean>('has_zblade_directory', { projectPath: workspacePath });
+                setHasCheckedZblade(true);
+                if (!exists) {
+                    setShowStorageSetup(true);
+                }
+            } catch (e) {
+                console.error('[Layout] Failed to check .zblade directory:', e);
+                setHasCheckedZblade(true);
+            }
+        };
+        
+        checkZbladeDir();
+    }, [workspacePath, hasCheckedZblade]);
 
     // Handle project state restoration
     const handleStateLoaded = useCallback((state: ProjectState) => {
@@ -566,7 +595,10 @@ const AppLayoutInner: React.FC = () => {
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                         </svg>
                     </div>
-                    <div className="mt-auto p-2 rounded-md text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)] transition-all cursor-pointer">
+                    <div 
+                        onClick={() => setIsSettingsOpen(true)}
+                        className="mt-auto p-2 rounded-md text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)] transition-all cursor-pointer"
+                    >
                         <Settings className="w-5 h-5" />
                     </div>
                 </div>
@@ -720,6 +752,18 @@ const AppLayoutInner: React.FC = () => {
 
             {/* Dev Tools */}
             <ProtocolExplorer />
+
+            {/* Settings Modal */}
+            <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} workspacePath={workspacePath} />
+
+            {/* First-time Storage Setup Modal (RFC-002) */}
+            {workspacePath && (
+                <StorageSetupModal
+                    isOpen={showStorageSetup}
+                    workspacePath={workspacePath}
+                    onComplete={() => setShowStorageSetup(false)}
+                />
+            )}
         </div>
     );
 };

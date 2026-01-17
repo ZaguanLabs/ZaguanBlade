@@ -139,6 +139,8 @@ struct ChatRequestPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     workspace: Option<WorkspaceInfo>,
     api_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    storage_mode: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -327,6 +329,18 @@ impl BladeWsClient {
         message: String,
         workspace: Option<WorkspaceInfo>,
     ) -> Result<(), String> {
+        self.send_message_with_storage_mode(session_id, model_id, message, workspace, None).await
+    }
+
+    /// Send a chat message with explicit storage mode (RFC-002)
+    pub async fn send_message_with_storage_mode(
+        &self,
+        session_id: Option<String>,
+        model_id: String,
+        message: String,
+        workspace: Option<WorkspaceInfo>,
+        storage_mode: Option<String>,
+    ) -> Result<(), String> {
         let conn = self.connection.lock().await;
         let conn = conn.as_ref().ok_or("Not connected")?;
 
@@ -336,6 +350,7 @@ impl BladeWsClient {
             message,
             workspace,
             api_key: self.api_key.clone(),
+            storage_mode,
         };
 
         let msg = WsBaseMessage {

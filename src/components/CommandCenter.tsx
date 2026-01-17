@@ -5,8 +5,8 @@ import { CompactModelSelector } from './CompactModelSelector';
 import type { ModelInfo } from '../types/chat';
 
 const COMMANDS = [
-    { name: 'web', description: 'Search the web', icon: Globe },
-    { name: 'search', description: 'Search codebase', icon: Search },
+    { name: 'web', description: 'Fetch a URL', icon: Globe },
+    { name: 'search', description: 'Search the web', icon: Search },
     { name: 'research', description: 'Deep research', icon: BookOpen },
 ];
 

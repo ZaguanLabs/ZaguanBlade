@@ -77,6 +77,7 @@ impl ChatManager {
         cursor_line: Option<usize>,
         cursor_column: Option<usize>,
         _http: reqwest::Client,
+        storage_mode: Option<String>,
     ) -> Result<(), String> {
         self.reasoning_parser.reset();
         self.xml_buffer.clear();
@@ -172,13 +173,14 @@ impl ChatManager {
                                 eprintln!("[CHAT MGR] Authenticated, sending chat message");
                                 authenticated = true;
 
-                                // Send chat message
+                                // Send chat message with storage mode (RFC-002)
                                 if let Err(e) = ws_client
-                                    .send_message(
+                                    .send_message_with_storage_mode(
                                         session_id.clone(),
                                         model_id.clone(),
                                         user_message.clone(),
                                         Some(workspace_info.clone()),
+                                        storage_mode.clone(),
                                     )
                                     .await
                                 {
@@ -923,6 +925,7 @@ mod tests {
                 None, // cursor_line
                 None, // cursor_column
                 http,
+                None, // storage_mode
             );
 
             // Verify conversation has Assistant placeholder

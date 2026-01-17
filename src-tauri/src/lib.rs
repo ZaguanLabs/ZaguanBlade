@@ -13,8 +13,11 @@ pub mod ephemeral_documents;
 pub mod events;
 pub mod explorer;
 pub mod idempotency; // [NEW] v1.1: Idempotency cache
+pub mod local_index; // [NEW] RFC-002: Local SQLite index for conversations
+pub mod local_artifacts; // [NEW] RFC-002: Local conversation artifact storage
 pub mod models;
 pub mod project;
+pub mod project_settings;
 pub mod project_state;
 pub mod protocol;
 pub mod reasoning_parser; // [NEW] v1.2: Multi-format reasoning extraction
@@ -987,6 +990,15 @@ async fn handle_send_message<R: Runtime>(
         // Ensure workspace root is valid
         let ws = workspace.workspace.as_ref();
 
+        // RFC-002: Get storage mode from project settings
+        let storage_mode = ws.map(|p| {
+            let settings = project_settings::load_project_settings(p);
+            match settings.storage.mode {
+                project_settings::StorageMode::Local => "local".to_string(),
+                project_settings::StorageMode::Server => "server".to_string(),
+            }
+        });
+
         mgr.start_stream(
             message,
             &mut conversation,
@@ -999,6 +1011,7 @@ async fn handle_send_message<R: Runtime>(
             cursor_line,
             cursor_column,
             http,
+            storage_mode,
         )
         .map_err(|e| e.to_string())?;
     }
@@ -1094,6 +1107,44 @@ async fn handle_send_message<R: Runtime>(
                             eprintln!("Failed to auto-save conversation: {}", e);
                         } else {
                             println!("Auto-saved conversation: {}", stored.metadata.id);
+                        }
+                        
+                        // RFC-002: Also save to local artifacts if in local storage mode
+                        let workspace = state.workspace.lock().unwrap();
+                        if let Some(ref ws_path) = workspace.workspace {
+                            let settings = project_settings::load_project_settings(ws_path);
+                            if settings.storage.mode == project_settings::StorageMode::Local {
+                                // Convert to local artifact format
+                                let project_id = crate::project::get_or_create_project_id(ws_path)
+                                    .unwrap_or_else(|_| "unknown".to_string());
+                                
+                                let title = if stored.metadata.title.is_empty() { "Untitled".to_string() } else { stored.metadata.title.clone() };
+                                let mut artifact = local_artifacts::ConversationArtifact::new(
+                                    stored.metadata.id.clone(),
+                                    project_id,
+                                    title,
+                                );
+                                
+                                // Convert messages
+                                for (idx, msg) in stored.messages.iter().enumerate() {
+                                    let local_msg = local_artifacts::Message {
+                                        id: format!("msg_{}", idx),
+                                        role: msg.role.clone(),
+                                        content: msg.content.clone(),
+                                        timestamp: chrono::Utc::now().to_rfc3339(),
+                                        code_references: vec![], // TODO: Extract from content
+                                    };
+                                    artifact.messages.push(local_msg);
+                                }
+                                artifact.metadata.total_messages = artifact.messages.len() as i32;
+                                
+                                let artifact_store = local_artifacts::LocalArtifactStore::new(ws_path);
+                                if let Err(e) = artifact_store.save_conversation(&artifact) {
+                                    eprintln!("[LOCAL] Failed to save local artifact: {}", e);
+                                } else {
+                                    eprintln!("[LOCAL] Saved conversation to .zblade/artifacts/conversations/{}.json", stored.metadata.id);
+                                }
+                            }
                         }
                     }
 
@@ -1990,6 +2041,76 @@ fn get_project_id(workspace_path: String) -> Option<String> {
 }
 
 // ==============================================================================
+// Project Settings (RFC-002: Hybrid Unlimited Context)
+// ==============================================================================
+
+#[tauri::command]
+fn load_project_settings(project_path: String) -> project_settings::ProjectSettings {
+    let path = std::path::PathBuf::from(project_path);
+    project_settings::load_project_settings(&path)
+}
+
+#[tauri::command]
+fn save_project_settings(
+    project_path: String,
+    settings: project_settings::ProjectSettings,
+) -> Result<(), String> {
+    let path = std::path::PathBuf::from(project_path);
+    project_settings::save_project_settings(&path, &settings)
+}
+
+#[tauri::command]
+fn init_zblade_directory(project_path: String) -> Result<(), String> {
+    let path = std::path::PathBuf::from(project_path);
+    project_settings::init_zblade_dir(&path)
+}
+
+#[tauri::command]
+fn has_zblade_directory(project_path: String) -> bool {
+    let path = std::path::PathBuf::from(project_path);
+    project_settings::has_zblade_dir(&path)
+}
+
+// ==============================================================================
+// Local Context Retrieval (RFC-002: Hybrid Unlimited Context)
+// ==============================================================================
+
+#[tauri::command]
+fn list_local_conversations(project_path: String) -> Result<Vec<local_index::ConversationIndex>, String> {
+    let path = std::path::PathBuf::from(project_path);
+    let store = local_artifacts::LocalArtifactStore::new(&path);
+    store.list_conversations()
+}
+
+#[tauri::command]
+fn load_local_conversation(project_path: String, conversation_id: String) -> Result<local_artifacts::ConversationArtifact, String> {
+    let path = std::path::PathBuf::from(project_path);
+    let store = local_artifacts::LocalArtifactStore::new(&path);
+    store.load_conversation(&conversation_id)
+}
+
+#[tauri::command]
+fn search_local_moments(project_path: String, query: String, limit: i32) -> Result<Vec<local_index::MomentIndex>, String> {
+    let path = std::path::PathBuf::from(project_path);
+    let store = local_artifacts::LocalArtifactStore::new(&path);
+    store.search_moments(&query, limit)
+}
+
+#[tauri::command]
+fn get_file_context(project_path: String, file_path: String) -> Result<Vec<local_index::CodeReferenceIndex>, String> {
+    let path = std::path::PathBuf::from(project_path);
+    let store = local_artifacts::LocalArtifactStore::new(&path);
+    store.get_file_references(&file_path)
+}
+
+#[tauri::command]
+fn delete_local_conversation(project_path: String, conversation_id: String) -> Result<(), String> {
+    let path = std::path::PathBuf::from(project_path);
+    let store = local_artifacts::LocalArtifactStore::new(&path);
+    store.delete_conversation(&conversation_id)
+}
+
+// ==============================================================================
 // Blade Protocol v1.0 Dispatcher
 // ==============================================================================
 
@@ -2747,6 +2868,15 @@ pub fn run() {
             should_rewarm_cache,
             get_user_id,
             get_project_id,
+            load_project_settings,
+            save_project_settings,
+            init_zblade_directory,
+            has_zblade_directory,
+            list_local_conversations,
+            load_local_conversation,
+            search_local_moments,
+            get_file_context,
+            delete_local_conversation,
             submit_command_result,
             ephemeral_commands::create_ephemeral_document,
             ephemeral_commands::get_ephemeral_document,
