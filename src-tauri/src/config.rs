@@ -10,6 +10,8 @@ pub struct ApiConfig {
     pub blade_url: String,
     #[serde(default)]
     pub api_key: String,
+    #[serde(default)]
+    pub user_id: String,
     pub theme: String,
     pub markdown_view: String,
 }
@@ -39,4 +41,36 @@ pub fn save_api_config(path: &Path, cfg: &ApiConfig) -> Result<(), String> {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     fs::write(path, json).map_err(|e| e.to_string())
+}
+
+/// Generate or get user_id from config
+/// If user_id doesn't exist, generate one and save it
+pub fn get_or_create_user_id(config_path: &Path) -> String {
+    let mut config = load_api_config(config_path);
+    
+    // If user_id is empty or invalid, generate a new one
+    if config.user_id.trim().is_empty() || !config.user_id.starts_with("user_") {
+        // Generate a short random suffix using base62 encoding of UUID
+        let uuid = uuid::Uuid::new_v4();
+        let uuid_bytes = uuid.as_bytes();
+        
+        // Take first 6 bytes and encode as base62-like string
+        let suffix: String = uuid_bytes[..6]
+            .iter()
+            .map(|&b| {
+                let chars = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+                chars[(b % 62) as usize] as char
+            })
+            .collect();
+        
+        config.user_id = format!("user_{}", suffix);
+        eprintln!("[CONFIG] Generated new user_id: {}", config.user_id);
+        
+        // Save the config with the new user_id
+        if let Err(e) = save_api_config(config_path, &config) {
+            eprintln!("[CONFIG] Failed to save user_id: {}", e);
+        }
+    }
+    
+    config.user_id
 }

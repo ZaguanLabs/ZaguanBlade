@@ -36,6 +36,7 @@ export type BladeIntent =
     | { type: "File"; payload: FileIntent }
     | { type: "Workflow"; payload: WorkflowIntent }
     | { type: "Terminal"; payload: TerminalIntent }
+    | { type: "History"; payload: HistoryIntent }
     | { type: "System"; payload: SystemIntent };
 
 export type ChatIntent =
@@ -95,6 +96,10 @@ export type TerminalIntent =
     | { type: "Resize"; payload: { id: string; rows: number; cols: number } }
     | { type: "Kill"; payload: { id: string } };
 
+export type HistoryIntent =
+    | { type: "ListConversations"; payload: { user_id: string; project_id: string } }
+    | { type: "LoadConversation"; payload: { session_id: string; user_id: string } };
+
 export type SystemIntent =
     | { type: "SetLogLevel"; payload: { level: string } };
 
@@ -108,6 +113,7 @@ export type BladeEvent =
     | { type: "File"; payload: FileEvent }
     | { type: "Workflow"; payload: WorkflowEvent }
     | { type: "Terminal"; payload: TerminalEvent }
+    | { type: "History"; payload: HistoryEvent }
     | { type: "System"; payload: SystemEvent };
 
 export type ChatEvent =
@@ -142,6 +148,35 @@ export type TerminalEvent =
     | { type: "Spawned"; payload: { id: string; owner: TerminalOwner } } // v1.1: terminal creation event
     | { type: "Output"; payload: { id: string; seq: number; data: string } } // v1.1: added seq
     | { type: "Exit"; payload: { id: string; code: number } };
+
+export type ConversationSummary = {
+    id: string;
+    project_id: string;
+    title: string;
+    created_at: string;
+    last_active_at: string;
+    message_count: number;
+    preview: string;
+};
+
+export type HistoryMessage = {
+    role: "user" | "assistant" | "tool" | "system";
+    content: string;
+    tool_calls?: Array<{
+        id: string;
+        type: string;
+        function: {
+            name: string;
+            arguments: string;
+        };
+    }>;
+    tool_call_id?: string;
+    created_at: string;
+};
+
+export type HistoryEvent =
+    | { type: "ConversationList"; payload: { conversations: ConversationSummary[] } }
+    | { type: "ConversationLoaded"; payload: { session_id: string; project_id: string; title: string; created_at: string; last_active_at: string; message_count: number; messages: HistoryMessage[] } };
 
 export type SystemEvent =
     | { type: "IntentFailed"; payload: { intent_id: string; error: BladeError } }

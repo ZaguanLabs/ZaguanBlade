@@ -129,6 +129,7 @@ pub struct AppState {
     >,
     pub idempotency_cache: crate::idempotency::IdempotencyCache, // v1.1: Idempotency support
     pub warmup_client: warmup::WarmupClient, // v2.1: Cache warmup
+    pub user_id: Mutex<Option<String>>, // Authenticated user ID from WebSocket
 }
 
 impl AppState {
@@ -184,10 +185,14 @@ impl AppState {
              workspace_manager.set_workspace(std::path::PathBuf::from(path_str));
         }
 
+        // Get or create user_id
+        let user_id = config::get_or_create_user_id(&config_path);
+
         // Initialize warmup client with config values
         let warmup_client = warmup::WarmupClient::new(
             config.blade_url.clone(),
             config.api_key.clone(),
+            user_id.clone(),
         );
 
         Self {
@@ -206,6 +211,7 @@ impl AppState {
             open_files: Mutex::new(Vec::new()),
             cursor_line: Mutex::new(None),
             cursor_column: Mutex::new(None),
+            user_id: Mutex::new(Some(user_id)),
             selection_start_line: Mutex::new(None),
             selection_end_line: Mutex::new(None),
             virtual_buffers: Mutex::new(std::collections::HashMap::new()),
@@ -855,8 +861,12 @@ fn greet(name: &str) -> String {
 }
 
 #[tauri::command]
-async fn list_models() -> Vec<crate::models::registry::ModelInfo> {
-    crate::models::registry::get_models().await
+async fn list_models(state: State<'_, AppState>) -> Result<Vec<crate::models::registry::ModelInfo>, String> {
+    let blade_url = {
+        let config = state.config.lock().unwrap();
+        config.blade_url.clone()
+    };
+    Ok(crate::models::registry::get_models(&blade_url).await)
 }
 
 // Legacy wrapper removed from handler, keeping generic function for dispatch if needed
@@ -949,7 +959,11 @@ async fn handle_send_message<R: Runtime>(
     }
 
     // 2. Start Stream
-    let models = get_models().await;
+    let blade_url = {
+        let config = state.config.lock().unwrap();
+        config.blade_url.clone()
+    };
+    let models = get_models(&blade_url).await;
     {
         let mut mgr = state.chat_manager.lock().unwrap();
         let mut conversation = state.conversation.lock().unwrap();
@@ -1002,7 +1016,11 @@ async fn handle_send_message<R: Runtime>(
             let state = app_handle.state::<AppState>();
 
             // Fetch models asynchronously before acquiring locks
-            let models = get_models().await;
+            let blade_url = {
+                let config = state.config.lock().unwrap();
+                config.blade_url.clone()
+            };
+            let models = get_models(&blade_url).await;
 
             let (result, is_streaming, session_id) = {
                 let mut mgr = state.chat_manager.lock().unwrap();
@@ -1249,6 +1267,15 @@ async fn handle_send_message<R: Runtime>(
                         });
                     }
                 }
+            } else if let DrainResult::Progress { message, stage, percent } = result {
+                // Emit progress event to frontend for @research command
+                #[derive(Clone, serde::Serialize)]
+                struct ProgressPayload {
+                    message: String,
+                    stage: String,
+                    percent: i32,
+                }
+                window.emit("research-progress", ProgressPayload { message, stage, percent }).unwrap_or_default();
             } else if let DrainResult::TodoUpdated(todos) = result {
                 // Emit todo_updated event to frontend
                 // Convert protocol::TodoItem to events::TodoItem
@@ -1557,7 +1584,11 @@ async fn handle_send_message<R: Runtime>(
                         eprintln!("[AGENTIC LOOP] Stopping due to loop detection");
 
                         // Fetch models before acquiring locks
-                        let models = get_models().await;
+                        let blade_url = {
+                            let config = state.config.lock().unwrap();
+                            config.blade_url.clone()
+                        };
+                        let models = get_models(&blade_url).await;
 
                         {
                             let mut mgr = state.chat_manager.lock().unwrap();
@@ -1590,7 +1621,11 @@ async fn handle_send_message<R: Runtime>(
                         // Don't continue the loop - let it finish naturally
                     } else {
                         // Fetch models before acquiring locks
-                        let models = get_models().await;
+                        let blade_url = {
+                            let config = state.config.lock().unwrap();
+                            config.blade_url.clone()
+                        };
+                        let models = get_models(&blade_url).await;
 
                         {
                             let mut mgr = state.chat_manager.lock().unwrap();
@@ -1872,7 +1907,11 @@ fn get_current_workspace(state: State<'_, AppState>) -> Option<String> {
 async fn set_selected_model(model_id: String, state: State<'_, AppState>) -> Result<(), String> {
     // Update the selected model index (in-memory only)
     // Model persistence is handled by project state, not main config
-    let models = get_models().await;
+    let blade_url = {
+        let config = state.config.lock().unwrap();
+        config.blade_url.clone()
+    };
+    let models = get_models(&blade_url).await;
     if let Some(idx) = models.iter().position(|m| m.id == model_id) {
         *state.selected_model_index.lock().unwrap() = idx;
         eprintln!("[MODEL] Set selected model index to {} for {}", idx, model_id);
@@ -1937,6 +1976,17 @@ async fn warmup_cache(
 #[tauri::command]
 fn should_rewarm_cache(state: State<'_, AppState>) -> bool {
     state.warmup_client.should_rewarm()
+}
+
+#[tauri::command]
+fn get_user_id(state: State<'_, AppState>) -> Option<String> {
+    state.user_id.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn get_project_id(workspace_path: String) -> Option<String> {
+    let path = std::path::PathBuf::from(workspace_path);
+    crate::project::get_or_create_project_id(&path).ok()
 }
 
 // ==============================================================================
@@ -2450,6 +2500,167 @@ async fn dispatch(
                 }
             }
         }
+        BladeIntent::History(history_intent) => {
+            match history_intent {
+                blade_protocol::HistoryIntent::ListConversations { user_id, project_id } => {
+                    println!("[History] ListConversations: user={}, project={}", user_id, project_id);
+                    
+                    // Get config to create BladeClient
+                    let (blade_url, api_key) = {
+                        let config = state.config.lock().unwrap();
+                        (config.blade_url.clone(), config.api_key.clone())
+                    };
+                    
+                    // Create HTTP client and BladeClient
+                    let http_client = reqwest::Client::new();
+                    let blade_client = crate::blade_client::BladeClient::new(
+                        blade_url,
+                        http_client,
+                        api_key,
+                    );
+                    
+                    // Call API
+                    match blade_client.get_conversation_history(&user_id, &project_id).await {
+                        Ok(response) => {
+                            // Parse response into ConversationSummary vec
+                            let conversations: Vec<blade_protocol::ConversationSummary> = 
+                                if let Some(convs) = response.get("conversations") {
+                                    serde_json::from_value(convs.clone())
+                                        .unwrap_or_else(|e| {
+                                            eprintln!("[History] Failed to parse conversations: {}", e);
+                                            Vec::new()
+                                        })
+                                } else {
+                                    Vec::new()
+                                };
+                            
+                            println!("[History] Fetched {} conversations", conversations.len());
+                            if let Some(first) = conversations.first() {
+                                println!("[History] Sample conversation dates - created_at: {}, last_active_at: {}", 
+                                    first.created_at, first.last_active_at);
+                            }
+                            
+                            // Emit ConversationList event
+                            let _ = window.emit(
+                                "blade-event",
+                                blade_protocol::BladeEventEnvelope {
+                                    id: uuid::Uuid::new_v4(),
+                                    timestamp: std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap()
+                                        .as_millis() as u64,
+                                    causality_id: Some(intent_id.to_string()),
+                                    event: blade_protocol::BladeEvent::History(
+                                        blade_protocol::HistoryEvent::ConversationList {
+                                            conversations,
+                                        }
+                                    ),
+                                },
+                            );
+                            Ok(())
+                        }
+                        Err(e) => {
+                            eprintln!("[History] API error: {}", e);
+                            Err(blade_protocol::BladeError::Internal {
+                                trace_id: intent_id.to_string(),
+                                message: e,
+                            })
+                        }
+                    }
+                }
+                blade_protocol::HistoryIntent::LoadConversation { session_id, user_id } => {
+                    println!("[History] LoadConversation: session={}, user={}", session_id, user_id);
+                    
+                    // Get config to create BladeClient
+                    let (blade_url, api_key) = {
+                        let config = state.config.lock().unwrap();
+                        (config.blade_url.clone(), config.api_key.clone())
+                    };
+                    
+                    // Create HTTP client and BladeClient
+                    let http_client = reqwest::Client::new();
+                    let blade_client = crate::blade_client::BladeClient::new(
+                        blade_url,
+                        http_client,
+                        api_key,
+                    );
+                    
+                    // Call API
+                    match blade_client.get_conversation(&session_id, &user_id).await {
+                        Ok(response) => {
+                            // Parse response into FullConversation
+                            let session_id = response.get("session_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or(&session_id)
+                                .to_string();
+                            let project_id = response.get("project_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let title = response.get("title")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("Untitled")
+                                .to_string();
+                            let created_at = response.get("created_at")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let last_active_at = response.get("last_active_at")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let message_count = response.get("message_count")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0) as u32;
+                            
+                            let messages: Vec<blade_protocol::HistoryMessage> = 
+                                if let Some(msgs) = response.get("messages") {
+                                    serde_json::from_value(msgs.clone())
+                                        .unwrap_or_else(|e| {
+                                            eprintln!("[History] Failed to parse messages: {}", e);
+                                            Vec::new()
+                                        })
+                                } else {
+                                    Vec::new()
+                                };
+                            
+                            println!("[History] Loaded conversation with {} messages", messages.len());
+                            
+                            // Emit ConversationLoaded event
+                            let _ = window.emit(
+                                "blade-event",
+                                blade_protocol::BladeEventEnvelope {
+                                    id: uuid::Uuid::new_v4(),
+                                    timestamp: std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap()
+                                        .as_millis() as u64,
+                                    causality_id: Some(intent_id.to_string()),
+                                    event: blade_protocol::BladeEvent::History(
+                                        blade_protocol::HistoryEvent::ConversationLoaded {
+                                            session_id,
+                                            project_id,
+                                            title,
+                                            created_at,
+                                            last_active_at,
+                                            message_count,
+                                            messages,
+                                        }
+                                    ),
+                                },
+                            );
+                            Ok(())
+                        }
+                        Err(e) => {
+                            eprintln!("[History] API error: {}", e);
+                            Err(blade_protocol::BladeError::ResourceNotFound {
+                                id: format!("Conversation {}: {}", session_id, e),
+                            })
+                        }
+                    }
+                }
+            }
+        }
         BladeIntent::System(system_intent) => {
             println!("System Intent: {:?}", system_intent);
             Ok(())
@@ -2534,6 +2745,8 @@ pub fn run() {
             get_project_state_path,
             warmup_cache,
             should_rewarm_cache,
+            get_user_id,
+            get_project_id,
             submit_command_result,
             ephemeral_commands::create_ephemeral_document,
             ephemeral_commands::get_ephemeral_document,

@@ -10,6 +10,7 @@ import type {
     FileIntent,
     WorkflowIntent,
     TerminalIntent,
+    HistoryIntent,
     Version
 } from '../types/blade';
 
@@ -73,5 +74,9 @@ export class BladeDispatcher {
 
     static async terminal(intent: TerminalIntent) {
         return this.dispatch("Terminal", { type: "Terminal", payload: intent });
+    }
+
+    static async history(intent: HistoryIntent) {
+        return this.dispatch("History", { type: "History", payload: intent });
     }
 }

@@ -1,14 +1,23 @@
-import React, { useEffect, useRef, useCallback } from 'react';
+import React, { useEffect, useRef, useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, X } from 'lucide-react';
 import { useCommandExecution } from '../hooks/useCommandExecution';
+import { useHistory } from '../hooks/useHistory';
 import type { ChatMessage as ChatMessageType, ModelInfo } from '../types/chat';
 import type { Change } from '../types/change';
 import type { StructuredAction } from '../types/events';
 import { ChatMessage } from './ChatMessage';
-import { ChatInput } from './ChatInput';
-import { ModelSelector } from './ModelSelector';
+import { ChatTabBar } from './ChatTabBar';
+import { CommandCenter } from './CommandCenter';
+import { HistoryTab } from './HistoryTab';
 import { ChatTerminal } from './ChatTerminal';
+
+interface ResearchProgress {
+    message: string;
+    stage: string;
+    percent: number;
+    isActive: boolean;
+}
 
 interface ChatPanelProps {
     messages: ChatMessageType[];
@@ -24,6 +33,10 @@ interface ChatPanelProps {
     pendingChanges: Change[];
     approveAllChanges: () => void;
     rejectChange: (changeId: string) => void;
+    userId: string;
+    projectId: string;
+    onLoadConversation: (messages: ChatMessageType[]) => void;
+    researchProgress?: ResearchProgress | null;
 }
 
 export const ChatPanel: React.FC<ChatPanelProps> = ({
@@ -40,11 +53,17 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     pendingChanges,
     approveAllChanges,
     rejectChange,
+    userId,
+    projectId,
+    onLoadConversation,
+    researchProgress,
 }) => {
     const { t } = useTranslation();
     const { executions, handleCommandComplete } = useCommandExecution();
+    const { loadConversation } = useHistory();
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const isUserAtBottomRef = useRef(true);
+    const [activeTab, setActiveTab] = useState<'chat' | 'history'>('chat');
 
     // Auto-scroll logic
     useEffect(() => {
@@ -66,29 +85,41 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         e.preventDefault();
     }, []);
 
+    const handleNewConversation = () => {
+        // TODO: Implement new conversation logic (clear current messages)
+        console.log('New conversation clicked');
+        setActiveTab('chat');
+    };
+
+    const handleSelectConversation = useCallback(async (sessionId: string) => {
+        try {
+            const conversationMessages = await loadConversation(sessionId, userId);
+            onLoadConversation(conversationMessages);
+            setActiveTab('chat');
+        } catch (e) {
+            console.error('Failed to load conversation:', e);
+        }
+    }, [loadConversation, userId, onLoadConversation]);
+
     return (
         <div className="flex flex-col h-full bg-[var(--bg-app)] text-[var(--fg-primary)] font-sans tracking-tight" onContextMenu={handleContextMenu}>
-            {/* Header */}
-            {/* Header */}
-            <header className="h-10 border-b border-[var(--border-subtle)] flex items-center px-2 bg-[var(--bg-app)] select-none shrink-0 z-30">
-                <div className="w-full">
-                    <ModelSelector
-                        models={models}
-                        selectedId={selectedModelId || ''}
-                        onSelect={setSelectedModelId}
-                    />
-                </div>
-            </header>
+            {/* Tab Bar */}
+            <ChatTabBar
+                activeTab={activeTab}
+                onTabChange={setActiveTab}
+                onNewConversation={handleNewConversation}
+            />
 
-            {/* Messages */}
-            <div
-                className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent"
-                onScroll={(e) => {
-                    const target = e.target as HTMLDivElement;
-                    const isBottom = Math.abs(target.scrollHeight - target.scrollTop - target.clientHeight) < 50;
-                    isUserAtBottomRef.current = isBottom;
-                }}
-            >
+            {/* Content Area - conditionally render based on active tab */}
+            {activeTab === 'chat' ? (
+                <div
+                    className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent"
+                    onScroll={(e) => {
+                        const target = e.target as HTMLDivElement;
+                        const isBottom = Math.abs(target.scrollHeight - target.scrollTop - target.clientHeight) < 50;
+                        isUserAtBottomRef.current = isBottom;
+                    }}
+                >
                 <div className="max-w-4xl mx-auto py-6">
                     {messages.length === 0 && (
                         <div className="flex flex-col items-center justify-center p-12 text-[var(--fg-tertiary)] text-center space-y-4 select-none">
@@ -157,6 +188,35 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                         );
                     })}
 
+                    {/* Research progress indicator */}
+                    {researchProgress?.isActive && (
+                        <div className="px-4 py-3 mx-4 my-4 bg-[var(--bg-surface)] border border-[var(--border-subtle)] rounded-md">
+                            <div className="flex items-center gap-3">
+                                {researchProgress.percent >= 100 ? (
+                                    <div className="w-4 h-4 rounded-full bg-green-500 flex items-center justify-center">
+                                        <Check className="w-3 h-3 text-white" />
+                                    </div>
+                                ) : (
+                                    <div className="animate-spin w-4 h-4 border-2 border-[var(--accent-primary)] border-t-transparent rounded-full" />
+                                )}
+                                <div className="flex-1">
+                                    <div className="text-sm text-[var(--fg-primary)]">
+                                        {researchProgress.message || 'Researching...'}
+                                    </div>
+                                    <div className="mt-1.5 h-1.5 bg-[var(--bg-app)] rounded-full overflow-hidden">
+                                        <div 
+                                            className="h-full bg-[var(--accent-primary)] transition-all duration-300"
+                                            style={{ width: `${researchProgress.percent}%` }}
+                                        />
+                                    </div>
+                                </div>
+                                <div className="text-xs text-[var(--fg-tertiary)]">
+                                    {researchProgress.percent}%
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {/* Pending Change Proposals - now shown in editor */}
                     {pendingChanges.length > 0 && (
                         <div className="px-4 py-3 bg-purple-900/20 border border-purple-500/30 rounded-md mx-4">
@@ -182,6 +242,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                     <div ref={messagesEndRef} className="h-4" />
                 </div>
             </div>
+            ) : (
+                <HistoryTab 
+                    userId={userId}
+                    projectId={projectId}
+                    onSelectConversation={handleSelectConversation}
+                />
+            )}
 
             {/* Global Accept/Reject All Buttons */}
             {pendingChanges.length > 0 && (
@@ -217,11 +284,15 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 </div>
             )}
 
-            {/* Input */}
-            <div className="shrink-0 z-20">
-                <ChatInput onSend={sendMessage} onStop={stopGeneration} loading={loading} />
-            </div>
-
+            {/* Command Center */}
+            <CommandCenter
+                onSend={sendMessage}
+                onStop={stopGeneration}
+                loading={loading}
+                models={models}
+                selectedModelId={selectedModelId}
+                setSelectedModelId={setSelectedModelId}
+            />
         </div>
     );
 };

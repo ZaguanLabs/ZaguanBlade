@@ -41,12 +41,13 @@ pub struct WarmupResponse {
 pub struct WarmupClient {
     base_url: String,
     api_key: String,
+    user_id: String,
     http_client: reqwest::Client,
     last_warmup: Mutex<Option<Instant>>,
 }
 
 impl WarmupClient {
-    pub fn new(base_url: String, api_key: String) -> Self {
+    pub fn new(base_url: String, api_key: String, user_id: String) -> Self {
         // Warmup requests should complete quickly (< 30s)
         // Use a timeout to prevent hanging
         let http_client = reqwest::Client::builder()
@@ -57,6 +58,7 @@ impl WarmupClient {
         Self {
             base_url,
             api_key,
+            user_id,
             http_client,
             last_warmup: Mutex::new(None),
         }
@@ -73,7 +75,7 @@ impl WarmupClient {
         let request = WarmupRequest {
             request_type: "warmup".to_string(),
             session_id: session_id.to_string(),
-            user_id: "default".to_string(),
+            user_id: self.user_id.clone(),
             model: model.to_string(),
             trigger,
         };

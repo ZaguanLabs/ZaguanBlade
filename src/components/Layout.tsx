@@ -36,25 +36,73 @@ const AppLayoutInner: React.FC = () => {
     const [isChatDragging, setIsChatDragging] = useState(false);
     const [virtualFiles, setVirtualFiles] = useState<Set<string>>(new Set());
     const chat = useChat();
-    const { pendingChanges, approveChange, rejectChange, selectedModelId, setSelectedModelId } = chat;
+    const { pendingChanges, approveChange, rejectChange, selectedModelId, setSelectedModelId, messages } = chat;
+    const [chatMessages, setChatMessages] = useState(chat.messages);
     const processingFilesRef = useRef<Set<string>>(new Set());
     const terminalPaneRef = useRef<TerminalPaneHandle>(null);
+    
+    // Research progress state
+    const [researchProgress, setResearchProgress] = useState<{
+        message: string;
+        stage: string;
+        percent: number;
+        isActive: boolean;
+    } | null>(null);
+
+    // Sync chatMessages with chat.messages from useChat
+    useEffect(() => {
+        setChatMessages(chat.messages);
+    }, [chat.messages]);
 
     // Workspace path for project state persistence
     const [workspacePath, setWorkspacePath] = useState<string | null>(null);
+    const [userId, setUserId] = useState<string | null>(null);
+    const [projectId, setProjectId] = useState<string | null>(null);
 
-    // Fetch current workspace on mount
+    // Fetch current workspace and user_id on mount
     useEffect(() => {
         const fetchWorkspace = async () => {
             try {
                 const path = await invoke<string | null>('get_current_workspace');
                 setWorkspacePath(path);
+                
+                // Fetch project_id for this workspace
+                if (path) {
+                    try {
+                        const id = await invoke<string | null>('get_project_id', { workspacePath: path });
+                        setProjectId(id);
+                    } catch (e) {
+                        console.error('[Layout] Failed to get project_id:', e);
+                    }
+                }
             } catch (e) {
                 console.error('[Layout] Failed to get workspace:', e);
             }
         };
+        const fetchUserId = async () => {
+            try {
+                const id = await invoke<string | null>('get_user_id');
+                if (id) {
+                    setUserId(id);
+                }
+            } catch (e) {
+                console.error('[Layout] Failed to get user_id:', e);
+            }
+        };
         fetchWorkspace();
-    }, []);
+        fetchUserId();
+        
+        // Poll for user_id until we get it (it's set when WebSocket connects)
+        const userIdInterval = setInterval(async () => {
+            if (!userId) {
+                await fetchUserId();
+            } else {
+                clearInterval(userIdInterval);
+            }
+        }, 1000);
+        
+        return () => clearInterval(userIdInterval);
+    }, [userId]);
 
     // Handle project state restoration
     const handleStateLoaded = useCallback((state: ProjectState) => {
@@ -333,6 +381,7 @@ const AppLayoutInner: React.FC = () => {
         let unlistenFileOpened: (() => void) | undefined;
         let unlistenFileWithHighlight: (() => void) | undefined;
         let unlistenEphemeral: (() => void) | undefined;
+        let unlistenResearchProgress: (() => void) | undefined;
         let unlistenChangeApplied: (() => void) | undefined;
 
         const setupListeners = async () => {
@@ -410,6 +459,9 @@ const AppLayoutInner: React.FC = () => {
                     suggestedName: event.payload.suggestedName
                 });
 
+                // Clear research progress when result arrives
+                setResearchProgress(null);
+
                 const { id, title, content, suggestedName } = event.payload;
 
                 setTabs(prev => {
@@ -432,6 +484,15 @@ const AppLayoutInner: React.FC = () => {
                     return [...prev, newTab];
                 });
                 setActiveTabId(id);
+            });
+
+            // Listen for research progress events
+            unlistenResearchProgress = await listen<{ message: string; stage: string; percent: number }>('research-progress', (event) => {
+                console.log('[LAYOUT] Research progress:', event.payload);
+                setResearchProgress({
+                    ...event.payload,
+                    isActive: true
+                });
             });
 
             // Listen for change-applied events to convert ephemeral tabs to file tabs
@@ -482,6 +543,7 @@ const AppLayoutInner: React.FC = () => {
             if (unlistenFileOpened) unlistenFileOpened();
             if (unlistenFileWithHighlight) unlistenFileWithHighlight();
             if (unlistenEphemeral) unlistenEphemeral();
+            if (unlistenResearchProgress) unlistenResearchProgress();
             if (unlistenChangeApplied) unlistenChangeApplied();
         };
     }, [tabs]);
@@ -614,7 +676,7 @@ const AppLayoutInner: React.FC = () => {
                         className="min-w-[280px] max-w-[800px] border-l border-[var(--border-subtle)] bg-[var(--bg-panel)] flex flex-col shadow-xl z-30"
                     >
                         <ChatPanel
-                            messages={chat.messages}
+                            messages={chatMessages}
                             loading={chat.loading}
                             error={chat.error}
                             sendMessage={chat.sendMessage}
@@ -627,6 +689,10 @@ const AppLayoutInner: React.FC = () => {
                             pendingChanges={chat.pendingChanges}
                             approveAllChanges={chat.approveAllChanges}
                             rejectChange={chat.rejectChange}
+                            userId={userId || "user-1"}
+                            projectId={projectId || "default-project"}
+                            onLoadConversation={setChatMessages}
+                            researchProgress={researchProgress}
                         />
                     </div>
 

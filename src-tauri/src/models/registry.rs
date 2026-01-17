@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-const ZCODERD_URL: &str = "http://10.0.0.1:8880";
 const CACHE_TTL: Duration = Duration::from_secs(300); // 5 minutes
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -53,8 +52,8 @@ lazy_static::lazy_static! {
     static ref MODEL_CACHE: Arc<Mutex<Option<ModelCache>>> = Arc::new(Mutex::new(None));
 }
 
-async fn fetch_models_from_server() -> Result<Vec<ModelInfo>, Box<dyn std::error::Error>> {
-    let url = format!("{}/v1/blade/models", ZCODERD_URL);
+async fn fetch_models_from_server(blade_url: &str) -> Result<Vec<ModelInfo>, Box<dyn std::error::Error>> {
+    let url = format!("{}/v1/blade/models", blade_url);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()?;
@@ -87,7 +86,7 @@ async fn fetch_models_from_server() -> Result<Vec<ModelInfo>, Box<dyn std::error
     Ok(models)
 }
 
-pub async fn get_models() -> Vec<ModelInfo> {
+pub async fn get_models(blade_url: &str) -> Vec<ModelInfo> {
     // Try to use cached models if still valid
     if let Ok(cache) = MODEL_CACHE.lock() {
         if let Some(ref cached) = *cache {
@@ -98,7 +97,7 @@ pub async fn get_models() -> Vec<ModelInfo> {
     }
 
     // Cache expired or missing - fetch from server
-    match fetch_models_from_server().await {
+    match fetch_models_from_server(blade_url).await {
         Ok(models) => {
             if let Ok(mut cache) = MODEL_CACHE.lock() {
                 *cache = Some(ModelCache {
@@ -106,15 +105,17 @@ pub async fn get_models() -> Vec<ModelInfo> {
                     last_fetch: Instant::now(),
                 });
                 eprintln!(
-                    "[MODEL REGISTRY] Successfully fetched {} models from zcoderd",
-                    models.len()
+                    "[MODEL REGISTRY] Successfully fetched {} models from {}",
+                    models.len(),
+                    blade_url
                 );
             }
             models
         }
         Err(e) => {
             eprintln!(
-                "[MODEL REGISTRY] Failed to fetch models from zcoderd: {}",
+                "[MODEL REGISTRY] Failed to fetch models from {}: {}",
+                blade_url,
                 e
             );
             // Return empty list on failure - let the UI handle it or retry

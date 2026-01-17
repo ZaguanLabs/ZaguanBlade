@@ -75,6 +75,7 @@ pub enum BladeIntent {
     File(FileIntent),
     Workflow(WorkflowIntent),
     Terminal(TerminalIntent),
+    History(HistoryIntent),
     System(SystemIntent),
 }
 
@@ -181,6 +182,13 @@ pub enum TerminalIntent {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", content = "payload")]
+pub enum HistoryIntent {
+    ListConversations { user_id: String, project_id: String },
+    LoadConversation { session_id: String, user_id: String },
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "type", content = "payload")]
 pub enum SystemIntent {
     // For bootstrapping or config
     SetLogLevel { level: String },
@@ -198,6 +206,7 @@ pub enum BladeEvent {
     File(FileEvent),
     Workflow(WorkflowEvent),
     Terminal(TerminalEvent),
+    History(HistoryEvent),
     System(SystemEvent),
 }
 
@@ -308,6 +317,45 @@ pub enum TerminalEvent {
     Exit {
         id: String,
         code: i32,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ConversationSummary {
+    pub id: String,
+    pub project_id: String,
+    pub title: String,
+    pub created_at: String,
+    pub last_active_at: String,
+    pub message_count: u32,
+    pub preview: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct HistoryMessage {
+    pub role: String,
+    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "type", content = "payload")]
+pub enum HistoryEvent {
+    ConversationList {
+        conversations: Vec<ConversationSummary>,
+    },
+    ConversationLoaded {
+        session_id: String,
+        project_id: String,
+        title: String,
+        created_at: String,
+        last_active_at: String,
+        message_count: u32,
+        messages: Vec<HistoryMessage>,
     },
 }
 

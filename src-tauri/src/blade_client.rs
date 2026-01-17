@@ -165,6 +165,68 @@ impl BladeClient {
         self.send_blade_request(request).await
     }
 
+    /// Get conversation history list
+    pub async fn get_conversation_history(
+        &self,
+        user_id: &str,
+        project_id: &str,
+    ) -> Result<Value, String> {
+        let url = format!(
+            "{}/v1/blade/history?user_id={}&project_id={}",
+            self.base_url, user_id, project_id
+        );
+
+        let response = self
+            .http_client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .send()
+            .await
+            .map_err(|e| format!("Failed to fetch conversation history: {}", e))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("History API error {}: {}", status, text));
+        }
+
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse history response: {}", e))
+    }
+
+    /// Get full conversation by session ID
+    pub async fn get_conversation(
+        &self,
+        session_id: &str,
+        user_id: &str,
+    ) -> Result<Value, String> {
+        let url = format!(
+            "{}/v1/blade/history/{}?user_id={}",
+            self.base_url, session_id, user_id
+        );
+
+        let response = self
+            .http_client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .send()
+            .await
+            .map_err(|e| format!("Failed to fetch conversation: {}", e))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Conversation API error {}: {}", status, text));
+        }
+
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse conversation response: {}", e))
+    }
+
     /// Internal method to send any Blade Protocol request
     async fn send_blade_request<T: Serialize>(
         &self,

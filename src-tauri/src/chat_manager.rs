@@ -22,6 +22,11 @@ pub enum DrainResult {
         content: String,
         suggested_name: String,
     },
+    Progress {
+        message: String,
+        stage: String,
+        percent: i32,
+    },
     ToolCalls(Vec<ToolCall>, Option<String>),
     ToolCreated(ChatMessage, Vec<ToolCall>),
     ToolStatusUpdate(ChatMessage),
@@ -276,6 +281,15 @@ impl ChatManager {
                                     ));
                                 }
                                 break;
+                            }
+                            crate::blade_ws_client::BladeWsEvent::Progress { message, stage, percent } => {
+                                eprintln!("[CHAT MGR] Progress: {} ({}%)", message, percent);
+                                let _ = tx.send(ChatEvent::Progress { message, stage, percent: percent as i32 });
+                            }
+                            crate::blade_ws_client::BladeWsEvent::Research { content } => {
+                                eprintln!("[CHAT MGR] Research result received ({} chars)", content.len());
+                                saw_content = true;
+                                let _ = tx.send(ChatEvent::Research { content, suggested_name: String::new() });
                             }
                         }
 
@@ -620,10 +634,11 @@ impl ChatManager {
                             if let Some(last) = conversation.last_mut() {
                                 if last.role == ChatRole::Assistant {
                                     last.progress = Some(crate::protocol::ProgressInfo {
-                                        message, stage, percent
+                                        message: message.clone(), stage: stage.clone(), percent
                                     });
                                 }
                             }
+                            self.pending_results.push_back(DrainResult::Progress { message, stage, percent });
                         }
                         ChatEvent::TodoUpdated(todos) => {
                             eprintln!("[DRAIN] Todo updated: {} items", todos.len());

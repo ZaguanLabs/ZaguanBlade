@@ -60,6 +60,14 @@ pub enum BladeWsEvent {
     ChatDone {
         finish_reason: String,
     },
+    Progress {
+        message: String,
+        stage: String,
+        percent: u8,
+    },
+    Research {
+        content: String,
+    },
     Error {
         code: String,
         message: String,
@@ -559,6 +567,39 @@ impl BladeWsClient {
                     pending_count
                 );
                 let _ = tx.send(BladeWsEvent::ToolResultAck { pending_count });
+            }
+            "progress" => {
+                let message = msg
+                    .payload
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let stage = msg
+                    .payload
+                    .get("stage")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let percent = msg
+                    .payload
+                    .get("percent")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u8;
+
+                eprintln!("[BLADE WS] Progress: {} ({}%)", message, percent);
+                let _ = tx.send(BladeWsEvent::Progress { message, stage, percent });
+            }
+            "research" => {
+                let content = msg
+                    .payload
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                eprintln!("[BLADE WS] Research result received ({} chars)", content.len());
+                let _ = tx.send(BladeWsEvent::Research { content });
             }
             _ => {
                 eprintln!("[BLADE WS] Unknown message type: {}", msg.msg_type);
