@@ -213,7 +213,11 @@ impl AppState {
         );
 
         // Initialize Language Service
-        let db_path = std::path::PathBuf::from("./zaguan_db/symbols.db");
+        // Initialize Language Service
+        let db_path = dirs::data_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("zaguan")
+            .join("symbols.db");
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent).ok();
         }
