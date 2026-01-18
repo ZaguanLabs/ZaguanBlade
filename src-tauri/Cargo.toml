@@ -45,6 +45,16 @@ glob = "0.3"
 rusqlite = { version = "0.32", features = ["bundled"] }
 notify = "6.1.1"
 
+# Tree-sitter for AST parsing (Rust-first architecture)
+tree-sitter = "0.24"
+tree-sitter-rust = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-python = "0.23"
+
+# LSP types for language server integration
+lsp-types = "0.97"
+
 [profile.release]
 panic = "abort" # Strip expensive panic clean-up logic
 codegen-units = 1 # Compile more slowly, but better optimization

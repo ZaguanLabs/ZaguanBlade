@@ -13,8 +13,8 @@ pub mod ephemeral_documents;
 pub mod events;
 pub mod explorer;
 pub mod idempotency; // [NEW] v1.1: Idempotency cache
-pub mod local_index; // [NEW] RFC-002: Local SQLite index for conversations
 pub mod local_artifacts; // [NEW] RFC-002: Local conversation artifact storage
+pub mod local_index; // [NEW] RFC-002: Local SQLite index for conversations
 pub mod models;
 pub mod project;
 pub mod project_settings;
@@ -24,19 +24,20 @@ pub mod reasoning_parser; // [NEW] v1.2: Multi-format reasoning extraction
 pub mod terminal;
 pub mod tool_execution;
 pub mod tools;
+pub mod tree_sitter; // [NEW] Tree-sitter parsing for LSP integration
 pub mod warmup; // [NEW] v2.1: Cache warmup
 pub mod workspace_manager;
 pub mod xml_parser;
 
 use crate::chat_manager::{ChatManager, DrainResult};
-use std::sync::Mutex;
-use tauri::{Emitter, Manager, Runtime, State};
 use clap::Parser;
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use notify::event::ModifyKind;
 use notify::EventKind;
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use tauri::{Emitter, Manager, Runtime, State};
 
 /// ZaguanBlade - AI-Native Intelligent Code Editor
 #[derive(Parser, Debug)]
@@ -136,7 +137,7 @@ pub struct AppState {
         Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>>,
     >,
     pub idempotency_cache: crate::idempotency::IdempotencyCache, // v1.1: Idempotency support
-    pub warmup_client: warmup::WarmupClient, // v2.1: Cache warmup
+    pub warmup_client: warmup::WarmupClient,                     // v2.1: Cache warmup
     pub user_id: Mutex<Option<String>>, // Authenticated user ID from WebSocket
     pub fs_watcher: Mutex<Option<RecommendedWatcher>>, // Workspace file watcher
 }
@@ -187,11 +188,11 @@ impl AppState {
                 )
                 .expect("Failed to create conversation store in temp directory")
             });
-        
+
         let mut workspace_manager = WorkspaceManager::new();
         // Override workspace if provided via CLI
         if let Some(path_str) = initial_path {
-             workspace_manager.set_workspace(std::path::PathBuf::from(path_str));
+            workspace_manager.set_workspace(std::path::PathBuf::from(path_str));
         }
 
         // Get or create user_id
@@ -250,54 +251,57 @@ fn restart_fs_watcher<R: Runtime>(app_handle: &tauri::AppHandle<R>, state: &Stat
         let last_emit = Arc::new(Mutex::new(Instant::now() - Duration::from_secs(1)));
         let last_emit_ref = last_emit.clone();
 
-        let mut watcher = match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-            match res {
-                Ok(event) => {
-                    let relevant = matches!(
-                        event.kind,
-                        EventKind::Create(_)
-                            | EventKind::Remove(_)
-                            | EventKind::Modify(ModifyKind::Name(_))
-                            | EventKind::Modify(ModifyKind::Data(_))
-                            | EventKind::Modify(ModifyKind::Metadata(_))
-                            | EventKind::Modify(ModifyKind::Any)
-                            | EventKind::Modify(_)
-                            | EventKind::Any
-                            | EventKind::Other
-                    );
-                    if !relevant {
-                        return;
-                    }
+        let mut watcher =
+            match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+                match res {
+                    Ok(event) => {
+                        let relevant = matches!(
+                            event.kind,
+                            EventKind::Create(_)
+                                | EventKind::Remove(_)
+                                | EventKind::Modify(ModifyKind::Name(_))
+                                | EventKind::Modify(ModifyKind::Data(_))
+                                | EventKind::Modify(ModifyKind::Metadata(_))
+                                | EventKind::Modify(ModifyKind::Any)
+                                | EventKind::Modify(_)
+                                | EventKind::Any
+                                | EventKind::Other
+                        );
+                        if !relevant {
+                            return;
+                        }
 
-                    let now = Instant::now();
-                    let mut last = last_emit_ref.lock().unwrap();
-                    if now.duration_since(*last) < Duration::from_millis(250) {
-                        return;
-                    }
-                    *last = now;
+                        let now = Instant::now();
+                        let mut last = last_emit_ref.lock().unwrap();
+                        if now.duration_since(*last) < Duration::from_millis(250) {
+                            return;
+                        }
+                        *last = now;
 
-                    // Emit detailed file change event with paths
-                    let paths: Vec<String> = event.paths.iter()
-                        .map(|p| p.display().to_string())
-                        .collect();
-                    
-                    let file_change_event = FileChangeEvent {
-                        count: paths.len(),
-                        paths: paths.clone(),
-                    };
-                    
-                    let _ = app_handle.emit("file-changes-detected", file_change_event);
-                    let _ = app_handle.emit(crate::events::event_names::REFRESH_EXPLORER, ());
+                        // Emit detailed file change event with paths
+                        let paths: Vec<String> = event
+                            .paths
+                            .iter()
+                            .map(|p| p.display().to_string())
+                            .collect();
+
+                        let file_change_event = FileChangeEvent {
+                            count: paths.len(),
+                            paths: paths.clone(),
+                        };
+
+                        let _ = app_handle.emit("file-changes-detected", file_change_event);
+                        let _ = app_handle.emit(crate::events::event_names::REFRESH_EXPLORER, ());
+                    }
+                    Err(e) => eprintln!("[WATCHER] error: {}", e),
                 }
-                Err(e) => eprintln!("[WATCHER] error: {}", e),
-            }
-        }) {
-            Ok(w) => w,
-            Err(e) => {
-                eprintln!("[WATCHER] Failed to start: {}", e);
-                return;
-            }
-        };
+            }) {
+                Ok(w) => w,
+                Err(e) => {
+                    eprintln!("[WATCHER] Failed to start: {}", e);
+                    return;
+                }
+            };
 
         if let Err(e) = watcher.watch(&root, RecursiveMode::Recursive) {
             eprintln!("[WATCHER] Failed to watch {}: {}", root.display(), e);
@@ -754,7 +758,11 @@ pub async fn approve_changes_for_file<R: Runtime>(
                 let mut all_ok = true;
                 let patch_count = patches.len();
                 for (idx, patch) in patches.iter().enumerate() {
-                    match crate::tools::apply_patch_to_string(&content, &patch.old_text, &patch.new_text) {
+                    match crate::tools::apply_patch_to_string(
+                        &content,
+                        &patch.old_text,
+                        &patch.new_text,
+                    ) {
                         Ok(new_content) => {
                             content = new_content;
                         }
@@ -763,7 +771,9 @@ pub async fn approve_changes_for_file<R: Runtime>(
                                 change.call.clone(),
                                 crate::tools::ToolResult::err(format!(
                                     "Multi-patch failed at hunk {}/{}: {}",
-                                    idx + 1, patch_count, e
+                                    idx + 1,
+                                    patch_count,
+                                    e
                                 )),
                             ));
                             all_ok = false;
@@ -869,7 +879,7 @@ pub async fn approve_all_changes(
 
     let mut succeeded = 0;
     let mut failed = 0;
-    
+
     for (idx, res) in results.into_iter().enumerate() {
         if let Err(e) = res {
             failed += 1;
@@ -885,21 +895,24 @@ pub async fn approve_all_changes(
 
     // v1.1: Emit BatchCompleted event
     let batch_id = uuid::Uuid::new_v4().to_string();
-    let _ = window.emit("blade-event", blade_protocol::BladeEventEnvelope {
-        id: uuid::Uuid::new_v4(),
-        timestamp: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64,
-        causality_id: None,
-        event: blade_protocol::BladeEvent::Workflow(
-            blade_protocol::WorkflowEvent::BatchCompleted {
-                batch_id,
-                succeeded,
-                failed,
-            }
-        ),
-    });
+    let _ = window.emit(
+        "blade-event",
+        blade_protocol::BladeEventEnvelope {
+            id: uuid::Uuid::new_v4(),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+            causality_id: None,
+            event: blade_protocol::BladeEvent::Workflow(
+                blade_protocol::WorkflowEvent::BatchCompleted {
+                    batch_id,
+                    succeeded,
+                    failed,
+                },
+            ),
+        },
+    );
 
     if errors.is_empty() {
         Ok(())
@@ -970,7 +983,9 @@ fn toggle_devtools(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
-async fn list_models(state: State<'_, AppState>) -> Result<Vec<crate::models::registry::ModelInfo>, String> {
+async fn list_models(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::models::registry::ModelInfo>, String> {
     let blade_url = {
         let config = state.config.lock().unwrap();
         config.blade_url.clone()
@@ -1097,13 +1112,16 @@ async fn handle_send_message<R: Runtime>(
         let ws = workspace.workspace.as_ref();
 
         // RFC-002: Get storage mode from project settings, default to "local"
-        let storage_mode = Some(ws.map(|p| {
-            let settings = project_settings::load_project_settings(p);
-            match settings.storage.mode {
-                project_settings::StorageMode::Local => "local".to_string(),
-                project_settings::StorageMode::Server => "server".to_string(),
-            }
-        }).unwrap_or_else(|| "local".to_string()));
+        let storage_mode = Some(
+            ws.map(|p| {
+                let settings = project_settings::load_project_settings(p);
+                match settings.storage.mode {
+                    project_settings::StorageMode::Local => "local".to_string(),
+                    project_settings::StorageMode::Server => "server".to_string(),
+                }
+            })
+            .unwrap_or_else(|| "local".to_string()),
+        );
 
         mgr.start_stream(
             message,
@@ -1189,7 +1207,7 @@ async fn handle_send_message<R: Runtime>(
                         last_emit_fp = Some(fp);
 
                         eprintln!(
-                            "[EMIT] Assistant message - content: {}, before_tools: {}, after_tools: {}, tool_calls: {}", 
+                            "[EMIT] Assistant message - content: {}, before_tools: {}, after_tools: {}, tool_calls: {}",
                             content_len,
                             before_len,
                             after_len,
@@ -1214,7 +1232,7 @@ async fn handle_send_message<R: Runtime>(
                         } else {
                             println!("Auto-saved conversation: {}", stored.metadata.id);
                         }
-                        
+
                         // RFC-002: Also save to local artifacts if in local storage mode
                         let workspace = state.workspace.lock().unwrap();
                         if let Some(ref ws_path) = workspace.workspace {
@@ -1223,14 +1241,18 @@ async fn handle_send_message<R: Runtime>(
                                 // Convert to local artifact format
                                 let project_id = crate::project::get_or_create_project_id(ws_path)
                                     .unwrap_or_else(|_| "unknown".to_string());
-                                
-                                let title = if stored.metadata.title.is_empty() { "Untitled".to_string() } else { stored.metadata.title.clone() };
+
+                                let title = if stored.metadata.title.is_empty() {
+                                    "Untitled".to_string()
+                                } else {
+                                    stored.metadata.title.clone()
+                                };
                                 let mut artifact = local_artifacts::ConversationArtifact::new(
                                     stored.metadata.id.clone(),
                                     project_id,
                                     title,
                                 );
-                                
+
                                 // Convert messages
                                 for (idx, msg) in stored.messages.iter().enumerate() {
                                     let local_msg = local_artifacts::Message {
@@ -1243,8 +1265,9 @@ async fn handle_send_message<R: Runtime>(
                                     artifact.messages.push(local_msg);
                                 }
                                 artifact.metadata.total_messages = artifact.messages.len() as i32;
-                                
-                                let artifact_store = local_artifacts::LocalArtifactStore::new(ws_path);
+
+                                let artifact_store =
+                                    local_artifacts::LocalArtifactStore::new(ws_path);
                                 if let Err(e) = artifact_store.save_conversation(&artifact) {
                                     eprintln!("[LOCAL] Failed to save local artifact: {}", e);
                                 } else {
@@ -1260,27 +1283,32 @@ async fn handle_send_message<R: Runtime>(
                         conversation.last().and_then(|msg| {
                             if msg.role == crate::protocol::ChatRole::Assistant {
                                 // Use existing ID if available (v1.1 compliant), else fallback to new
-                                msg.id.clone().or_else(|| Some(uuid::Uuid::new_v4().to_string()))
+                                msg.id
+                                    .clone()
+                                    .or_else(|| Some(uuid::Uuid::new_v4().to_string()))
                             } else {
                                 None
                             }
                         })
                     };
-                    
+
                     if let Some(id) = msg_id {
-                        let _ = window.emit("blade-event", blade_protocol::BladeEventEnvelope {
-                            id: uuid::Uuid::new_v4(),
-                            timestamp: std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_millis() as u64,
-                            causality_id: None,
-                            event: blade_protocol::BladeEvent::Chat(
-                                blade_protocol::ChatEvent::MessageCompleted { id }
-                            ),
-                        });
+                        let _ = window.emit(
+                            "blade-event",
+                            blade_protocol::BladeEventEnvelope {
+                                id: uuid::Uuid::new_v4(),
+                                timestamp: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as u64,
+                                causality_id: None,
+                                event: blade_protocol::BladeEvent::Chat(
+                                    blade_protocol::ChatEvent::MessageCompleted { id },
+                                ),
+                            },
+                        );
                     }
-                    
+
                     window.emit("chat-done", ()).unwrap_or_default();
                     break;
                 }
@@ -1326,59 +1354,19 @@ async fn handle_send_message<R: Runtime>(
                 mgr.message_seq += 1;
                 // Get the message ID if possible, otherwise use a temporary one (chat manager should track this properly in future)
                 // For now, we assume the frontend can correlate by expecting a stream
-                let msg_id = msg.id.clone().unwrap_or_else(|| "streaming-msg".to_string());
+                let msg_id = msg
+                    .id
+                    .clone()
+                    .unwrap_or_else(|| "streaming-msg".to_string());
                 drop(mgr);
 
                 // 1. Emit legacy format for compatibility - REMOVED for v1.1
                 // window.emit("chat-update", msg).unwrap_or_default();
 
                 // 2. Emit Blade v1.1 MessageDelta
-                let _ = window.emit("blade-event", blade_protocol::BladeEventEnvelope {
-                    id: uuid::Uuid::new_v4(),
-                    timestamp: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as u64,
-                    causality_id: Some(msg_id.clone()),
-                    event: blade_protocol::BladeEvent::Chat(
-                        blade_protocol::ChatEvent::MessageDelta {
-                            id: msg_id,
-                            seq,
-                            chunk,
-                            is_final: false, // Will be set in MessageCompleted
-                        }
-                    ),
-                });
-            } else if let DrainResult::Reasoning(msg, chunk) = result {
-                let mut mgr = state.chat_manager.lock().unwrap();
-                let seq = mgr.message_seq;
-                mgr.message_seq += 1;
-                let msg_id = msg.id.clone().unwrap_or_else(|| "streaming-msg".to_string());
-                drop(mgr);
-
-                let _ = window.emit("blade-event", blade_protocol::BladeEventEnvelope {
-                    id: uuid::Uuid::new_v4(),
-                    timestamp: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as u64,
-                    causality_id: Some(msg_id.clone()),
-                    event: blade_protocol::BladeEvent::Chat(
-                        blade_protocol::ChatEvent::ReasoningDelta {
-                            id: msg_id,
-                            seq,
-                            chunk,
-                            is_final: false,
-                        }
-                    ),
-                });
-            } else if let DrainResult::Error(e) = result {
-                window.emit("chat-error", e).unwrap_or_default();
-                break;
-            } else if let DrainResult::ToolCreated(msg, new_calls) = result {
-                 let msg_id = msg.id.clone().unwrap_or_else(|| "unknown".to_string());
-                 for tc in new_calls {
-                     let _ = window.emit("blade-event", blade_protocol::BladeEventEnvelope {
+                let _ = window.emit(
+                    "blade-event",
+                    blade_protocol::BladeEventEnvelope {
                         id: uuid::Uuid::new_v4(),
                         timestamp: std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
@@ -1386,26 +1374,53 @@ async fn handle_send_message<R: Runtime>(
                             .as_millis() as u64,
                         causality_id: Some(msg_id.clone()),
                         event: blade_protocol::BladeEvent::Chat(
-                            blade_protocol::ChatEvent::ToolUpdate {
-                                message_id: msg_id.clone(),
-                                tool_call_id: tc.id.clone(),
-                                status: "executing".to_string(),
-                                result: None,
-                                tool_call: Some(tc.clone()),
-                            }
+                            blade_protocol::ChatEvent::MessageDelta {
+                                id: msg_id,
+                                seq,
+                                chunk,
+                                is_final: false, // Will be set in MessageCompleted
+                            },
                         ),
-                     });
-                 }
-            } else if let DrainResult::ToolStatusUpdate(msg) = result {
-                // v1.1: Emit ToolUpdate events via blade-event
-                if let Some(tool_calls) = &msg.tool_calls {
-                    let msg_id = msg.id.clone().unwrap_or_else(|| "unknown".to_string());
-                    for tc in tool_calls {
-                        // Emit update for each tool call
-                        // We emit indiscriminately here because the frontend will merge/update state based on ID
-                        let status = tc.status.clone().unwrap_or_else(|| "unknown".to_string());
-                        
-                        let _ = window.emit("blade-event", blade_protocol::BladeEventEnvelope {
+                    },
+                );
+            } else if let DrainResult::Reasoning(msg, chunk) = result {
+                let mut mgr = state.chat_manager.lock().unwrap();
+                let seq = mgr.message_seq;
+                mgr.message_seq += 1;
+                let msg_id = msg
+                    .id
+                    .clone()
+                    .unwrap_or_else(|| "streaming-msg".to_string());
+                drop(mgr);
+
+                let _ = window.emit(
+                    "blade-event",
+                    blade_protocol::BladeEventEnvelope {
+                        id: uuid::Uuid::new_v4(),
+                        timestamp: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64,
+                        causality_id: Some(msg_id.clone()),
+                        event: blade_protocol::BladeEvent::Chat(
+                            blade_protocol::ChatEvent::ReasoningDelta {
+                                id: msg_id,
+                                seq,
+                                chunk,
+                                is_final: false,
+                            },
+                        ),
+                    },
+                );
+            } else if let DrainResult::Error(e) = result {
+                window.emit("chat-error", e).unwrap_or_default();
+                break;
+            } else if let DrainResult::ToolCreated(msg, new_calls) = result {
+                let msg_id = msg.id.clone().unwrap_or_else(|| "unknown".to_string());
+                for tc in new_calls {
+                    let _ = window.emit(
+                        "blade-event",
+                        blade_protocol::BladeEventEnvelope {
                             id: uuid::Uuid::new_v4(),
                             timestamp: std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
@@ -1416,15 +1431,51 @@ async fn handle_send_message<R: Runtime>(
                                 blade_protocol::ChatEvent::ToolUpdate {
                                     message_id: msg_id.clone(),
                                     tool_call_id: tc.id.clone(),
-                                    status,
-                                    result: tc.result.clone(),
+                                    status: "executing".to_string(),
+                                    result: None,
                                     tool_call: Some(tc.clone()),
-                                }
+                                },
                             ),
-                        });
+                        },
+                    );
+                }
+            } else if let DrainResult::ToolStatusUpdate(msg) = result {
+                // v1.1: Emit ToolUpdate events via blade-event
+                if let Some(tool_calls) = &msg.tool_calls {
+                    let msg_id = msg.id.clone().unwrap_or_else(|| "unknown".to_string());
+                    for tc in tool_calls {
+                        // Emit update for each tool call
+                        // We emit indiscriminately here because the frontend will merge/update state based on ID
+                        let status = tc.status.clone().unwrap_or_else(|| "unknown".to_string());
+
+                        let _ = window.emit(
+                            "blade-event",
+                            blade_protocol::BladeEventEnvelope {
+                                id: uuid::Uuid::new_v4(),
+                                timestamp: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as u64,
+                                causality_id: Some(msg_id.clone()),
+                                event: blade_protocol::BladeEvent::Chat(
+                                    blade_protocol::ChatEvent::ToolUpdate {
+                                        message_id: msg_id.clone(),
+                                        tool_call_id: tc.id.clone(),
+                                        status,
+                                        result: tc.result.clone(),
+                                        tool_call: Some(tc.clone()),
+                                    },
+                                ),
+                            },
+                        );
                     }
                 }
-            } else if let DrainResult::Progress { message, stage, percent } = result {
+            } else if let DrainResult::Progress {
+                message,
+                stage,
+                percent,
+            } = result
+            {
                 // Emit progress event to frontend for @research command
                 #[derive(Clone, serde::Serialize)]
                 struct ProgressPayload {
@@ -1432,7 +1483,16 @@ async fn handle_send_message<R: Runtime>(
                     stage: String,
                     percent: i32,
                 }
-                window.emit("research-progress", ProgressPayload { message, stage, percent }).unwrap_or_default();
+                window
+                    .emit(
+                        "research-progress",
+                        ProgressPayload {
+                            message,
+                            stage,
+                            percent,
+                        },
+                    )
+                    .unwrap_or_default();
             } else if let DrainResult::TodoUpdated(todos) = result {
                 // Emit todo_updated event to frontend
                 // Convert protocol::TodoItem to events::TodoItem
@@ -1444,7 +1504,10 @@ async fn handle_send_message<R: Runtime>(
                         status: t.status,
                     })
                     .collect();
-                eprintln!("[LIB] Emitting TODO_UPDATED event with {} items", event_todos.len());
+                eprintln!(
+                    "[LIB] Emitting TODO_UPDATED event with {} items",
+                    event_todos.len()
+                );
                 match window.emit(
                     crate::events::event_names::TODO_UPDATED,
                     crate::events::TodoUpdatedPayload { todos: event_todos },
@@ -1725,10 +1788,7 @@ async fn handle_send_message<R: Runtime>(
                                     args.get("path").or_else(|| args.get("file_path"))
                                 {
                                     if let Some(path) = path_value.as_str() {
-                                        eprintln!(
-                                            "[AUTO OPEN] Opening file in editor: {}",
-                                            path
-                                        );
+                                        eprintln!("[AUTO OPEN] Opening file in editor: {}", path);
                                         window.emit("open-file", path).unwrap_or_default();
                                     }
                                 }
@@ -2078,7 +2138,10 @@ async fn set_selected_model(model_id: String, state: State<'_, AppState>) -> Res
     let models = get_models(&blade_url).await;
     if let Some(idx) = models.iter().position(|m| m.id == model_id) {
         *state.selected_model_index.lock().unwrap() = idx;
-        eprintln!("[MODEL] Set selected model index to {} for {}", idx, model_id);
+        eprintln!(
+            "[MODEL] Set selected model index to {} for {}",
+            idx, model_id
+        );
         Ok(())
     } else {
         Err(format!("Model not found: {}", model_id))
@@ -2108,8 +2171,7 @@ fn save_project_state(state_data: project_state::ProjectState) -> Result<(), Str
 
 #[tauri::command]
 fn get_project_state_path(project_path: String) -> Option<String> {
-    project_state::get_project_state_path(&project_path)
-        .map(|p| p.to_string_lossy().to_string())
+    project_state::get_project_state_path(&project_path).map(|p| p.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -2194,28 +2256,40 @@ fn has_zblade_directory(project_path: String) -> bool {
 // ==============================================================================
 
 #[tauri::command]
-fn list_local_conversations(project_path: String) -> Result<Vec<local_index::ConversationIndex>, String> {
+fn list_local_conversations(
+    project_path: String,
+) -> Result<Vec<local_index::ConversationIndex>, String> {
     let path = std::path::PathBuf::from(project_path);
     let store = local_artifacts::LocalArtifactStore::new(&path);
     store.list_conversations()
 }
 
 #[tauri::command]
-fn load_local_conversation(project_path: String, conversation_id: String) -> Result<local_artifacts::ConversationArtifact, String> {
+fn load_local_conversation(
+    project_path: String,
+    conversation_id: String,
+) -> Result<local_artifacts::ConversationArtifact, String> {
     let path = std::path::PathBuf::from(project_path);
     let store = local_artifacts::LocalArtifactStore::new(&path);
     store.load_conversation(&conversation_id)
 }
 
 #[tauri::command]
-fn search_local_moments(project_path: String, query: String, limit: i32) -> Result<Vec<local_index::MomentIndex>, String> {
+fn search_local_moments(
+    project_path: String,
+    query: String,
+    limit: i32,
+) -> Result<Vec<local_index::MomentIndex>, String> {
     let path = std::path::PathBuf::from(project_path);
     let store = local_artifacts::LocalArtifactStore::new(&path);
     store.search_moments(&query, limit)
 }
 
 #[tauri::command]
-fn get_file_context(project_path: String, file_path: String) -> Result<Vec<local_index::CodeReferenceIndex>, String> {
+fn get_file_context(
+    project_path: String,
+    file_path: String,
+) -> Result<Vec<local_index::CodeReferenceIndex>, String> {
     let path = std::path::PathBuf::from(project_path);
     let store = local_artifacts::LocalArtifactStore::new(&path);
     store.get_file_references(&file_path)
@@ -2285,7 +2359,7 @@ async fn dispatch(
                 "[BladeProtocol] Idempotency hit for key '{}' (original intent_id: {})",
                 key, cached_intent_id
             );
-            
+
             // Return cached result
             match cached_result {
                 crate::idempotency::IdempotencyResult::Success => {
@@ -2297,10 +2371,13 @@ async fn dispatch(
                         trace_id: cached_intent_id.to_string(),
                         message: error,
                     };
-                    let _ = window.emit("sys-event", SystemEvent::IntentFailed {
-                        intent_id,
-                        error: blade_error.clone(),
-                    });
+                    let _ = window.emit(
+                        "sys-event",
+                        SystemEvent::IntentFailed {
+                            intent_id,
+                            error: blade_error.clone(),
+                        },
+                    );
                     return Err(blade_error);
                 }
             }
@@ -2313,15 +2390,18 @@ async fn dispatch(
         supported: vec![Version::CURRENT],
         current: Version::CURRENT,
     };
-    let _ = window.emit("blade-event", blade_protocol::BladeEventEnvelope {
-        id: uuid::Uuid::new_v4(),
-        timestamp: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64,
-        causality_id: None,
-        event: blade_protocol::BladeEvent::System(protocol_version_event),
-    });
+    let _ = window.emit(
+        "blade-event",
+        blade_protocol::BladeEventEnvelope {
+            id: uuid::Uuid::new_v4(),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+            causality_id: None,
+            event: blade_protocol::BladeEvent::System(protocol_version_event),
+        },
+    );
 
     // 4. Ack (Process Started)
     let _ = window.emit("sys-event", SystemEvent::ProcessStarted { intent_id });
@@ -2568,7 +2648,7 @@ async fn dispatch(
                     let (resolved_old, resolved_new) = {
                         let ws = state.workspace.lock().unwrap();
                         let root = ws.workspace.clone();
-                        
+
                         let resolve = |p: &str| {
                             let path = std::path::PathBuf::from(p);
                             if path.is_absolute() {
@@ -2579,7 +2659,7 @@ async fn dispatch(
                                 path
                             }
                         };
-                        
+
                         (resolve(&old_path), resolve(&new_path))
                     };
 
@@ -2741,44 +2821,49 @@ async fn dispatch(
         }
         BladeIntent::History(history_intent) => {
             match history_intent {
-                blade_protocol::HistoryIntent::ListConversations { user_id, project_id } => {
-                    println!("[History] ListConversations: user={}, project={}", user_id, project_id);
-                    
+                blade_protocol::HistoryIntent::ListConversations {
+                    user_id,
+                    project_id,
+                } => {
+                    println!(
+                        "[History] ListConversations: user={}, project={}",
+                        user_id, project_id
+                    );
+
                     // Get config to create BladeClient
                     let (blade_url, api_key) = {
                         let config = state.config.lock().unwrap();
                         (config.blade_url.clone(), config.api_key.clone())
                     };
-                    
+
                     // Create HTTP client and BladeClient
                     let http_client = reqwest::Client::new();
-                    let blade_client = crate::blade_client::BladeClient::new(
-                        blade_url,
-                        http_client,
-                        api_key,
-                    );
-                    
+                    let blade_client =
+                        crate::blade_client::BladeClient::new(blade_url, http_client, api_key);
+
                     // Call API
-                    match blade_client.get_conversation_history(&user_id, &project_id).await {
+                    match blade_client
+                        .get_conversation_history(&user_id, &project_id)
+                        .await
+                    {
                         Ok(response) => {
                             // Parse response into ConversationSummary vec
-                            let conversations: Vec<blade_protocol::ConversationSummary> = 
+                            let conversations: Vec<blade_protocol::ConversationSummary> =
                                 if let Some(convs) = response.get("conversations") {
-                                    serde_json::from_value(convs.clone())
-                                        .unwrap_or_else(|e| {
-                                            eprintln!("[History] Failed to parse conversations: {}", e);
-                                            Vec::new()
-                                        })
+                                    serde_json::from_value(convs.clone()).unwrap_or_else(|e| {
+                                        eprintln!("[History] Failed to parse conversations: {}", e);
+                                        Vec::new()
+                                    })
                                 } else {
                                     Vec::new()
                                 };
-                            
+
                             println!("[History] Fetched {} conversations", conversations.len());
                             if let Some(first) = conversations.first() {
                                 println!("[History] Sample conversation dates - created_at: {}, last_active_at: {}", 
                                     first.created_at, first.last_active_at);
                             }
-                            
+
                             // Emit ConversationList event
                             let _ = window.emit(
                                 "blade-event",
@@ -2787,12 +2872,13 @@ async fn dispatch(
                                     timestamp: std::time::SystemTime::now()
                                         .duration_since(std::time::UNIX_EPOCH)
                                         .unwrap()
-                                        .as_millis() as u64,
+                                        .as_millis()
+                                        as u64,
                                     causality_id: Some(intent_id.to_string()),
                                     event: blade_protocol::BladeEvent::History(
                                         blade_protocol::HistoryEvent::ConversationList {
                                             conversations,
-                                        }
+                                        },
                                     ),
                                 },
                             );
@@ -2807,64 +2893,76 @@ async fn dispatch(
                         }
                     }
                 }
-                blade_protocol::HistoryIntent::LoadConversation { session_id, user_id } => {
-                    println!("[History] LoadConversation: session={}, user={}", session_id, user_id);
-                    
+                blade_protocol::HistoryIntent::LoadConversation {
+                    session_id,
+                    user_id,
+                } => {
+                    println!(
+                        "[History] LoadConversation: session={}, user={}",
+                        session_id, user_id
+                    );
+
                     // Get config to create BladeClient
                     let (blade_url, api_key) = {
                         let config = state.config.lock().unwrap();
                         (config.blade_url.clone(), config.api_key.clone())
                     };
-                    
+
                     // Create HTTP client and BladeClient
                     let http_client = reqwest::Client::new();
-                    let blade_client = crate::blade_client::BladeClient::new(
-                        blade_url,
-                        http_client,
-                        api_key,
-                    );
-                    
+                    let blade_client =
+                        crate::blade_client::BladeClient::new(blade_url, http_client, api_key);
+
                     // Call API
                     match blade_client.get_conversation(&session_id, &user_id).await {
                         Ok(response) => {
                             // Parse response into FullConversation
-                            let session_id = response.get("session_id")
+                            let session_id = response
+                                .get("session_id")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or(&session_id)
                                 .to_string();
-                            let project_id = response.get("project_id")
+                            let project_id = response
+                                .get("project_id")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
                                 .to_string();
-                            let title = response.get("title")
+                            let title = response
+                                .get("title")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("Untitled")
                                 .to_string();
-                            let created_at = response.get("created_at")
+                            let created_at = response
+                                .get("created_at")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
                                 .to_string();
-                            let last_active_at = response.get("last_active_at")
+                            let last_active_at = response
+                                .get("last_active_at")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
                                 .to_string();
-                            let message_count = response.get("message_count")
+                            let message_count = response
+                                .get("message_count")
                                 .and_then(|v| v.as_u64())
-                                .unwrap_or(0) as u32;
-                            
-                            let messages: Vec<blade_protocol::HistoryMessage> = 
+                                .unwrap_or(0)
+                                as u32;
+
+                            let messages: Vec<blade_protocol::HistoryMessage> =
                                 if let Some(msgs) = response.get("messages") {
-                                    serde_json::from_value(msgs.clone())
-                                        .unwrap_or_else(|e| {
-                                            eprintln!("[History] Failed to parse messages: {}", e);
-                                            Vec::new()
-                                        })
+                                    serde_json::from_value(msgs.clone()).unwrap_or_else(|e| {
+                                        eprintln!("[History] Failed to parse messages: {}", e);
+                                        Vec::new()
+                                    })
                                 } else {
                                     Vec::new()
                                 };
-                            
-                            println!("[History] Loaded conversation with {} messages", messages.len());
-                            
+
+                            println!(
+                                "[History] Loaded conversation with {} messages",
+                                messages.len()
+                            );
+
                             // Emit ConversationLoaded event
                             let _ = window.emit(
                                 "blade-event",
@@ -2873,7 +2971,8 @@ async fn dispatch(
                                     timestamp: std::time::SystemTime::now()
                                         .duration_since(std::time::UNIX_EPOCH)
                                         .unwrap()
-                                        .as_millis() as u64,
+                                        .as_millis()
+                                        as u64,
                                     causality_id: Some(intent_id.to_string()),
                                     event: blade_protocol::BladeEvent::History(
                                         blade_protocol::HistoryEvent::ConversationLoaded {
@@ -2884,7 +2983,7 @@ async fn dispatch(
                                             last_active_at,
                                             message_count,
                                             messages,
-                                        }
+                                        },
                                     ),
                                 },
                             );
@@ -2919,7 +3018,9 @@ async fn dispatch(
         Err(e) => {
             // Store failure in idempotency cache if key provided
             if let Some(key) = idempotency_key {
-                state.idempotency_cache.store_failure(key, intent_id, format!("{:?}", e));
+                state
+                    .idempotency_cache
+                    .store_failure(key, intent_id, format!("{:?}", e));
             }
             let _ = window.emit(
                 "sys-event",
