@@ -481,7 +481,7 @@ impl LanguageService {
     // Helper Methods
     // =========================================================================
 
-    fn resolve_path(&self, file_path: &str) -> PathBuf {
+    pub fn resolve_path(&self, file_path: &str) -> PathBuf {
         if Path::new(file_path).is_absolute() {
             PathBuf::from(file_path)
         } else {
