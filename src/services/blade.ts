@@ -31,13 +31,14 @@ export class BladeDispatcher {
      * @param idempotencyKey - Optional idempotency key for critical operations
      * @returns Promise that resolves when the intent is ACCEPTED (not necessarily completed)
      */
-    static async dispatch(domain: string, intent: BladeIntent, idempotencyKey?: string): Promise<void> {
+    static async dispatch(domain: string, intent: BladeIntent, idempotencyKey?: string, explicitId?: string): Promise<string> {
+        const id = explicitId || uuidv4();
         const envelope: BladeEnvelope<BladeIntentEnvelope> = {
             protocol: this.PROTOCOL_NAME,
             version: this.PROTOCOL_VERSION,
             domain,
             message: {
-                id: uuidv4(),
+                id,
                 timestamp: Date.now(),
                 idempotency_key: idempotencyKey, // v1.1: Optional idempotency key
                 intent
@@ -45,8 +46,9 @@ export class BladeDispatcher {
         };
 
         try {
-            console.log(`[BladeDispatcher] Dispatching ${domain} intent:`, intent);
+            console.log(`[BladeDispatcher] Dispatching ${domain} intent:`, intent, `ID: ${id}`);
             await invoke('dispatch', { envelope });
+            return id;
         } catch (error) {
             // Re-throw typed error if it matches BladeError shape, otherwise wrap it
             console.error('[BladeDispatcher] Failed to dispatch:', error);
@@ -81,7 +83,7 @@ export class BladeDispatcher {
         return this.dispatch("History", { type: "History", payload: intent });
     }
 
-    static async language(intent: LanguageIntent) {
-        return this.dispatch("Language", { type: "Language", payload: intent });
+    static async language(intent: LanguageIntent, id?: string) {
+        return this.dispatch("Language", { type: "Language", payload: intent }, undefined, id);
     }
 }
