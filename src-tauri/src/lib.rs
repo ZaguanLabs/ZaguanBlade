@@ -235,6 +235,12 @@ impl AppState {
             )
             .expect("Failed to initialize Language Service"),
         );
+
+        // Enable LSP integration
+        if let Err(e) = language_service.enable_lsp() {
+            eprintln!("Warning: Failed to enable LSP: {}", e);
+        }
+
         let language_handler =
             crate::language_service::LanguageHandler::new(language_service.clone());
 
