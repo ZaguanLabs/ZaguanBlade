@@ -6,6 +6,7 @@ pub mod blade_ws_client;
 pub mod chat;
 pub mod chat_manager;
 pub mod config;
+pub mod context_assembly; // [NEW] Phase 3: AI context assembly
 pub mod conversation;
 pub mod conversation_store;
 pub mod ephemeral_commands;
