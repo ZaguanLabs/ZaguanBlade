@@ -13,6 +13,7 @@ pub mod ephemeral_documents;
 pub mod events;
 pub mod explorer;
 pub mod idempotency; // [NEW] v1.1: Idempotency cache
+pub mod language_service; // [NEW] Phase 2: Unified language service
 pub mod local_artifacts; // [NEW] RFC-002: Local conversation artifact storage
 pub mod local_index; // [NEW] RFC-002: Local SQLite index for conversations
 pub mod lsp; // [NEW] LSP integration for language servers

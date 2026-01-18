@@ -8,8 +8,8 @@
 //! - File indexing: <100ms for 1000 lines
 //! - Workspace index: <20s for 1000 files
 
-mod search;
-mod store;
+pub mod search;
+pub mod store;
 
 pub use search::{SearchQuery, SearchResult};
-pub use store::SymbolStore;
+pub use store::{SymbolStore, SymbolStoreError};

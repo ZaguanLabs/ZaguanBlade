@@ -12,8 +12,10 @@
 
 mod client;
 mod manager;
-mod types;
+pub mod types;
 
 pub use client::LspClient;
 pub use manager::{LspManager, LspServerConfig};
-pub use types::{LspError, ServerCapabilities};
+pub use types::{
+    CompletionItem, Diagnostic, DocumentSymbol, Hover, Location, LspError, ServerCapabilities,
+};
