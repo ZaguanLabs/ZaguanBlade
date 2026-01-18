@@ -6,11 +6,12 @@ export { scrollPastEnd } from "./scrollPastEnd";
 export { lineHighlightField, addLineHighlight, clearLineHighlight } from "./lineHighlight";
 export { diffsField, addDiff, removeDiff, clearDiffs, acceptDiff, rejectDiff } from "./diffView";
 export { virtualBufferField, setBaseContent, getVirtualContent, hasVirtualChanges } from "./virtualBuffer";
-export { 
-    inlineDiffField, 
-    inlineDiffTheme, 
-    setInlineDiff, 
-    clearInlineDiff, 
+export {
+    inlineDiffField,
+    inlineDiffTheme,
+    setInlineDiff,
+    clearInlineDiff,
     computeDiffLines,
-    type PendingInlineDiff 
+    type PendingInlineDiff
 } from "./inlineDiff";
+export { languageFeatures } from "./languageFeatures";

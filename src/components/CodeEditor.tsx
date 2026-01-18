@@ -29,6 +29,7 @@ import {
     rainbowBrackets,
     smoothCursor,
     scrollPastEnd,
+    languageFeatures,
 } from "./editor/extensions";
 import { useEditor } from "../contexts/EditorContext";
 import { useContextMenu, type ContextMenuItem } from "./ui/ContextMenu";
@@ -56,6 +57,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     const editorRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     const languageConf = useRef(new Compartment());
+    const languageFeaturesConf = useRef(new Compartment());
     const { setCursorPosition, setSelection, clearSelection } = useEditor();
     const { showMenu } = useContextMenu();
 
@@ -139,7 +141,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 rectangularSelection(),
                 crosshairCursor(),
                 lintGutter(),
-                
+
                 // Editing features
                 history(),
                 bracketMatching(),
@@ -147,32 +149,33 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 autocompletion(),
                 highlightSelectionMatches(),
                 indentOnInput(),
-                
+
                 // Custom Zaguan theme (includes syntax highlighting)
                 zaguanTheme,
-                
+
                 // Custom extensions for enhanced UX
                 indentGuides,
                 rainbowBrackets,
                 smoothCursor,
                 scrollPastEnd,
-                
+
                 // Diff and virtual buffer extensions
                 diffsField,
                 lineHighlightField,
                 virtualBufferField,
                 inlineDiffField,
                 inlineDiffTheme,
-                
+
                 // Layout
                 EditorView.theme({
                     "&": { height: "100%" },
                     ".cm-scroller": { overflow: "auto" }
                 }),
-                
+
                 // Language support (dynamic)
                 languageConf.current.of(getLanguageExtension(filename)),
-                
+                languageFeaturesConf.current.of(languageFeatures(filename || "")),
+
                 // Keymaps
                 keymap.of([
                     indentWithTab,
@@ -249,6 +252,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 changes: { from: 0, to: view.state.doc.length, insert: content },
                 effects: [
                     languageConf.current.reconfigure(getLanguageExtension(filename)),
+                    languageFeaturesConf.current.reconfigure(languageFeatures(filename || "")),
                     setBaseContent.of(content) // Initialize virtual buffer with base content
                 ]
             });
