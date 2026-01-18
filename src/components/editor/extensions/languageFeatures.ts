@@ -6,7 +6,7 @@ import {
     CompletionResult,
     Completion
 } from "@codemirror/autocomplete";
-import { hoverTooltip } from "@codemirror/view";
+import { hoverTooltip, keymap } from "@codemirror/view";
 import { LanguageService } from "../../../services/language";
 
 function createCompletionSource(filePath: string) {
@@ -109,9 +109,38 @@ function mapKind(kind: string | null): "class" | "constant" | "enum" | "function
     }
 }
 
-export function languageFeatures(filePath: string): Extension {
-    return [
+export function languageFeatures(
+    filePath: string,
+    onNavigate?: (path: string, line: number, character: number) => void
+): Extension {
+    const extensions = [
         autocompletion({ override: [createCompletionSource(filePath)] }),
         createHoverTooltip(filePath)
     ];
+
+    if (onNavigate) {
+        extensions.push(keymap.of([{
+            key: "F12",
+            run: (view) => {
+                const pos = view.state.selection.main.head;
+                const line = view.state.doc.lineAt(pos);
+                const lineNum = line.number - 1;
+                const char = pos - line.from;
+
+                LanguageService.getDefinition(filePath, lineNum, char)
+                    .then(locations => {
+                        if (locations && locations.length > 0) {
+                            const loc = locations[0];
+                            // Backend sends 0-based lines/chars.
+                            onNavigate(loc.file_path, loc.range.start.line, loc.range.start.character);
+                        }
+                    })
+                    .catch(e => console.error("Definition lookup failed", e));
+
+                return true;
+            }
+        }]));
+    }
+
+    return extensions;
 }

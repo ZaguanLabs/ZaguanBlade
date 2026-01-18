@@ -46,6 +46,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     const [reloadTrigger, setReloadTrigger] = useState(0);
     const { setActiveFile } = useEditor();
     const editorRef = useRef<CodeEditorHandle>(null);
+    const pendingNavigation = useRef<{ path: string, line: number, col: number } | null>(null);
 
     useEffect(() => {
         // Update editor context when active file changes
@@ -159,6 +160,20 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         loadFile();
     }, [activeFile, reloadTrigger]);
 
+    // Handle pending navigation after content load
+    useEffect(() => {
+        if (!loading && activeFile && pendingNavigation.current && pendingNavigation.current.path === activeFile) {
+            setTimeout(() => {
+                if (editorRef.current && pendingNavigation.current) {
+                    const { line, col } = pendingNavigation.current;
+                    // Convert 0-based line from backend to 1-based for editor
+                    editorRef.current.setCursor(line + 1, col);
+                    pendingNavigation.current = null;
+                }
+            }, 150);
+        }
+    }, [content, loading, activeFile]);
+
     // Handle save (Ctrl+S)
     const handleSave = async (text: string) => {
         if (activeFile) {
@@ -175,9 +190,15 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         }
     };
 
+    const handleNavigate = (path: string, line: number, character: number) => {
+        console.log("Navigating to:", path, line, character);
+        setActiveFile(path);
+        pendingNavigation.current = { path, line, col: character };
+    };
+
     if (!activeFile) {
         return (
-            <div 
+            <div
                 className="h-full flex flex-col items-center justify-center text-zinc-600 select-none bg-zinc-900/50"
                 onContextMenu={(e) => e.preventDefault()}
             >
@@ -220,6 +241,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     onSave={handleSave}
                     filename={activeFile}
                     highlightLines={highlightLines || undefined}
+                    onNavigate={handleNavigate}
                 />
             )}
             {/* Non-invasive bottom action bar for pending changes */}

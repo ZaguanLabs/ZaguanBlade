@@ -44,16 +44,22 @@ interface CodeEditorProps {
     highlightLines?: { startLine: number; endLine: number } | null;
     /** Pending change to highlight inline (Windsurf-style) */
     pendingChange?: Change | null;
+    /** Callback for navigating to symbol definition */
+    onNavigate?: (path: string, line: number, character: number) => void;
 }
+
 
 export interface CodeEditorHandle {
     getView: () => EditorView | null;
     clearDiffs: () => void;
     /** Show inline diff highlighting for a pending change */
     showInlineDiff: (change: Change | null) => void;
+    /** Set cursor position and scroll into view (line is 1-based, col is 0-based) */
+    setCursor: (line: number, col: number) => void;
 }
 
-const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onChange, onSave, filename, highlightLines }, ref) => {
+
+const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onChange, onSave, filename, highlightLines, onNavigate }, ref) => {
     const editorRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     const languageConf = useRef(new Compartment());
@@ -120,6 +126,23 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                     })
                 });
             }
+        },
+        setCursor: (line: number, col: number) => {
+            const view = viewRef.current;
+            if (!view) return;
+
+            const doc = view.state.doc;
+            const safeLine = Math.max(1, Math.min(line, doc.lines));
+            const lineObj = doc.line(safeLine);
+            const safeCol = Math.max(0, Math.min(col, lineObj.length));
+
+            const pos = lineObj.from + safeCol;
+
+            view.dispatch({
+                selection: { anchor: pos, head: pos },
+                effects: EditorView.scrollIntoView(pos, { y: "center" })
+            });
+            view.focus();
         }
     }));
 
@@ -174,7 +197,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
 
                 // Language support (dynamic)
                 languageConf.current.of(getLanguageExtension(filename)),
-                languageFeaturesConf.current.of(languageFeatures(filename || "")),
+                languageFeaturesConf.current.of(languageFeatures(filename || "", onNavigate)),
 
                 // Keymaps
                 keymap.of([
@@ -252,7 +275,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 changes: { from: 0, to: view.state.doc.length, insert: content },
                 effects: [
                     languageConf.current.reconfigure(getLanguageExtension(filename)),
-                    languageFeaturesConf.current.reconfigure(languageFeatures(filename || "")),
+                    languageFeaturesConf.current.reconfigure(languageFeatures(filename || "", onNavigate)),
                     setBaseContent.of(content) // Initialize virtual buffer with base content
                 ]
             });
@@ -266,7 +289,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 });
             }
         }
-    }, [filename, content]);
+    }, [filename, content, onNavigate]);
 
     // Handle line highlighting when highlightLines prop changes or content loads
     useEffect(() => {
