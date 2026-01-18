@@ -9,8 +9,10 @@
 //! - Symbol Index: Persistent SQLite storage with FTS5 search
 //! - LSP Manager: Optional LSP server integration for enhanced features
 
+pub mod handler;
 mod indexer;
 mod service;
 
+pub use handler::LanguageHandler;
 pub use indexer::{FileIndexer, IndexEvent};
 pub use service::LanguageService;

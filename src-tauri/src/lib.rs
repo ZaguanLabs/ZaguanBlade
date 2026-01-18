@@ -145,6 +145,8 @@ pub struct AppState {
     pub warmup_client: warmup::WarmupClient,                     // v2.1: Cache warmup
     pub user_id: Mutex<Option<String>>, // Authenticated user ID from WebSocket
     pub fs_watcher: Mutex<Option<RecommendedWatcher>>, // Workspace file watcher
+    pub language_service: std::sync::Arc<crate::language_service::LanguageService>, // v1.3: Unified Language Service
+    pub language_handler: crate::language_service::LanguageHandler, // v1.3: Language Intent Handler
 }
 
 impl AppState {
@@ -196,7 +198,7 @@ impl AppState {
 
         let mut workspace_manager = WorkspaceManager::new();
         // Override workspace if provided via CLI
-        if let Some(path_str) = initial_path {
+        if let Some(path_str) = &initial_path {
             workspace_manager.set_workspace(std::path::PathBuf::from(path_str));
         }
 
@@ -209,6 +211,28 @@ impl AppState {
             config.api_key.clone(),
             user_id.clone(),
         );
+
+        // Initialize Language Service
+        let db_path = std::path::PathBuf::from("./zaguan_db/symbols.db");
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        let ls_root = initial_path.as_deref().unwrap_or(".");
+
+        let symbol_store = std::sync::Arc::new(
+            crate::symbol_index::store::SymbolStore::new(&db_path)
+                .expect("Failed to create SymbolStore"),
+        );
+
+        let language_service = std::sync::Arc::new(
+            crate::language_service::LanguageService::new(
+                std::path::PathBuf::from(ls_root),
+                symbol_store,
+            )
+            .expect("Failed to initialize Language Service"),
+        );
+        let language_handler =
+            crate::language_service::LanguageHandler::new(language_service.clone());
 
         Self {
             chat_manager: Mutex::new(ChatManager::new(10)),
@@ -235,6 +259,8 @@ impl AppState {
             idempotency_cache: crate::idempotency::IdempotencyCache::default(), // 24h TTL
             warmup_client, // v2.1: Cache warmup
             fs_watcher: Mutex::new(None),
+            language_service,
+            language_handler,
         }
     }
 }
@@ -3010,25 +3036,15 @@ async fn dispatch(
         }
         BladeIntent::Language(language_intent) => {
             // v1.3: Language domain handler (tree-sitter + LSP)
-            // Full implementation will be added in Phase 2 (Symbol Index)
             eprintln!("[Language] Intent received: {:?}", language_intent);
 
-            // Emit a placeholder event for now
-            let _ = window.emit(
-                "blade-event",
-                blade_protocol::BladeEventEnvelope {
-                    id: uuid::Uuid::new_v4(),
-                    timestamp: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as u64,
-                    causality_id: Some(intent_id.to_string()),
-                    event: blade_protocol::BladeEvent::System(
-                        blade_protocol::SystemEvent::ProcessCompleted { intent_id },
-                    ),
-                },
-            );
-
+            let maybe_event = state
+                .language_handler
+                .handle(language_intent, intent_id)
+                .await?;
+            if let Some(event) = maybe_event {
+                let _ = window.emit("blade-event", event);
+            }
             Ok(())
         }
     };

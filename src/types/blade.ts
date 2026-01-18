@@ -37,7 +37,8 @@ export type BladeIntent =
     | { type: "Workflow"; payload: WorkflowIntent }
     | { type: "Terminal"; payload: TerminalIntent }
     | { type: "History"; payload: HistoryIntent }
-    | { type: "System"; payload: SystemIntent };
+    | { type: "System"; payload: SystemIntent }
+    | { type: "Language"; payload: LanguageIntent };
 
 export type ChatIntent =
     | { type: "SendMessage"; payload: { content: string; model: string; context?: EditorContext } }
@@ -114,7 +115,8 @@ export type BladeEvent =
     | { type: "Workflow"; payload: WorkflowEvent }
     | { type: "Terminal"; payload: TerminalEvent }
     | { type: "History"; payload: HistoryEvent }
-    | { type: "System"; payload: SystemEvent };
+    | { type: "System"; payload: SystemEvent }
+    | { type: "Language"; payload: LanguageEvent };
 
 export type ChatEvent =
     | { type: "ChatState"; payload: { messages: ChatMessage[] } }
@@ -205,4 +207,83 @@ export interface ChatMessage {
     reasoning?: string;
     tool_call_id?: string;
     // ... complete as needed based on Rust struct
+}
+
+// ===================================
+// Language Domain (v1.3)
+// ===================================
+
+export type LanguageIntent =
+    | { type: "IndexFile"; payload: { file_path: string } }
+    | { type: "IndexWorkspace"; payload?: Record<string, never> }
+    | { type: "SearchSymbols"; payload: { query: string; file_path?: string | null; symbol_types?: string[] | null } }
+    | { type: "GetSymbolAt"; payload: { file_path: string; line: number; character: number } }
+    | { type: "GetCompletions"; payload: { file_path: string; line: number; character: number } }
+    | { type: "GetHover"; payload: { file_path: string; line: number; character: number } }
+    | { type: "GetDefinition"; payload: { file_path: string; line: number; character: number } }
+    | { type: "GetReferences"; payload: { file_path: string; line: number; character: number; include_declaration: boolean } }
+    | { type: "GetDocumentSymbols"; payload: { file_path: string } }
+    | { type: "GetDiagnostics"; payload: { file_path: string } };
+
+export type LanguageEvent =
+    | { type: "FileIndexed"; payload: { file_path: string; symbol_count: number } }
+    | { type: "WorkspaceIndexed"; payload: { file_count: number; symbol_count: number; duration_ms: number } }
+    | { type: "SymbolsFound"; payload: { intent_id: string; symbols: LanguageSymbol[] } }
+    | { type: "SymbolAt"; payload: { intent_id: string; symbol: LanguageSymbol | null } }
+    | { type: "CompletionsReady"; payload: { intent_id: string; items: CompletionItem[] } }
+    | { type: "HoverReady"; payload: { intent_id: string; contents: string | null; range: LanguageRange | null } }
+    | { type: "DefinitionReady"; payload: { intent_id: string; locations: LanguageLocation[] } }
+    | { type: "ReferencesReady"; payload: { intent_id: string; locations: LanguageLocation[] } }
+    | { type: "DocumentSymbolsReady"; payload: { intent_id: string; symbols: LanguageDocumentSymbol[] } }
+    | { type: "DiagnosticsUpdated"; payload: { file_path: string; diagnostics: LanguageDiagnostic[] } };
+
+export type LanguagePosition = {
+    line: number;
+    character: number;
+}
+
+export type LanguageRange = {
+    start: LanguagePosition;
+    end: LanguagePosition;
+}
+
+export type LanguageLocation = {
+    file_path: string;
+    range: LanguageRange;
+}
+
+export type LanguageSymbol = {
+    id: string;
+    name: string;
+    symbol_type: string;
+    file_path: string;
+    range: LanguageRange;
+    parent_id: string | null;
+    docstring: string | null;
+    signature: string | null;
+}
+
+export type LanguageDocumentSymbol = {
+    name: string;
+    kind: string;
+    range: LanguageRange;
+    selection_range: LanguageRange;
+    detail: string | null;
+    children: LanguageDocumentSymbol[];
+}
+
+export type CompletionItem = {
+    label: string;
+    kind: string | null;
+    detail: string | null;
+    documentation: string | null;
+    insert_text: string | null;
+}
+
+export type LanguageDiagnostic = {
+    range: LanguageRange;
+    severity: string;
+    code: string | null;
+    message: string;
+    source: string | null;
 }

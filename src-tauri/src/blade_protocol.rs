@@ -594,6 +594,9 @@ pub enum BladeError {
     },
 }
 
+/// Result type for Blade Protocol operations
+pub type BladeResult<T> = Result<T, BladeError>;
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -221,14 +221,13 @@ pub fn generate_title(first_message: &str) -> String {
     let trimmed = first_message.trim();
 
     // Handle slash commands
+    // Handle slash commands
     if trimmed.starts_with('/') {
         let without_slash = &trimmed[1..];
-        let first_word = without_slash.split_whitespace().next().unwrap_or("command");
-        return format!(
-            "{} {}",
-            first_word.chars().next().unwrap().to_uppercase(),
-            &first_word[1..]
-        );
+        if let Some(first_char) = without_slash.chars().next() {
+            return format!("{}{}", first_char.to_uppercase(), &without_slash[1..]);
+        }
+        return String::new();
     }
 
     // Take first 50 characters, truncate at word boundary
@@ -265,6 +264,6 @@ mod tests {
     #[test]
     fn test_generate_title_slash_command() {
         assert_eq!(generate_title("/fix the bug"), "Fix the bug");
-        assert_eq!(generate_title("/help"), "Help ");
+        assert_eq!(generate_title("/help"), "Help");
     }
 }
