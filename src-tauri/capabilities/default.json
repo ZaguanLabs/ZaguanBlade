@@ -8,6 +8,22 @@
   "permissions": [
     "core:default",
     "opener:default",
+    "shell:default",
+    "fs:default",
+    "notification:allow-notify",
+    "notification:allow-is-permission-granted",
+    {
+      "identifier": "fs:allow-read-file",
+      "allow": [
+        { "path": "$HOME/**" }
+      ]
+    },
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        { "path": "$HOME/**" }
+      ]
+    },
     "core:window:allow-close",
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",

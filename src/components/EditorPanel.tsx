@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import CodeEditor, { type CodeEditorHandle } from './CodeEditor';
 import { MarkdownEditor } from './MarkdownEditor';
+import { PdfViewer } from './PdfViewer';
 import { useEditor } from '../contexts/EditorContext';
 import { BladeDispatcher } from '../services/blade';
 import { BladeEvent, FileEvent } from '../types/blade';
@@ -186,22 +187,25 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         );
     }
 
-    // Check if this is a Markdown file
+    // Check file type
     const isMarkdownFile = activeFile.endsWith('.md') || activeFile.endsWith('.markdown');
+    const isPdfFile = activeFile.endsWith('.pdf');
 
     return (
         <div className="h-full flex flex-col relative bg-[#1e1e1e]">
-            {loading && (
+            {loading && !isPdfFile && (
                 <div className="absolute inset-0 bg-black/50 z-10 flex items-center justify-center">
                     <div className="animate-spin w-5 h-5 border-2 border-emerald-500 border-t-transparent rounded-full" />
                 </div>
             )}
-            {error && (
+            {error && !isPdfFile && (
                 <div className="bg-red-900/50 text-red-200 p-2 text-xs font-mono">
                     ERR_LOAD: {error}
                 </div>
             )}
-            {isMarkdownFile ? (
+            {isPdfFile ? (
+                <PdfViewer filePath={activeFile} />
+            ) : isMarkdownFile ? (
                 <MarkdownEditor
                     content={content}
                     onChange={setContent}

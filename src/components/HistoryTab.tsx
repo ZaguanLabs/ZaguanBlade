@@ -13,8 +13,14 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ userId, projectId, onSel
     const { conversations, loading, error, fetchConversations } = useHistory();
 
     useEffect(() => {
+        console.log('[HistoryTab] userId:', userId, 'projectId:', projectId);
+        console.log('[HistoryTab] conversations.length:', conversations.length);
+        
         if (userId && projectId) {
+            console.log('[HistoryTab] Fetching conversations...');
             fetchConversations(userId, projectId);
+        } else {
+            console.warn('[HistoryTab] Missing userId or projectId, not fetching');
         }
     }, [userId, projectId, fetchConversations]);
 

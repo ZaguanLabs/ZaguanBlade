@@ -1,4 +1,3 @@
-
 import React, { useMemo, useCallback, useState } from 'react';
 import { useTree } from '@headless-tree/react';
 import {
@@ -13,7 +12,7 @@ import { FileEntry } from '../types/blade';
 import { Folder, ChevronRight, FileCode, FileText, FileBox, Search, FilePlus, FolderPlus, Pencil, Trash2, Copy, Scissors, Clipboard, Terminal } from 'lucide-react';
 import { useContextMenu, ContextMenuItem } from './ui/ContextMenu';
 import { InputModal, ConfirmModal } from './ui/Modal';
-import { emit } from '@tauri-apps/api/event';
+import { listen, emit } from '@tauri-apps/api/event';
 
 // Define the Node type for our tree
 interface NodeData {
@@ -91,6 +90,11 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
             }
         });
     }, [roots]);
+
+    // Clear cache on refresh to force re-fetch
+    React.useEffect(() => {
+        itemCache.current.clear();
+    }, [refreshKey]);
 
     // File operation handlers
     const handleCreateFile = async (name: string, parentPath: string, isDir: boolean) => {
@@ -399,34 +403,32 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                 }
 
                 return new Promise<string[]>((resolve, reject) => {
-                    import('@tauri-apps/api/event').then(async ({ listen }) => {
-                        let resolved = false;
-                        const unlisten = await listen<any>('sys-event', (eventRaw) => {
-                            let evt = eventRaw.payload;
-                            if (evt.event && evt.id && evt.timestamp) {
-                                evt = evt.event;
-                            }
+                    let resolved = false;
+                    
+                    listen<any>('sys-event', (eventRaw) => {
+                        let evt = eventRaw.payload;
+                        if (evt.event && evt.id && evt.timestamp) {
+                            evt = evt.event;
+                        }
 
-                            if (evt.type === 'File' &&
-                                evt.payload.type === 'Listing' &&
-                                evt.payload.payload.path === path) {
-                                resolved = true;
-                                const entries = evt.payload.payload.entries;
+                        if (evt.type === 'File' &&
+                            evt.payload.type === 'Listing' &&
+                            evt.payload.payload.path === path) {
+                            resolved = true;
+                            const entries = evt.payload.payload.entries;
 
-                                entries.forEach((e: any) => {
-                                    itemCache.current.set(e.path, {
-                                        id: e.path,
-                                        name: e.name,
-                                        is_dir: e.is_dir,
-                                        data: e
-                                    });
+                            entries.forEach((e: any) => {
+                                itemCache.current.set(e.path, {
+                                    id: e.path,
+                                    name: e.name,
+                                    is_dir: e.is_dir,
+                                    data: e
                                 });
+                            });
 
-                                resolve(entries.map((e: any) => e.path));
-                                unlisten();
-                            }
-                        });
-
+                            resolve(entries.map((e: any) => e.path));
+                        }
+                    }).then(unlisten => {
                         BladeDispatcher.file({ type: 'List', payload: { path: path } });
 
                         setTimeout(() => {
@@ -435,7 +437,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                                 resolve([]);
                             }
                         }, 5000);
-                    });
+                    }).catch(reject);
                 });
             }
         },
@@ -443,7 +445,16 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
 
     // Auto-expand and select active file in the tree
     React.useEffect(() => {
-        if (!activeFile) return;
+        if (!activeFile) {
+            // Clear selection when no file is active
+            const selectedItems = tree.getItems().filter(item => item.isSelected());
+            selectedItems.forEach(item => {
+                if (item.isSelected()) {
+                    item.deselect();
+                }
+            });
+            return;
+        }
 
         const expandAndSelect = async () => {
             try {
@@ -496,7 +507,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
 
             <div
                 {...tree.getContainerProps()}
-                className="flex-1 overflow-y-auto text-xs font-mono select-none outline-none"
+                className="flex-1 overflow-y-auto text-xs select-none outline-none"
                 onContextMenu={handleBackgroundContextMenu}
             >
                 {tree.getItems().map(item => (

@@ -1,11 +1,13 @@
 'use client';
-import React, { useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import React, { useState, useEffect } from 'react';
+import { Save, X, FileText } from 'lucide-react';
+import { save } from '@tauri-apps/plugin-dialog';
+import { invoke } from '@tauri-apps/api/core';
+import { MarkdownRenderer } from './MarkdownRenderer';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { X, Save, FileText } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface DocumentViewerProps {
   documentId: string;
@@ -54,7 +56,6 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
     // Otherwise, use the save dialog for generic ephemeral documents
     setIsSaving(true);
     try {
-      const { save } = await import('@tauri-apps/plugin-dialog');
       const filePath = await save({
         defaultPath: suggestedName || 'document.md',
         filters: [{

@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 import { BladeDispatcher } from '../services/blade';
 import type { ConversationSummary, BladeEventEnvelope } from '../types/blade';
 import type { ChatMessage } from '../types/chat';
@@ -11,25 +12,30 @@ export function useHistory() {
 
     // Listen for History Events from backend
     useEffect(() => {
-        if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
+        if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
+            console.warn('[useHistory] Not in Tauri environment, skipping listener setup');
+            return;
+        }
 
+        console.log('[useHistory] Setting up blade-event listener');
         let unlistenHistory: (() => void) | undefined;
 
         const setupListener = async () => {
             const unlisten = await listen<BladeEventEnvelope>('blade-event', (event) => {
                 const envelope = event.payload;
+                console.log('[useHistory] Received blade-event:', envelope.event.type);
 
                 if (envelope.event.type === 'History') {
                     const historyEvent = envelope.event.payload;
+                    console.log('[useHistory] History event type:', historyEvent.type);
 
                     if (historyEvent.type === 'ConversationList') {
+                        console.log('[useHistory] ConversationList received with', historyEvent.payload.conversations.length, 'conversations');
                         if (historyEvent.payload.conversations.length > 0) {
                             const sample = historyEvent.payload.conversations[0];
                             // Use Tauri's invoke to log to terminal
-                            import('@tauri-apps/api/core').then(({ invoke }) => {
-                                invoke('log_frontend', { 
-                                    message: `[useHistory] Sample conversation: id=${sample.id}, created_at=${sample.created_at}, last_active_at=${sample.last_active_at}` 
-                                });
+                            invoke('log_frontend', { 
+                                message: `[useHistory] Sample conversation: id=${sample.id}, created_at=${sample.created_at}, last_active_at=${sample.last_active_at}` 
                             });
                         }
                         setConversations(historyEvent.payload.conversations);
@@ -40,30 +46,35 @@ export function useHistory() {
                     }
                 }
             });
+            console.log('[useHistory] blade-event listener set up successfully');
             unlistenHistory = unlisten;
         };
 
         setupListener();
 
         return () => {
+            console.log('[useHistory] Cleaning up blade-event listener');
             if (unlistenHistory) unlistenHistory();
         };
     }, []);
 
     const fetchConversations = useCallback(async (userId: string, projectId: string) => {
         try {
+            console.log('[useHistory] fetchConversations called with userId:', userId, 'projectId:', projectId);
             setLoading(true);
             setError(null);
             
             // Dispatch ListConversations Intent via BCP
+            console.log('[useHistory] Dispatching ListConversations intent...');
             await BladeDispatcher.history({
                 type: 'ListConversations',
                 payload: { user_id: userId, project_id: projectId }
             });
+            console.log('[useHistory] ListConversations intent dispatched successfully');
             
             // Backend will respond with ConversationList Event
         } catch (e) {
-            console.error('Failed to fetch conversation history:', e);
+            console.error('[useHistory] Failed to fetch conversation history:', e);
             setError(e instanceof Error ? e.message : String(e));
             setLoading(false);
         }

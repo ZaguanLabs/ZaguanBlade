@@ -32,6 +32,11 @@ use crate::chat_manager::{ChatManager, DrainResult};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, Runtime, State};
 use clap::Parser;
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use notify::event::ModifyKind;
+use notify::EventKind;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// ZaguanBlade - AI-Native Intelligent Code Editor
 #[derive(Parser, Debug)]
@@ -133,6 +138,7 @@ pub struct AppState {
     pub idempotency_cache: crate::idempotency::IdempotencyCache, // v1.1: Idempotency support
     pub warmup_client: warmup::WarmupClient, // v2.1: Cache warmup
     pub user_id: Mutex<Option<String>>, // Authenticated user ID from WebSocket
+    pub fs_watcher: Mutex<Option<RecommendedWatcher>>, // Workspace file watcher
 }
 
 impl AppState {
@@ -222,7 +228,84 @@ impl AppState {
             executing_commands: std::sync::Arc::new(Mutex::new(std::collections::HashMap::new())),
             idempotency_cache: crate::idempotency::IdempotencyCache::default(), // 24h TTL
             warmup_client, // v2.1: Cache warmup
+            fs_watcher: Mutex::new(None),
         }
+    }
+}
+
+#[derive(Clone, serde::Serialize)]
+struct FileChangeEvent {
+    paths: Vec<String>,
+    count: usize,
+}
+
+fn restart_fs_watcher<R: Runtime>(app_handle: &tauri::AppHandle<R>, state: &State<'_, AppState>) {
+    let workspace_root = { state.workspace.lock().unwrap().workspace.clone() };
+
+    let mut watcher_guard = state.fs_watcher.lock().unwrap();
+    *watcher_guard = None;
+
+    if let Some(root) = workspace_root {
+        let app_handle = app_handle.clone();
+        let last_emit = Arc::new(Mutex::new(Instant::now() - Duration::from_secs(1)));
+        let last_emit_ref = last_emit.clone();
+
+        let mut watcher = match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+            match res {
+                Ok(event) => {
+                    let relevant = matches!(
+                        event.kind,
+                        EventKind::Create(_)
+                            | EventKind::Remove(_)
+                            | EventKind::Modify(ModifyKind::Name(_))
+                            | EventKind::Modify(ModifyKind::Data(_))
+                            | EventKind::Modify(ModifyKind::Metadata(_))
+                            | EventKind::Modify(ModifyKind::Any)
+                            | EventKind::Modify(_)
+                            | EventKind::Any
+                            | EventKind::Other
+                    );
+                    if !relevant {
+                        return;
+                    }
+
+                    let now = Instant::now();
+                    let mut last = last_emit_ref.lock().unwrap();
+                    if now.duration_since(*last) < Duration::from_millis(250) {
+                        return;
+                    }
+                    *last = now;
+
+                    // Emit detailed file change event with paths
+                    let paths: Vec<String> = event.paths.iter()
+                        .map(|p| p.display().to_string())
+                        .collect();
+                    
+                    let file_change_event = FileChangeEvent {
+                        count: paths.len(),
+                        paths: paths.clone(),
+                    };
+                    
+                    let _ = app_handle.emit("file-changes-detected", file_change_event);
+                    let _ = app_handle.emit(crate::events::event_names::REFRESH_EXPLORER, ());
+                }
+                Err(e) => eprintln!("[WATCHER] error: {}", e),
+            }
+        }) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("[WATCHER] Failed to start: {}", e);
+                return;
+            }
+        };
+
+        if let Err(e) = watcher.watch(&root, RecursiveMode::Recursive) {
+            eprintln!("[WATCHER] Failed to watch {}: {}", root.display(), e);
+            return;
+        }
+
+        *watcher_guard = Some(watcher);
+        eprintln!("[WATCHER] Watching workspace: {}", root.display());
     }
 }
 
@@ -864,6 +947,29 @@ fn greet(name: &str) -> String {
 }
 
 #[tauri::command]
+fn toggle_devtools(app: tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        #[cfg(debug_assertions)]
+        {
+            if window.is_devtools_open() {
+                window.close_devtools();
+            } else {
+                window.open_devtools();
+            }
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            // In production builds with devtools feature enabled
+            if window.is_devtools_open() {
+                window.close_devtools();
+            } else {
+                window.open_devtools();
+            }
+        }
+    }
+}
+
+#[tauri::command]
 async fn list_models(state: State<'_, AppState>) -> Result<Vec<crate::models::registry::ModelInfo>, String> {
     let blade_url = {
         let config = state.config.lock().unwrap();
@@ -990,14 +1096,14 @@ async fn handle_send_message<R: Runtime>(
         // Ensure workspace root is valid
         let ws = workspace.workspace.as_ref();
 
-        // RFC-002: Get storage mode from project settings
-        let storage_mode = ws.map(|p| {
+        // RFC-002: Get storage mode from project settings, default to "local"
+        let storage_mode = Some(ws.map(|p| {
             let settings = project_settings::load_project_settings(p);
             match settings.storage.mode {
                 project_settings::StorageMode::Local => "local".to_string(),
                 project_settings::StorageMode::Server => "server".to_string(),
             }
-        });
+        }).unwrap_or_else(|| "local".to_string()));
 
         mgr.start_stream(
             message,
@@ -1724,9 +1830,16 @@ fn get_conversation(state: State<'_, AppState>) -> Vec<crate::protocol::ChatMess
 }
 
 #[tauri::command]
-async fn open_workspace(path: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+async fn open_workspace(
+    path: String,
+    state: tauri::State<'_, AppState>,
+    window: tauri::Window,
+) -> Result<(), String> {
     let mut ws = state.workspace.lock().unwrap();
     ws.set_workspace(std::path::PathBuf::from(&path));
+    drop(ws);
+    restart_fs_watcher(&window.app_handle(), &state);
+    let _ = window.emit(crate::events::event_names::REFRESH_EXPLORER, ());
     Ok(())
 }
 
@@ -1997,6 +2110,11 @@ fn save_project_state(state_data: project_state::ProjectState) -> Result<(), Str
 fn get_project_state_path(project_path: String) -> Option<String> {
     project_state::get_project_state_path(&project_path)
         .map(|p| p.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn read_binary_file(path: String) -> Result<Vec<u8>, String> {
+    std::fs::read(&path).map_err(|e| format!("Failed to read binary file: {}", e))
 }
 
 // ==============================================================================
@@ -2839,11 +2957,21 @@ pub fn run() {
     });
 
     tauri::Builder::default()
+        .setup(|app| {
+            let state = app.state::<AppState>();
+            restart_fs_watcher(&app.handle(), &state);
+            Ok(())
+        })
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState::new(resolved_path))
         .manage(terminal::TerminalManager::new())
         .invoke_handler(tauri::generate_handler![
             greet,
+            toggle_devtools,
             log_frontend,
             get_conversation,
             list_models,
@@ -2878,6 +3006,7 @@ pub fn run() {
             get_file_context,
             delete_local_conversation,
             submit_command_result,
+            read_binary_file,
             ephemeral_commands::create_ephemeral_document,
             ephemeral_commands::get_ephemeral_document,
             ephemeral_commands::update_ephemeral_document,

@@ -66,22 +66,26 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
                 onClick={handleToggle}
                 className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-zinc-800/30 transition-colors text-left"
             >
-                <div className="flex items-center gap-2">
-                    <Brain className={`w-3 h-3 ${isStreaming ? 'text-purple-400 animate-pulse' : 'text-zinc-600'}`} />
-                    <span className={`font-mono text-[9px] uppercase tracking-wider ${
+                <div className="flex items-center gap-2 flex-1 min-w-0">
+                    <Brain className={`w-3 h-3 flex-shrink-0 ${isStreaming ? 'text-purple-400 animate-pulse' : 'text-zinc-600'}`} />
+                    <span className={`font-mono text-[9px] uppercase tracking-wider flex-shrink-0 ${
                         isStreaming ? 'text-purple-400' : 'text-zinc-600'
                     }`}>
-                        {isStreaming ? 'Thinking...' : 'Thought Process'}
+                        {isStreaming ? 'Reasoning' : 'Thought Process'}
                     </span>
+                    {!isExpanded && cleanContent && (
+                        <span className="text-[10px] text-zinc-600 truncate font-mono ml-2">
+                            {cleanContent.slice(0, 80)}...
+                        </span>
+                    )}
                 </div>
-                <div className="flex-1" />
                 {isStreaming && (
-                    <Loader2 className="w-2.5 h-2.5 text-purple-400/60 animate-spin mr-1" />
+                    <Loader2 className="w-2.5 h-2.5 text-purple-400/60 animate-spin mr-1 flex-shrink-0" />
                 )}
                 {isExpanded ? (
-                    <ChevronDown className="w-3 h-3 text-zinc-600" />
+                    <ChevronDown className="w-3 h-3 text-zinc-600 flex-shrink-0" />
                 ) : (
-                    <ChevronRight className="w-3 h-3 text-zinc-600" />
+                    <ChevronRight className="w-3 h-3 text-zinc-600 flex-shrink-0" />
                 )}
             </button>
 

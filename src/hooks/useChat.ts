@@ -115,11 +115,15 @@ export function useChat() {
 
                     // Handle reasoning
                     if (type === 'reasoning') {
+                        console.log(`[v1.1 MessageBuffer] Processing reasoning chunk: id=${id}, chunk_len=${chunk.length}, is_final=${is_final}`);
+                        
                         if (accumulatedReasoningRef.current.id !== id) {
                             accumulatedReasoningRef.current = { id, content: '' };
                         }
                         accumulatedReasoningRef.current.content += chunk;
                         const fullReasoning = accumulatedReasoningRef.current.content;
+
+                        console.log(`[v1.1 MessageBuffer] Accumulated reasoning length: ${fullReasoning.length}`);
 
                         setMessages((prev) => {
                             const existingIdx = prev.findIndex(m => m.id === id);
@@ -136,14 +140,17 @@ export function useChat() {
                                 if (lastBlock && lastBlock.type === 'reasoning') {
                                     blocks[blocks.length - 1] = { ...lastBlock, content: lastBlock.content + chunk };
                                 } else {
+                                    console.log(`[v1.1 MessageBuffer] Creating new reasoning block`);
                                     blocks.push({ type: 'reasoning', content: chunk, id: crypto.randomUUID() });
                                 }
                                 newMsg.blocks = blocks;
 
+                                console.log(`[v1.1 MessageBuffer] Updated message blocks count: ${blocks.length}`);
                                 updated[existingIdx] = newMsg;
                                 return updated;
                             }
                             // New message starting with reasoning
+                            console.log(`[v1.1 MessageBuffer] Creating new message with reasoning`);
                             return [...prev, {
                                 id,
                                 role: 'Assistant',
@@ -275,9 +282,10 @@ export function useChat() {
                     return [...prev, ...newChanges];
                 });
 
-                // Automatically open new files as ephemeral tabs
+                // Automatically open files for all change types
                 event.payload.forEach(change => {
                     if (change.change_type === 'new_file') {
+                        // Open new files as ephemeral tabs
                         const filename = change.path.split('/').pop() || change.path;
                         emit('open-ephemeral-document', {
                             id: `new-file-${change.id}`,
@@ -285,6 +293,9 @@ export function useChat() {
                             content: change.content,
                             suggestedName: change.path
                         });
+                    } else if (change.change_type === 'patch' || change.change_type === 'multi_patch') {
+                        // Open existing files being modified so user can see and approve changes
+                        emit('open-file', change.path);
                     }
                 });
             });
@@ -380,10 +391,12 @@ export function useChat() {
                         }
                     } else if (chatEvent.type === 'ReasoningDelta') {
                         const { id, seq, chunk, is_final } = chatEvent.payload;
-                        console.log(`[v1.1 Chat] ReasoningDelta: id=${id}, seq=${seq}, is_final=${is_final}, chunk_len=${chunk.length}`);
+                        console.log(`[v1.1 Chat] ReasoningDelta: id=${id}, seq=${seq}, is_final=${is_final}, chunk_len=${chunk.length}, chunk="${chunk.slice(0, 50)}..."`);
 
                         if (messageBufferRef.current) {
                             messageBufferRef.current.addReasoningDelta(id, seq, chunk, is_final);
+                        } else {
+                            console.warn('[v1.1 Chat] ReasoningDelta received but messageBufferRef is null!');
                         }
                     } else if (chatEvent.type === 'MessageCompleted') {
                         const { id } = chatEvent.payload;

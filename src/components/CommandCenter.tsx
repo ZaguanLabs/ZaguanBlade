@@ -37,6 +37,46 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const popupRef = useRef<HTMLDivElement>(null);
 
+    // Render text with @ commands styled differently
+    const renderFormattedText = useCallback((inputText: string) => {
+        const parts: React.ReactNode[] = [];
+        const regex = /@(\w+)/g;
+        let lastIndex = 0;
+        let match;
+
+        while ((match = regex.exec(inputText)) !== null) {
+            // Add text before the match
+            if (match.index > lastIndex) {
+                parts.push(
+                    <span key={`text-${lastIndex}`} className="font-sans">
+                        {inputText.slice(lastIndex, match.index)}
+                    </span>
+                );
+            }
+            // Add the @ command with distinct styling
+            parts.push(
+                <span 
+                    key={`cmd-${match.index}`} 
+                    className="text-[var(--accent-primary)] font-semibold"
+                >
+                    {match[0]}
+                </span>
+            );
+            lastIndex = regex.lastIndex;
+        }
+
+        // Add remaining text
+        if (lastIndex < inputText.length) {
+            parts.push(
+                <span key={`text-${lastIndex}`} className="font-sans">
+                    {inputText.slice(lastIndex)}
+                </span>
+            );
+        }
+
+        return parts.length > 0 ? parts : <span className="font-sans">{inputText}</span>;
+    }, []);
+
     // Filter commands based on what user typed after @
     const filteredCommands = COMMANDS.filter(cmd => 
         cmd.name.toLowerCase().startsWith(commandFilter.toLowerCase())
@@ -153,6 +193,13 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
 
                     {/* Chat Input */}
                     <div className={`relative transition-colors ${loading ? 'bg-[var(--bg-surface)]' : ''}`}>
+                        {/* Formatted text overlay - shows styled @ commands */}
+                        <div 
+                            className="absolute inset-0 p-3 pr-10 pointer-events-none whitespace-pre-wrap break-words text-xs leading-relaxed overflow-y-auto"
+                            style={{ color: 'var(--fg-secondary)' }}
+                        >
+                            {text ? renderFormattedText(text) : null}
+                        </div>
                         {/* Command Autocomplete Popup */}
                         {showCommands && filteredCommands.length > 0 && (
                             <div 
@@ -187,7 +234,7 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
                             onChange={handleTextChange}
                             onKeyDown={handleKeyDown}
                             placeholder={t('chat.inputPlaceholder')}
-                            className="w-full bg-transparent text-[var(--fg-primary)] p-3 pr-10 outline-none resize-none min-h-[42px] max-h-[200px] text-xs font-mono placeholder-[var(--fg-tertiary)]"
+                            className="w-full bg-transparent text-transparent caret-[var(--fg-secondary)] p-3 pr-10 outline-none resize-none min-h-[42px] max-h-[400px] overflow-y-auto text-xs font-sans placeholder-[var(--fg-tertiary)] leading-relaxed relative z-10"
                             rows={1}
                             disabled={disabled}
                         />

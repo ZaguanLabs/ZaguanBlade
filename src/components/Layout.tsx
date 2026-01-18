@@ -380,6 +380,13 @@ const AppLayoutInner: React.FC = () => {
                 }
             }
             
+            // F12 to toggle DevTools
+            if (e.key === 'F12') {
+                e.preventDefault();
+                invoke('toggle_devtools').catch(err => console.error('Failed to toggle devtools:', err));
+                return;
+            }
+
             // Ctrl-Tab to cycle right through tabs
             if (e.ctrlKey && e.key === 'Tab') {
                 e.preventDefault();
@@ -632,30 +639,7 @@ const AppLayoutInner: React.FC = () => {
                         <div className="flex-1 overflow-hidden relative">
                             {(() => {
                                 const activeTab = tabs.find(t => t.id === activeTabId);
-                                if (!activeTab) return <EditorPanel activeFile={null} highlightLines={null} />;
-
-                                if (activeTab.type === 'ephemeral') {
-                                    const isNewFileProposal = activeTab.id.startsWith('new-file-');
-                                    const changeId = isNewFileProposal ? activeTab.id.replace('new-file-', '') : undefined;
-
-                                    return (
-                                        <DocumentViewer
-                                            documentId={activeTab.id}
-                                            title={activeTab.title}
-                                            content={activeTab.content || ''}
-                                            isEphemeral={true}
-                                            suggestedName={activeTab.suggestedName}
-                                            onClose={() => handleTabClose(activeTab.id)}
-                                            onSave={(savedPath) => handleEphemeralSave(activeTab.id, savedPath)}
-                                            changeId={changeId}
-                                            onApprove={changeId ? () => approveChange(changeId) : undefined}
-                                        />
-                                    );
-                                }
-
-                                const pendingChange = pendingChanges.find(c => c.path === activeTab.path);
                                 const filesWithChanges = [...new Set(pendingChanges.map(c => c.path))];
-                                const currentFileIndex = activeTab.path ? filesWithChanges.indexOf(activeTab.path) + 1 : 0;
 
                                 const navigateToFile = (path: string) => {
                                     const tabId = `file-${path}`;
@@ -669,17 +653,62 @@ const AppLayoutInner: React.FC = () => {
                                 };
 
                                 return (
-                                    <EditorPanel
-                                        activeFile={activeTab.path || null}
-                                        highlightLines={activeTab.highlightLines || null}
-                                        pendingEdit={pendingChange}
-                                        onAcceptEdit={approveChange}
-                                        onRejectEdit={rejectChange}
-                                        totalPendingFiles={filesWithChanges.length}
-                                        currentFileIndex={currentFileIndex || 1}
-                                        onNextFile={filesWithChanges.length > 1 && currentFileIndex < filesWithChanges.length ? () => navigateToFile(filesWithChanges[currentFileIndex]) : undefined}
-                                        onPrevFile={filesWithChanges.length > 1 && currentFileIndex > 1 ? () => navigateToFile(filesWithChanges[currentFileIndex - 2]) : undefined}
-                                    />
+                                    <>
+                                        {/* Render all file tabs (hidden when not active) */}
+                                        {tabs.filter(t => t.type === 'file').map(tab => {
+                                            const isActive = tab.id === activeTabId;
+                                            const pendingChange = pendingChanges.find(c => c.path === tab.path);
+                                            const currentFileIndex = tab.path ? filesWithChanges.indexOf(tab.path) + 1 : 0;
+
+                                            return (
+                                                <div 
+                                                    key={tab.id} 
+                                                    className={`absolute inset-0 ${isActive ? 'z-10' : 'z-0 pointer-events-none opacity-0'}`}
+                                                >
+                                                    <EditorPanel
+                                                        activeFile={tab.path || null}
+                                                        highlightLines={tab.highlightLines || null}
+                                                        pendingEdit={pendingChange}
+                                                        onAcceptEdit={approveChange}
+                                                        onRejectEdit={rejectChange}
+                                                        totalPendingFiles={filesWithChanges.length}
+                                                        currentFileIndex={currentFileIndex || 1}
+                                                        onNextFile={filesWithChanges.length > 1 && currentFileIndex < filesWithChanges.length ? () => navigateToFile(filesWithChanges[currentFileIndex]) : undefined}
+                                                        onPrevFile={filesWithChanges.length > 1 && currentFileIndex > 1 ? () => navigateToFile(filesWithChanges[currentFileIndex - 2]) : undefined}
+                                                    />
+                                                </div>
+                                            );
+                                        })}
+
+                                        {/* Render ephemeral tabs */}
+                                        {tabs.filter(t => t.type === 'ephemeral').map(tab => {
+                                            const isActive = tab.id === activeTabId;
+                                            const isNewFileProposal = tab.id.startsWith('new-file-');
+                                            const changeId = isNewFileProposal ? tab.id.replace('new-file-', '') : undefined;
+
+                                            return (
+                                                <div 
+                                                    key={tab.id} 
+                                                    className={`absolute inset-0 ${isActive ? 'z-10' : 'z-0 pointer-events-none opacity-0'}`}
+                                                >
+                                                    <DocumentViewer
+                                                        documentId={tab.id}
+                                                        title={tab.title}
+                                                        content={tab.content || ''}
+                                                        isEphemeral={true}
+                                                        suggestedName={tab.suggestedName}
+                                                        onClose={() => handleTabClose(tab.id)}
+                                                        onSave={(savedPath) => handleEphemeralSave(tab.id, savedPath)}
+                                                        changeId={changeId}
+                                                        onApprove={changeId ? () => approveChange(changeId) : undefined}
+                                                    />
+                                                </div>
+                                            );
+                                        })}
+
+                                        {/* Show placeholder if no tabs */}
+                                        {tabs.length === 0 && <EditorPanel activeFile={null} highlightLines={null} />}
+                                    </>
                                 );
                             })()}
                         </div>

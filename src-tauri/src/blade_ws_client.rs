@@ -68,6 +68,10 @@ pub enum BladeWsEvent {
     Research {
         content: String,
     },
+    GetConversationContext {
+        request_id: String,
+        session_id: String,
+    },
     Error {
         code: String,
         message: String,
@@ -151,6 +155,14 @@ struct ToolResultPayload {
     content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    api_key: Option<String>, // API key for auth in multi-turn conversations
+}
+
+#[derive(Debug, Serialize)]
+struct ConversationContextPayload {
+    session_id: String,
+    messages: Vec<serde_json::Value>,
 }
 
 /// Incoming WebSocket message
@@ -386,6 +398,7 @@ impl BladeWsClient {
             success: result.success,
             content: result.content,
             error: result.error,
+            api_key: Some(self.api_key.clone()), // Include API key for multi-turn auth
         };
 
         let msg = WsBaseMessage {
@@ -401,6 +414,38 @@ impl BladeWsClient {
         conn.tx
             .send(WsMessage::Send(json))
             .map_err(|e| format!("Failed to send tool result: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Send conversation context in response to get_conversation_context request (RFC-002)
+    pub async fn send_conversation_context(
+        &self,
+        request_id: String,
+        session_id: String,
+        messages: Vec<serde_json::Value>,
+    ) -> Result<(), String> {
+        let conn = self.connection.lock().await;
+        let conn = conn.as_ref().ok_or("Not connected")?;
+
+        let payload = ConversationContextPayload {
+            session_id,
+            messages,
+        };
+
+        let msg = WsBaseMessage {
+            id: request_id,
+            msg_type: "conversation_context".to_string(),
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            payload: Some(serde_json::to_value(payload).unwrap()),
+        };
+
+        let json =
+            serde_json::to_string(&msg).map_err(|e| format!("JSON serialization error: {}", e))?;
+
+        conn.tx
+            .send(WsMessage::Send(json))
+            .map_err(|e| format!("Failed to send conversation context: {}", e))?;
 
         Ok(())
     }
@@ -615,6 +660,20 @@ impl BladeWsClient {
 
                 eprintln!("[BLADE WS] Research result received ({} chars)", content.len());
                 let _ = tx.send(BladeWsEvent::Research { content });
+            }
+            "get_conversation_context" => {
+                let session_id = msg
+                    .payload
+                    .get("session_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                eprintln!("[BLADE WS] Server requesting conversation context for session: {}", session_id);
+                let _ = tx.send(BladeWsEvent::GetConversationContext {
+                    request_id: msg.id.clone(),
+                    session_id,
+                });
             }
             _ => {
                 eprintln!("[BLADE WS] Unknown message type: {}", msg.msg_type);

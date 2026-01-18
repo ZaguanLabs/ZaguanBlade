@@ -25,6 +25,15 @@ export default defineConfig(async () => ({
     },
     build: {
         chunkSizeWarningLimit: 1000,
+        minify: 'terser' as const,
+        terserOptions: {
+            compress: {
+                drop_console: false,
+                drop_debugger: true,
+                pure_funcs: ['console.debug']
+            }
+        },
+        cssCodeSplit: true,
         rollupOptions: {
             output: {
                 manualChunks: (id) => {
@@ -44,6 +53,10 @@ export default defineConfig(async () => ({
                         // Headless Tree (File Explorer)
                         if (id.includes('@headless-tree')) {
                             return 'vendor-tree';
+                        }
+                        // PDF.js (PDF Viewer)
+                        if (id.includes('pdfjs-dist')) {
+                            return 'vendor-pdf';
                         }
 
                         // Core Framework, Markdown, and Common Libs

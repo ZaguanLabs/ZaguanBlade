@@ -108,6 +108,27 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     // For run_command, extract the command for display and copy
     const commandText = isRunCommand ? (parsedArgs.command as string || parsedArgs.CommandLine as string || '') : '';
     const cwdText = isRunCommand ? (parsedArgs.cwd as string || parsedArgs.Cwd as string || '') : '';
+    const pathText = (parsedArgs.path as string || parsedArgs.Path as string || '');
+    const filenameOnlyTools = new Set([
+        'read_file',
+        'read_file_range',
+        'write_file',
+        'apply_patch',
+        'edit_file',
+        'create_file',
+        'delete_file',
+        'list_files',
+        'get_workspace_structure'
+    ]);
+    const getLastPathSegments = (value: string, count: number) => {
+        const parts = value.split(/[/\\]/).filter(Boolean);
+        return parts.slice(-count).join('/');
+    };
+    const displayPathText = toolCall.function.name === 'list_directory'
+        ? getLastPathSegments(pathText, 2) || pathText
+        : filenameOnlyTools.has(toolCall.function.name)
+            ? pathText.split(/[/\\]/).pop() || pathText
+            : pathText;
 
     // Compact inline display for most tools, expanded for run_command
     if (!isRunCommand) {
@@ -118,6 +139,14 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                 <span className="font-medium text-zinc-400">
                     {getFriendlyToolName(toolCall.function.name, parsedArgs)}
                 </span>
+                {displayPathText && (
+                    <span
+                        className="text-[10px] text-zinc-500 truncate max-w-[260px]"
+                        title={displayPathText}
+                    >
+                        {displayPathText}
+                    </span>
+                )}
                 {status === 'executing' && (
                     <span className="text-[9px] text-blue-400 animate-pulse">running...</span>
                 )}

@@ -34,6 +34,9 @@
     "@lezer/highlight": "^1.2.3",
     "@tauri-apps/api": "^2.9.1",
     "@tauri-apps/plugin-dialog": "^2.6.0",
+    "@tauri-apps/plugin-fs": "^2.4.5",
+    "@tauri-apps/plugin-notification": "^2.3.3",
+    "@tauri-apps/plugin-shell": "^2.3.4",
     "@types/react-syntax-highlighter": "^15.5.13",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-web-links": "^0.12.0",
@@ -46,6 +49,7 @@
     "i18next-http-backend": "^3.0.2",
     "klass": "^1.4.1",
     "lucide-react": "^0.562.0",
+    "pdfjs-dist": "^5.4.530",
     "postcss": "^8.5.6",
     "react": "19.2.3",
     "react-dom": "19.2.3",
@@ -67,6 +71,7 @@
     "babel-plugin-react-compiler": "1.0.0",
     "eslint": "^9.39.2",
     "tailwindcss": "^4.1.18",
+    "terser": "^5.46.0",
     "typescript": "^5.9.3",
     "vite": "^7.3.1"
   }

@@ -293,6 +293,25 @@ impl ChatManager {
                                 saw_content = true;
                                 let _ = tx.send(ChatEvent::Research { content, suggested_name: String::new() });
                             }
+                            crate::blade_ws_client::BladeWsEvent::GetConversationContext {
+                                request_id,
+                                session_id: req_session_id,
+                            } => {
+                                eprintln!("[CHAT MGR] Server requesting conversation context for session: {}", req_session_id);
+                                
+                                // RFC-002: Send conversation context back to server
+                                // TODO: We need to access the conversation history here
+                                // For now, send empty messages array
+                                // This will need refactoring to pass conversation into the async task
+                                let messages: Vec<serde_json::Value> = vec![];
+                                
+                                if let Err(e) = ws_client
+                                    .send_conversation_context(request_id, req_session_id, messages)
+                                    .await
+                                {
+                                    eprintln!("[CHAT MGR] Failed to send conversation context: {}", e);
+                                }
+                            }
                         }
 
                         if !authenticated {

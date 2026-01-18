@@ -1,5 +1,6 @@
 'use client';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { BladeDispatcher } from '../services/blade';
 import { BladeEvent, FileEntry } from '../types/blade';
 import { listen } from '@tauri-apps/api/event';
@@ -92,7 +93,7 @@ const FileItem: React.FC<{
     return (
         <div>
             <div
-                className={`flex items-center gap-1.5 py-1 px-2 cursor-pointer select-none text-xs font-mono transition-colors ${isActive ? 'bg-emerald-500/10 text-emerald-400' : 'hover:bg-zinc-800/50 text-zinc-400'}`}
+                className={`flex items-center gap-1.5 py-1 px-2 cursor-pointer select-none text-xs transition-colors ${isActive ? 'bg-emerald-500/10 text-emerald-400' : 'hover:bg-zinc-800/50 text-zinc-400'}`}
                 style={{ paddingLeft: `${depth * 12 + 8}px` }}
                 onClick={toggleExpand}
             >
@@ -189,9 +190,6 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
     const openSpecificPath = async () => {
         try {
             // Still using invoke for 'open_folder' as it is a workspace state change, not just a File Read
-            // But we need to check if 'invoke' import is available.
-            // We removed it from top. We need to re-add it or use @tauri-apps/api/core dynamically
-            const { invoke } = await import('@tauri-apps/api/core');
             await invoke('open_workspace', { path: pathInput });
             loadRoot();
         } catch (e) {
@@ -234,6 +232,7 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
                     // We need to import FileExplorer first
                     <ErrorBoundary>
                         <FileExplorer
+                            key={refreshKey}
                             onFileSelect={onFileSelect}
                             activeFile={activeFile}
                             roots={roots}
