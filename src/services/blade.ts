@@ -11,6 +11,7 @@ import type {
     WorkflowIntent,
     TerminalIntent,
     HistoryIntent,
+    LanguageIntent,
     Version
 } from '../types/blade';
 
@@ -78,5 +79,9 @@ export class BladeDispatcher {
 
     static async history(intent: HistoryIntent) {
         return this.dispatch("History", { type: "History", payload: intent });
+    }
+
+    static async language(intent: LanguageIntent) {
+        return this.dispatch("Language", { type: "Language", payload: intent });
     }
 }
