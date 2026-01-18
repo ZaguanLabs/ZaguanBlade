@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // ==============================================================================
-// 0. Version (v1.1)
+// 0. Version (v1.3) - Added Language domain for LSP + tree-sitter
 // ==============================================================================
 
 /// Semantic version for protocol compatibility checking
@@ -16,7 +16,7 @@ pub struct Version {
 impl Version {
     pub const CURRENT: Version = Version {
         major: 1,
-        minor: 2,
+        minor: 3,
         patch: 0,
     };
 
@@ -77,6 +77,7 @@ pub enum BladeIntent {
     Terminal(TerminalIntent),
     History(HistoryIntent),
     System(SystemIntent),
+    Language(LanguageIntent), // v1.3: LSP + tree-sitter integration
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -194,6 +195,59 @@ pub enum SystemIntent {
     SetLogLevel { level: String },
 }
 
+// v1.3: Language domain for LSP + tree-sitter integration
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "type", content = "payload")]
+pub enum LanguageIntent {
+    // Symbol operations (tree-sitter)
+    IndexFile {
+        file_path: String,
+    },
+    IndexWorkspace,
+    SearchSymbols {
+        query: String,
+        #[serde(default)]
+        file_path: Option<String>, // Optional: limit to specific file
+        #[serde(default)]
+        symbol_types: Option<Vec<String>>, // Optional: filter by type
+    },
+    GetSymbolAt {
+        file_path: String,
+        line: u32,
+        character: u32,
+    },
+
+    // LSP operations
+    GetCompletions {
+        file_path: String,
+        line: u32,
+        character: u32,
+    },
+    GetHover {
+        file_path: String,
+        line: u32,
+        character: u32,
+    },
+    GetDefinition {
+        file_path: String,
+        line: u32,
+        character: u32,
+    },
+    GetReferences {
+        file_path: String,
+        line: u32,
+        character: u32,
+        #[serde(default)]
+        include_declaration: bool,
+    },
+    GetDocumentSymbols {
+        file_path: String,
+    },
+    GetDiagnostics {
+        file_path: String,
+    },
+}
+
 // ==============================================================================
 // 3. Events (Reads/Updates)
 // ==============================================================================
@@ -208,6 +262,7 @@ pub enum BladeEvent {
     Terminal(TerminalEvent),
     History(HistoryEvent),
     System(SystemEvent),
+    Language(LanguageEvent), // v1.3: LSP + tree-sitter integration
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -382,6 +437,127 @@ pub enum SystemEvent {
     ProcessCompleted {
         intent_id: Uuid,
     },
+}
+
+// v1.3: Language domain events
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "type", content = "payload")]
+pub enum LanguageEvent {
+    // Symbol events
+    FileIndexed {
+        file_path: String,
+        symbol_count: usize,
+    },
+    WorkspaceIndexed {
+        file_count: usize,
+        symbol_count: usize,
+        duration_ms: u64,
+    },
+    SymbolsFound {
+        intent_id: Uuid,
+        symbols: Vec<LanguageSymbol>,
+    },
+    SymbolAt {
+        intent_id: Uuid,
+        symbol: Option<LanguageSymbol>,
+    },
+
+    // LSP events
+    CompletionsReady {
+        intent_id: Uuid,
+        items: Vec<CompletionItem>,
+    },
+    HoverReady {
+        intent_id: Uuid,
+        contents: Option<String>,
+        range: Option<LanguageRange>,
+    },
+    DefinitionReady {
+        intent_id: Uuid,
+        locations: Vec<LanguageLocation>,
+    },
+    ReferencesReady {
+        intent_id: Uuid,
+        locations: Vec<LanguageLocation>,
+    },
+    DocumentSymbolsReady {
+        intent_id: Uuid,
+        symbols: Vec<LanguageDocumentSymbol>,
+    },
+    DiagnosticsUpdated {
+        file_path: String,
+        diagnostics: Vec<LanguageDiagnostic>,
+    },
+}
+
+// Language domain data types
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LanguageSymbol {
+    pub id: String,
+    pub name: String,
+    pub symbol_type: String,
+    pub file_path: String,
+    pub range: LanguageRange,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub docstring: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+pub struct LanguagePosition {
+    pub line: u32,
+    pub character: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+pub struct LanguageRange {
+    pub start: LanguagePosition,
+    pub end: LanguagePosition,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LanguageLocation {
+    pub file_path: String,
+    pub range: LanguageRange,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CompletionItem {
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub documentation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub insert_text: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LanguageDocumentSymbol {
+    pub name: String,
+    pub kind: String,
+    pub range: LanguageRange,
+    pub selection_range: LanguageRange,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<LanguageDocumentSymbol>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LanguageDiagnostic {
+    pub range: LanguageRange,
+    pub severity: String, // "error", "warning", "information", "hint"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    pub message: String,
 }
 
 // ==============================================================================

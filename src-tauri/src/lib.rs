@@ -3004,6 +3004,29 @@ async fn dispatch(
             println!("System Intent: {:?}", system_intent);
             Ok(())
         }
+        BladeIntent::Language(language_intent) => {
+            // v1.3: Language domain handler (tree-sitter + LSP)
+            // Full implementation will be added in Phase 2 (Symbol Index)
+            eprintln!("[Language] Intent received: {:?}", language_intent);
+
+            // Emit a placeholder event for now
+            let _ = window.emit(
+                "blade-event",
+                blade_protocol::BladeEventEnvelope {
+                    id: uuid::Uuid::new_v4(),
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                    causality_id: Some(intent_id.to_string()),
+                    event: blade_protocol::BladeEvent::System(
+                        blade_protocol::SystemEvent::ProcessCompleted { intent_id },
+                    ),
+                },
+            );
+
+            Ok(())
+        }
     };
 
     // 5. Handle Result & Store Idempotency (v1.1)
