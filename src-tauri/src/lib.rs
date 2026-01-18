@@ -15,6 +15,7 @@ pub mod explorer;
 pub mod idempotency; // [NEW] v1.1: Idempotency cache
 pub mod local_artifacts; // [NEW] RFC-002: Local conversation artifact storage
 pub mod local_index; // [NEW] RFC-002: Local SQLite index for conversations
+pub mod lsp; // [NEW] LSP integration for language servers
 pub mod models;
 pub mod project;
 pub mod project_settings;
