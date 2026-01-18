@@ -15,4 +15,4 @@ mod symbol;
 
 pub use parser::{Language, TreeSitterParser};
 pub use query::QueryManager;
-pub use symbol::{extract_symbols, Symbol, SymbolExtractor, SymbolType};
+pub use symbol::{extract_symbols, Position, Range, Symbol, SymbolExtractor, SymbolType};

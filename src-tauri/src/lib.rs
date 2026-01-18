@@ -22,6 +22,7 @@ pub mod project_settings;
 pub mod project_state;
 pub mod protocol;
 pub mod reasoning_parser; // [NEW] v1.2: Multi-format reasoning extraction
+pub mod symbol_index; // [NEW] Phase 2: SQLite symbol index
 pub mod terminal;
 pub mod tool_execution;
 pub mod tools;
