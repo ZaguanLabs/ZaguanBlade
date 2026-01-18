@@ -1,7 +1,7 @@
 'use client';
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { X, Database, Cloud, Shield, Zap, HardDrive, Server, ChevronRight, Info, Loader2 } from 'lucide-react';
+import { X, Database, Cloud, Shield, Zap, HardDrive, Server, ChevronRight, Info, Loader2, Code } from 'lucide-react';
 
 type StorageMode = 'local' | 'server';
 
@@ -24,6 +24,9 @@ interface SettingsState {
     privacy: {
         telemetry: boolean;
     };
+    editor: {
+        enableLsp: boolean;
+    };
 }
 
 const defaultSettings: SettingsState = {
@@ -44,6 +47,9 @@ const defaultSettings: SettingsState = {
     },
     privacy: {
         telemetry: false,
+    },
+    editor: {
+        enableLsp: true,
     },
 };
 
@@ -66,6 +72,9 @@ interface BackendSettings {
     privacy: {
         telemetry: boolean;
     };
+    editor: {
+        enable_lsp: boolean;
+    };
 }
 
 function backendToFrontend(backend: BackendSettings): SettingsState {
@@ -87,6 +96,9 @@ function backendToFrontend(backend: BackendSettings): SettingsState {
         },
         privacy: {
             telemetry: backend.privacy.telemetry,
+        },
+        editor: {
+            enableLsp: backend.editor.enable_lsp,
         },
     };
 }
@@ -111,6 +123,9 @@ function frontendToBackend(frontend: SettingsState): BackendSettings {
         privacy: {
             telemetry: frontend.privacy.telemetry,
         },
+        editor: {
+            enable_lsp: frontend.editor.enableLsp,
+        },
     };
 }
 
@@ -120,7 +135,7 @@ interface SettingsModalProps {
     workspacePath?: string | null;
 }
 
-type SettingsSection = 'storage' | 'context' | 'privacy';
+type SettingsSection = 'storage' | 'context' | 'privacy' | 'editor';
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, workspacePath }) => {
     const [settings, setSettings] = useState<SettingsState>(defaultSettings);
@@ -208,6 +223,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
 
     const sections: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
         { id: 'storage', label: 'Storage', icon: <Database className="w-4 h-4" /> },
+        { id: 'editor', label: 'Editor', icon: <Code className="w-4 h-4" /> },
         { id: 'context', label: 'Context', icon: <Zap className="w-4 h-4" /> },
         { id: 'privacy', label: 'Privacy', icon: <Shield className="w-4 h-4" /> },
     ];
@@ -241,11 +257,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
                             <button
                                 key={section.id}
                                 onClick={() => setActiveSection(section.id)}
-                                className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
-                                    activeSection === section.id
-                                        ? 'bg-[var(--bg-surface-hover)] text-[var(--fg-primary)] border-l-2 border-[var(--accent-primary)]'
-                                        : 'text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--fg-primary)] border-l-2 border-transparent'
-                                }`}
+                                className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${activeSection === section.id
+                                    ? 'bg-[var(--bg-surface-hover)] text-[var(--fg-primary)] border-l-2 border-[var(--accent-primary)]'
+                                    : 'text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--fg-primary)] border-l-2 border-transparent'
+                                    }`}
                             >
                                 {section.icon}
                                 {section.label}
@@ -282,6 +297,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
                                     <PrivacySettings
                                         settings={settings.privacy}
                                         onChange={(updates) => updateSettings('privacy', updates)}
+                                    />
+                                )}
+                                {activeSection === 'editor' && (
+                                    <EditorSettings
+                                        settings={settings.editor}
+                                        onChange={(updates) => updateSettings('editor', updates)}
                                     />
                                 )}
                             </>
@@ -329,11 +350,10 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
                     {/* Local Storage Option */}
                     <button
                         onClick={() => onChange({ mode: 'local' })}
-                        className={`relative p-4 rounded-lg border-2 text-left transition-all ${
-                            settings.mode === 'local'
-                                ? 'border-emerald-500 bg-emerald-500/10'
-                                : 'border-[var(--border-subtle)] hover:border-[var(--border-focus)]'
-                        }`}
+                        className={`relative p-4 rounded-lg border-2 text-left transition-all ${settings.mode === 'local'
+                            ? 'border-emerald-500 bg-emerald-500/10'
+                            : 'border-[var(--border-subtle)] hover:border-[var(--border-focus)]'
+                            }`}
                     >
                         <div className="flex items-center gap-3 mb-3">
                             <div className={`p-2 rounded-lg ${settings.mode === 'local' ? 'bg-emerald-500/20' : 'bg-[var(--bg-app)]'}`}>
@@ -366,11 +386,10 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
                     {/* Server Storage Option */}
                     <button
                         onClick={() => onChange({ mode: 'server' })}
-                        className={`relative p-4 rounded-lg border-2 text-left transition-all ${
-                            settings.mode === 'server'
-                                ? 'border-blue-500 bg-blue-500/10'
-                                : 'border-[var(--border-subtle)] hover:border-[var(--border-focus)]'
-                        }`}
+                        className={`relative p-4 rounded-lg border-2 text-left transition-all ${settings.mode === 'server'
+                            ? 'border-blue-500 bg-blue-500/10'
+                            : 'border-[var(--border-subtle)] hover:border-[var(--border-focus)]'
+                            }`}
                     >
                         <div className="flex items-center gap-3 mb-3">
                             <div className={`p-2 rounded-lg ${settings.mode === 'server' ? 'bg-blue-500/20' : 'bg-[var(--bg-app)]'}`}>
@@ -527,22 +546,20 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange })
                         <div className="flex gap-3">
                             <button
                                 onClick={() => onChange({ compression: { ...settings.compression, model: 'remote' } })}
-                                className={`flex-1 px-3 py-2 rounded-md text-sm transition-colors ${
-                                    settings.compression.model === 'remote'
-                                        ? 'bg-emerald-600 text-white'
-                                        : 'bg-[var(--bg-app)] text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)]'
-                                }`}
+                                className={`flex-1 px-3 py-2 rounded-md text-sm transition-colors ${settings.compression.model === 'remote'
+                                    ? 'bg-emerald-600 text-white'
+                                    : 'bg-[var(--bg-app)] text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)]'
+                                    }`}
                             >
                                 <Cloud className="w-4 h-4 inline-block mr-2" />
                                 Remote (Faster)
                             </button>
                             <button
                                 onClick={() => onChange({ compression: { ...settings.compression, model: 'local' } })}
-                                className={`flex-1 px-3 py-2 rounded-md text-sm transition-colors ${
-                                    settings.compression.model === 'local'
-                                        ? 'bg-emerald-600 text-white'
-                                        : 'bg-[var(--bg-app)] text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)]'
-                                }`}
+                                className={`flex-1 px-3 py-2 rounded-md text-sm transition-colors ${settings.compression.model === 'local'
+                                    ? 'bg-emerald-600 text-white'
+                                    : 'bg-[var(--bg-app)] text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)]'
+                                    }`}
                             >
                                 <HardDrive className="w-4 h-4 inline-block mr-2" />
                                 Local (Private)
@@ -605,6 +622,44 @@ const PrivacySettings: React.FC<PrivacySettingsProps> = ({ settings, onChange })
     );
 };
 
+interface EditorSettingsProps {
+    settings: SettingsState['editor'];
+    onChange: (updates: Partial<SettingsState['editor']>) => void;
+}
+
+const EditorSettings: React.FC<EditorSettingsProps> = ({ settings, onChange }) => {
+    return (
+        <div className="space-y-6">
+            <div>
+                <h3 className="text-base font-semibold text-[var(--fg-primary)] mb-1">Editor</h3>
+                <p className="text-sm text-[var(--fg-tertiary)] mb-4">
+                    Configure editor behavior and intelligence.
+                </p>
+            </div>
+
+            {/* LSP Toggle */}
+            <div className="bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded-lg p-4">
+                <div className="flex items-center justify-between mb-2">
+                    <div>
+                        <div className="text-sm font-medium text-[var(--fg-primary)] flex items-center gap-2">
+                            <Zap className="w-4 h-4 text-emerald-500" />
+                            Language Intelligence (LSP)
+                        </div>
+                    </div>
+                    <Toggle
+                        checked={settings.enableLsp}
+                        onChange={(checked) => onChange({ enableLsp: checked })}
+                    />
+                </div>
+                <div className="text-xs text-[var(--fg-tertiary)] ml-0">
+                    Enable advanced features like Hover, Go to Definition, and Autocomplete.
+                    Requires language servers (e.g. rust-analyzer) to be installed on your system.
+                </div>
+            </div>
+        </div>
+    );
+};
+
 interface ToggleProps {
     checked: boolean;
     onChange: (checked: boolean) => void;
@@ -616,14 +671,12 @@ const Toggle: React.FC<ToggleProps> = ({ checked, onChange }) => {
             role="switch"
             aria-checked={checked}
             onClick={() => onChange(!checked)}
-            className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 ${
-                checked ? 'bg-emerald-600' : 'bg-[var(--bg-app)]'
-            }`}
+            className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 ${checked ? 'bg-emerald-600' : 'bg-[var(--bg-app)]'
+                }`}
         >
             <span
-                className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
-                    checked ? 'translate-x-4' : 'translate-x-0'
-                }`}
+                className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${checked ? 'translate-x-4' : 'translate-x-0'
+                    }`}
             />
         </button>
     );

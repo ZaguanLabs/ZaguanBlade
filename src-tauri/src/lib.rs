@@ -236,9 +236,16 @@ impl AppState {
             .expect("Failed to initialize Language Service"),
         );
 
-        // Enable LSP integration
-        if let Err(e) = language_service.enable_lsp() {
-            eprintln!("Warning: Failed to enable LSP: {}", e);
+        // Enable LSP based on project settings
+        let settings =
+            crate::project_settings::load_project_settings(&std::path::PathBuf::from(ls_root));
+
+        if settings.editor.enable_lsp {
+            if let Err(e) = language_service.enable_lsp() {
+                eprintln!("Warning: Failed to enable LSP: {}", e);
+            }
+        } else {
+            println!("LSP support is disabled in project settings.");
         }
 
         let language_handler =

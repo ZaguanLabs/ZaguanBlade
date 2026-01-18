@@ -102,6 +102,19 @@ pub struct PrivacySettings {
     pub telemetry: bool,
 }
 
+/// Editor settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EditorSettings {
+    #[serde(default = "default_true")]
+    pub enable_lsp: bool,
+}
+
+impl Default for EditorSettings {
+    fn default() -> Self {
+        Self { enable_lsp: true }
+    }
+}
+
 /// Per-project settings stored in .zblade/config/settings.json
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProjectSettings {
@@ -111,6 +124,8 @@ pub struct ProjectSettings {
     pub context: ContextSettings,
     #[serde(default)]
     pub privacy: PrivacySettings,
+    #[serde(default)]
+    pub editor: EditorSettings,
 }
 
 fn default_true() -> bool {
@@ -132,13 +147,15 @@ pub fn get_zblade_dir(project_path: &Path) -> PathBuf {
 
 /// Get the settings file path for a project
 pub fn get_settings_path(project_path: &Path) -> PathBuf {
-    get_zblade_dir(project_path).join("config").join("settings.json")
+    get_zblade_dir(project_path)
+        .join("config")
+        .join("settings.json")
 }
 
 /// Initialize .zblade directory structure if it doesn't exist
 pub fn init_zblade_dir(project_path: &Path) -> Result<(), String> {
     let zblade_dir = get_zblade_dir(project_path);
-    
+
     // Create directory structure
     let dirs = [
         zblade_dir.join("config"),
@@ -147,12 +164,12 @@ pub fn init_zblade_dir(project_path: &Path) -> Result<(), String> {
         zblade_dir.join("index"),
         zblade_dir.join("cache"),
     ];
-    
+
     for dir in &dirs {
         fs::create_dir_all(dir)
             .map_err(|e| format!("Failed to create directory {:?}: {}", dir, e))?;
     }
-    
+
     // Create .gitignore in .zblade if it doesn't exist
     let gitignore_path = zblade_dir.join(".gitignore");
     if !gitignore_path.exists() {
@@ -165,7 +182,7 @@ pub fn init_zblade_dir(project_path: &Path) -> Result<(), String> {
         fs::write(&gitignore_path, gitignore_content)
             .map_err(|e| format!("Failed to create .gitignore: {}", e))?;
     }
-    
+
     // Create default instructions.md if it doesn't exist
     let instructions_path = zblade_dir.join("instructions.md");
     if !instructions_path.exists() {
@@ -188,25 +205,23 @@ Add project-specific instructions for the AI assistant here.
         fs::write(&instructions_path, instructions_content)
             .map_err(|e| format!("Failed to create instructions.md: {}", e))?;
     }
-    
+
     Ok(())
 }
 
 /// Load project settings from disk
 pub fn load_project_settings(project_path: &Path) -> ProjectSettings {
     let settings_path = get_settings_path(project_path);
-    
+
     if !settings_path.exists() {
         return ProjectSettings::default();
     }
-    
+
     match fs::read_to_string(&settings_path) {
-        Ok(content) => {
-            serde_json::from_str(&content).unwrap_or_else(|e| {
-                eprintln!("[SETTINGS] Failed to parse settings: {}", e);
-                ProjectSettings::default()
-            })
-        }
+        Ok(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
+            eprintln!("[SETTINGS] Failed to parse settings: {}", e);
+            ProjectSettings::default()
+        }),
         Err(e) => {
             eprintln!("[SETTINGS] Failed to read settings: {}", e);
             ProjectSettings::default()
@@ -215,18 +230,20 @@ pub fn load_project_settings(project_path: &Path) -> ProjectSettings {
 }
 
 /// Save project settings to disk
-pub fn save_project_settings(project_path: &Path, settings: &ProjectSettings) -> Result<(), String> {
+pub fn save_project_settings(
+    project_path: &Path,
+    settings: &ProjectSettings,
+) -> Result<(), String> {
     // Ensure .zblade directory exists
     init_zblade_dir(project_path)?;
-    
+
     let settings_path = get_settings_path(project_path);
-    
+
     let json = serde_json::to_string_pretty(settings)
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-    
-    fs::write(&settings_path, json)
-        .map_err(|e| format!("Failed to write settings: {}", e))?;
-    
+
+    fs::write(&settings_path, json).map_err(|e| format!("Failed to write settings: {}", e))?;
+
     eprintln!("[SETTINGS] Saved settings to {:?}", settings_path);
     Ok(())
 }
@@ -259,7 +276,7 @@ mod tests {
         let settings = ProjectSettings::default();
         let json = serde_json::to_string_pretty(&settings).unwrap();
         let restored: ProjectSettings = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(restored.storage.mode, settings.storage.mode);
         assert_eq!(restored.context.max_tokens, settings.context.max_tokens);
     }
@@ -268,28 +285,33 @@ mod tests {
     fn test_init_zblade_dir() {
         let temp = tempdir().unwrap();
         let project_path = temp.path();
-        
+
         init_zblade_dir(project_path).unwrap();
-        
+
         assert!(get_zblade_dir(project_path).exists());
         assert!(get_zblade_dir(project_path).join("config").exists());
-        assert!(get_zblade_dir(project_path).join("artifacts").join("conversations").exists());
+        assert!(get_zblade_dir(project_path)
+            .join("artifacts")
+            .join("conversations")
+            .exists());
         assert!(get_zblade_dir(project_path).join("index").exists());
         assert!(get_zblade_dir(project_path).join(".gitignore").exists());
-        assert!(get_zblade_dir(project_path).join("instructions.md").exists());
+        assert!(get_zblade_dir(project_path)
+            .join("instructions.md")
+            .exists());
     }
 
     #[test]
     fn test_save_and_load_settings() {
         let temp = tempdir().unwrap();
         let project_path = temp.path();
-        
+
         let mut settings = ProjectSettings::default();
         settings.storage.mode = StorageMode::Server;
         settings.context.max_tokens = 16000;
-        
+
         save_project_settings(project_path, &settings).unwrap();
-        
+
         let loaded = load_project_settings(project_path);
         assert_eq!(loaded.storage.mode, StorageMode::Server);
         assert_eq!(loaded.context.max_tokens, 16000);
