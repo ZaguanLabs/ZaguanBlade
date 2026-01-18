@@ -28,14 +28,10 @@ pub struct LanguageService {
 /// Cached file data
 #[derive(Clone)]
 struct CachedFile {
-    /// File content
-    content: String,
     /// Content hash for change detection
     hash: String,
     /// Extracted symbols
     symbols: Vec<Symbol>,
-    /// Last modified timestamp
-    modified_at: u64,
 }
 
 /// Error type for language service operations
@@ -163,10 +159,8 @@ impl LanguageService {
             cache.insert(
                 file_path.to_string(),
                 CachedFile {
-                    content,
                     hash,
                     symbols: symbols.clone(),
-                    modified_at: now_timestamp(),
                 },
             );
         }
@@ -533,10 +527,8 @@ impl LanguageService {
             cache.insert(
                 file_path.to_string(),
                 CachedFile {
-                    content: content.to_string(),
                     hash,
                     symbols: symbols.clone(),
-                    modified_at: now_timestamp(),
                 },
             );
         }
@@ -572,14 +564,6 @@ fn compute_hash(content: &str) -> String {
     let mut hasher = DefaultHasher::new();
     content.hash(&mut hasher);
     format!("{:x}", hasher.finish())
-}
-
-/// Get current timestamp in seconds
-fn now_timestamp() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
 }
 
 #[cfg(test)]

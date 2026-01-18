@@ -222,43 +222,6 @@ impl SemanticPatch {
     }
 }
 
-/// A batch of patches to apply together
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PatchBatch {
-    /// Unique batch identifier
-    pub id: String,
-    /// Description of the batch
-    pub description: String,
-    /// Patches in this batch (order matters)
-    pub patches: Vec<SemanticPatch>,
-    /// Apply all or nothing
-    pub atomic: bool,
-}
-
-impl PatchBatch {
-    /// Create a new patch batch
-    pub fn new(description: &str) -> Self {
-        Self {
-            id: uuid::Uuid::new_v4().to_string(),
-            description: description.to_string(),
-            patches: Vec::new(),
-            atomic: true,
-        }
-    }
-
-    /// Add a patch to the batch
-    pub fn add(mut self, patch: SemanticPatch) -> Self {
-        self.patches.push(patch);
-        self
-    }
-
-    /// Set whether the batch is atomic
-    pub fn atomic(mut self, atomic: bool) -> Self {
-        self.atomic = atomic;
-        self
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,27 +239,6 @@ mod tests {
         assert_eq!(patch.file_path, "test.ts");
         matches!(patch.operation, PatchOperation::Replace);
         matches!(patch.target, PatchTarget::Symbol { .. });
-    }
-
-    #[test]
-    fn test_patch_batch() {
-        let batch = PatchBatch::new("Refactoring auth")
-            .add(SemanticPatch::rename_symbol(
-                "auth.ts",
-                "validate",
-                "validateToken",
-                None,
-                "Rename for clarity",
-            ))
-            .add(SemanticPatch::delete_symbol(
-                "auth.ts",
-                "deprecatedCheck",
-                None,
-                "Remove deprecated function",
-            ));
-
-        assert_eq!(batch.patches.len(), 2);
-        assert!(batch.atomic);
     }
 
     #[test]

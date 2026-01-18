@@ -5,7 +5,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
 use crate::tree_sitter::Language;
@@ -175,40 +175,6 @@ impl FileIndexer {
     /// Estimate total files for progress tracking
     pub fn count_files(&self) -> usize {
         self.discover_files().len()
-    }
-}
-
-/// Statistics from a batch indexing operation
-#[derive(Debug, Clone, Default)]
-pub struct BatchIndexStats {
-    pub started_at: Option<Instant>,
-    pub files_discovered: usize,
-    pub files_indexed: usize,
-    pub files_failed: usize,
-    pub symbols_total: usize,
-}
-
-impl BatchIndexStats {
-    pub fn new(files_discovered: usize) -> Self {
-        Self {
-            started_at: Some(Instant::now()),
-            files_discovered,
-            ..Default::default()
-        }
-    }
-
-    pub fn elapsed_ms(&self) -> u64 {
-        self.started_at
-            .map(|s| s.elapsed().as_millis() as u64)
-            .unwrap_or(0)
-    }
-
-    pub fn progress_percent(&self) -> f32 {
-        if self.files_discovered == 0 {
-            0.0
-        } else {
-            (self.files_indexed + self.files_failed) as f32 / self.files_discovered as f32
-        }
     }
 }
 
