@@ -427,7 +427,7 @@ impl BladeWsClient {
     /// Send conversation context in response to get_conversation_context request (RFC-002)
     pub async fn send_conversation_context(
         &self,
-        _request_id: String,
+        request_id: String,
         session_id: String,
         messages: Vec<serde_json::Value>,
     ) -> Result<(), String> {
@@ -435,12 +435,17 @@ impl BladeWsClient {
         let conn = conn.as_ref().ok_or("Not connected")?;
 
         let payload = ConversationContextPayload {
-            session_id,
+            session_id: session_id.clone(),
             messages,
         };
 
+        eprintln!(
+            "[BLADE WS] Sending conversation context response: id={} session={}",
+            request_id, session_id
+        );
+
         let msg = WsBaseMessage {
-            id: format!("ctx-{}", chrono::Utc::now().timestamp_millis()),
+            id: request_id, // Must match the request ID for server correlation
             msg_type: "conversation_context".to_string(),
             timestamp: chrono::Utc::now().timestamp_millis(),
             payload: Some(serde_json::to_value(payload).unwrap()),
