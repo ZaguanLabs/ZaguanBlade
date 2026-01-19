@@ -40,6 +40,7 @@ Zaguán Blade uses a **hybrid architecture** for language intelligence:
 | Auto-index on open | `lib.rs` (open_workspace) | Background indexing when workspace opens |
 | Signature Help | `signatureHelp.ts` | Parameter hints on '(' and ',' |
 | Code Actions UI | `codeActions.ts` | Lightbulb menu with quick fixes |
+| Find References | `references.ts` | Shift+F12 popup menu |
 
 ### 🔄 What's Partially Working
 
@@ -52,7 +53,6 @@ Zaguán Blade uses a **hybrid architecture** for language intelligence:
 
 | Feature | Description | Priority |
 |---------|-------------|----------|
-| **Find references** | Where is this symbol used? (backend ready, UI missing) | MEDIUM |
 | **Rename symbol** | Refactor across files | MEDIUM |
 | **Document symbols** | Outline view / breadcrumbs | LOW |
 | **Auto-import** | Add missing imports automatically | LOW |
