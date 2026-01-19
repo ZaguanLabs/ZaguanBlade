@@ -10,8 +10,17 @@ import type {
     LanguageLocation,
     LanguageDocumentSymbol,
     LanguageDiagnostic,
-    LanguageEvent
+    LanguageEvent,
+    SignatureInfo,
+    CodeActionInfo
 } from '../types/blade';
+
+// Result type for signature help
+export interface SignatureHelpResult {
+    signatures: SignatureInfo[];
+    activeSignature: number | null;
+    activeParameter: number | null;
+}
 
 /**
  * Service for interacting with the backend Language Service (Tree-sitter + LSP).
@@ -146,6 +155,51 @@ export class LanguageService {
             payload: { file_path: filePath }
         }, (event) => {
             if (event.type === 'DiagnosticsUpdated') return event.payload.diagnostics;
+            return undefined;
+        });
+    }
+
+    /**
+     * Get signature help (parameter hints) at position
+     */
+    static async getSignatureHelp(filePath: string, line: number, character: number): Promise<SignatureHelpResult | null> {
+        return this.request<SignatureHelpResult | null>("GetSignatureHelp", {
+            type: "GetSignatureHelp",
+            payload: { file_path: filePath, line, character }
+        }, (event) => {
+            if (event.type === 'SignatureHelpReady') {
+                if (event.payload.signatures.length === 0) return null;
+                return {
+                    signatures: event.payload.signatures,
+                    activeSignature: event.payload.active_signature,
+                    activeParameter: event.payload.active_parameter
+                };
+            }
+            return undefined;
+        });
+    }
+
+    /**
+     * Get code actions (quick fixes) for a range
+     */
+    static async getCodeActions(
+        filePath: string,
+        startLine: number,
+        startCharacter: number,
+        endLine: number,
+        endCharacter: number
+    ): Promise<CodeActionInfo[]> {
+        return this.request<CodeActionInfo[]>("GetCodeActions", {
+            type: "GetCodeActions",
+            payload: {
+                file_path: filePath,
+                start_line: startLine,
+                start_character: startCharacter,
+                end_line: endLine,
+                end_character: endCharacter
+            }
+        }, (event) => {
+            if (event.type === 'CodeActionsReady') return event.payload.actions;
             return undefined;
         });
     }

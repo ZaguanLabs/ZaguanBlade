@@ -332,6 +332,63 @@ impl LspManager {
             .map(|c| c.get_diagnostics(&uri))
             .unwrap_or_default()
     }
+
+    /// Get signature help (parameter hints)
+    pub fn signature_help(
+        &mut self,
+        file_path: &str,
+        line: u32,
+        character: u32,
+    ) -> Result<Option<super::types::SignatureHelp>, LspError> {
+        let language = self
+            .language_for_file(file_path)
+            .ok_or_else(|| LspError::UnsupportedLanguage(file_path.to_string()))?;
+
+        self.ensure_server(&language)?;
+
+        let uri = path_to_uri(file_path);
+        self.servers
+            .get_mut(&language)
+            .ok_or(LspError::ServerNotFound(language))?
+            .signature_help(&uri, line, character)
+    }
+
+    /// Get code actions (quick fixes, refactorings)
+    pub fn code_actions(
+        &mut self,
+        file_path: &str,
+        start_line: u32,
+        start_char: u32,
+        end_line: u32,
+        end_char: u32,
+    ) -> Result<Vec<super::types::CodeAction>, LspError> {
+        let language = self
+            .language_for_file(file_path)
+            .ok_or_else(|| LspError::UnsupportedLanguage(file_path.to_string()))?;
+
+        self.ensure_server(&language)?;
+
+        let uri = path_to_uri(file_path);
+
+        // Get any cached diagnostics for this range to include in context
+        let diagnostics = self.get_diagnostics(file_path);
+        let relevant_diagnostics: Vec<_> = diagnostics
+            .into_iter()
+            .filter(|d| d.range.start.line >= start_line && d.range.end.line <= end_line)
+            .collect();
+
+        self.servers
+            .get_mut(&language)
+            .ok_or(LspError::ServerNotFound(language))?
+            .code_actions(
+                &uri,
+                start_line,
+                start_char,
+                end_line,
+                end_char,
+                &relevant_diagnostics,
+            )
+    }
 }
 
 impl Drop for LspManager {

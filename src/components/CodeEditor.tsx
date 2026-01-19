@@ -31,6 +31,7 @@ import {
     scrollPastEnd,
     languageFeatures,
     diagnosticsExtension,
+    signatureHelpExtension,
 } from "./editor/extensions";
 import { useEditor } from "../contexts/EditorContext";
 import { useContextMenu, type ContextMenuItem } from "./ui/ContextMenu";
@@ -84,6 +85,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     const languageConf = useRef(new Compartment());
     const languageFeaturesConf = useRef(new Compartment());
     const diagnosticsConf = useRef(new Compartment());
+    const signatureHelpConf = useRef(new Compartment());
     const { setCursorPosition, setSelection, clearSelection } = useEditor();
     const { showMenu } = useContextMenu();
 
@@ -223,6 +225,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 languageConf.current.of(getLanguageExtension(filename)),
                 languageFeaturesConf.current.of(languageFeatures(filename || "", onNavigate)),
                 diagnosticsConf.current.of(diagnosticsExtension(filename || "")),
+                signatureHelpConf.current.of(signatureHelpExtension(filename || "")),
 
                 // Keymaps
                 keymap.of([
@@ -302,6 +305,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                     languageConf.current.reconfigure(getLanguageExtension(filename)),
                     languageFeaturesConf.current.reconfigure(languageFeatures(filename || "", onNavigate)),
                     diagnosticsConf.current.reconfigure(diagnosticsExtension(filename || "")),
+                    signatureHelpConf.current.reconfigure(signatureHelpExtension(filename || "")),
                     setBaseContent.of(content) // Initialize virtual buffer with base content
                 ]
             });

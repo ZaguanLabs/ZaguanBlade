@@ -16,3 +16,4 @@ export {
 } from "./inlineDiff";
 export { languageFeatures } from "./languageFeatures";
 export { diagnosticsExtension, setDiagnostics, clearDiagnostics, getDiagnostics } from "./diagnostics";
+export { signatureHelpExtension, triggerSignatureHelp } from "./signatureHelp";

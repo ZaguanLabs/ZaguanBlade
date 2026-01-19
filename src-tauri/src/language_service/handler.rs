@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::blade_protocol::{
     BladeError, BladeEvent, BladeEventEnvelope, BladeResult, CodeAction, CompletionItem,
     LanguageDiagnostic, LanguageDocumentSymbol, LanguageEvent, LanguageIntent, LanguageLocation,
-    LanguagePosition, LanguageRange, LanguageSymbol, SignatureInfo,
+    LanguagePosition, LanguageRange, LanguageSymbol, ParameterInfo, SignatureInfo,
 };
 use crate::language_service::LanguageService;
 use crate::tree_sitter::SymbolType;
@@ -350,34 +350,119 @@ impl LanguageHandler {
             }
 
             LanguageIntent::GetSignatureHelp {
-                file_path: _,
-                line: _,
-                character: _,
+                file_path,
+                line,
+                character,
             } => {
-                // Signature help - parameter hints while typing function calls
-                // TODO: Implement via LSP textDocument/signatureHelp
-                // For now, return empty result
+                let help = self
+                    .service
+                    .get_signature_help(&file_path, line, character)
+                    .map_err(|e| BladeError::Internal {
+                        trace_id: Uuid::new_v4().to_string(),
+                        message: format!("SignatureHelp failed: {}", e),
+                    })?;
+
+                let (signatures, active_sig, active_param) = if let Some(h) = help {
+                    let sigs: Vec<SignatureInfo> = h
+                        .signatures
+                        .into_iter()
+                        .map(|s| SignatureInfo {
+                            label: s.label,
+                            documentation: s.documentation.and_then(|d| match d {
+                                serde_json::Value::String(s) => Some(s),
+                                serde_json::Value::Object(o) => o
+                                    .get("value")
+                                    .and_then(|v| v.as_str().map(|s| s.to_string())),
+                                _ => None,
+                            }),
+                            parameters: s
+                                .parameters
+                                .into_iter()
+                                .map(|p| ParameterInfo {
+                                    label: match p.label {
+                                        serde_json::Value::String(s) => s,
+                                        serde_json::Value::Array(arr) if arr.len() == 2 => {
+                                            // [start, end] offsets - just return as string for now
+                                            format!("[{}, {}]", arr[0], arr[1])
+                                        }
+                                        _ => p.label.to_string(),
+                                    },
+                                    documentation: p.documentation.and_then(|d| match d {
+                                        serde_json::Value::String(s) => Some(s),
+                                        serde_json::Value::Object(o) => o
+                                            .get("value")
+                                            .and_then(|v| v.as_str().map(|s| s.to_string())),
+                                        _ => None,
+                                    }),
+                                })
+                                .collect(),
+                        })
+                        .collect();
+                    (sigs, h.active_signature, h.active_parameter)
+                } else {
+                    (vec![], None, None)
+                };
+
                 LanguageEvent::SignatureHelpReady {
                     intent_id,
-                    signatures: vec![],
-                    active_signature: None,
-                    active_parameter: None,
+                    signatures,
+                    active_signature: active_sig,
+                    active_parameter: active_param,
                 }
             }
 
             LanguageIntent::GetCodeActions {
-                file_path: _,
-                start_line: _,
-                start_character: _,
-                end_line: _,
-                end_character: _,
+                file_path,
+                start_line,
+                start_character,
+                end_line,
+                end_character,
             } => {
-                // Code actions - quick fixes and refactoring
-                // TODO: Implement via LSP textDocument/codeAction
-                // For now, return empty result
+                let actions = self
+                    .service
+                    .get_code_actions(
+                        &file_path,
+                        start_line,
+                        start_character,
+                        end_line,
+                        end_character,
+                    )
+                    .map_err(|e| BladeError::Internal {
+                        trace_id: Uuid::new_v4().to_string(),
+                        message: format!("CodeActions failed: {}", e),
+                    })?;
+
+                let action_items: Vec<CodeAction> = actions
+                    .into_iter()
+                    .map(|a| CodeAction {
+                        title: a.title,
+                        kind: a.kind,
+                        diagnostics: if a.diagnostics.is_empty() {
+                            None
+                        } else {
+                            Some(
+                                a.diagnostics
+                                    .into_iter()
+                                    .map(|d| LanguageDiagnostic {
+                                        range: self.map_range(d.range),
+                                        severity: d
+                                            .severity
+                                            .map(|s| format!("{:?}", s))
+                                            .unwrap_or_else(|| "information".to_string()),
+                                        code: d.code.map(|c| c.to_string()),
+                                        source: d.source,
+                                        message: d.message,
+                                    })
+                                    .collect(),
+                            )
+                        },
+                        is_preferred: a.is_preferred,
+                    })
+                    .collect();
+
                 LanguageEvent::CodeActionsReady {
                     intent_id,
-                    actions: vec![],
+                    actions: action_items,
                 }
             }
         };
