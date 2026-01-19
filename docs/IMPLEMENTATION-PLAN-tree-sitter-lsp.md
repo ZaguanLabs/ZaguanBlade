@@ -38,14 +38,14 @@ Zaguán Blade uses a **hybrid architecture** for language intelligence:
 | didOpen/didChange | `CodeEditor.tsx` + `handler.rs` | LSP document sync on file open/edit |
 | Diagnostics display | `diagnostics.ts` | Red/yellow/blue underlines for errors |
 | Auto-index on open | `lib.rs` (open_workspace) | Background indexing when workspace opens |
+| Signature Help | `signatureHelp.ts` | Parameter hints on '(' and ',' |
 
 ### 🔄 What's Partially Working
 
 | Feature | Issue | Priority |
 |---------|-------|----------|
 | **Hover tooltips** | `GetHover` returns data, tooltip CSS needs polish | MEDIUM |
-| **Signature Help** | Backend scaffolded, needs frontend UI | MEDIUM |
-| **Code Actions** | Backend scaffolded, needs frontend UI | MEDIUM |
+| **Code Actions** | Backend complete, needs frontend UI (lightbulb menu) | MEDIUM |
 
 ### ❌ What's Missing
 
