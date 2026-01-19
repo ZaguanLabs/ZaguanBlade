@@ -37,21 +37,21 @@ Zaguán Blade uses a **hybrid architecture** for language intelligence:
 | Settings toggle | `SettingsModal.tsx` | Enable/disable LSP |
 | didOpen/didChange | `CodeEditor.tsx` + `handler.rs` | LSP document sync on file open/edit |
 | Diagnostics display | `diagnostics.ts` | Red/yellow/blue underlines for errors |
+| Auto-index on open | `lib.rs` (open_workspace) | Background indexing when workspace opens |
 
 ### 🔄 What's Partially Working
 
 | Feature | Issue | Priority |
 |---------|-------|----------|
 | **Hover tooltips** | `GetHover` returns data, tooltip CSS needs polish | MEDIUM |
-| **Workspace indexing** | Manual trigger only, no auto-index on open | MEDIUM |
+| **Signature Help** | Backend scaffolded, needs frontend UI | MEDIUM |
+| **Code Actions** | Backend scaffolded, needs frontend UI | MEDIUM |
 
 ### ❌ What's Missing
 
 | Feature | Description | Priority |
 |---------|-------------|----------|
-| **Quick fixes** | "Did you mean X?" actions | HIGH |
-| **Signature help** | Parameter hints while typing | MEDIUM |
-| **Find references** | Where is this symbol used? | MEDIUM |
+| **Find references** | Where is this symbol used? (backend ready, UI missing) | MEDIUM |
 | **Rename symbol** | Refactor across files | MEDIUM |
 | **Document symbols** | Outline view / breadcrumbs | LOW |
 | **Auto-import** | Add missing imports automatically | LOW |
