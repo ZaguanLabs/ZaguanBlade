@@ -4,6 +4,7 @@ import React, { useState, useEffect, forwardRef, useImperativeHandle } from "rea
 import Terminal from "./Terminal";
 import { Plus, X, Terminal as TerminalIcon } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 
 interface TerminalTab {
     id: string;
@@ -22,23 +23,59 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
     ]);
     const [activeId, setActiveId] = useState<string>("term-1");
 
+    const getTitleFromCwd = (path?: string, fallback = "Terminal") => {
+        if (!path) return fallback;
+        const normalized = path.replace(/[\\/]+$/, "");
+        if (!normalized) return fallback;
+        const parts = normalized.split(/[\\/]/);
+        return parts[parts.length - 1] || fallback;
+    };
+
     useImperativeHandle(ref, () => ({
         getTerminalState: () => ({ terminals, activeId }),
         restoreTerminals: (restoredTerminals: TerminalTab[], restoredActiveId?: string) => {
             if (restoredTerminals.length > 0) {
-                setTerminals(restoredTerminals);
-                setActiveId(restoredActiveId || restoredTerminals[0].id);
+                const normalized = restoredTerminals.map((term) =>
+                    term.cwd ? { ...term, title: getTitleFromCwd(term.cwd, term.title) } : term
+                );
+                setTerminals(normalized);
+                setActiveId(restoredActiveId || normalized[0].id);
             }
         },
     }), [terminals, activeId]);
+
+    // Set initial terminal cwd/title to workspace root if available
+    useEffect(() => {
+        let isMounted = true;
+        const initWorkspace = async () => {
+            try {
+                const workspaceRoot = await invoke<string | null>("get_current_workspace");
+                if (!isMounted || !workspaceRoot) return;
+                setTerminals(prev =>
+                    prev.map(term =>
+                        term.cwd
+                            ? { ...term, title: getTitleFromCwd(term.cwd, term.title) }
+                            : { ...term, cwd: workspaceRoot, title: getTitleFromCwd(workspaceRoot, term.title) }
+                    )
+                );
+            } catch {
+                // ignore
+            }
+        };
+
+        initWorkspace();
+        return () => {
+            isMounted = false;
+        };
+    }, []);
 
     // Listen for open-terminal events from other components (e.g., File Explorer)
     useEffect(() => {
         const unlisten = listen<{ path: string }>('open-terminal', (event) => {
             const { path } = event.payload;
-            const folderName = path.split('/').pop() || 'Terminal';
+            const title = getTitleFromCwd(path, 'Terminal');
             const newId = `term-${Date.now()}`;
-            const newTab = { id: newId, title: folderName, cwd: path };
+            const newTab = { id: newId, title, cwd: path };
             setTerminals(prev => [...prev, newTab]);
             setActiveId(newId);
             console.log('[TerminalPane] Opening terminal at:', path);
@@ -49,10 +86,39 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
         };
     }, []);
 
-    const addTerminal = () => {
+    // Update terminal titles when backend reports cwd changes
+    useEffect(() => {
+        const unlisten = listen<{ id: string; cwd: string }>('terminal-cwd-changed', (event) => {
+            const { id, cwd } = event.payload;
+            setTerminals(prev =>
+                prev.map(term =>
+                    term.id === id
+                        ? { ...term, cwd, title: getTitleFromCwd(cwd, term.title) }
+                        : term
+                )
+            );
+        });
+
+        return () => {
+            unlisten.then(fn => fn());
+        };
+    }, []);
+
+    const addTerminal = async () => {
         const newId = `term-${Date.now()}`;
-        const newTab = { id: newId, title: "zsh" };
-        setTerminals([...terminals, newTab]);
+        let terminalCwd: string | undefined;
+        try {
+            const workspaceRoot = await invoke<string | null>("get_current_workspace");
+            terminalCwd = workspaceRoot || undefined;
+        } catch {
+            terminalCwd = undefined;
+        }
+        const newTab = {
+            id: newId,
+            title: getTitleFromCwd(terminalCwd, "Terminal"),
+            cwd: terminalCwd,
+        };
+        setTerminals(prev => [...prev, newTab]);
         setActiveId(newId);
     };
 

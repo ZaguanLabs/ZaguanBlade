@@ -18,10 +18,8 @@ pub fn list_directory(path: &Path) -> Vec<FileEntry> {
             let name = entry.file_name().to_string_lossy().to_string();
             let is_dir = path.is_dir();
 
-            // Skip hidden files/dirs (simple check)
-            if name.starts_with('.') {
-                continue;
-            }
+            // Hidden files/folders (starting with '.') are now included
+            // as they are often important in coding projects (.gitignore, .env, .github, etc.)
 
             let children = None;
             if is_dir {

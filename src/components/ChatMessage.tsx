@@ -56,11 +56,10 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
     const isStreaming = isActive && !hasContent;
 
     return (
-        <div className={`my-2 rounded-md border overflow-hidden transition-all duration-200 ${
-            isStreaming 
-                ? 'border-purple-500/30 bg-purple-950/10' 
-                : 'border-zinc-800/50 bg-zinc-900/20'
-        }`}>
+        <div className={`my-2 rounded-md border overflow-hidden transition-all duration-200 ${isStreaming
+            ? 'border-purple-500/30 bg-purple-950/10'
+            : 'border-zinc-800/50 bg-zinc-900/20'
+            }`}>
             {/* Header - clickable to toggle */}
             <button
                 onClick={handleToggle}
@@ -68,9 +67,8 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
             >
                 <div className="flex items-center gap-2 flex-1 min-w-0">
                     <Brain className={`w-3 h-3 flex-shrink-0 ${isStreaming ? 'text-purple-400 animate-pulse' : 'text-zinc-600'}`} />
-                    <span className={`font-mono text-[9px] uppercase tracking-wider flex-shrink-0 ${
-                        isStreaming ? 'text-purple-400' : 'text-zinc-600'
-                    }`}>
+                    <span className={`font-mono text-[9px] uppercase tracking-wider flex-shrink-0 ${isStreaming ? 'text-purple-400' : 'text-zinc-600'
+                        }`}>
                         {isStreaming ? 'Reasoning' : 'Thought Process'}
                     </span>
                     {!isExpanded && cleanContent && (
@@ -91,7 +89,7 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
 
             {/* Content - scrollable container */}
             {isExpanded && (
-                <div 
+                <div
                     ref={contentRef}
                     className="px-3 py-2 border-t border-zinc-800/30 bg-zinc-950/20 max-h-48 overflow-y-auto"
                 >
@@ -301,6 +299,15 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                             } else if (block.type === 'tool_call') {
                                 const toolCall = message.tool_calls?.find(tc => tc.id === block.id);
                                 if (!toolCall) return null;
+
+                                // Skip showing ToolCallDisplay for run_command when it's pending approval
+                                // The CommandApprovalCard will show it instead with Run/Skip buttons
+                                const isRunCommand = toolCall.function.name === 'run_command';
+                                const hasPendingApproval = pendingActions && pendingActions.length > 0;
+                                if (isRunCommand && hasPendingApproval) {
+                                    return null;  // CommandApprovalCard will render this
+                                }
+
                                 return (
                                     <div key={block.id} className="mb-3 space-y-2">
                                         <ToolCallDisplay
@@ -391,14 +398,22 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                                 )}
                                 {hasToolCalls && (
                                     <div className="mb-3 space-y-2">
-                                        {toolCalls.map((call, idx) => (
-                                            <ToolCallDisplay
-                                                key={`${call.id}-${idx}`}
-                                                toolCall={call}
-                                                status={call.status || 'executing'}
-                                                result={call.result}
-                                            />
-                                        ))}
+                                        {toolCalls
+                                            .filter(call => {
+                                                // Skip run_command when pending approval - CommandApprovalCard handles it
+                                                if (call.function.name === 'run_command' && pendingActions && pendingActions.length > 0) {
+                                                    return false;
+                                                }
+                                                return true;
+                                            })
+                                            .map((call, idx) => (
+                                                <ToolCallDisplay
+                                                    key={`${call.id}-${idx}`}
+                                                    toolCall={call}
+                                                    status={call.status || 'executing'}
+                                                    result={call.result}
+                                                />
+                                            ))}
                                     </div>
                                 )}
                                 {message.todos && message.todos.length > 0 && <TodoList todos={message.todos} />}

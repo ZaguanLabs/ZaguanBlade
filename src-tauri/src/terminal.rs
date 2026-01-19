@@ -1,3 +1,4 @@
+use crate::events::{event_names, TerminalCwdChangedPayload};
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use std::{
     collections::HashMap,
@@ -55,7 +56,11 @@ pub fn create_terminal<R: Runtime>(
 
     // Spawn the shell (bash for now, or use user's SHELL env)
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string());
-    let mut cmd = CommandBuilder::new(shell);
+    let shell_name = std::path::Path::new(&shell)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("sh");
+    let mut cmd = CommandBuilder::new(shell.clone());
 
     // Set working directory if provided
     if let Some(path) = cwd {
@@ -64,6 +69,26 @@ pub fn create_terminal<R: Runtime>(
 
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
+
+    // Ensure shells emit OSC 7 working-directory updates so the UI can track cwd changes.
+    if shell_name == "bash" {
+        let osc7_cmd = "printf '\\e]7;file://localhost%s\\e\\\\' \"$PWD\"";
+        let prompt_command = std::env::var("PROMPT_COMMAND").ok();
+        let combined = if let Some(existing) = prompt_command {
+            if existing.trim().is_empty() {
+                osc7_cmd.to_string()
+            } else {
+                format!("{existing};{osc7_cmd}")
+            }
+        } else {
+            osc7_cmd.to_string()
+        };
+        cmd.env("PROMPT_COMMAND", combined);
+    } else if shell_name == "zsh" {
+        if let Some(zdotdir) = ensure_zsh_zdotdir() {
+            cmd.env("ZDOTDIR", zdotdir);
+        }
+    }
 
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
 
@@ -86,32 +111,56 @@ pub fn create_terminal<R: Runtime>(
             },
         );
     }
-    
+
     // v1.1: Emit TerminalSpawned event
-    let _ = app_handle.emit("blade-event", crate::blade_protocol::BladeEventEnvelope {
-        id: uuid::Uuid::new_v4(),
-        timestamp: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64,
-        causality_id: None,
-        event: crate::blade_protocol::BladeEvent::Terminal(
-            crate::blade_protocol::TerminalEvent::Spawned {
-                id: id.clone(),
-                owner,
-            }
-        ),
-    });
+    let _ = app_handle.emit(
+        "blade-event",
+        crate::blade_protocol::BladeEventEnvelope {
+            id: uuid::Uuid::new_v4(),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+            causality_id: None,
+            event: crate::blade_protocol::BladeEvent::Terminal(
+                crate::blade_protocol::TerminalEvent::Spawned {
+                    id: id.clone(),
+                    owner,
+                },
+            ),
+        },
+    );
 
     // Spawn a thread to read output and emit to frontend
     let id_clone = id.clone();
+    let app_handle_clone = app_handle.clone();
     thread::spawn(move || {
         let mut buffer = [0u8; 1024];
+        let mut pending_osc = String::new();
         loop {
             match reader.read(&mut buffer) {
                 Ok(n) if n > 0 => {
                     let output = String::from_utf8_lossy(&buffer[..n]).to_string();
-                    
+
+                    let combined = if pending_osc.is_empty() {
+                        output.clone()
+                    } else {
+                        let mut merged = pending_osc;
+                        merged.push_str(&output);
+                        merged
+                    };
+                    let (cwd_updates, new_pending) = extract_osc7_paths(&combined);
+                    pending_osc = new_pending;
+                    for cwd in cwd_updates {
+                        let _ = app_handle_clone.emit(
+                            event_names::TERMINAL_CWD_CHANGED,
+                            TerminalCwdChangedPayload {
+                                id: id_clone.clone(),
+                                cwd,
+                            },
+                        );
+                    }
+
                     // v1.1: Increment sequence number
                     let _seq = {
                         let mut seq_guard = seq_counter.lock().unwrap();
@@ -119,7 +168,7 @@ pub fn create_terminal<R: Runtime>(
                         *seq_guard += 1;
                         current
                     };
-                    
+
                     let payload = TerminalOutput {
                         id: id_clone.clone(),
                         data: output,
@@ -186,6 +235,102 @@ struct TerminalOutput {
 struct TerminalExit {
     id: String,
     exit_code: i32,
+}
+
+fn ensure_zsh_zdotdir() -> Option<String> {
+    let base_dir = std::env::temp_dir().join("zblade-zsh");
+    if std::fs::create_dir_all(&base_dir).is_err() {
+        return None;
+    }
+
+    let existing_zdotdir = std::env::var("ZDOTDIR").ok();
+    let source_line = if let Some(dir) = existing_zdotdir {
+        format!(
+            "if [ -f \"{}/.zshrc\" ]; then source \"{}/.zshrc\"; fi",
+            dir, dir
+        )
+    } else {
+        "if [ -f \"$HOME/.zshrc\" ]; then source \"$HOME/.zshrc\"; fi".to_string()
+    };
+
+    let zshrc = format!(
+        "{source_line}\n\
+function __zblade_osc7() {{ printf '\\e]7;file://localhost%s\\e\\\\' \"$PWD\"; }}\n\
+autoload -U add-zsh-hook\n\
+add-zsh-hook precmd __zblade_osc7\n"
+    );
+
+    let zshrc_path = base_dir.join(".zshrc");
+    if std::fs::write(&zshrc_path, zshrc).is_err() {
+        return None;
+    }
+
+    Some(base_dir.to_string_lossy().to_string())
+}
+
+fn extract_osc7_paths(input: &str) -> (Vec<String>, String) {
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    let mut paths = Vec::new();
+    let mut pending = String::new();
+
+    while i < bytes.len() {
+        if bytes[i] == 0x1b {
+            if i + 1 >= bytes.len() {
+                pending = input[i..].to_string();
+                break;
+            }
+            if bytes[i + 1] == b']' {
+                if i + 3 >= bytes.len() {
+                    pending = input[i..].to_string();
+                    break;
+                }
+                if bytes[i + 2] == b'7' && bytes[i + 3] == b';' {
+                    let start = i + 4;
+                    let mut j = start;
+                    let mut terminator_len = None;
+                    while j < bytes.len() {
+                        if bytes[j] == 0x07 {
+                            terminator_len = Some((j, 1));
+                            break;
+                        }
+                        if bytes[j] == 0x1b && j + 1 < bytes.len() && bytes[j + 1] == b'\\' {
+                            terminator_len = Some((j, 2));
+                            break;
+                        }
+                        j += 1;
+                    }
+
+                    if let Some((end, term_len)) = terminator_len {
+                        let raw = &input[start..end];
+                        if let Some(path) = parse_osc7_path(raw) {
+                            paths.push(path);
+                        }
+                        i = end + term_len;
+                        continue;
+                    } else {
+                        pending = input[i..].to_string();
+                        break;
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+
+    (paths, pending)
+}
+
+fn parse_osc7_path(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let rest = trimmed.strip_prefix("file://")?;
+    let path_start = rest.find('/').unwrap_or(0);
+    let path = &rest[path_start..];
+    if path.is_empty() {
+        None
+    } else {
+        Some(path.to_string())
+    }
 }
 
 // Execute a command in a terminal (non-interactive, for AI command execution)
@@ -273,7 +418,7 @@ pub fn execute_command_in_terminal<R: Runtime>(
                 Ok(n) if n > 0 => {
                     let output = String::from_utf8_lossy(&buffer[..n]).to_string();
                     accumulated_output.push_str(&output);
-                    
+
                     // v1.1: Increment sequence number
                     let _seq = {
                         let mut seq_guard = seq_counter.lock().unwrap();
@@ -281,7 +426,7 @@ pub fn execute_command_in_terminal<R: Runtime>(
                         *seq_guard += 1;
                         current
                     };
-                    
+
                     let payload = TerminalOutput {
                         id: id_clone.clone(),
                         data: output,

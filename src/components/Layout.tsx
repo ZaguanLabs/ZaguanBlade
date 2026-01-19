@@ -9,7 +9,7 @@ import { TerminalPane, TerminalPaneHandle } from './TerminalPane';
 import { DocumentTabs } from './DocumentTabs';
 import { DocumentViewer } from './DocumentViewer';
 import { TitleBar } from './TitleBar';
-import { Settings } from 'lucide-react';
+import { GitBranch, Settings } from 'lucide-react';
 import { EditorProvider } from '../contexts/EditorContext';
 import { useChat } from '../hooks/useChat';
 import { ProtocolExplorer } from './dev/ProtocolExplorer';
@@ -17,6 +17,8 @@ import { SettingsModal } from './SettingsModal';
 import { StorageSetupModal } from './StorageSetupModal';
 import { useProjectState, type ProjectState } from '../hooks/useProjectState';
 import { useWarmup } from '../hooks/useWarmup';
+import { useGitStatus } from '../hooks/useGitStatus';
+import { GitPanel } from './GitPanel';
 
 interface Tab {
     id: string;
@@ -37,7 +39,25 @@ const AppLayoutInner: React.FC = () => {
     const [isDragging, setIsDragging] = useState(false);
     const [isChatDragging, setIsChatDragging] = useState(false);
     const [virtualFiles, setVirtualFiles] = useState<Set<string>>(new Set());
+    const [activeSidebar, setActiveSidebar] = useState<'explorer' | 'git'>('explorer');
     const chat = useChat();
+    const {
+        status: gitStatus,
+        files: gitFiles,
+        error: gitError,
+        filesError: gitFilesError,
+        lastRefreshedAt: gitLastRefreshedAt,
+        refresh: refreshGitStatus,
+        stageFile: stageGitFile,
+        unstageFile: unstageGitFile,
+        stageAll: stageAllGit,
+        unstageAll: unstageAllGit,
+        commit: commitGit,
+        push: pushGit,
+        diff: diffGit,
+        generateCommitMessage: generateGitCommitMessage,
+    } = useGitStatus();
+    const gitChangedCount = gitStatus?.changedCount ?? 0;
     const { pendingChanges, approveChange, rejectChange, selectedModelId, setSelectedModelId, messages } = chat;
     const [chatMessages, setChatMessages] = useState(chat.messages);
     const processingFilesRef = useRef<Set<string>>(new Set());
@@ -592,10 +612,30 @@ const AppLayoutInner: React.FC = () => {
             <div className="flex-1 flex overflow-hidden">
                 {/* Activity Bar (Vertical) */}
                 <div className="w-[50px] bg-[var(--bg-app)] border-r border-[var(--border-subtle)] flex flex-col items-center py-4 gap-6 z-20 shrink-0">
-                    <div className="p-2 rounded-md bg-[var(--bg-surface)] text-[var(--fg-primary)] shadow-sm border border-[var(--border-subtle)] group cursor-pointer hover:border-[var(--border-focus)] transition-colors">
-                        <svg className="w-5 h-5 opacity-90 group-hover:opacity-100 transition-opacity" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <div
+                        onClick={() => setActiveSidebar('explorer')}
+                        className={`p-2 rounded-md shadow-sm border transition-colors cursor-pointer ${activeSidebar === 'explorer'
+                            ? 'bg-[var(--bg-surface)] text-[var(--fg-primary)] border-[var(--border-focus)]'
+                            : 'border-transparent text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]'}
+                        `}
+                    >
+                        <svg className="w-5 h-5 opacity-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
                         </svg>
+                    </div>
+                    <div
+                        onClick={() => setActiveSidebar('git')}
+                        className={`relative p-2 rounded-md shadow-sm border transition-colors cursor-pointer ${activeSidebar === 'git'
+                            ? 'bg-[var(--bg-surface)] text-[var(--fg-primary)] border-[var(--border-focus)]'
+                            : 'border-transparent text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]'}
+                        `}
+                    >
+                        <GitBranch className="w-5 h-5" />
+                        {gitStatus?.isRepo && gitChangedCount > 0 && (
+                            <span className="absolute bottom-0 right-0 min-w-[14px] h-3 px-1 rounded-full bg-sky-500 text-[9px] leading-3 text-white text-center">
+                                {Math.min(gitChangedCount, 99)}
+                            </span>
+                        )}
                     </div>
                     <div className="p-2 rounded-md text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)] transition-all cursor-pointer">
                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -615,7 +655,26 @@ const AppLayoutInner: React.FC = () => {
 
                     {/* Explorer */}
                     <div className="w-64 min-w-[200px] flex flex-col border-r border-[var(--border-subtle)] bg-[var(--bg-panel)]">
-                        <ExplorerPanel onFileSelect={handleFileSelect} activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
+                        {activeSidebar === 'explorer' ? (
+                            <ExplorerPanel onFileSelect={handleFileSelect} activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
+                        ) : (
+                            <GitPanel
+                                status={gitStatus}
+                                files={gitFiles}
+                                error={gitError}
+                                filesError={gitFilesError}
+                                lastRefreshedAt={gitLastRefreshedAt}
+                                onRefresh={refreshGitStatus}
+                                onStageFile={stageGitFile}
+                                onUnstageFile={unstageGitFile}
+                                onStageAll={stageAllGit}
+                                onUnstageAll={unstageAllGit}
+                                onCommit={commitGit}
+                                onPush={pushGit}
+                                onDiff={diffGit}
+                                onGenerateCommitMessage={() => generateGitCommitMessage(selectedModelId)}
+                            />
+                        )}
                     </div>
 
                     {/* Editor & Terminal */}

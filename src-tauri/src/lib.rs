@@ -13,6 +13,7 @@ pub mod ephemeral_commands;
 pub mod ephemeral_documents;
 pub mod events;
 pub mod explorer;
+pub mod git;
 pub mod idempotency; // [NEW] v1.1: Idempotency cache
 pub mod language_service; // [NEW] Phase 2: Unified language service
 pub mod local_artifacts; // [NEW] RFC-002: Local conversation artifact storage
@@ -2395,10 +2396,11 @@ async fn dispatch(
     let idempotency_key = envelope.message.idempotency_key.clone();
     let intent = envelope.message.intent;
 
-    println!(
-        "[BladeProtocol] Dispatching Intent: {:?} (ID: {})",
-        intent, intent_id
-    );
+    // Debug logging disabled - was too verbose for File(List) intents
+    // println!(
+    //     "[BladeProtocol] Dispatching Intent: {:?} (ID: {})",
+    //     intent, intent_id
+    // );
 
     // 2. Idempotency Check (v1.1)
     if let Some(ref key) = idempotency_key {
@@ -3169,6 +3171,17 @@ pub fn run() {
             delete_local_conversation,
             submit_command_result,
             read_binary_file,
+            git::git_status_summary,
+            git::git_status_files,
+            git::git_stage_file,
+            git::git_unstage_file,
+            git::git_stage_all,
+            git::git_unstage_all,
+            git::git_commit,
+            git::git_push,
+            git::git_diff,
+            git::git_generate_commit_message,
+            git::git_generate_commit_message_ai,
             ephemeral_commands::create_ephemeral_document,
             ephemeral_commands::get_ephemeral_document,
             ephemeral_commands::update_ephemeral_document,

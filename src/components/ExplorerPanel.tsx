@@ -170,18 +170,31 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
 
     useEffect(() => {
         // Listen for refresh requests from backend
+        // Debounce rapid refreshes to prevent UI thrashing during bulk file operations
         let unlistenFn: (() => void) | undefined;
+        let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
         const setupListener = async () => {
             unlistenFn = await listen('refresh-explorer', () => {
-                console.log('[EXPLORER] Refresh event received');
-                setRefreshKey(prev => prev + 1);
-                loadRoot();
+                // Clear any pending debounce timer
+                if (debounceTimer) {
+                    clearTimeout(debounceTimer);
+                }
+
+                // Debounce for 500ms to batch rapid refresh events
+                debounceTimer = setTimeout(() => {
+                    console.log('[EXPLORER] Refresh event received (debounced)');
+                    setRefreshKey(prev => prev + 1);
+                    loadRoot();
+                    debounceTimer = null;
+                }, 500);
             });
         };
         setupListener();
 
         return () => {
             if (unlistenFn) unlistenFn();
+            if (debounceTimer) clearTimeout(debounceTimer);
         };
     }, [loadRoot]);
 
@@ -232,7 +245,6 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
                     // We need to import FileExplorer first
                     <ErrorBoundary>
                         <FileExplorer
-                            key={refreshKey}
                             onFileSelect={onFileSelect}
                             activeFile={activeFile}
                             roots={roots}

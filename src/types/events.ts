@@ -83,6 +83,11 @@ export const EventNames = {
   /** Request explorer refresh */
   REFRESH_EXPLORER: 'refresh-explorer',
 
+  // === Terminal ===
+
+  /** Terminal reported a cwd change */
+  TERMINAL_CWD_CHANGED: 'terminal-cwd-changed',
+
   // === Connection & Status ===
   
   /** Connection status to zcoderd changed */
@@ -116,6 +121,14 @@ export interface CommandExecutedPayload {
   output: string;
   exitCode: number;
   duration?: number;
+}
+
+/**
+ * Payload for terminal-cwd-changed event
+ */
+export interface TerminalCwdChangedPayload {
+  id: string;
+  cwd: string;
 }
 
 /**
