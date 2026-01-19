@@ -8,9 +8,9 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::blade_protocol::{
-    BladeError, BladeEvent, BladeEventEnvelope, BladeResult, CompletionItem, LanguageDiagnostic,
-    LanguageDocumentSymbol, LanguageEvent, LanguageIntent, LanguageLocation, LanguagePosition,
-    LanguageRange, LanguageSymbol,
+    BladeError, BladeEvent, BladeEventEnvelope, BladeResult, CodeAction, CompletionItem,
+    LanguageDiagnostic, LanguageDocumentSymbol, LanguageEvent, LanguageIntent, LanguageLocation,
+    LanguagePosition, LanguageRange, LanguageSymbol, SignatureInfo,
 };
 use crate::language_service::LanguageService;
 use crate::tree_sitter::SymbolType;
@@ -347,6 +347,38 @@ impl LanguageHandler {
 
                 // No event for close
                 return Ok(None);
+            }
+
+            LanguageIntent::GetSignatureHelp {
+                file_path: _,
+                line: _,
+                character: _,
+            } => {
+                // Signature help - parameter hints while typing function calls
+                // TODO: Implement via LSP textDocument/signatureHelp
+                // For now, return empty result
+                LanguageEvent::SignatureHelpReady {
+                    intent_id,
+                    signatures: vec![],
+                    active_signature: None,
+                    active_parameter: None,
+                }
+            }
+
+            LanguageIntent::GetCodeActions {
+                file_path: _,
+                start_line: _,
+                start_character: _,
+                end_line: _,
+                end_character: _,
+            } => {
+                // Code actions - quick fixes and refactoring
+                // TODO: Implement via LSP textDocument/codeAction
+                // For now, return empty result
+                LanguageEvent::CodeActionsReady {
+                    intent_id,
+                    actions: vec![],
+                }
             }
         };
 

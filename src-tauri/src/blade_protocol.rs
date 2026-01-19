@@ -261,6 +261,22 @@ pub enum LanguageIntent {
     DidClose {
         file_path: String,
     },
+
+    // Signature help (parameter hints)
+    GetSignatureHelp {
+        file_path: String,
+        line: u32,
+        character: u32,
+    },
+
+    // Code actions (quick fixes)
+    GetCodeActions {
+        file_path: String,
+        start_line: u32,
+        start_character: u32,
+        end_line: u32,
+        end_character: u32,
+    },
 }
 
 // ==============================================================================
@@ -503,6 +519,16 @@ pub enum LanguageEvent {
         file_path: String,
         diagnostics: Vec<LanguageDiagnostic>,
     },
+    SignatureHelpReady {
+        intent_id: Uuid,
+        signatures: Vec<SignatureInfo>,
+        active_signature: Option<u32>,
+        active_parameter: Option<u32>,
+    },
+    CodeActionsReady {
+        intent_id: Uuid,
+        actions: Vec<CodeAction>,
+    },
 }
 
 // Language domain data types
@@ -573,6 +599,31 @@ pub struct LanguageDiagnostic {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     pub message: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SignatureInfo {
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub documentation: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parameters: Vec<ParameterInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ParameterInfo {
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub documentation: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CodeAction {
+    pub title: String,
+    pub kind: Option<String>, // e.g., "quickfix", "refactor"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostics: Option<Vec<LanguageDiagnostic>>,
+    pub is_preferred: bool,
 }
 
 // ==============================================================================

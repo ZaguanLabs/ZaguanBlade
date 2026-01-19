@@ -226,7 +226,9 @@ export type LanguageIntent =
     | { type: "GetDiagnostics"; payload: { file_path: string } }
     | { type: "DidOpen"; payload: { file_path: string; content: string; language_id: string } }
     | { type: "DidChange"; payload: { file_path: string; content: string; version: number } }
-    | { type: "DidClose"; payload: { file_path: string } };
+    | { type: "DidClose"; payload: { file_path: string } }
+    | { type: "GetSignatureHelp"; payload: { file_path: string; line: number; character: number } }
+    | { type: "GetCodeActions"; payload: { file_path: string; start_line: number; start_character: number; end_line: number; end_character: number } };
 
 export type LanguageEvent =
     | { type: "FileIndexed"; payload: { file_path: string; symbol_count: number } }
@@ -238,7 +240,9 @@ export type LanguageEvent =
     | { type: "DefinitionReady"; payload: { intent_id: string; locations: LanguageLocation[] } }
     | { type: "ReferencesReady"; payload: { intent_id: string; locations: LanguageLocation[] } }
     | { type: "DocumentSymbolsReady"; payload: { intent_id: string; symbols: LanguageDocumentSymbol[] } }
-    | { type: "DiagnosticsUpdated"; payload: { file_path: string; diagnostics: LanguageDiagnostic[] } };
+    | { type: "DiagnosticsUpdated"; payload: { file_path: string; diagnostics: LanguageDiagnostic[] } }
+    | { type: "SignatureHelpReady"; payload: { intent_id: string; signatures: SignatureInfo[]; active_signature: number | null; active_parameter: number | null } }
+    | { type: "CodeActionsReady"; payload: { intent_id: string; actions: CodeActionInfo[] } };
 
 export type LanguagePosition = {
     line: number;
@@ -289,4 +293,22 @@ export type LanguageDiagnostic = {
     code: string | null;
     message: string;
     source: string | null;
+}
+
+export type SignatureInfo = {
+    label: string;
+    documentation: string | null;
+    parameters: ParameterInfo[];
+}
+
+export type ParameterInfo = {
+    label: string;
+    documentation: string | null;
+}
+
+export type CodeActionInfo = {
+    title: string;
+    kind: string | null;
+    diagnostics: LanguageDiagnostic[] | null;
+    is_preferred: boolean;
 }

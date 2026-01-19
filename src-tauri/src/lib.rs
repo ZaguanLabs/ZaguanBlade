@@ -1949,6 +1949,28 @@ async fn open_workspace(
     drop(ws);
     restart_fs_watcher(&window.app_handle(), &state);
     let _ = window.emit(crate::events::event_names::REFRESH_EXPLORER, ());
+
+    // Auto-index workspace in background for symbol search and AI context
+    let language_service = state.language_service.clone();
+    let workspace_path = path.clone();
+    tokio::spawn(async move {
+        eprintln!(
+            "[LanguageService] Starting background workspace indexing: {}",
+            workspace_path
+        );
+        match language_service.index_directory(".") {
+            Ok(stats) => {
+                eprintln!(
+                    "[LanguageService] Workspace indexed: {} files, {} symbols in {}ms",
+                    stats.files_indexed, stats.symbols_extracted, stats.duration_ms
+                );
+            }
+            Err(e) => {
+                eprintln!("[LanguageService] Workspace indexing failed: {}", e);
+            }
+        }
+    });
+
     Ok(())
 }
 
