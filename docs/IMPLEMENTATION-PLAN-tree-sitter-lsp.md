@@ -39,13 +39,14 @@ Zaguán Blade uses a **hybrid architecture** for language intelligence:
 | Diagnostics display | `diagnostics.ts` | Red/yellow/blue underlines for errors |
 | Auto-index on open | `lib.rs` (open_workspace) | Background indexing when workspace opens |
 | Signature Help | `signatureHelp.ts` | Parameter hints on '(' and ',' |
+| Code Actions UI | `codeActions.ts` | Lightbulb menu with quick fixes |
 
 ### 🔄 What's Partially Working
 
 | Feature | Issue | Priority |
 |---------|-------|----------|
 | **Hover tooltips** | `GetHover` returns data, tooltip CSS needs polish | MEDIUM |
-| **Code Actions** | Backend complete, needs frontend UI (lightbulb menu) | MEDIUM |
+| **Code Action Apply** | UI shows, but applying edits not implemented yet | LOW |
 
 ### ❌ What's Missing
 
