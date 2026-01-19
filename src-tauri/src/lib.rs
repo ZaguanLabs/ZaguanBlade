@@ -1951,9 +1951,12 @@ async fn open_workspace(
     let _ = window.emit(crate::events::event_names::REFRESH_EXPLORER, ());
 
     // Auto-index workspace in background for symbol search and AI context
+    // CRITICAL: Use spawn_blocking because index_directory does blocking file I/O
+    // and CPU-intensive parsing. Using tokio::spawn was blocking the async runtime
+    // and causing 30-second delays for WebSocket messages.
     let language_service = state.language_service.clone();
     let workspace_path = path.clone();
-    tokio::spawn(async move {
+    tokio::task::spawn_blocking(move || {
         eprintln!(
             "[LanguageService] Starting background workspace indexing: {}",
             workspace_path

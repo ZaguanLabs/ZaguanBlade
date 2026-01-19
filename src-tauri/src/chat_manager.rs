@@ -90,8 +90,10 @@ impl ChatManager {
         let model_id = selected_info
             .map(|m| {
                 let id = m.api_id.as_ref().unwrap_or(&m.id).clone();
-                eprintln!("[CHAT MGR] Model selection: display_id={}, api_id={:?}, sending={}", 
-                    m.id, m.api_id, id);
+                eprintln!(
+                    "[CHAT MGR] Model selection: display_id={}, api_id={:?}, sending={}",
+                    m.id, m.api_id, id
+                );
                 id
             })
             .unwrap_or_else(|| "anthropic/claude-sonnet-4-5-20250929".to_string());
@@ -167,7 +169,10 @@ impl ChatManager {
                     let mut saw_chat_done = false;
                     let mut saw_content = false;
                     while let Some(event) = ws_rx.recv().await {
-                        eprintln!("[CHAT MGR] Received event: {:?}", std::mem::discriminant(&event));
+                        eprintln!(
+                            "[CHAT MGR] Received event: {:?}",
+                            std::mem::discriminant(&event)
+                        );
                         match event {
                             crate::blade_ws_client::BladeWsEvent::Connected { .. } => {
                                 eprintln!("[CHAT MGR] Authenticated, sending chat message");
@@ -233,7 +238,9 @@ impl ChatManager {
                                 };
                                 let _ = tx.send(ChatEvent::ToolCalls(vec![tool_call]));
                             }
-                            crate::blade_ws_client::BladeWsEvent::ToolResultAck { pending_count } => {
+                            crate::blade_ws_client::BladeWsEvent::ToolResultAck {
+                                pending_count,
+                            } => {
                                 // zcoderd acknowledged our tool result but is waiting for more
                                 // This is informational - keep connection alive and wait for real response
                                 eprintln!(
@@ -284,32 +291,69 @@ impl ChatManager {
                                 }
                                 break;
                             }
-                            crate::blade_ws_client::BladeWsEvent::Progress { message, stage, percent } => {
+                            crate::blade_ws_client::BladeWsEvent::Progress {
+                                message,
+                                stage,
+                                percent,
+                            } => {
                                 eprintln!("[CHAT MGR] Progress: {} ({}%)", message, percent);
-                                let _ = tx.send(ChatEvent::Progress { message, stage, percent: percent as i32 });
+                                let _ = tx.send(ChatEvent::Progress {
+                                    message,
+                                    stage,
+                                    percent: percent as i32,
+                                });
                             }
                             crate::blade_ws_client::BladeWsEvent::Research { content } => {
-                                eprintln!("[CHAT MGR] Research result received ({} chars)", content.len());
+                                eprintln!(
+                                    "[CHAT MGR] Research result received ({} chars)",
+                                    content.len()
+                                );
                                 saw_content = true;
-                                let _ = tx.send(ChatEvent::Research { content, suggested_name: String::new() });
+                                let _ = tx.send(ChatEvent::Research {
+                                    content,
+                                    suggested_name: String::new(),
+                                });
                             }
                             crate::blade_ws_client::BladeWsEvent::GetConversationContext {
                                 request_id,
                                 session_id: req_session_id,
                             } => {
-                                eprintln!("[CHAT MGR] Server requesting conversation context for session: {}", req_session_id);
-                                
+                                let t0 = std::time::Instant::now();
+                                eprintln!(
+                                    "[CHAT MGR] T+{:?} GetConversationContext event received",
+                                    t0.elapsed()
+                                );
+                                eprintln!(
+                                    "[CHAT MGR] T+{:?} session_id={}",
+                                    t0.elapsed(),
+                                    req_session_id
+                                );
+
                                 // RFC-002: Send conversation context back to server
-                                // TODO: We need to access the conversation history here
-                                // For now, send empty messages array
-                                // This will need refactoring to pass conversation into the async task
                                 let messages: Vec<serde_json::Value> = vec![];
-                                
-                                if let Err(e) = ws_client
-                                    .send_conversation_context(request_id, req_session_id, messages)
-                                    .await
-                                {
-                                    eprintln!("[CHAT MGR] Failed to send conversation context: {}", e);
+
+                                eprintln!(
+                                    "[CHAT MGR] T+{:?} Calling send_conversation_context...",
+                                    t0.elapsed()
+                                );
+                                let result = ws_client
+                                    .send_conversation_context(
+                                        request_id.clone(),
+                                        req_session_id.clone(),
+                                        messages,
+                                    )
+                                    .await;
+                                eprintln!(
+                                    "[CHAT MGR] T+{:?} send_conversation_context returned: {:?}",
+                                    t0.elapsed(),
+                                    result.is_ok()
+                                );
+
+                                if let Err(e) = result {
+                                    eprintln!(
+                                        "[CHAT MGR] Failed to send conversation context: {}",
+                                        e
+                                    );
                                 }
                             }
                         }
@@ -392,14 +436,14 @@ impl ChatManager {
         // Create the client once
         let ws_client = crate::blade_ws_client::BladeWsClient::new(blade_url, api_key);
         let results = batch.file_results.clone(); // Clone for the task
-        
+
         // Channel for the main thread
         let (tx, rx) = mpsc::channel();
-        
+
         // Spawn a SINGLE task to handle the entire batch interaction
         tokio::spawn(async move {
             eprintln!("[CHAT MGR] Connecting to WebSocket for batch tool submission");
-            
+
             match ws_client.connect().await {
                 Ok(mut ws_rx) => {
                     let mut authenticated = false;
@@ -407,10 +451,13 @@ impl ChatManager {
                     let total_results = results.len();
                     let mut saw_final_chat_done = false;
                     let mut saw_content = false;
-                    
+
                     // Event loop
                     while let Some(event) = ws_rx.recv().await {
-                        eprintln!("[CHAT MGR BATCH] Received event: {:?}", std::mem::discriminant(&event));
+                        eprintln!(
+                            "[CHAT MGR BATCH] Received event: {:?}",
+                            std::mem::discriminant(&event)
+                        );
                         match event {
                             crate::blade_ws_client::BladeWsEvent::Connected { .. } => {
                                 eprintln!("[CHAT MGR] Authenticated, starting batch submission");
@@ -419,28 +466,47 @@ impl ChatManager {
                                 // Send ALL results sequentially
                                 for (call, result) in &results {
                                     let tool_content = result.to_tool_content();
-                                    eprintln!("[TOOL RESULT SEND] call_id={}, success={}", call.id, result.success);
-                                    
+                                    eprintln!(
+                                        "[TOOL RESULT SEND] call_id={}, success={}",
+                                        call.id, result.success
+                                    );
+
                                     let tool_result = crate::blade_ws_client::ToolResult {
                                         success: result.success,
                                         content: tool_content,
-                                        error: if result.success { None } else { Some("Tool execution failed".to_string()) },
+                                        error: if result.success {
+                                            None
+                                        } else {
+                                            Some("Tool execution failed".to_string())
+                                        },
                                     };
 
-                                    if let Err(e) = ws_client.send_tool_result(
-                                        session_id.clone(),
-                                        call.id.clone(),
-                                        tool_result
-                                    ).await {
-                                        eprintln!("[CHAT MGR] Failed to send tool result {}: {}", call.id, e);
-                                        // We continue trying to send others? Or break? 
+                                    if let Err(e) = ws_client
+                                        .send_tool_result(
+                                            session_id.clone(),
+                                            call.id.clone(),
+                                            tool_result,
+                                        )
+                                        .await
+                                    {
+                                        eprintln!(
+                                            "[CHAT MGR] Failed to send tool result {}: {}",
+                                            call.id, e
+                                        );
+                                        // We continue trying to send others? Or break?
                                         // Creating an error here might be fatal for the turn.
-                                        let _ = tx.send(ChatEvent::Error(format!("Failed to send tool result: {}", e)));
-                                        break; 
+                                        let _ = tx.send(ChatEvent::Error(format!(
+                                            "Failed to send tool result: {}",
+                                            e
+                                        )));
+                                        break;
                                     }
                                     results_sent_count += 1;
                                 }
-                                eprintln!("[CHAT MGR] All {} results sent. Listening for response...", results_sent_count);
+                                eprintln!(
+                                    "[CHAT MGR] All {} results sent. Listening for response...",
+                                    results_sent_count
+                                );
                             }
                             crate::blade_ws_client::BladeWsEvent::TextChunk(text) => {
                                 saw_content = true;
@@ -450,18 +516,27 @@ impl ChatManager {
                                 saw_content = true;
                                 let _ = tx.send(ChatEvent::ReasoningChunk(text));
                             }
-                            crate::blade_ws_client::BladeWsEvent::ToolCall { id, name, arguments } => {
+                            crate::blade_ws_client::BladeWsEvent::ToolCall {
+                                id,
+                                name,
+                                arguments,
+                            } => {
                                 saw_content = true;
                                 let tool_call = ToolCall {
                                     id,
                                     typ: "function".to_string(),
-                                    function: ToolFunction { name, arguments: arguments.to_string() },
+                                    function: ToolFunction {
+                                        name,
+                                        arguments: arguments.to_string(),
+                                    },
                                     status: Some("executing".to_string()),
                                     result: None,
                                 };
                                 let _ = tx.send(ChatEvent::ToolCalls(vec![tool_call]));
                             }
-                            crate::blade_ws_client::BladeWsEvent::ToolResultAck { pending_count } => {
+                            crate::blade_ws_client::BladeWsEvent::ToolResultAck {
+                                pending_count,
+                            } => {
                                 // zcoderd acknowledged our tool result but is waiting for more
                                 eprintln!(
                                     "[CHAT MGR] Tool result acknowledged, {} more pending",
@@ -487,7 +562,7 @@ impl ChatManager {
                                 // AND if we have received some content (chunks/tools) from the new generation.
                                 // zcoderd/Protocol v2 can send ChatDone immediately as an ACK for tool results,
                                 // which we must ignore to catch the actual response stream.
-                                
+
                                 if results_sent_count >= total_results && saw_content {
                                     saw_final_chat_done = true;
                                     let _ = tx.send(ChatEvent::Done);
@@ -499,9 +574,9 @@ impl ChatManager {
                             crate::blade_ws_client::BladeWsEvent::Error { code, message } => {
                                 eprintln!("[CHAT MGR] Error: {} - {}", code, message);
                                 if authenticated && (saw_final_chat_done || saw_content) {
-                                     let _ = tx.send(ChatEvent::Done);
+                                    let _ = tx.send(ChatEvent::Done);
                                 } else {
-                                     let _ = tx.send(ChatEvent::Error(message));
+                                    let _ = tx.send(ChatEvent::Error(message));
                                 }
                                 break;
                             }
@@ -514,8 +589,10 @@ impl ChatManager {
                             }
                             _ => {}
                         }
-                        
-                        if !authenticated { continue; }
+
+                        if !authenticated {
+                            continue;
+                        }
                     }
                 }
                 Err(e) => {
@@ -559,7 +636,9 @@ impl ChatManager {
             .get(selected_model)
             .map(|m| m.id.to_lowercase())
             .unwrap_or_default();
-        let is_openai_text = model_id.contains("openai") || model_id.contains("gpt-5.2") || model_id.contains("codex");
+        let is_openai_text = model_id.contains("openai")
+            || model_id.contains("gpt-5.2")
+            || model_id.contains("codex");
 
         let mut batched_chunk = String::new();
         let mut done = false;
@@ -570,12 +649,14 @@ impl ChatManager {
             () => {
                 if !batched_chunk.is_empty() {
                     let s = batched_chunk.clone();
-                    
+
                     if let Some(assistant_msg) = conversation.last_assistant_mut() {
                         if is_openai_text {
                             assistant_msg.content.push_str(&s);
                         } else {
-                            if assistant_msg.tool_calls.is_some() && assistant_msg.content_before_tools.is_some() {
+                            if assistant_msg.tool_calls.is_some()
+                                && assistant_msg.content_before_tools.is_some()
+                            {
                                 let after = assistant_msg
                                     .content_after_tools
                                     .get_or_insert_with(String::new);
@@ -587,7 +668,8 @@ impl ChatManager {
                                 self.process_incoming_chunk(&s, assistant_msg);
                             }
                         }
-                        self.pending_results.push_back(DrainResult::Update(assistant_msg.clone(), s));
+                        self.pending_results
+                            .push_back(DrainResult::Update(assistant_msg.clone(), s));
                     } else {
                         conversation.push(ChatMessage::new(ChatRole::Assistant, String::new()));
                         if let Some(new_last) = conversation.last_mut() {
@@ -596,7 +678,8 @@ impl ChatManager {
                             } else {
                                 self.process_incoming_chunk(&s, new_last);
                             }
-                            self.pending_results.push_back(DrainResult::Update(new_last.clone(), s));
+                            self.pending_results
+                                .push_back(DrainResult::Update(new_last.clone(), s));
                         }
                     }
                     batched_chunk.clear();
@@ -614,10 +697,11 @@ impl ChatManager {
                     if let Some(assistant_msg) = conversation.last_assistant_mut() {
                         let r = assistant_msg.reasoning.get_or_insert_with(String::new);
                         r.push_str(&s);
-                        self.pending_results.push_back(DrainResult::Reasoning(assistant_msg.clone(), s));
+                        self.pending_results
+                            .push_back(DrainResult::Reasoning(assistant_msg.clone(), s));
                     }
                 }
-                
+
                 other => {
                     flush_batch!();
 
@@ -627,14 +711,20 @@ impl ChatManager {
                             self.session_id = Some(session_id);
                             let _ = model;
                         }
-                        ChatEvent::Research { content, suggested_name } => {
+                        ChatEvent::Research {
+                            content,
+                            suggested_name,
+                        } => {
                             if let Some(last) = conversation.last_mut() {
                                 if last.role == ChatRole::Assistant {
                                     last.content = "✅ **Research complete!**\n\n📄 Results opened in new editor tab above.".to_string();
                                     last.progress = None;
                                 }
                             }
-                            self.pending_results.push_back(DrainResult::Research { content, suggested_name });
+                            self.pending_results.push_back(DrainResult::Research {
+                                content,
+                                suggested_name,
+                            });
                         }
                         ChatEvent::ToolCalls(calls) => {
                             self.accumulated_tool_calls.extend(calls.clone());
@@ -647,23 +737,37 @@ impl ChatManager {
                                 }
                                 let existing = last.tool_calls.get_or_insert_with(Vec::new);
                                 existing.extend(calls);
-                                
-                                self.pending_results.push_back(DrainResult::ToolCreated(last.clone(), calls_for_emit));
+
+                                self.pending_results.push_back(DrainResult::ToolCreated(
+                                    last.clone(),
+                                    calls_for_emit,
+                                ));
                             }
                         }
-                        ChatEvent::Progress { message, stage, percent } => {
+                        ChatEvent::Progress {
+                            message,
+                            stage,
+                            percent,
+                        } => {
                             if let Some(last) = conversation.last_mut() {
                                 if last.role == ChatRole::Assistant {
                                     last.progress = Some(crate::protocol::ProgressInfo {
-                                        message: message.clone(), stage: stage.clone(), percent
+                                        message: message.clone(),
+                                        stage: stage.clone(),
+                                        percent,
                                     });
                                 }
                             }
-                            self.pending_results.push_back(DrainResult::Progress { message, stage, percent });
+                            self.pending_results.push_back(DrainResult::Progress {
+                                message,
+                                stage,
+                                percent,
+                            });
                         }
                         ChatEvent::TodoUpdated(todos) => {
                             eprintln!("[DRAIN] Todo updated: {} items", todos.len());
-                            self.pending_results.push_back(DrainResult::TodoUpdated(todos));
+                            self.pending_results
+                                .push_back(DrainResult::TodoUpdated(todos));
                         }
                         ChatEvent::Done => {
                             // Flush any remaining XML buffer content
@@ -677,15 +781,25 @@ impl ChatManager {
                             }
 
                             // Handler Qwen fallback
-                            let current_model = models.get(selected_model).map(|m| &m.id[..]).unwrap_or("");
-                            if current_model.to_lowercase().contains("qwen") 
-                                && conversation.last().map(|m| m.role == ChatRole::Assistant).unwrap_or(false)
-                                && self.accumulated_tool_calls.is_empty() 
+                            let current_model =
+                                models.get(selected_model).map(|m| &m.id[..]).unwrap_or("");
+                            if current_model.to_lowercase().contains("qwen")
+                                && conversation
+                                    .last()
+                                    .map(|m| m.role == ChatRole::Assistant)
+                                    .unwrap_or(false)
+                                && self.accumulated_tool_calls.is_empty()
                             {
                                 if let Some(last) = conversation.last() {
-                                    if let Some(xml_calls) = xml_parser::detect_xml_tool_calls(&last.content) {
-                                        eprintln!("[QWEN] Detected {} XML tool calls", xml_calls.len());
-                                        self.accumulated_tool_calls.extend(self.convert_xml_calls(xml_calls));
+                                    if let Some(xml_calls) =
+                                        xml_parser::detect_xml_tool_calls(&last.content)
+                                    {
+                                        eprintln!(
+                                            "[QWEN] Detected {} XML tool calls",
+                                            xml_calls.len()
+                                        );
+                                        self.accumulated_tool_calls
+                                            .extend(self.convert_xml_calls(xml_calls));
                                     }
                                 }
                             }
@@ -694,20 +808,23 @@ impl ChatManager {
                             done = true;
                         }
                         ChatEvent::Error(e) => {
-                             error_msg = Some(e);
-                             done = true;
+                            error_msg = Some(e);
+                            done = true;
                         }
                         _ => {}
                     }
                 }
             }
         }
-        
+
         flush_batch!();
 
         if done {
             let tool_calls = if !self.accumulated_tool_calls.is_empty() {
-                eprintln!("[DRAIN] Found {} accumulated tool calls", self.accumulated_tool_calls.len());
+                eprintln!(
+                    "[DRAIN] Found {} accumulated tool calls",
+                    self.accumulated_tool_calls.len()
+                );
                 Some(self.accumulated_tool_calls.clone())
             } else {
                 eprintln!("[DRAIN] No accumulated tool calls");
@@ -715,8 +832,17 @@ impl ChatManager {
             };
             self.accumulated_tool_calls.clear();
 
-            eprintln!("[DRAIN] Calling finalize_turn with tool_calls: {:?}", tool_calls.as_ref().map(|t| t.len()));
-            self.finalize_turn(conversation, tool_calls.clone(), &error_msg, models, selected_model);
+            eprintln!(
+                "[DRAIN] Calling finalize_turn with tool_calls: {:?}",
+                tool_calls.as_ref().map(|t| t.len())
+            );
+            self.finalize_turn(
+                conversation,
+                tool_calls.clone(),
+                &error_msg,
+                models,
+                selected_model,
+            );
 
             self.streaming = false;
             self.rx = None;
@@ -726,16 +852,24 @@ impl ChatManager {
                 self.pending_results.push_back(DrainResult::Error(msg));
             } else if let Some(calls) = tool_calls {
                 let content = conversation.last().map(|m| m.content.clone());
-                self.pending_results.push_back(DrainResult::ToolCalls(calls, content));
+                self.pending_results
+                    .push_back(DrainResult::ToolCalls(calls, content));
             }
         }
 
         if let Some(msg) = self.updated_assistant_message.take() {
-            self.pending_results.push_back(DrainResult::ToolStatusUpdate(msg));
+            self.pending_results
+                .push_back(DrainResult::ToolStatusUpdate(msg));
         }
 
-        let result = self.pending_results.pop_front().unwrap_or(DrainResult::None);
-        eprintln!("[DRAIN] Returning result: {:?}", std::mem::discriminant(&result));
+        let result = self
+            .pending_results
+            .pop_front()
+            .unwrap_or(DrainResult::None);
+        eprintln!(
+            "[DRAIN] Returning result: {:?}",
+            std::mem::discriminant(&result)
+        );
         result
     }
 
@@ -754,7 +888,6 @@ impl ChatManager {
             r.push_str(&result.reasoning);
         }
     }
-
 
     fn append_content(&mut self, text: &str, last_msg: &mut ChatMessage) {
         // XML buffering for tool call detection (Qwen/GLM models)
@@ -965,4 +1098,3 @@ mod tests {
         });
     }
 }
-

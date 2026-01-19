@@ -222,19 +222,37 @@ impl BladeWsClient {
 
         // Spawn write task
         let _write_task = tokio::spawn(async move {
+            eprintln!("[WS WRITE] Write task started");
             while let Some(msg) = msg_rx.recv().await {
+                let t0 = std::time::Instant::now();
                 match msg {
                     WsMessage::Send(text) => {
+                        let preview: String = text.chars().take(80).collect();
+                        eprintln!(
+                            "[WS WRITE] T+{:?} Received from channel: {}...",
+                            t0.elapsed(),
+                            preview
+                        );
+
+                        eprintln!("[WS WRITE] T+{:?} Calling write.send()...", t0.elapsed());
                         if let Err(e) = write.send(Message::Text(text)).await {
-                            eprintln!("[BLADE WS] Write error: {}", e);
+                            eprintln!("[WS WRITE] Write error after {:?}: {}", t0.elapsed(), e);
                             break;
                         }
-                        // CRITICAL: flush() is required! send() only queues the message,
-                        // it doesn't actually transmit it over the wire.
+                        eprintln!(
+                            "[WS WRITE] T+{:?} write.send() complete, now flushing...",
+                            t0.elapsed()
+                        );
+
+                        // CRITICAL: flush() is required! send() only queues the message
                         if let Err(e) = futures_util::SinkExt::flush(&mut write).await {
-                            eprintln!("[BLADE WS] Flush error: {}", e);
+                            eprintln!("[WS WRITE] Flush error after {:?}: {}", t0.elapsed(), e);
                             break;
                         }
+                        eprintln!(
+                            "[WS WRITE] T+{:?} Flush complete - message on wire!",
+                            t0.elapsed()
+                        );
                     }
                     WsMessage::Ping => {
                         if let Err(e) = write.send(Message::Ping(Vec::new())).await {
@@ -247,11 +265,13 @@ impl BladeWsClient {
                         }
                     }
                     WsMessage::Close => {
+                        eprintln!("[WS WRITE] Close requested");
                         let _ = write.close().await;
                         break;
                     }
                 }
             }
+            eprintln!("[WS WRITE] Write task exiting");
         });
 
         // Heartbeat: send websocket ping periodically to keep connection alive
@@ -436,16 +456,25 @@ impl BladeWsClient {
         session_id: String,
         messages: Vec<serde_json::Value>,
     ) -> Result<(), String> {
+        let t0 = std::time::Instant::now();
+        eprintln!(
+            "[WS CTX] T+{:?} send_conversation_context called",
+            t0.elapsed()
+        );
+
+        eprintln!("[WS CTX] T+{:?} Acquiring connection lock...", t0.elapsed());
         let conn = self.connection.lock().await;
+        eprintln!("[WS CTX] T+{:?} Lock acquired", t0.elapsed());
+
         let conn = conn.as_ref().ok_or("Not connected")?;
 
         let payload = ConversationContextPayload {
-            session_id,
+            session_id: session_id.clone(),
             messages,
         };
 
         let msg = WsBaseMessage {
-            id: request_id,
+            id: request_id.clone(),
             msg_type: "conversation_context".to_string(),
             timestamp: chrono::Utc::now().timestamp_millis(),
             payload: Some(serde_json::to_value(payload).unwrap()),
@@ -454,10 +483,19 @@ impl BladeWsClient {
         let json =
             serde_json::to_string(&msg).map_err(|e| format!("JSON serialization error: {}", e))?;
 
+        eprintln!(
+            "[WS CTX] T+{:?} Sending to channel: id={}, session={}, len={}",
+            t0.elapsed(),
+            request_id,
+            session_id,
+            json.len()
+        );
+
         conn.tx
             .send(WsMessage::Send(json))
             .map_err(|e| format!("Failed to send conversation context: {}", e))?;
 
+        eprintln!("[WS CTX] T+{:?} Channel send complete!", t0.elapsed());
         Ok(())
     }
 
