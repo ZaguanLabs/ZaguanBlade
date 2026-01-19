@@ -35,21 +35,20 @@ Zaguán Blade uses a **hybrid architecture** for language intelligence:
 | Frontend completions | `languageFeatures.ts` | CodeMirror autocomplete via backend |
 | Go-to-Definition (F12) | `languageFeatures.ts` + `EditorPanel.tsx` | Cross-file navigation |
 | Settings toggle | `SettingsModal.tsx` | Enable/disable LSP |
+| didOpen/didChange | `CodeEditor.tsx` + `handler.rs` | LSP document sync on file open/edit |
+| Diagnostics display | `diagnostics.ts` | Red/yellow/blue underlines for errors |
 
 ### 🔄 What's Partially Working
 
 | Feature | Issue | Priority |
 |---------|-------|----------|
-| **Hover tooltips** | `GetHover` fires but no tooltip UI shows | HIGH |
-| **Diagnostics** | LSP sends diagnostics, but not rendered in editor | HIGH |
-| **didOpen/didChange** | Not sent to LSP → stale results for unsaved files | MEDIUM |
+| **Hover tooltips** | `GetHover` returns data, tooltip CSS needs polish | MEDIUM |
 | **Workspace indexing** | Manual trigger only, no auto-index on open | MEDIUM |
 
 ### ❌ What's Missing
 
 | Feature | Description | Priority |
 |---------|-------------|----------|
-| **Diagnostic underlines** | Red squiggles for errors | HIGH |
 | **Quick fixes** | "Did you mean X?" actions | HIGH |
 | **Signature help** | Parameter hints while typing | MEDIUM |
 | **Find references** | Where is this symbol used? | MEDIUM |
