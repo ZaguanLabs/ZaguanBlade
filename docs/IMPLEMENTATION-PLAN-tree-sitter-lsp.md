@@ -2,7 +2,7 @@
 
 ## Status: IN PROGRESS (Phase 1 Complete, Phase 2 Active)
 
-**Last Updated:** 2026-01-19  
+**Last Updated:** 2026-01-19
 **Goal:** Make Zaguán Blade's language intelligence **top of class** — matching or exceeding Cursor/Windsurf/VS Code.
 
 ---
@@ -15,7 +15,7 @@ Zaguán Blade uses a **hybrid architecture** for language intelligence:
 |-------|------------|---------|--------|
 | **Visual (Frontend)** | CodeMirror + Lezer | Syntax highlighting, basic editing | ✅ Complete |
 | **Semantic (Backend)** | Tree-sitter + SQLite | Symbol extraction, persistent index, AI context | ✅ Core Complete |
-| **Intelligence (Backend)** | LSP Clients | Hover, Completions, Diagnostics, Go-to-Def | 🔄 Partial |
+| **Intelligence (Backend)** | LSP Clients | Hover, Completions, Diagnostics, Go-to-Def | ✅ Core Complete |
 | **AI Context** | LanguageService + SymbolStore | Code understanding for AI prompts | ✅ Core Complete |
 
 ---
@@ -40,20 +40,21 @@ Zaguán Blade uses a **hybrid architecture** for language intelligence:
 | Auto-index on open | `lib.rs` (open_workspace) | Background indexing when workspace opens |
 | Signature Help | `signatureHelp.ts` | Parameter hints on '(' and ',' |
 | Code Actions UI | `codeActions.ts` | Lightbulb menu with quick fixes |
+| Code Actions Apply | `applyEdit.ts` | Applies workspace edits from actions |
 | Find References | `references.ts` | Shift+F12 popup menu |
+| Rename Symbol | `rename.ts` | F2 rename with backend support |
+| Document Outline | `OutlinePanel.tsx` | Tree view of document symbols |
 
 ### 🔄 What's Partially Working
 
 | Feature | Issue | Priority |
 |---------|-------|----------|
 | **Hover tooltips** | `GetHover` returns data, tooltip CSS needs polish | MEDIUM |
-| **Code Action Apply** | UI shows, but applying edits not implemented yet | LOW |
 
 ### ❌ What's Missing
 
 | Feature | Description | Priority |
 |---------|-------------|----------|
-| **Document symbols** | Outline view / breadcrumbs | LOW |
 | **Auto-import** | Add missing imports automatically | LOW |
 | **Inlay hints** | Type annotations inline | LOW |
 
@@ -443,9 +444,9 @@ pub async fn validate_and_fix(&self, file_path: &str, content: &str) -> Result<S
 6. [ ] **Signature Help** - Parameter hints
 
 ### Sprint 3 (Following Week)
-7. [ ] **Code Actions** - Quick fixes
-8. [ ] **Rename Symbol** - Cross-file refactoring
-9. [ ] **Document Outline** - Symbol tree view
+7. [x] **Code Actions** - Quick fixes
+8. [x] **Rename Symbol** - Cross-file refactoring
+9. [x] **Document Outline** - Symbol tree view
 
 ### Sprint 4 (Future)
 10. [ ] **Inlay Hints** - Type annotations
