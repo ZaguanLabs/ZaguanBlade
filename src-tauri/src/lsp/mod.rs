@@ -17,5 +17,6 @@ pub mod types;
 pub use client::LspClient;
 pub use manager::{LspManager, LspServerConfig};
 pub use types::{
-    CompletionItem, Diagnostic, DocumentSymbol, Hover, Location, LspError, ServerCapabilities,
+    CodeAction, CompletionItem, Diagnostic, DocumentSymbol, Hover, Location, LspError,
+    ParameterInformation, ServerCapabilities, SignatureHelp, SignatureInformation,
 };

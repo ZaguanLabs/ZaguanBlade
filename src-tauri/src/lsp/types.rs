@@ -221,6 +221,55 @@ pub struct DocumentSymbol {
     pub children: Vec<DocumentSymbol>,
 }
 
+/// LSP SignatureHelp
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignatureHelp {
+    pub signatures: Vec<SignatureInformation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_signature: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_parameter: Option<u32>,
+}
+
+/// LSP SignatureInformation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignatureInformation {
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub documentation: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parameters: Vec<ParameterInformation>,
+}
+
+/// LSP ParameterInformation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParameterInformation {
+    /// The label can be a string or [start, end] offsets into the signature label
+    pub label: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub documentation: Option<serde_json::Value>,
+}
+
+/// LSP CodeAction
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeAction {
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<Diagnostic>,
+    #[serde(default)]
+    pub is_preferred: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edit: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<serde_json::Value>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
