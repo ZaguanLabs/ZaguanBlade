@@ -302,6 +302,52 @@ impl LanguageHandler {
                     diagnostics: diag_items,
                 }
             }
+
+            // Document synchronization (no response events - just update state)
+            LanguageIntent::DidOpen {
+                file_path,
+                content,
+                language_id: _,
+            } => {
+                self.service
+                    .did_open(&file_path, &content)
+                    .map_err(|e| BladeError::Internal {
+                        trace_id: Uuid::new_v4().to_string(),
+                        message: format!("DidOpen failed: {}", e),
+                    })?;
+
+                // Return a simple acknowledgment event
+                LanguageEvent::FileIndexed {
+                    file_path,
+                    symbol_count: 0, // Placeholder, could be enhanced
+                }
+            }
+            LanguageIntent::DidChange {
+                file_path,
+                content,
+                version,
+            } => {
+                self.service
+                    .did_change(&file_path, version as i32, &content)
+                    .map_err(|e| BladeError::Internal {
+                        trace_id: Uuid::new_v4().to_string(),
+                        message: format!("DidChange failed: {}", e),
+                    })?;
+
+                // No event for change - diagnostics will come separately
+                return Ok(None);
+            }
+            LanguageIntent::DidClose { file_path } => {
+                self.service
+                    .did_close(&file_path)
+                    .map_err(|e| BladeError::Internal {
+                        trace_id: Uuid::new_v4().to_string(),
+                        message: format!("DidClose failed: {}", e),
+                    })?;
+
+                // No event for close
+                return Ok(None);
+            }
         };
 
         Ok(Some(BladeEventEnvelope {

@@ -317,6 +317,21 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                                         />
                                     </div>
                                 );
+                            } else if (block.type === 'command_execution') {
+                                // Find the command execution by ID
+                                const cmdExec = message.commandExecutions?.find(c => c.id === block.id);
+                                if (!cmdExec) return null;
+                                return (
+                                    <div key={block.id} className="mb-3">
+                                        <CommandOutputDisplay
+                                            command={cmdExec.command}
+                                            cwd={cmdExec.cwd}
+                                            output={cmdExec.output}
+                                            exitCode={cmdExec.exitCode}
+                                            duration={cmdExec.duration}
+                                        />
+                                    </div>
+                                );
                             }
                             return null;
                         })}
@@ -334,20 +349,27 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
 
                         {message.todos && message.todos.length > 0 && <TodoList todos={message.todos} />}
 
-                        {/* Command Output/Executions are typically appended at end */}
+                        {/* Legacy: Render commandExecutions that don't have block entries (backward compat) */}
                         {message.commandExecutions && message.commandExecutions.length > 0 && (
-                            <div className="mt-3 space-y-2">
-                                {message.commandExecutions.map((cmd, idx) => (
-                                    <CommandOutputDisplay
-                                        key={`${cmd.timestamp}-${idx}`}
-                                        command={cmd.command}
-                                        cwd={cmd.cwd}
-                                        output={cmd.output}
-                                        exitCode={cmd.exitCode}
-                                        duration={cmd.duration}
-                                    />
-                                ))}
-                            </div>
+                            (() => {
+                                const blockIds = new Set((message.blocks || []).filter(b => b.type === 'command_execution').map(b => b.id));
+                                const orphanedCmds = message.commandExecutions.filter(c => !blockIds.has(c.id));
+                                if (orphanedCmds.length === 0) return null;
+                                return (
+                                    <div className="mt-3 space-y-2">
+                                        {orphanedCmds.map((cmd, idx) => (
+                                            <CommandOutputDisplay
+                                                key={`${cmd.timestamp}-${idx}`}
+                                                command={cmd.command}
+                                                cwd={cmd.cwd}
+                                                output={cmd.output}
+                                                exitCode={cmd.exitCode}
+                                                duration={cmd.duration}
+                                            />
+                                        ))}
+                                    </div>
+                                );
+                            })()
                         )}
                     </>
                 ) : (

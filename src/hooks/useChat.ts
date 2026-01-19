@@ -116,7 +116,7 @@ export function useChat() {
                     // Handle reasoning
                     if (type === 'reasoning') {
                         console.log(`[v1.1 MessageBuffer] Processing reasoning chunk: id=${id}, chunk_len=${chunk.length}, is_final=${is_final}`);
-                        
+
                         if (accumulatedReasoningRef.current.id !== id) {
                             accumulatedReasoningRef.current = { id, content: '' };
                         }
@@ -312,18 +312,31 @@ export function useChat() {
 
                     const updated = [...prev];
                     const msg = updated[lastAssistantIndex];
+
+                    // Generate unique ID for this command execution
+                    const cmdId = crypto.randomUUID();
+
+                    // Add to commandExecutions array
+                    const newExecution = {
+                        id: cmdId,
+                        command: event.payload.command,
+                        cwd: event.payload.cwd,
+                        output: event.payload.output,
+                        exitCode: event.payload.exitCode,
+                        duration: event.payload.duration,
+                        timestamp: Date.now(),
+                    };
+
+                    // Add block entry for proper ordering in conversation flow
+                    const newBlocks = [...(msg.blocks || [])];
+                    newBlocks.push({ type: 'command_execution', id: cmdId });
+
                     updated[lastAssistantIndex] = {
                         ...msg,
+                        blocks: newBlocks,
                         commandExecutions: [
                             ...(msg.commandExecutions || []),
-                            {
-                                command: event.payload.command,
-                                cwd: event.payload.cwd,
-                                output: event.payload.output,
-                                exitCode: event.payload.exitCode,
-                                duration: event.payload.duration,
-                                timestamp: Date.now(),
-                            },
+                            newExecution,
                         ],
                     };
                     return updated;

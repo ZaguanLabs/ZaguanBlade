@@ -246,6 +246,21 @@ pub enum LanguageIntent {
     GetDiagnostics {
         file_path: String,
     },
+
+    // Document synchronization (for LSP)
+    DidOpen {
+        file_path: String,
+        content: String,
+        language_id: String,
+    },
+    DidChange {
+        file_path: String,
+        content: String,
+        version: u32,
+    },
+    DidClose {
+        file_path: String,
+    },
 }
 
 // ==============================================================================

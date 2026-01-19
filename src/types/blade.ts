@@ -223,7 +223,10 @@ export type LanguageIntent =
     | { type: "GetDefinition"; payload: { file_path: string; line: number; character: number } }
     | { type: "GetReferences"; payload: { file_path: string; line: number; character: number; include_declaration: boolean } }
     | { type: "GetDocumentSymbols"; payload: { file_path: string } }
-    | { type: "GetDiagnostics"; payload: { file_path: string } };
+    | { type: "GetDiagnostics"; payload: { file_path: string } }
+    | { type: "DidOpen"; payload: { file_path: string; content: string; language_id: string } }
+    | { type: "DidChange"; payload: { file_path: string; content: string; version: number } }
+    | { type: "DidClose"; payload: { file_path: string } };
 
 export type LanguageEvent =
     | { type: "FileIndexed"; payload: { file_path: string; symbol_count: number } }

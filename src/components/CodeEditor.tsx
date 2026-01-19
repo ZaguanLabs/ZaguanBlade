@@ -35,6 +35,24 @@ import { useEditor } from "../contexts/EditorContext";
 import { useContextMenu, type ContextMenuItem } from "./ui/ContextMenu";
 import { Copy, Scissors, Clipboard, Undo2, Redo2, Search } from "lucide-react";
 import type { Change } from "../types/change";
+import { LanguageService } from "../services/language";
+
+// Map file extension to LSP language ID
+function getLanguageId(filename: string): string {
+    const ext = filename.split('.').pop()?.toLowerCase() || '';
+    switch (ext) {
+        case 'ts': case 'tsx': return 'typescript';
+        case 'js': case 'jsx': return 'javascript';
+        case 'rs': return 'rust';
+        case 'py': return 'python';
+        case 'go': return 'go';
+        case 'json': return 'json';
+        case 'html': return 'html';
+        case 'css': return 'css';
+        case 'md': return 'markdown';
+        default: return 'plaintext';
+    }
+}
 
 interface CodeEditorProps {
     content: string;
@@ -66,6 +84,10 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     const languageFeaturesConf = useRef(new Compartment());
     const { setCursorPosition, setSelection, clearSelection } = useEditor();
     const { showMenu } = useContextMenu();
+
+    // LSP document sync tracking
+    const documentVersion = useRef(0);
+    const didChangeTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Expose methods to parent via ref
     useImperativeHandle(ref, () => ({
@@ -279,6 +301,15 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                     setBaseContent.of(content) // Initialize virtual buffer with base content
                 ]
             });
+
+            // Notify LSP that file was opened
+            if (filename) {
+                const languageId = getLanguageId(filename);
+                documentVersion.current = 1;
+                LanguageService.didOpen(filename, content, languageId).catch(e =>
+                    console.warn('[LSP] didOpen failed:', e)
+                );
+            }
         } else {
             // Same file, but content changed externally (e.g., file loaded)
             const currentDoc = view.state.doc.toString();
@@ -290,6 +321,30 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
             }
         }
     }, [filename, content, onNavigate]);
+
+    // Send didChange to LSP on document changes (debounced)
+    useEffect(() => {
+        const view = viewRef.current;
+        if (!view || !filename) return;
+
+        // Debounce didChange notifications
+        if (didChangeTimeout.current) {
+            clearTimeout(didChangeTimeout.current);
+        }
+
+        didChangeTimeout.current = setTimeout(() => {
+            documentVersion.current += 1;
+            LanguageService.didChange(filename, content, documentVersion.current).catch(e =>
+                console.warn('[LSP] didChange failed:', e)
+            );
+        }, 150); // 150ms debounce
+
+        return () => {
+            if (didChangeTimeout.current) {
+                clearTimeout(didChangeTimeout.current);
+            }
+        };
+    }, [content, filename]);
 
     // Handle line highlighting when highlightLines prop changes or content loads
     useEffect(() => {

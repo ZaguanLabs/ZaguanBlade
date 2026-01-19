@@ -106,6 +106,38 @@ export class LanguageService {
     }
 
     /**
+     * Notify the backend that a file was opened.
+     * This enables LSP servers to track the file content.
+     */
+    static async didOpen(filePath: string, content: string, languageId: string): Promise<void> {
+        await BladeDispatcher.language({
+            type: "DidOpen",
+            payload: { file_path: filePath, content, language_id: languageId }
+        });
+    }
+
+    /**
+     * Notify the backend that a file's content changed.
+     * Should be called on each edit (debounced for performance).
+     */
+    static async didChange(filePath: string, content: string, version: number): Promise<void> {
+        await BladeDispatcher.language({
+            type: "DidChange",
+            payload: { file_path: filePath, content, version }
+        });
+    }
+
+    /**
+     * Notify the backend that a file was closed.
+     */
+    static async didClose(filePath: string): Promise<void> {
+        await BladeDispatcher.language({
+            type: "DidClose",
+            payload: { file_path: filePath }
+        });
+    }
+
+    /**
      * Helper to correlate a request intent with its corresponding response event.
      * Starts listening for the event BEFORE dispatching the intent to ensuring no race conditions.
      */
