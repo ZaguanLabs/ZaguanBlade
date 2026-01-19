@@ -32,6 +32,7 @@ import {
     languageFeatures,
     diagnosticsExtension,
     signatureHelpExtension,
+    codeActionsExtension,
 } from "./editor/extensions";
 import { useEditor } from "../contexts/EditorContext";
 import { useContextMenu, type ContextMenuItem } from "./ui/ContextMenu";
@@ -86,6 +87,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     const languageFeaturesConf = useRef(new Compartment());
     const diagnosticsConf = useRef(new Compartment());
     const signatureHelpConf = useRef(new Compartment());
+    const codeActionsConf = useRef(new Compartment());
     const { setCursorPosition, setSelection, clearSelection } = useEditor();
     const { showMenu } = useContextMenu();
 
@@ -226,6 +228,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 languageFeaturesConf.current.of(languageFeatures(filename || "", onNavigate)),
                 diagnosticsConf.current.of(diagnosticsExtension(filename || "")),
                 signatureHelpConf.current.of(signatureHelpExtension(filename || "")),
+                codeActionsConf.current.of(codeActionsExtension(filename || "")),
 
                 // Keymaps
                 keymap.of([
@@ -306,6 +309,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                     languageFeaturesConf.current.reconfigure(languageFeatures(filename || "", onNavigate)),
                     diagnosticsConf.current.reconfigure(diagnosticsExtension(filename || "")),
                     signatureHelpConf.current.reconfigure(signatureHelpExtension(filename || "")),
+                    codeActionsConf.current.reconfigure(codeActionsExtension(filename || "")),
                     setBaseContent.of(content) // Initialize virtual buffer with base content
                 ]
             });
