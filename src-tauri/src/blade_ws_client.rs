@@ -229,10 +229,20 @@ impl BladeWsClient {
                             eprintln!("[BLADE WS] Write error: {}", e);
                             break;
                         }
+                        // CRITICAL: flush() is required! send() only queues the message,
+                        // it doesn't actually transmit it over the wire.
+                        if let Err(e) = futures_util::SinkExt::flush(&mut write).await {
+                            eprintln!("[BLADE WS] Flush error: {}", e);
+                            break;
+                        }
                     }
                     WsMessage::Ping => {
                         if let Err(e) = write.send(Message::Ping(Vec::new())).await {
                             eprintln!("[BLADE WS] Ping error: {}", e);
+                            break;
+                        }
+                        if let Err(e) = futures_util::SinkExt::flush(&mut write).await {
+                            eprintln!("[BLADE WS] Ping flush error: {}", e);
                             break;
                         }
                     }
@@ -341,7 +351,8 @@ impl BladeWsClient {
         message: String,
         workspace: Option<WorkspaceInfo>,
     ) -> Result<(), String> {
-        self.send_message_with_storage_mode(session_id, model_id, message, workspace, None).await
+        self.send_message_with_storage_mode(session_id, model_id, message, workspace, None)
+            .await
     }
 
     /// Send a chat message with explicit storage mode (RFC-002)
@@ -541,7 +552,7 @@ impl BladeWsClient {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                
+
                 // Handle arguments: if it's a string (which it is now from server), parse it to JSON Value
                 // This ensures ChatManager's to_string() produces clean JSON, not an escaped string
                 let raw_args = msg.payload.get("arguments");
@@ -551,11 +562,11 @@ impl BladeWsClient {
                         Ok(v) => {
                             eprintln!("[BLADE WS] Successfully parsed arguments to JSON object");
                             v
-                        },
+                        }
                         Err(e) => {
                             eprintln!("[BLADE WS] Failed to parse arguments as JSON: {}", e);
                             Value::String(str_args.to_string())
-                        },
+                        }
                     }
                 } else {
                     eprintln!("[BLADE WS] Arguments are not a string, using raw value");
@@ -577,7 +588,10 @@ impl BladeWsClient {
                             eprintln!("[BLADE WS] Todo updated: {} items", todos.len());
                             match tx.send(BladeWsEvent::TodoUpdated { todos }) {
                                 Ok(_) => eprintln!("[BLADE WS] TodoUpdated event sent to channel"),
-                                Err(e) => eprintln!("[BLADE WS] Failed to send TodoUpdated to channel: {}", e),
+                                Err(e) => eprintln!(
+                                    "[BLADE WS] Failed to send TodoUpdated to channel: {}",
+                                    e
+                                ),
                             }
                         }
                         Err(e) => {
@@ -648,7 +662,11 @@ impl BladeWsClient {
                     .unwrap_or(0) as u8;
 
                 eprintln!("[BLADE WS] Progress: {} ({}%)", message, percent);
-                let _ = tx.send(BladeWsEvent::Progress { message, stage, percent });
+                let _ = tx.send(BladeWsEvent::Progress {
+                    message,
+                    stage,
+                    percent,
+                });
             }
             "research" => {
                 let content = msg
@@ -658,18 +676,59 @@ impl BladeWsClient {
                     .unwrap_or("")
                     .to_string();
 
-                eprintln!("[BLADE WS] Research result received ({} chars)", content.len());
+                eprintln!(
+                    "[BLADE WS] Research result received ({} chars)",
+                    content.len()
+                );
                 let _ = tx.send(BladeWsEvent::Research { content });
             }
             "get_conversation_context" => {
-                let session_id = msg
-                    .payload
-                    .get("session_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
+                // zcoderd sends payload as Base64-encoded JSON string
+                // Decode: "eyJzZXNzaW9uX2lkIjoiLi4uIn0=" -> {"session_id":"..."}
+                let session_id = if let Some(payload_str) = msg.payload.as_str() {
+                    // Payload is a Base64-encoded string
+                    use base64::Engine;
+                    match base64::engine::general_purpose::STANDARD.decode(payload_str) {
+                        Ok(decoded_bytes) => {
+                            match String::from_utf8(decoded_bytes) {
+                                Ok(json_str) => match serde_json::from_str::<Value>(&json_str) {
+                                    Ok(json_obj) => json_obj
+                                        .get("session_id")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string(),
+                                    Err(e) => {
+                                        eprintln!("[BLADE WS] Failed to parse decoded context payload: {}", e);
+                                        "".to_string()
+                                    }
+                                },
+                                Err(e) => {
+                                    eprintln!(
+                                        "[BLADE WS] Failed to decode context payload as UTF-8: {}",
+                                        e
+                                    );
+                                    "".to_string()
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("[BLADE WS] Failed to decode Base64 context payload: {}", e);
+                            "".to_string()
+                        }
+                    }
+                } else {
+                    // Fallback: payload is a JSON object directly (old format)
+                    msg.payload
+                        .get("session_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string()
+                };
 
-                eprintln!("[BLADE WS] Server requesting conversation context for session: {}", session_id);
+                eprintln!(
+                    "[BLADE WS] Server requesting conversation context for session: {}",
+                    session_id
+                );
                 let _ = tx.send(BladeWsEvent::GetConversationContext {
                     request_id: msg.id.clone(),
                     session_id,

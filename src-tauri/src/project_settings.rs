@@ -111,7 +111,12 @@ pub struct EditorSettings {
 
 impl Default for EditorSettings {
     fn default() -> Self {
-        Self { enable_lsp: true }
+        // IMPORTANT: LSP is disabled by default because the current implementation
+        // uses synchronous blocking I/O that starves the tokio async runtime.
+        // This was causing WebSocket messages (including chat context responses)
+        // to be delayed by 30+ seconds, breaking the chat functionality.
+        // TODO: Fix by wrapping LSP calls in tokio::task::spawn_blocking
+        Self { enable_lsp: false }
     }
 }
 
