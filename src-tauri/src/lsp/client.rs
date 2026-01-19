@@ -345,6 +345,33 @@ impl LspClient {
         serde_json::from_value(response).map_err(LspError::from)
     }
 
+    /// Rename a symbol
+    pub fn rename(
+        &mut self,
+        uri: &str,
+        line: u32,
+        character: u32,
+        new_name: &str,
+    ) -> Result<Option<super::types::WorkspaceEdit>, LspError> {
+        if !self.capabilities.rename {
+            return Ok(None);
+        }
+
+        let params = json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": line, "character": character },
+            "newName": new_name
+        });
+
+        let response = self.send_request_sync("textDocument/rename", params)?;
+
+        if response.is_null() {
+            return Ok(None);
+        }
+
+        serde_json::from_value(response).map_err(LspError::from)
+    }
+
     /// Get code actions (quick fixes, refactorings)
     pub fn code_actions(
         &mut self,

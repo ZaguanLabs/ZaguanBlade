@@ -34,6 +34,7 @@ import {
     signatureHelpExtension,
     codeActionsExtension,
     referencesExtension,
+    renameExtension,
 } from "./editor/extensions";
 import { useEditor } from "../contexts/EditorContext";
 import { useContextMenu, type ContextMenuItem } from "./ui/ContextMenu";
@@ -90,6 +91,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     const signatureHelpConf = useRef(new Compartment());
     const codeActionsConf = useRef(new Compartment());
     const referencesConf = useRef(new Compartment());
+    const renameConf = useRef(new Compartment());
     const { setCursorPosition, setSelection, clearSelection } = useEditor();
     const { showMenu } = useContextMenu();
 
@@ -233,6 +235,12 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 codeActionsConf.current.of(codeActionsExtension(filename || "")),
                 referencesConf.current.of(referencesExtension(filename || "", (path, line, char) => {
                     if (onNavigate) onNavigate(path, line, char);
+                })),
+                renameConf.current.of(renameExtension(filename || "", (changes) => {
+                    // Start of handling rename edits
+                    console.log("Applying rename edits:", changes);
+                    // For now we just log, real implementation requires workspace edit handling
+                    // which is currently out of scope for this specific file editor component
                 })),
 
                 // Keymaps
@@ -491,6 +499,19 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                     view.contentDOM.dispatchEvent(event);
                 }
             },
+            {
+                id: 'rename',
+                label: 'Rename Symbol',
+                shortcut: 'F2',
+                onClick: () => {
+                    // Dispatch F2 key event to trigger the rename extension
+                    const event = new KeyboardEvent('keydown', {
+                        key: 'F2',
+                        bubbles: true
+                    });
+                    view.contentDOM.dispatchEvent(event);
+                }
+            }
         ];
 
         showMenu({ x: e.clientX, y: e.clientY }, items);

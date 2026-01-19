@@ -18,5 +18,6 @@ pub use client::LspClient;
 pub use manager::{LspManager, LspServerConfig};
 pub use types::{
     CodeAction, CompletionItem, Diagnostic, DocumentSymbol, Hover, Location, LspError,
-    ParameterInformation, ServerCapabilities, SignatureHelp, SignatureInformation,
+    ParameterInformation, ServerCapabilities, SignatureHelp, SignatureInformation, TextEdit,
+    WorkspaceEdit,
 };

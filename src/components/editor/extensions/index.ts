@@ -19,3 +19,4 @@ export { diagnosticsExtension, setDiagnostics, clearDiagnostics, getDiagnostics 
 export { signatureHelpExtension, triggerSignatureHelp } from "./signatureHelp";
 export { codeActionsExtension, requestCodeActions } from "./codeActions";
 export { referencesExtension } from "./references";
+export { renameExtension } from "./rename";

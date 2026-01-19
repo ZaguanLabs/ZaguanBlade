@@ -436,6 +436,30 @@ impl LanguageService {
         }
     }
 
+    /// Rename a symbol
+    pub fn rename_symbol(
+        &self,
+        file_path: &str,
+        line: u32,
+        character: u32,
+        new_name: &str,
+    ) -> Result<Option<crate::lsp::types::WorkspaceEdit>, LanguageError> {
+        let mut lsp = self.lsp_manager.write().unwrap();
+        match lsp.as_mut() {
+            Some(manager) => {
+                let full_path = self.resolve_path(file_path);
+                let edit = manager.rename(
+                    full_path.to_string_lossy().as_ref(),
+                    line,
+                    character,
+                    new_name,
+                )?;
+                Ok(edit)
+            }
+            None => Ok(None),
+        }
+    }
+
     /// Get code actions (quick fixes, refactorings)
     pub fn get_code_actions(
         &self,

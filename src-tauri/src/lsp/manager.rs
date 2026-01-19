@@ -8,7 +8,8 @@ use std::path::Path;
 
 use super::client::LspClient;
 use super::types::{
-    CompletionItem, Diagnostic, DocumentSymbol, Hover, Location, LspError, ServerCapabilities,
+    CompletionItem, Diagnostic, DocumentSymbol, Hover, Location, LspError,
+    ServerCapabilities, WorkspaceEdit,
 };
 
 /// Configuration for spawning a language server
@@ -351,6 +352,27 @@ impl LspManager {
             .get_mut(&language)
             .ok_or(LspError::ServerNotFound(language))?
             .signature_help(&uri, line, character)
+    }
+
+    /// Rename a symbol
+    pub fn rename(
+        &mut self,
+        file_path: &str,
+        line: u32,
+        character: u32,
+        new_name: &str,
+    ) -> Result<Option<WorkspaceEdit>, LspError> {
+        let language = self
+            .language_for_file(file_path)
+            .ok_or_else(|| LspError::UnsupportedLanguage(file_path.to_string()))?;
+
+        self.ensure_server(&language)?;
+
+        let uri = path_to_uri(file_path);
+        self.servers
+            .get_mut(&language)
+            .ok_or(LspError::ServerNotFound(language))?
+            .rename(&uri, line, character, new_name)
     }
 
     /// Get code actions (quick fixes, refactorings)

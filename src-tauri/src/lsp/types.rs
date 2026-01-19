@@ -253,6 +253,22 @@ pub struct ParameterInformation {
     pub documentation: Option<serde_json::Value>,
 }
 
+/// LSP TextEdit
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextEdit {
+    pub range: Range,
+    pub new_text: String,
+}
+
+/// LSP WorkspaceEdit
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceEdit {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub changes: Option<std::collections::HashMap<String, Vec<TextEdit>>>,
+}
+
 /// LSP CodeAction
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -265,7 +281,7 @@ pub struct CodeAction {
     #[serde(default)]
     pub is_preferred: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub edit: Option<serde_json::Value>,
+    pub edit: Option<WorkspaceEdit>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<serde_json::Value>,
 }

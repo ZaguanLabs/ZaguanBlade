@@ -228,7 +228,8 @@ export type LanguageIntent =
     | { type: "DidChange"; payload: { file_path: string; content: string; version: number } }
     | { type: "DidClose"; payload: { file_path: string } }
     | { type: "GetSignatureHelp"; payload: { file_path: string; line: number; character: number } }
-    | { type: "GetCodeActions"; payload: { file_path: string; start_line: number; start_character: number; end_line: number; end_character: number } };
+    | { type: "GetCodeActions"; payload: { file_path: string; start_line: number; start_character: number; end_line: number; end_character: number } }
+    | { type: "Rename"; payload: { file_path: string; line: number; character: number; new_name: string } };
 
 export type LanguageEvent =
     | { type: "FileIndexed"; payload: { file_path: string; symbol_count: number } }
@@ -242,7 +243,8 @@ export type LanguageEvent =
     | { type: "DocumentSymbolsReady"; payload: { intent_id: string; symbols: LanguageDocumentSymbol[] } }
     | { type: "DiagnosticsUpdated"; payload: { file_path: string; diagnostics: LanguageDiagnostic[] } }
     | { type: "SignatureHelpReady"; payload: { intent_id: string; signatures: SignatureInfo[]; active_signature: number | null; active_parameter: number | null } }
-    | { type: "CodeActionsReady"; payload: { intent_id: string; actions: CodeActionInfo[] } };
+    | { type: "CodeActionsReady"; payload: { intent_id: string; actions: CodeActionInfo[] } }
+    | { type: "RenameEditsReady"; payload: { intent_id: string; edit: LanguageWorkspaceEdit | null } };
 
 export type LanguagePosition = {
     line: number;
@@ -312,3 +314,13 @@ export type CodeActionInfo = {
     diagnostics: LanguageDiagnostic[] | null;
     is_preferred: boolean;
 }
+
+export type LanguageTextEdit = {
+    range: LanguageRange;
+    new_text: string;
+}
+
+export type LanguageWorkspaceEdit = {
+    changes: Record<string, LanguageTextEdit[]> | null;
+}
+

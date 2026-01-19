@@ -53,7 +53,6 @@ Zaguán Blade uses a **hybrid architecture** for language intelligence:
 
 | Feature | Description | Priority |
 |---------|-------------|----------|
-| **Rename symbol** | Refactor across files | MEDIUM |
 | **Document symbols** | Outline view / breadcrumbs | LOW |
 | **Auto-import** | Add missing imports automatically | LOW |
 | **Inlay hints** | Type annotations inline | LOW |

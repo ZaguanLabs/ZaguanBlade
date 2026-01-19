@@ -277,6 +277,12 @@ pub enum LanguageIntent {
         end_line: u32,
         end_character: u32,
     },
+    Rename {
+        file_path: String,
+        line: u32,
+        character: u32,
+        new_name: String,
+    },
 }
 
 // ==============================================================================
@@ -529,6 +535,24 @@ pub enum LanguageEvent {
         intent_id: Uuid,
         actions: Vec<CodeAction>,
     },
+    RenameEditsReady {
+        intent_id: Uuid,
+        edit: Option<LanguageWorkspaceEdit>,
+    },
+}
+
+// ... existing structs ...
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LanguageTextEdit {
+    pub range: LanguageRange,
+    pub new_text: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LanguageWorkspaceEdit {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub changes: Option<std::collections::HashMap<String, Vec<LanguageTextEdit>>>,
 }
 
 // Language domain data types

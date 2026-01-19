@@ -10,7 +10,8 @@ use uuid::Uuid;
 use crate::blade_protocol::{
     BladeError, BladeEvent, BladeEventEnvelope, BladeResult, CodeAction, CompletionItem,
     LanguageDiagnostic, LanguageDocumentSymbol, LanguageEvent, LanguageIntent, LanguageLocation,
-    LanguagePosition, LanguageRange, LanguageSymbol, ParameterInfo, SignatureInfo,
+    LanguagePosition, LanguageRange, LanguageSymbol, LanguageTextEdit, LanguageWorkspaceEdit,
+    ParameterInfo, SignatureInfo,
 };
 use crate::language_service::LanguageService;
 use crate::tree_sitter::SymbolType;
@@ -463,6 +464,48 @@ impl LanguageHandler {
                 LanguageEvent::CodeActionsReady {
                     intent_id,
                     actions: action_items,
+                }
+            }
+            LanguageIntent::Rename {
+                file_path,
+                line,
+                character,
+                new_name,
+            } => {
+                let edit = self
+                    .service
+                    .rename_symbol(&file_path, line, character, &new_name)
+                    .map_err(|e| BladeError::Internal {
+                        trace_id: Uuid::new_v4().to_string(),
+                        message: format!("Rename failed: {}", e),
+                    })?;
+
+                // Convert to Blade protocol types
+                let blade_edit = edit.map(|e| {
+                    let mut changes = std::collections::HashMap::new();
+                    if let Some(e_changes) = e.changes {
+                        for (uri, edits) in e_changes {
+                            let converted_edits = edits
+                                .into_iter()
+                                .map(|te| LanguageTextEdit {
+                                    range: self.map_range(te.range),
+                                    new_text: te.new_text,
+                                })
+                                .collect();
+                            // Simple URI to path conversion (may need better logic)
+                            // Assuming file:// URIs for now or direct paths
+                            let file_path = uri.replace("file://", "");
+                            changes.insert(file_path, converted_edits);
+                        }
+                    }
+                    LanguageWorkspaceEdit {
+                        changes: Some(changes),
+                    }
+                });
+
+                LanguageEvent::RenameEditsReady {
+                    intent_id,
+                    edit: blade_edit,
                 }
             }
         };

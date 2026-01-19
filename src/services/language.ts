@@ -12,7 +12,8 @@ import type {
     LanguageDiagnostic,
     LanguageEvent,
     SignatureInfo,
-    CodeActionInfo
+    CodeActionInfo,
+    LanguageWorkspaceEdit
 } from '../types/blade';
 
 // Result type for signature help
@@ -200,6 +201,29 @@ export class LanguageService {
             }
         }, (event) => {
             if (event.type === 'CodeActionsReady') return event.payload.actions;
+            return undefined;
+        });
+    }
+
+    /**
+     * Rename a symbol at position
+     */
+    static async renameSymbol(
+        filePath: string,
+        line: number,
+        character: number,
+        newName: string
+    ): Promise<LanguageWorkspaceEdit | null> {
+        return this.request<LanguageWorkspaceEdit | null>("Rename", {
+            type: "Rename",
+            payload: {
+                file_path: filePath,
+                line,
+                character,
+                new_name: newName
+            }
+        }, (event) => {
+            if (event.type === 'RenameEditsReady') return event.payload.edit;
             return undefined;
         });
     }
