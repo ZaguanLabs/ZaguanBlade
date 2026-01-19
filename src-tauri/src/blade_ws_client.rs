@@ -224,13 +224,26 @@ impl BladeWsClient {
 
         // Spawn write task
         let _write_task = tokio::spawn(async move {
+            eprintln!("[BLADE WS WRITE] Write task started");
             while let Some(msg) = msg_rx.recv().await {
                 match msg {
                     WsMessage::Send(text) => {
+                        let preview = if text.len() > 100 {
+                            &text[..100]
+                        } else {
+                            &text
+                        };
+                        eprintln!("[BLADE WS WRITE] >>> Sending message: {}...", preview);
+                        let start = std::time::Instant::now();
                         if let Err(e) = write.send(Message::Text(text)).await {
-                            eprintln!("[BLADE WS] Write error: {}", e);
+                            eprintln!(
+                                "[BLADE WS WRITE] Write error after {:?}: {}",
+                                start.elapsed(),
+                                e
+                            );
                             break;
                         }
+                        eprintln!("[BLADE WS WRITE] <<< Message sent in {:?}", start.elapsed());
                     }
                     WsMessage::Ping => {
                         if let Err(e) = write.send(Message::Ping(Vec::new())).await {
@@ -239,11 +252,13 @@ impl BladeWsClient {
                         }
                     }
                     WsMessage::Close => {
+                        eprintln!("[BLADE WS WRITE] Closing connection");
                         let _ = write.close().await;
                         break;
                     }
                 }
             }
+            eprintln!("[BLADE WS WRITE] Write task exiting");
         });
 
         // Heartbeat: send websocket ping periodically to keep connection alive
@@ -431,21 +446,23 @@ impl BladeWsClient {
         session_id: String,
         messages: Vec<serde_json::Value>,
     ) -> Result<(), String> {
+        eprintln!("[BLADE WS CTX] >>> Acquiring connection lock for context response...");
+        let lock_start = std::time::Instant::now();
         let conn = self.connection.lock().await;
-        let conn = conn.as_ref().ok_or("Not connected")?;
+        eprintln!("[BLADE WS CTX] Lock acquired in {:?}", lock_start.elapsed());
+
+        let conn = conn.as_ref().ok_or_else(|| {
+            eprintln!("[BLADE WS CTX] ERROR: Not connected!");
+            "Not connected".to_string()
+        })?;
 
         let payload = ConversationContextPayload {
             session_id: session_id.clone(),
             messages,
         };
 
-        eprintln!(
-            "[BLADE WS] Sending conversation context response: id={} session={}",
-            request_id, session_id
-        );
-
         let msg = WsBaseMessage {
-            id: request_id, // Must match the request ID for server correlation
+            id: request_id.clone(), // Must match the request ID for server correlation
             msg_type: "conversation_context".to_string(),
             timestamp: chrono::Utc::now().timestamp_millis(),
             payload: Some(serde_json::to_value(payload).unwrap()),
@@ -454,10 +471,19 @@ impl BladeWsClient {
         let json =
             serde_json::to_string(&msg).map_err(|e| format!("JSON serialization error: {}", e))?;
 
-        conn.tx
-            .send(WsMessage::Send(json))
-            .map_err(|e| format!("Failed to send conversation context: {}", e))?;
+        eprintln!(
+            "[BLADE WS CTX] >>> Sending to channel: id={}, session={}, json_len={}",
+            request_id,
+            session_id,
+            json.len()
+        );
 
+        conn.tx.send(WsMessage::Send(json)).map_err(|e| {
+            eprintln!("[BLADE WS CTX] CHANNEL SEND FAILED: {}", e);
+            format!("Failed to send conversation context: {}", e)
+        })?;
+
+        eprintln!("[BLADE WS CTX] <<< Message queued to write channel successfully!");
         Ok(())
     }
 
