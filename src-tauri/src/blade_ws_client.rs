@@ -134,7 +134,6 @@ struct AuthenticatePayload {
     client_name: String,
     client_version: String,
 }
-
 #[derive(Debug, Serialize)]
 struct ChatRequestPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -144,6 +143,8 @@ struct ChatRequestPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     workspace: Option<WorkspaceInfo>,
     api_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_id: Option<String>, // Request ID embedded in payload for tracking
     #[serde(skip_serializing_if = "Option::is_none")]
     storage_mode: Option<String>,
 }
@@ -358,17 +359,20 @@ impl BladeWsClient {
         let conn = self.connection.lock().await;
         let conn = conn.as_ref().ok_or("Not connected")?;
 
+        let msg_id = format!("chat-{}", chrono::Utc::now().timestamp_millis());
+
         let payload = ChatRequestPayload {
             session_id,
             model_id,
             message,
             workspace,
             api_key: self.api_key.clone(),
+            request_id: Some(msg_id.clone()),
             storage_mode,
         };
 
         let msg = WsBaseMessage {
-            id: format!("chat-{}", chrono::Utc::now().timestamp_millis()),
+            id: msg_id.clone(),
             msg_type: "chat_request".to_string(),
             timestamp: chrono::Utc::now().timestamp_millis(),
             payload: Some(serde_json::to_value(payload).unwrap()),
