@@ -423,7 +423,7 @@ impl BladeWsClient {
     /// Send conversation context in response to get_conversation_context request (RFC-002)
     pub async fn send_conversation_context(
         &self,
-        request_id: String,
+        _request_id: String,
         session_id: String,
         messages: Vec<serde_json::Value>,
     ) -> Result<(), String> {
@@ -436,7 +436,7 @@ impl BladeWsClient {
         };
 
         let msg = WsBaseMessage {
-            id: request_id,
+            id: format!("ctx-{}", chrono::Utc::now().timestamp_millis()),
             msg_type: "conversation_context".to_string(),
             timestamp: chrono::Utc::now().timestamp_millis(),
             payload: Some(serde_json::to_value(payload).unwrap()),
