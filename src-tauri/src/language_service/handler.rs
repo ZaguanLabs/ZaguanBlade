@@ -458,6 +458,26 @@ impl LanguageHandler {
                             )
                         },
                         is_preferred: a.is_preferred,
+                        edit: a.edit.map(|e| {
+                            let mut changes = std::collections::HashMap::new();
+                            if let Some(e_changes) = e.changes {
+                                for (uri, edits) in e_changes {
+                                    let converted_edits = edits
+                                        .into_iter()
+                                        .map(|te| LanguageTextEdit {
+                                            range: self.map_range(te.range),
+                                            new_text: te.new_text,
+                                        })
+                                        .collect();
+                                    // Simple URI to path conversion
+                                    let file_path = uri.replace("file://", "");
+                                    changes.insert(file_path, converted_edits);
+                                }
+                            }
+                            LanguageWorkspaceEdit {
+                                changes: Some(changes),
+                            }
+                        }),
                     })
                     .collect();
 

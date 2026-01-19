@@ -18,31 +18,33 @@ import {
 } from "@codemirror/view";
 import { LanguageService } from "../../../services/language";
 import type { CodeActionInfo, LanguageDiagnostic } from "../../../types/blade";
+import { applyWorkspaceEdit } from "../utils/applyEdit";
 
 // Store current code actions per line
 interface CodeActionsState {
     actions: Map<number, CodeActionInfo[]>; // line number -> actions
+    filePath: string;
 }
 
 const setCodeActions = StateEffect.define<CodeActionsState>();
 
 const codeActionsState = StateField.define<CodeActionsState>({
-    create: () => ({ actions: new Map() }),
+    create: () => ({ actions: new Map(), filePath: "" }),
     update(state, tr) {
         for (const effect of tr.effects) {
             if (effect.is(setCodeActions)) {
                 return effect.value;
             }
         }
-        // Clear on significant document changes
+        // Clear on significant document changes but keep filePath if possible or reset
+        // Actually we should prob just keep filePath if we had it, but for simplicity:
         if (tr.docChanged) {
-            return { actions: new Map() };
+            return { actions: new Map(), filePath: state.filePath };
         }
         return state;
     }
 });
 
-// Lightbulb gutter marker
 class LightbulbMarker extends GutterMarker {
     constructor(readonly actions: CodeActionInfo[]) {
         super();
@@ -86,7 +88,7 @@ const lightbulbGutter = gutter({
             const actions = state.actions.get(lineNum);
 
             if (actions && actions.length > 0) {
-                showCodeActionsMenu(view, line.from, actions);
+                showCodeActionsMenu(view, line.from, actions, state.filePath);
                 return true;
             }
             return false;
@@ -95,7 +97,7 @@ const lightbulbGutter = gutter({
 });
 
 // Show code actions menu
-function showCodeActionsMenu(view: EditorView, pos: number, actions: CodeActionInfo[]) {
+function showCodeActionsMenu(view: EditorView, pos: number, actions: CodeActionInfo[], filePath: string) {
     // Remove any existing menu
     const existing = document.querySelector(".cm-code-actions-menu");
     if (existing) existing.remove();
@@ -132,7 +134,7 @@ function showCodeActionsMenu(view: EditorView, pos: number, actions: CodeActionI
 
         item.onclick = () => {
             menu.remove();
-            applyCodeAction(view, action);
+            applyCodeAction(view, action, filePath);
         };
 
         menu.appendChild(item);
@@ -158,17 +160,19 @@ function getActionIcon(kind: string | null): string {
     return "💡";
 }
 
-async function applyCodeAction(view: EditorView, action: CodeActionInfo) {
-    // For now, just log the action
-    // Full implementation would parse the workspace edit and apply it
+async function applyCodeAction(view: EditorView, action: CodeActionInfo, filePath: string) {
     console.log("[CodeAction] Apply:", action.title);
 
-    // TODO: Implement workspace edit application
-    // This would require:
-    // 1. Backend to return the edit details
-    // 2. Frontend to parse and apply text edits
-    // For now, show a notification
-    console.warn("[CodeAction] Apply not yet implemented - action:", action);
+    if (action.edit) {
+        const applied = applyWorkspaceEdit(view, filePath, action.edit);
+        if (applied) {
+            console.log("[CodeAction] Successfully applied edits to current view");
+        } else {
+            console.log("[CodeAction] Edits were not applicable to current view or empty");
+        }
+    } else {
+        console.warn("[CodeAction] No edit attached to action:", action);
+    }
 }
 
 // Theme for code actions
@@ -227,7 +231,6 @@ const codeActionsTheme = EditorView.baseTheme({
  * Creates a code actions extension.
  * 
  * @param filePath - The file path for LSP requests
- * @param getDiagnosticLines - Function to get lines with diagnostics
  */
 export function codeActionsExtension(filePath: string): Extension {
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -283,7 +286,7 @@ export function codeActionsExtension(filePath: string): Extension {
                 const newActions = new Map(state.actions);
                 newActions.set(lineNum, actions);
                 view.dispatch({
-                    effects: setCodeActions.of({ actions: newActions })
+                    effects: setCodeActions.of({ actions: newActions, filePath: path })
                 });
             }
         } catch (e) {
@@ -315,7 +318,7 @@ export function requestCodeActions(view: EditorView, filePath: string): void {
         sel.to - endLine.from
     ).then(actions => {
         if (actions.length > 0) {
-            showCodeActionsMenu(view, sel.from, actions);
+            showCodeActionsMenu(view, sel.from, actions, filePath);
         }
     }).catch(e => console.warn("[CodeActions] Request failed:", e));
 }

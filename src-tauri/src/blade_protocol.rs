@@ -647,6 +647,8 @@ pub struct CodeAction {
     pub kind: Option<String>, // e.g., "quickfix", "refactor"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diagnostics: Option<Vec<LanguageDiagnostic>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edit: Option<LanguageWorkspaceEdit>,
     pub is_preferred: bool,
 }
 

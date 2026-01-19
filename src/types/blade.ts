@@ -312,6 +312,7 @@ export type CodeActionInfo = {
     title: string;
     kind: string | null;
     diagnostics: LanguageDiagnostic[] | null;
+    edit?: LanguageWorkspaceEdit | null;
     is_preferred: boolean;
 }
 
