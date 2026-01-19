@@ -30,6 +30,7 @@ import {
     smoothCursor,
     scrollPastEnd,
     languageFeatures,
+    diagnosticsExtension,
 } from "./editor/extensions";
 import { useEditor } from "../contexts/EditorContext";
 import { useContextMenu, type ContextMenuItem } from "./ui/ContextMenu";
@@ -82,6 +83,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     const viewRef = useRef<EditorView | null>(null);
     const languageConf = useRef(new Compartment());
     const languageFeaturesConf = useRef(new Compartment());
+    const diagnosticsConf = useRef(new Compartment());
     const { setCursorPosition, setSelection, clearSelection } = useEditor();
     const { showMenu } = useContextMenu();
 
@@ -220,6 +222,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 // Language support (dynamic)
                 languageConf.current.of(getLanguageExtension(filename)),
                 languageFeaturesConf.current.of(languageFeatures(filename || "", onNavigate)),
+                diagnosticsConf.current.of(diagnosticsExtension(filename || "")),
 
                 // Keymaps
                 keymap.of([
@@ -298,6 +301,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 effects: [
                     languageConf.current.reconfigure(getLanguageExtension(filename)),
                     languageFeaturesConf.current.reconfigure(languageFeatures(filename || "", onNavigate)),
+                    diagnosticsConf.current.reconfigure(diagnosticsExtension(filename || "")),
                     setBaseContent.of(content) // Initialize virtual buffer with base content
                 ]
             });
@@ -332,11 +336,24 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
             clearTimeout(didChangeTimeout.current);
         }
 
-        didChangeTimeout.current = setTimeout(() => {
+        didChangeTimeout.current = setTimeout(async () => {
             documentVersion.current += 1;
-            LanguageService.didChange(filename, content, documentVersion.current).catch(e =>
-                console.warn('[LSP] didChange failed:', e)
-            );
+            try {
+                await LanguageService.didChange(filename, content, documentVersion.current);
+
+                // After a short delay for LSP to process, fetch diagnostics
+                setTimeout(async () => {
+                    try {
+                        const diagnostics = await LanguageService.getDiagnostics(filename);
+                        // Diagnostics will be delivered via DiagnosticsUpdated event
+                        // which the diagnosticsExtension listens for
+                    } catch (e) {
+                        // Diagnostics fetch is best-effort
+                    }
+                }, 200);
+            } catch (e) {
+                console.warn('[LSP] didChange failed:', e);
+            }
         }, 150); // 150ms debounce
 
         return () => {

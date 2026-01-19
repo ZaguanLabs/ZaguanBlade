@@ -15,3 +15,4 @@ export {
     type PendingInlineDiff
 } from "./inlineDiff";
 export { languageFeatures } from "./languageFeatures";
+export { diagnosticsExtension, setDiagnostics, clearDiagnostics, getDiagnostics } from "./diagnostics";

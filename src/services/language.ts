@@ -138,6 +138,19 @@ export class LanguageService {
     }
 
     /**
+     * Get diagnostics for a file (errors, warnings, etc.)
+     */
+    static async getDiagnostics(filePath: string): Promise<LanguageDiagnostic[]> {
+        return this.request<LanguageDiagnostic[]>("GetDiagnostics", {
+            type: "GetDiagnostics",
+            payload: { file_path: filePath }
+        }, (event) => {
+            if (event.type === 'DiagnosticsUpdated') return event.payload.diagnostics;
+            return undefined;
+        });
+    }
+
+    /**
      * Helper to correlate a request intent with its corresponding response event.
      * Starts listening for the event BEFORE dispatching the intent to ensuring no race conditions.
      */
