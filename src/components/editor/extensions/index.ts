@@ -18,3 +18,4 @@ export { languageFeatures } from "./languageFeatures";
 export { diagnosticsExtension, setDiagnostics, clearDiagnostics, getDiagnostics } from "./diagnostics";
 export { signatureHelpExtension, triggerSignatureHelp } from "./signatureHelp";
 export { codeActionsExtension, requestCodeActions } from "./codeActions";
+export { referencesExtension } from "./references";
