@@ -24,16 +24,33 @@ export const DocumentTabs: React.FC<DocumentTabsProps> = ({
   onTabClick,
   onTabClose,
 }) => {
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+  const activeTabRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (activeTabId && activeTabRef.current) {
+      activeTabRef.current.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+        inline: 'nearest',
+      });
+    }
+  }, [activeTabId]);
+
   if (tabs.length === 0) return null;
 
   return (
-    <div className="flex items-center bg-[#252526] border-b border-[#3c3c3c] overflow-x-auto scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-transparent">
+    <div
+      ref={scrollRef}
+      className="flex items-center bg-[#252526] border-b border-[#3c3c3c] overflow-x-auto scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-transparent"
+    >
       {tabs.map((tab) => {
         const isActive = activeTabId === tab.id;
         const { icon, color } = getFileIcon(tab.title, isActive);
         return (
           <div
             key={tab.id}
+            ref={isActive ? activeTabRef : null}
             onClick={() => onTabClick(tab.id)}
             className={`
               group flex items-center gap-2 px-3 py-2 min-w-[120px] max-w-[200px] cursor-pointer

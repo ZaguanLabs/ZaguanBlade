@@ -14,6 +14,7 @@ use std::process::Command;
 use crate::protocol::ToolCall;
 use crate::tool_execution::ToolExecutionContext;
 use crate::tools;
+use tauri::Emitter;
 
 pub use tool_defs::get_tool_definitions;
 
@@ -219,7 +220,7 @@ impl AiWorkflow {
 
         let mut file_results: Vec<(ToolCall, tools::ToolResult)> = Vec::new();
         let mut commands: Vec<PendingCommand> = Vec::new();
-        let mut changes: Vec<PendingChange> = Vec::new();
+        let changes: Vec<PendingChange> = Vec::new();
         let mut confirms: Vec<PendingConfirm> = Vec::new();
         let mut loop_detected = false;
         let mut seen_in_batch: HashMap<(String, String), usize> = HashMap::new();
@@ -330,11 +331,38 @@ impl AiWorkflow {
                     workspace_root,
                     &call.function.name,
                 ) {
-                    Ok(mut change) => {
+                    Ok(change) => {
                         // NEW LOGIC: Apply the change IMMEDIATELY to disk
                         // This makes it act like an "Undo/Redo" buffer - change is live, can be undone.
 
                         let full_path = workspace_root.join(&change.path);
+
+                        // History Snapshot
+                        if let Some(app) = &context.app_handle {
+                            use tauri::Manager;
+                            let state = app.state::<crate::app_state::AppState>();
+                            if full_path.exists() {
+                                match state
+                                    .history_service
+                                    .create_snapshot(&full_path, Some(call.id.clone()))
+                                {
+                                    Ok(entry) => {
+                                        println!("[HISTORY] Snapshot created for {}", change.path);
+                                        let _ = app.emit(
+                                            crate::events::event_names::HISTORY_ENTRY_ADDED,
+                                            crate::events::HistoryEntryAddedPayload { entry },
+                                        );
+                                    }
+                                    Err(e) => {
+                                        eprintln!(
+                                            "[HISTORY] Failed to create snapshot for {}: {}",
+                                            change.path, e
+                                        );
+                                    }
+                                }
+                            }
+                        }
+
                         let apply_result = (|| -> Result<(), String> {
                             match &change.change_type {
                                 ChangeType::Patch {
@@ -390,19 +418,38 @@ impl AiWorkflow {
                         match apply_result {
                             Ok(_) => {
                                 println!("[AI WORKFLOW] Auto-applied change to {}", change.path);
-                                change.applied = true;
-                                change.error = None;
+                                if let Some(app) = &context.app_handle {
+                                    let _ = app.emit("refresh-explorer", ());
+                                    let _ = app.emit(
+                                        crate::events::event_names::CHANGE_APPLIED,
+                                        crate::events::ChangeAppliedPayload {
+                                            change_id: call.id.clone(),
+                                            file_path: change.path.clone(),
+                                        },
+                                    );
+                                }
+                                file_results.push((
+                                    call.clone(),
+                                    tools::ToolResult::ok(format!(
+                                        "Change applied to {}",
+                                        change.path
+                                    )),
+                                ));
                             }
                             Err(e) => {
                                 eprintln!("[AI WORKFLOW] Failed to auto-apply change: {}", e);
-                                change.applied = false;
-                                change.error = Some(e);
-                                // We still push it as pending, but it's not applied. User will see normal Accept/Reject.
+                                file_results.push((
+                                    call.clone(),
+                                    tools::ToolResult::err(format!(
+                                        "Failed to apply change: {}",
+                                        e
+                                    )),
+                                ));
                             }
                         }
 
-                        change.call = call.clone();
-                        changes.push(change);
+                        // change.call = call.clone();
+                        // changes.push(change);
                     }
                     Err(e) => file_results.push((call.clone(), tools::ToolResult::err(e))),
                 }
@@ -416,6 +463,32 @@ impl AiWorkflow {
                         // Same immediate apply logic for delete_file
                         let full_path = workspace_root.join(&change.path);
 
+                        // History Snapshot
+                        if let Some(app) = &context.app_handle {
+                            use tauri::Manager;
+                            let state = app.state::<crate::app_state::AppState>();
+                            if full_path.exists() {
+                                match state
+                                    .history_service
+                                    .create_snapshot(&full_path, Some(call.id.clone()))
+                                {
+                                    Ok(entry) => {
+                                        println!("[HISTORY] Snapshot created for {}", change.path);
+                                        let _ = app.emit(
+                                            crate::events::event_names::HISTORY_ENTRY_ADDED,
+                                            crate::events::HistoryEntryAddedPayload { entry },
+                                        );
+                                    }
+                                    Err(e) => {
+                                        eprintln!(
+                                            "[HISTORY] Failed to create snapshot for {}: {}",
+                                            change.path, e
+                                        );
+                                    }
+                                }
+                            }
+                        }
+
                         // Capture content for undo
                         if let ChangeType::DeleteFile {
                             ref mut old_content,
@@ -428,19 +501,36 @@ impl AiWorkflow {
 
                         match fs::remove_file(&full_path) {
                             Ok(_) => {
-                                change.applied = true;
-                                change.error = None;
+                                if let Some(app) = &context.app_handle {
+                                    let _ = app.emit("refresh-explorer", ());
+                                    let _ = app.emit(
+                                        crate::events::event_names::CHANGE_APPLIED,
+                                        crate::events::ChangeAppliedPayload {
+                                            change_id: call.id.clone(),
+                                            file_path: change.path.clone(),
+                                        },
+                                    );
+                                }
+                                file_results.push((
+                                    call.clone(),
+                                    tools::ToolResult::ok(format!("File deleted: {}", change.path)),
+                                ));
                             }
                             Err(e) => {
                                 let err_msg = e.to_string();
                                 eprintln!("[AI WORKFLOW] Failed to auto-delete file: {}", err_msg);
-                                change.applied = false;
-                                change.error = Some(err_msg);
+                                file_results.push((
+                                    call.clone(),
+                                    tools::ToolResult::err(format!(
+                                        "Failed to delete file: {}",
+                                        err_msg
+                                    )),
+                                ));
                             }
                         }
 
-                        change.call = call.clone();
-                        changes.push(change);
+                        // change.call = call.clone();
+                        // changes.push(change);
                     }
                     Err(e) => file_results.push((call.clone(), tools::ToolResult::err(e))),
                 }

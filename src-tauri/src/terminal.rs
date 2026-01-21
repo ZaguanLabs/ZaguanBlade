@@ -488,6 +488,9 @@ pub fn execute_command_in_terminal<R: Runtime>(
         };
         let _ = app_handle.emit("terminal-exit", exit_payload);
 
+        // Refresh explorer
+        let _ = app_handle.emit("refresh-explorer", ());
+
         // Remove from executing commands
         let mut executing = executing_commands.lock().unwrap();
         executing.remove(&id_clone);

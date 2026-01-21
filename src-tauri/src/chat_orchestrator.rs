@@ -554,139 +554,14 @@ pub async fn handle_send_message<R: Runtime>(
                 let pending = pending_opt.or(batch_opt);
 
                 if let Some(batch) = pending {
-                    let has_pending_changes = !batch.changes.is_empty();
+                    // Check if there are actions requiring approval (commands, confirms)
+                    // Note: File edits (changes) are now applied immediately and not buffered here.
                     let has_pending_actions =
                         !batch.commands.is_empty() || !batch.confirms.is_empty();
 
-                    // If there are NO pending items requiring approval, run immediately
-                    if !has_pending_changes && !has_pending_actions {
+                    if !has_pending_actions {
                         // No approval needed - set batch to run and let it fall through
                         batch_to_run = Some(batch);
-                    } else if has_pending_changes && !has_pending_actions {
-                        // NON-BLOCKING BUFFER MODE: Only file changes, no dangerous actions.
-                        eprintln!(
-                            "[NON-BLOCKING] Buffering {} changes without blocking",
-                            batch.changes.len()
-                        );
-
-                        // 1. Store changes in accumulated pending_changes (EXTEND)
-                        {
-                            let mut pending_changes = state.pending_changes.lock().unwrap();
-                            pending_changes.extend(batch.changes.clone());
-                        }
-
-                        // 2. Emit propose-changes event so Frontend can display them
-                        #[derive(serde::Serialize, Clone)]
-                        #[serde(tag = "change_type")]
-                        enum ChangeProposal {
-                            #[serde(rename = "patch")]
-                            Patch {
-                                id: String,
-                                path: String,
-                                old_content: String,
-                                new_content: String,
-                                applied: bool,
-                                error: Option<String>,
-                            },
-                            #[serde(rename = "multi_patch")]
-                            MultiPatch {
-                                id: String,
-                                path: String,
-                                patches: Vec<crate::ai_workflow::PatchHunk>,
-                                applied: bool,
-                                error: Option<String>,
-                            },
-                            #[serde(rename = "new_file")]
-                            NewFile {
-                                id: String,
-                                path: String,
-                                content: String,
-                                applied: bool,
-                                error: Option<String>,
-                            },
-                            #[serde(rename = "delete_file")]
-                            DeleteFile {
-                                id: String,
-                                path: String,
-                                applied: bool,
-                                error: Option<String>,
-                            },
-                        }
-
-                        let proposals: Vec<ChangeProposal> = batch
-                            .changes
-                            .iter()
-                            .map(|change| match &change.change_type {
-                                crate::ai_workflow::ChangeType::Patch {
-                                    old_content,
-                                    new_content,
-                                } => ChangeProposal::Patch {
-                                    id: change.call.id.clone(),
-                                    path: change.path.clone(),
-                                    old_content: old_content.clone(),
-                                    new_content: new_content.clone(),
-                                    applied: change.applied,
-                                    error: change.error.clone(),
-                                },
-                                crate::ai_workflow::ChangeType::MultiPatch { patches } => {
-                                    ChangeProposal::MultiPatch {
-                                        id: change.call.id.clone(),
-                                        path: change.path.clone(),
-                                        patches: patches.clone(),
-                                        applied: change.applied,
-                                        error: change.error.clone(),
-                                    }
-                                }
-                                crate::ai_workflow::ChangeType::NewFile { content } => {
-                                    ChangeProposal::NewFile {
-                                        id: change.call.id.clone(),
-                                        path: change.path.clone(),
-                                        content: content.clone(),
-                                        applied: change.applied,
-                                        error: change.error.clone(),
-                                    }
-                                }
-                                crate::ai_workflow::ChangeType::DeleteFile { .. } => {
-                                    ChangeProposal::DeleteFile {
-                                        id: change.call.id.clone(),
-                                        path: change.path.clone(),
-                                        applied: change.applied,
-                                        error: change.error.clone(),
-                                    }
-                                }
-                            })
-                            .collect();
-
-                        window
-                            .emit("propose-changes", proposals)
-                            .unwrap_or_default();
-
-                        // 3. Mark batch as "Buffered" success
-                        let mut modified_batch = batch.clone();
-                        for change in &modified_batch.changes {
-                            if !modified_batch
-                                .file_results
-                                .iter()
-                                .any(|(c, _)| c.id == change.call.id)
-                            {
-                                let res = if let Some(ref err) = change.error {
-                                    crate::tools::ToolResult::err(format!(
-                                        "Failed to apply change to {}: {}",
-                                        change.path, err
-                                    ))
-                                } else {
-                                    crate::tools::ToolResult::ok(
-                                        "Change buffered in editor. Please proceed.",
-                                    )
-                                };
-                                modified_batch.file_results.push((change.call.clone(), res));
-                            }
-                        }
-                        // Clear changes so downstream logic doesn't think we need approval
-                        modified_batch.changes.clear();
-
-                        // 4. Run Immediately
-                        batch_to_run = Some(modified_batch);
                     } else {
                         // If we reach here, there ARE pending items that need approval
                         // MUST go through the approval flow
@@ -696,9 +571,6 @@ pub async fn handle_send_message<R: Runtime>(
                         {
                             let mut batch_guard = state.pending_batch.lock().unwrap();
                             *batch_guard = Some(batch.clone());
-                            // Mirror pending changes for approval handlers (approve_change/approve_all_changes)
-                            let mut pending_changes = state.pending_changes.lock().unwrap();
-                            pending_changes.extend(batch.changes.clone());
                         }
 
                         // 2. Emit UI events

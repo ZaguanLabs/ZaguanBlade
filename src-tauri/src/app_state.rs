@@ -17,8 +17,8 @@ pub struct AppState {
     pub workspace: Mutex<WorkspaceManager>,
     pub config: Mutex<ApiConfig>,
     pub workflow: Mutex<AiWorkflow>,
+
     pub pending_approval: Mutex<Option<tokio::sync::oneshot::Sender<bool>>>,
-    pub pending_changes: Mutex<Vec<crate::ai_workflow::PendingChange>>,
     pub pending_batch: Mutex<Option<crate::ai_workflow::PendingToolBatch>>,
     pub selected_model_index: Mutex<usize>,
     pub ephemeral_docs: ephemeral_documents::EphemeralDocumentStore,
@@ -28,7 +28,7 @@ pub struct AppState {
     pub cursor_column: Mutex<Option<usize>>,
     pub selection_start_line: Mutex<Option<usize>>,
     pub selection_end_line: Mutex<Option<usize>>,
-    pub virtual_buffers: Mutex<std::collections::HashMap<String, String>>, // path -> virtual content
+    // virtual_buffers removed
     pub approved_command_roots: Mutex<std::collections::HashSet<String>>,
     pub executing_commands: std::sync::Arc<
         Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>>,
@@ -37,6 +37,7 @@ pub struct AppState {
     pub warmup_client: warmup::WarmupClient,                     // v2.1: Cache warmup
     pub user_id: Mutex<Option<String>>, // Authenticated user ID from WebSocket
     pub fs_watcher: Mutex<Option<RecommendedWatcher>>, // Workspace file watcher
+    pub history_service: std::sync::Arc<crate::history::HistoryService>, // File history service
     pub language_service: std::sync::Arc<crate::language_service::LanguageService>, // v1.3: Unified Language Service
     pub language_handler: crate::language_service::LanguageHandler, // v1.3: Language Intent Handler
 }
@@ -71,7 +72,7 @@ impl AppState {
             .join("zaguan")
             .join("conversations");
 
-        let conversation_store = conversation_store::ConversationStore::new(storage_path)
+        let conversation_store = conversation_store::ConversationStore::new(storage_path.clone())
             .unwrap_or_else(|e| {
                 eprintln!("Failed to initialize conversation store: {}", e);
                 // Fallback to temp directory
@@ -80,6 +81,12 @@ impl AppState {
                 )
                 .expect("Failed to create conversation store in temp directory")
             });
+
+        // Initialize History Service
+        // Use zaguan/history in data dir
+        let history_service = std::sync::Arc::new(crate::history::HistoryService::new(
+            &storage_path.parent().unwrap(),
+        ));
 
         let mut workspace_manager = WorkspaceManager::new();
         // Override workspace if provided via CLI
@@ -143,7 +150,6 @@ impl AppState {
             config: Mutex::new(config),
             workflow: Mutex::new(AiWorkflow::new()),
             pending_approval: Mutex::new(None),
-            pending_changes: Mutex::new(Vec::new()),
             pending_batch: Mutex::new(None),
             selected_model_index: Mutex::new(initial_model_index),
             ephemeral_docs: ephemeral_documents::EphemeralDocumentStore::new(),
@@ -154,12 +160,13 @@ impl AppState {
             user_id: Mutex::new(Some(user_id)),
             selection_start_line: Mutex::new(None),
             selection_end_line: Mutex::new(None),
-            virtual_buffers: Mutex::new(std::collections::HashMap::new()),
+            // virtual_buffers removed
             approved_command_roots: Mutex::new(std::collections::HashSet::new()),
             executing_commands: std::sync::Arc::new(Mutex::new(std::collections::HashMap::new())),
             idempotency_cache: crate::idempotency::IdempotencyCache::default(), // 24h TTL
             warmup_client, // v2.1: Cache warmup
             fs_watcher: Mutex::new(None),
+            history_service,
             language_service,
             language_handler,
         }

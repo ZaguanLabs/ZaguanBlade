@@ -50,8 +50,6 @@ export function useChat() {
 
     // Permission Logic
     const [pendingActions, setPendingActions] = useState<StructuredAction[] | null>(null);
-    const [pendingChanges, setPendingChanges] = useState<Change[]>([]);
-    const autoApproveAllRef = useRef(false);
 
     // Load initial conversation and models
     useEffect(() => {
@@ -240,15 +238,12 @@ export function useChat() {
             const u2 = await listen('chat-done', () => {
                 setLoading(false);
                 setPendingActions(null); // Clear any hanging dialogs
-                autoApproveAllRef.current = false;
             });
             unlistenDone = u2;
 
             const u3 = await listen<string>('chat-error', (event) => {
-                setError(event.payload);
                 setLoading(false);
                 setPendingActions(null);
-                autoApproveAllRef.current = false;
             });
             unlistenError = u3;
 
@@ -259,49 +254,7 @@ export function useChat() {
             });
             unlistenPerm = u4;
 
-            // Listen for change proposals (backend sends array of changes)
-            const u5 = await listen<Change[]>('propose-changes', (event) => {
-                console.log('[PROPOSE CHANGES] received', event.payload.map(c => ({ id: c.id, type: c.change_type, path: c.path })));
 
-                if (autoApproveAllRef.current) {
-                    const batchId = `batch-${Date.now()}`;
-                    const idempotencyKey = getOrCreateIdempotencyKey(
-                        IDEMPOTENT_OPERATIONS.APPROVE_ALL,
-                        batchId
-                    );
-                    BladeDispatcher.dispatch(
-                        'Workflow',
-                        { type: 'Workflow', payload: { type: 'ApproveAll', payload: { batch_id: batchId } } },
-                        idempotencyKey
-                    ).catch(e => console.error('[useChat] Auto-approve all failed:', e));
-                    return;
-                }
-
-                setPendingChanges(prev => {
-                    const newChanges = event.payload.filter(newChange =>
-                        !prev.some(c => c.id === newChange.id)
-                    );
-                    return [...prev, ...newChanges];
-                });
-
-                // Automatically open files for all change types
-                event.payload.forEach(change => {
-                    if (change.change_type === 'new_file') {
-                        // Open new files as ephemeral tabs
-                        const filename = change.path.split('/').pop() || change.path;
-                        emit('open-ephemeral-document', {
-                            id: `new-file-${change.id}`,
-                            title: `NEW: ${filename}`,
-                            content: change.content,
-                            suggestedName: change.path
-                        });
-                    } else if (change.change_type === 'patch' || change.change_type === 'multi_patch') {
-                        // Open existing files being modified so user can see and approve changes
-                        emit('open-file', change.path);
-                    }
-                });
-            });
-            unlistenChanges = u5;
 
             // Listen for command executions
             const u6 = await listen<{ command: string; cwd?: string; output: string; exitCode: number; duration?: number; call_id: string }>('command-executed', (event) => {
@@ -373,20 +326,7 @@ export function useChat() {
 
             // u7 removed - redundant with chat-update logic
 
-            // Listen for change applied signal (from individual or batch approval)
-            const u8 = await listen<ChangeAppliedPayload>(EventNames.CHANGE_APPLIED, (event) => {
-                const { change_id, file_path } = event.payload;
-                console.log('[CHAT] Change applied signal received:', change_id, 'for', file_path);
-                setPendingChanges(prev => prev.filter(c => c.id !== change_id && c.path !== file_path));
-            });
-            const unlistenApplied = u8;
 
-            const u9 = await listen<AllEditsAppliedPayload>(EventNames.ALL_EDITS_APPLIED, (event) => {
-                const { file_paths } = event.payload;
-                console.log('[CHAT] All changes applied for:', file_paths);
-                setPendingChanges(prev => prev.filter(c => !file_paths.includes(c.path)));
-            });
-            const unlistenAllApplied = u9;
 
             // Listen for todo list updates
             const u10 = await listen<{ todos: import('../types/events').TodoItem[] }>(EventNames.TODO_UPDATED, (event) => {
@@ -535,11 +475,8 @@ export function useChat() {
                 if (unlistenDone) unlistenDone();
                 if (unlistenError) unlistenError();
                 if (unlistenPerm) unlistenPerm();
-                if (unlistenChanges) unlistenChanges();
                 if (unlistenCommand) unlistenCommand();
                 // if (unlistenToolCompleted) unlistenToolCompleted(); // Removed
-                if (unlistenApplied) unlistenApplied();
-                if (unlistenAllApplied) unlistenAllApplied();
                 if (unlistenTodoUpdated) unlistenTodoUpdated();
                 if (unlistenV11) unlistenV11();
             };
@@ -627,97 +564,7 @@ export function useChat() {
         }
     }, []);
 
-    const approveChange = useCallback(async (changeId: string) => {
-        console.log('[useChat] approveChange called with:', changeId);
-        logFrontend(`[approveChange] changeId=${changeId}`);
-        try {
-            // Get the change being approved to check its file path
-            const change = pendingChanges.find(c => c.id === changeId);
-            console.log('[useChat] Found change:', change);
-            logFrontend(`[approveChange] found change path=${change?.path ?? 'n/a'} type=${change?.change_type ?? 'n/a'}`);
 
-            // v1.1: Generate idempotency key for this critical operation
-            const idempotencyKey = getOrCreateIdempotencyKey(
-                IDEMPOTENT_OPERATIONS.APPROVE_CHANGE,
-                changeId
-            );
-
-            // Use v1.1 ApproveAction intent with idempotency
-            await BladeDispatcher.dispatch(
-                'Workflow',
-                { type: 'Workflow', payload: { type: 'ApproveAction', payload: { action_id: changeId } } },
-                idempotencyKey
-            );
-            console.log('[useChat] Backend approve_action completed');
-            logFrontend(`[approveChange] backend completed changeId=${changeId}`);
-
-            // Remove the approved change and any other changes for the same file
-            // (since applying one patch invalidates others for the same file)
-            setPendingChanges(prev => {
-                if (change) {
-                    const filtered = prev.filter(c => c.id !== changeId && c.path !== change.path);
-                    if (filtered.length < prev.length - 1) {
-                        console.log(`[CHANGE] Removed ${prev.length - filtered.length - 1} stale changes for ${change.path}`);
-                    }
-                    return filtered;
-                }
-                return prev.filter(c => c.id !== changeId);
-            });
-        } catch (e) {
-            console.error("Failed to approve change:", e);
-        }
-    }, [pendingChanges, logFrontend]);
-
-    const rejectChange = useCallback(async (changeId: string) => {
-        try {
-            // v1.1: Generate idempotency key for this critical operation
-            const idempotencyKey = getOrCreateIdempotencyKey(
-                IDEMPOTENT_OPERATIONS.REJECT_CHANGE,
-                changeId
-            );
-
-            // Use v1.1 RejectAction intent with idempotency
-            await BladeDispatcher.dispatch(
-                'Workflow',
-                { type: 'Workflow', payload: { type: 'RejectAction', payload: { action_id: changeId } } },
-                idempotencyKey
-            );
-            setPendingChanges(prev => prev.filter(c => c.id !== changeId));
-        } catch (e) {
-            console.error("Failed to reject change:", e);
-        }
-    }, []);
-
-    const approveAllChanges = useCallback(async () => {
-        try {
-            console.log('[useChat] approveAllChanges called; pendingChanges:', pendingChanges.map(c => ({ id: c.id, path: c.path, type: c.change_type })));
-            logFrontend(`[approveAllChanges] count=${pendingChanges.length} ids=${pendingChanges.map(c => c.id).join(',')}`);
-
-            // v1.1: Generate idempotency key using batch ID (timestamp-based)
-            const batchId = `batch-${Date.now()}`;
-            const idempotencyKey = getOrCreateIdempotencyKey(
-                IDEMPOTENT_OPERATIONS.APPROVE_ALL,
-                batchId
-            );
-
-            // Use v1.1 ApproveAll intent with idempotency
-            autoApproveAllRef.current = true;
-            await BladeDispatcher.dispatch(
-                'Workflow',
-                { type: 'Workflow', payload: { type: 'ApproveAll', payload: { batch_id: batchId } } },
-                idempotencyKey
-            );
-            console.log('[useChat] Backend approve_all completed');
-            logFrontend('[approveAllChanges] backend completed');
-            setPendingChanges([]);
-        } catch (e) {
-            console.error("Failed to approve all changes:", e);
-        }
-    }, [pendingChanges, logFrontend]);
-
-    const removeChangesFromList = useCallback((changeIds: string[]) => {
-        setPendingChanges(prev => prev.filter(c => !changeIds.includes(c.id)));
-    }, []);
 
     const approveTool = useCallback(async (approved: boolean) => {
         try {
@@ -743,6 +590,29 @@ export function useChat() {
         }
     }, []);
 
+    const newConversation = useCallback(async () => {
+        try {
+            await invoke('new_conversation');
+            setMessages([]);
+            setLoading(false);
+            setPendingActions(null);
+        } catch (e) {
+            console.error('Failed to start new conversation:', e);
+        }
+    }, []);
+
+    const undoTool = useCallback(async (toolCallId: string) => {
+        try {
+            console.log('[useChat] Undoing tool batch:', toolCallId);
+            const revertedFiles = await invoke<string[]>('undo_batch', { groupId: toolCallId });
+            console.log('[useChat] Reverted files:', revertedFiles);
+            // We might want to show a toast or notification here
+        } catch (e) {
+            console.error('Failed to undo tool batch:', e);
+            // Show error in UI?
+        }
+    }, []);
+
     return {
         messages,
         loading,
@@ -755,10 +625,7 @@ export function useChat() {
         pendingActions,
         approveTool,
         approveToolDecision,
-        pendingChanges,
-        approveChange,
-        approveAllChanges,
-        rejectChange,
-        removeChangesFromList
+        newConversation,
+        undoTool,
     };
 }

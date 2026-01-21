@@ -2,6 +2,8 @@
 import React, { useState } from 'react';
 import { Terminal, ChevronDown, ChevronRight, CheckCircle2, XCircle, Clock } from 'lucide-react';
 
+import Ansi from 'ansi-to-react';
+
 interface CommandOutputDisplayProps {
     command: string;
     cwd?: string;
@@ -57,8 +59,8 @@ export const CommandOutputDisplay: React.FC<CommandOutputDisplayProps> = ({
                         </div>
                     )}
                     <div className={`px-2 py-0.5 rounded text-xs font-medium ${isSuccess
-                            ? 'bg-emerald-500/10 text-emerald-400'
-                            : 'bg-red-500/10 text-red-400'
+                        ? 'bg-emerald-500/10 text-emerald-400'
+                        : 'bg-red-500/10 text-red-400'
                         }`}>
                         Exit {exitCode}
                     </div>
@@ -74,7 +76,7 @@ export const CommandOutputDisplay: React.FC<CommandOutputDisplayProps> = ({
             {isExpanded && output && (
                 <div className="border-t border-[#3e3e42]">
                     <pre className="p-4 text-xs font-mono text-zinc-300 overflow-x-auto max-h-[400px] overflow-y-auto bg-[#1e1e1e] select-text">
-                        {output}
+                        <Ansi>{output}</Ansi>
                     </pre>
                 </div>
             )}

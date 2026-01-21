@@ -18,6 +18,7 @@ pub mod events;
 pub mod explorer;
 pub mod fs_watcher;
 pub mod git;
+pub mod history;
 pub mod idempotency;
 pub mod language_service;
 pub mod local_artifacts;
@@ -96,10 +97,10 @@ pub fn run() {
             commands::misc::greet,
             commands::misc::toggle_devtools,
             commands::misc::log_frontend,
-            commands::misc::set_virtual_buffer,
-            commands::misc::clear_virtual_buffer,
-            commands::misc::has_virtual_buffer,
-            commands::misc::get_virtual_files,
+            // commands::misc::set_virtual_buffer,
+            // commands::misc::clear_virtual_buffer,
+            // commands::misc::has_virtual_buffer,
+            // commands::misc::get_virtual_files,
             // Files
             commands::files::open_workspace,
             commands::files::list_files,
@@ -135,10 +136,10 @@ pub fn run() {
             // Tools & Changes
             commands::tools::submit_command_result,
             commands::tools::approve_tool_decision,
-            commands::changes::approve_change,
-            commands::changes::approve_changes_for_file,
-            commands::changes::approve_all_changes,
-            commands::changes::reject_change,
+            // History
+            commands::history::get_file_history,
+            commands::history::revert_file_to_snapshot,
+            commands::history::undo_batch,
             // Cache
             commands::cache::warmup_cache,
             commands::cache::should_rewarm_cache,

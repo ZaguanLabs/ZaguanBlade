@@ -103,6 +103,17 @@ pub mod event_names {
 
     /// Terminal reported a cwd change
     pub const TERMINAL_CWD_CHANGED: &str = "terminal-cwd-changed";
+
+    // === History ===
+
+    /// History entry added (snapshot created)
+    pub const HISTORY_ENTRY_ADDED: &str = "history-entry-added";
+}
+
+/// Payload for history-entry-added event
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryEntryAddedPayload {
+    pub entry: crate::history::HistoryEntry,
 }
 
 /// Payload for chat-update event
@@ -201,6 +212,7 @@ pub struct CommandExecutedPayload {
     pub command: String,
     pub cwd: Option<String>,
     pub output: String,
+    #[serde(rename = "exitCode")]
     pub exit_code: i32,
     pub duration: Option<u64>,
     pub call_id: String,
