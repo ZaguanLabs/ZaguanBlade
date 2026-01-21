@@ -37,6 +37,7 @@ pub struct AppState {
     pub warmup_client: warmup::WarmupClient,                     // v2.1: Cache warmup
     pub user_id: Mutex<Option<String>>, // Authenticated user ID from WebSocket
     pub fs_watcher: Mutex<Option<RecommendedWatcher>>, // Workspace file watcher
+    pub history_service: std::sync::Arc<crate::history::HistoryService>, // File history service
     pub language_service: std::sync::Arc<crate::language_service::LanguageService>, // v1.3: Unified Language Service
     pub language_handler: crate::language_service::LanguageHandler, // v1.3: Language Intent Handler
 }
@@ -71,7 +72,7 @@ impl AppState {
             .join("zaguan")
             .join("conversations");
 
-        let conversation_store = conversation_store::ConversationStore::new(storage_path)
+        let conversation_store = conversation_store::ConversationStore::new(storage_path.clone())
             .unwrap_or_else(|e| {
                 eprintln!("Failed to initialize conversation store: {}", e);
                 // Fallback to temp directory
@@ -80,6 +81,12 @@ impl AppState {
                 )
                 .expect("Failed to create conversation store in temp directory")
             });
+
+        // Initialize History Service
+        // Use zaguan/history in data dir
+        let history_service = std::sync::Arc::new(crate::history::HistoryService::new(
+            &storage_path.parent().unwrap(),
+        ));
 
         let mut workspace_manager = WorkspaceManager::new();
         // Override workspace if provided via CLI
@@ -160,6 +167,7 @@ impl AppState {
             idempotency_cache: crate::idempotency::IdempotencyCache::default(), // 24h TTL
             warmup_client, // v2.1: Cache warmup
             fs_watcher: Mutex::new(None),
+            history_service,
             language_service,
             language_handler,
         }
