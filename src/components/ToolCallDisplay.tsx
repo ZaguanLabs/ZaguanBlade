@@ -1,17 +1,19 @@
 'use client';
 import React, { useState, useCallback } from 'react';
 import { ToolCall } from '../types/chat';
-import { Zap, CheckCircle2, XCircle, Loader2, Copy, Check, ChevronRight, ChevronDown } from 'lucide-react';
+import { Zap, CheckCircle2, XCircle, Loader2, Copy, Check, ChevronRight, ChevronDown, RotateCcw } from 'lucide-react';
 
 interface ToolCallDisplayProps {
     toolCall: ToolCall;
     status?: 'pending' | 'executing' | 'complete' | 'error' | 'skipped';
     result?: string;
+    onUndo?: () => void;
 }
 
 export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     toolCall,
-    status = 'pending'
+    status = 'pending',
+    onUndo
 }) => {
     const [copied, setCopied] = useState(false);
     const [isExpanded, setIsExpanded] = useState(false);
@@ -183,6 +185,20 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                 )}
                 {status === 'error' && (
                     <span className="text-[9px] text-red-400">failed</span>
+                )}
+                {/* Undo Button */}
+                {onUndo && status === 'complete' && (
+                    <button
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onUndo();
+                        }}
+                        className="opacity-0 group-hover/tool:opacity-100 flex items-center gap-1 ml-2 px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[9px] text-zinc-400 hover:text-red-400 transition-all border border-zinc-700"
+                        title="Undo changes"
+                    >
+                        <RotateCcw className="w-2.5 h-2.5" />
+                        Undo
+                    </button>
                 )}
                 {/* Expand button for details */}
                 <button

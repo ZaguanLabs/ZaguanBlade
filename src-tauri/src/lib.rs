@@ -139,6 +139,7 @@ pub fn run() {
             // History
             commands::history::get_file_history,
             commands::history::revert_file_to_snapshot,
+            commands::history::undo_batch,
             // Cache
             commands::cache::warmup_cache,
             commands::cache::should_rewarm_cache,

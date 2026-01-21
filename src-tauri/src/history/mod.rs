@@ -8,6 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryEntry {
     pub id: String,
+    pub group_id: Option<String>,
     pub file_path: PathBuf,
     pub timestamp: u64,
     pub snapshot_path: PathBuf,
@@ -54,7 +55,11 @@ impl HistoryService {
         }
     }
 
-    pub fn create_snapshot(&self, file_path: &Path) -> Result<HistoryEntry, String> {
+    pub fn create_snapshot(
+        &self,
+        file_path: &Path,
+        group_id: Option<String>,
+    ) -> Result<HistoryEntry, String> {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -69,6 +74,7 @@ impl HistoryService {
 
         let entry = HistoryEntry {
             id,
+            group_id,
             file_path: file_path.to_path_buf(),
             timestamp,
             snapshot_path,
@@ -105,6 +111,55 @@ impl HistoryService {
         } else {
             Err("Snapshot not found".to_string())
         }
+    }
+
+    pub fn undo_batch(&self, group_id: &str) -> Result<Vec<String>, String> {
+        let index = self.index.lock().unwrap();
+
+        // Find all entries for this group
+        let mut group_entries: Vec<HistoryEntry> = Vec::new();
+        for entries in index.values() {
+            for entry in entries {
+                if let Some(gid) = &entry.group_id {
+                    if gid == group_id {
+                        group_entries.push(entry.clone());
+                    }
+                }
+            }
+        }
+
+        if group_entries.is_empty() {
+            return Err(format!(
+                "No history entries found for group ID: {}",
+                group_id
+            ));
+        }
+
+        // Group by file path and find the earliest timestamp for each file
+        let mut earliest_by_file: HashMap<PathBuf, HistoryEntry> = HashMap::new();
+
+        for entry in group_entries {
+            earliest_by_file
+                .entry(entry.file_path.clone())
+                .and_modify(|e| {
+                    if entry.timestamp < e.timestamp {
+                        *e = entry.clone();
+                    }
+                })
+                .or_insert(entry);
+        }
+
+        let mut reverted_files = Vec::new();
+
+        // Revert files
+        for (path, entry) in earliest_by_file {
+            match fs::copy(&entry.snapshot_path, &path) {
+                Ok(_) => reverted_files.push(path.to_string_lossy().into_owned()),
+                Err(e) => eprintln!("Failed to revert {}: {}", path.display(), e),
+            }
+        }
+
+        Ok(reverted_files)
     }
 
     pub fn get_history(&self, file_path: &Path) -> Vec<HistoryEntry> {

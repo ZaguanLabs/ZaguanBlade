@@ -18,3 +18,8 @@ pub fn revert_file_to_snapshot(
 ) -> Result<(), String> {
     state.history_service.revert_to(&snapshot_id)
 }
+
+#[tauri::command]
+pub fn undo_batch(group_id: String, state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    state.history_service.undo_batch(&group_id)
+}

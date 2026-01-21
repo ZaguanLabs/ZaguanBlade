@@ -342,7 +342,10 @@ impl AiWorkflow {
                             use tauri::Manager;
                             let state = app.state::<crate::app_state::AppState>();
                             if full_path.exists() {
-                                match state.history_service.create_snapshot(&full_path) {
+                                match state
+                                    .history_service
+                                    .create_snapshot(&full_path, Some(call.id.clone()))
+                                {
                                     Ok(entry) => {
                                         println!("[HISTORY] Snapshot created for {}", change.path);
                                         let _ = app.emit(
@@ -455,7 +458,10 @@ impl AiWorkflow {
                             use tauri::Manager;
                             let state = app.state::<crate::app_state::AppState>();
                             if full_path.exists() {
-                                match state.history_service.create_snapshot(&full_path) {
+                                match state
+                                    .history_service
+                                    .create_snapshot(&full_path, Some(call.id.clone()))
+                                {
                                     Ok(entry) => {
                                         println!("[HISTORY] Snapshot created for {}", change.path);
                                         let _ = app.emit(

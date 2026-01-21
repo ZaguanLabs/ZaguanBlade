@@ -601,6 +601,18 @@ export function useChat() {
         }
     }, []);
 
+    const undoTool = useCallback(async (toolCallId: string) => {
+        try {
+            console.log('[useChat] Undoing tool batch:', toolCallId);
+            const revertedFiles = await invoke<string[]>('undo_batch', { groupId: toolCallId });
+            console.log('[useChat] Reverted files:', revertedFiles);
+            // We might want to show a toast or notification here
+        } catch (e) {
+            console.error('Failed to undo tool batch:', e);
+            // Show error in UI?
+        }
+    }, []);
+
     return {
         messages,
         loading,
@@ -614,5 +626,6 @@ export function useChat() {
         approveTool,
         approveToolDecision,
         newConversation,
+        undoTool,
     };
 }

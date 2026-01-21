@@ -38,6 +38,7 @@ interface ChatPanelProps {
     onLoadConversation: (messages: ChatMessageType[]) => void;
     researchProgress?: ResearchProgress | null;
     onNewConversation: () => void;
+    onUndoTool: (toolCallId: string) => void;
 }
 
 export const ChatPanel: React.FC<ChatPanelProps> = ({
@@ -55,6 +56,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     onLoadConversation,
     researchProgress,
     onNewConversation,
+    onUndoTool,
 }) => {
     const { t } = useTranslation();
     const { executions, handleCommandComplete } = useCommandExecution();
@@ -188,6 +190,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                                         isActive={isActive}
                                         activeTerminals={executions}
                                         onTerminalComplete={handleCommandComplete}
+                                        onUndoTool={onUndoTool}
                                     />
 
 

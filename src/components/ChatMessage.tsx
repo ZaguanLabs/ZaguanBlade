@@ -10,6 +10,17 @@ import { useContextMenu, ContextMenuItem } from './ui/ContextMenu';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ChatTerminal } from './ChatTerminal';
 
+const REVERTIBLE_TOOLS = new Set([
+    'apply_patch',
+    'edit_file',
+    'write_file',
+    'create_file',
+    'delete_file',
+    'replace_file_content',
+    'multi_replace_file_content',
+    'write_to_file',
+]);
+
 const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent?: boolean }> = ({ content, isActive, hasContent }) => {
     const [isExpanded, setIsExpanded] = useState(true); // Start expanded
     const [userToggled, setUserToggled] = useState(false); // Track if user manually toggled
@@ -112,6 +123,7 @@ interface ChatMessageProps {
     isActive?: boolean; // Is this the currently streaming message?
     activeTerminals?: Map<string, { callId: string, commandId: string, command: string, cwd?: string }>;
     onTerminalComplete?: (callId: string, output: string, exitCode: number) => void;
+    onUndoTool?: (toolCallId: string) => void;
 }
 
 export const ChatMessage: React.FC<ChatMessageProps> = ({
@@ -122,7 +134,8 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
     isContinued = false,
     isActive = false,
     activeTerminals,
-    onTerminalComplete
+    onTerminalComplete,
+    onUndoTool,
 }) => {
     const isUser = message.role === 'User';
     const isSystem = message.role === 'System';
@@ -345,6 +358,11 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                                             toolCall={toolCall}
                                             status={toolCall.status || 'executing'}
                                             result={toolCall.result}
+                                            onUndo={
+                                                onUndoTool && REVERTIBLE_TOOLS.has(toolCall.function.name)
+                                                    ? (() => onUndoTool(toolCall.id))
+                                                    : undefined
+                                            }
                                         />
                                     </div>
                                 );
@@ -479,6 +497,11 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                                                     toolCall={call}
                                                     status={call.status || 'executing'}
                                                     result={call.result}
+                                                    onUndo={
+                                                        onUndoTool && REVERTIBLE_TOOLS.has(call.function.name)
+                                                            ? (() => onUndoTool(call.id))
+                                                            : undefined
+                                                    }
                                                 />
                                             ))}
                                     </div>

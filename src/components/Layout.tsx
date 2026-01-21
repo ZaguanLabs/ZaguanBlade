@@ -895,6 +895,7 @@ const AppLayoutInner: React.FC = () => {
                             onLoadConversation={setChatMessages}
                             researchProgress={researchProgress}
                             onNewConversation={chat.newConversation}
+                            onUndoTool={chat.undoTool}
                         />
                     </div>
 
