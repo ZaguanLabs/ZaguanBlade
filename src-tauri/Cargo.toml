@@ -1,6 +1,6 @@
 [package]
 name = "zblade"
-version = "0.0.3-alpha"
+version = "0.0.4-alpha"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -54,6 +54,7 @@ tree-sitter-python = "0.23"
 
 # LSP types for language server integration
 lsp-types = "0.97"
+base64 = "0.22.1"
 
 [profile.release]
 panic = "abort" # Strip expensive panic clean-up logic

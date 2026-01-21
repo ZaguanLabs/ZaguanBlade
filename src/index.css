@@ -16,14 +16,14 @@
     --color-accent: var(--accent-primary);
     --color-run: var(--accent-secondary);
 
-    --font-sans: var(--font-sans);
-    --font-mono: var(--font-mono);
+    --font-sans: var(--font-family-sans);
+    --font-mono: var(--font-family-mono);
 }
 
 body {
     background-color: var(--bg-app);
     color: var(--fg-primary);
-    font-family: var(--font-sans);
+    font-family: var(--font-family-sans);
     width: 100vw;
     height: 100vh;
     margin: 0;

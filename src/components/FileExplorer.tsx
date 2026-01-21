@@ -48,6 +48,8 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
 
     // Use Ref for cache to persist data across renders.
     const itemCache = React.useRef(new Map<string, NodeData>());
+    // Track pending requests to deduplicate File(List) calls for the same path
+    const pendingRequests = React.useRef(new Map<string | null, Promise<string[]>>());
     const { showMenu } = useContextMenu();
 
     // Modal state
@@ -91,10 +93,11 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
         });
     }, [roots]);
 
-    // Clear cache on refresh to force re-fetch
-    React.useEffect(() => {
-        itemCache.current.clear();
-    }, [refreshKey]);
+    // Track the last expanded activeFile to prevent repeated expansions for the same file
+    // Declared here (before useTree) so it can be reset when refreshKey changes
+    const lastExpandedFileRef = React.useRef<string | null>(null);
+
+
 
     // File operation handlers
     const handleCreateFile = async (name: string, parentPath: string, isDir: boolean) => {
@@ -402,9 +405,15 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                     return roots.map(r => r.path);
                 }
 
-                return new Promise<string[]>((resolve, reject) => {
+                // Check if there's already a pending request for this path
+                const existingRequest = pendingRequests.current.get(path);
+                if (existingRequest) {
+                    return existingRequest;
+                }
+
+                const requestPromise = new Promise<string[]>((resolve, reject) => {
                     let resolved = false;
-                    
+
                     listen<any>('sys-event', (eventRaw) => {
                         let evt = eventRaw.payload;
                         if (evt.event && evt.id && evt.timestamp) {
@@ -433,17 +442,75 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
 
                         setTimeout(() => {
                             unlisten();
+                            // Clean up pending request when done
+                            pendingRequests.current.delete(path);
                             if (!resolved) {
                                 resolve([]);
                             }
                         }, 5000);
-                    }).catch(reject);
+                    }).catch((err) => {
+                        pendingRequests.current.delete(path);
+                        reject(err);
+                    });
                 });
+
+                // Store the pending request
+                pendingRequests.current.set(path, requestPromise);
+                return requestPromise;
             }
         },
     });
 
+    // Clear cache and pending requests on refresh to force re-fetch
+    // Also reset lastExpandedFileRef so the tree re-expands to active file after refresh
+    React.useEffect(() => {
+        itemCache.current.clear();
+        pendingRequests.current.clear();
+        lastExpandedFileRef.current = null;
+        if ((tree as any).invalidateItem) {
+            (tree as any).invalidateItem('root');
+        }
+    }, [refreshKey, tree]);
+
+    // Listen for file system events to update tree dynamically
+    React.useEffect(() => {
+        let unlisten: (() => void) | undefined;
+        const setup = async () => {
+            unlisten = await listen<any>('sys-event', (eventRaw) => {
+                let evt = eventRaw.payload;
+                if (evt.event) evt = evt.event;
+
+                if (evt.type === 'File') {
+                    const filePayload = evt.payload;
+                    const pathsToInvalidate: string[] = [];
+
+                    if (filePayload.type === 'Created' || filePayload.type === 'Deleted') {
+                        pathsToInvalidate.push(filePayload.payload.path);
+                    } else if (filePayload.type === 'Renamed') {
+                        pathsToInvalidate.push(filePayload.payload.old_path);
+                        pathsToInvalidate.push(filePayload.payload.new_path);
+                    }
+
+                    pathsToInvalidate.forEach(path => {
+                        const parentPath = path.substring(0, path.lastIndexOf('/'));
+                        if (parentPath && (tree as any).invalidateItem) {
+                            (tree as any).invalidateItem(parentPath);
+                        } else if ((tree as any).invalidateItem) {
+                            (tree as any).invalidateItem('root');
+                        }
+                    });
+                }
+            });
+        };
+        setup();
+        return () => { if (unlisten) unlisten(); };
+    }, [tree]);
+
     // Auto-expand and select active file in the tree
+    // NOTE: We intentionally exclude 'tree' from dependencies to prevent infinite loops.
+    // The tree reference changes frequently as state updates, which would cause this effect
+    // to re-run endlessly. Instead, we access tree directly since it's stable within the
+    // component's render cycle.
     React.useEffect(() => {
         if (!activeFile) {
             // Clear selection when no file is active
@@ -453,6 +520,12 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                     item.deselect();
                 }
             });
+            lastExpandedFileRef.current = null;
+            return;
+        }
+
+        // Skip if we've already expanded and selected this file
+        if (lastExpandedFileRef.current === activeFile) {
             return;
         }
 
@@ -461,7 +534,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                 // Get all parent folders of the active file
                 const pathParts = activeFile.split('/');
                 const parentPaths: string[] = [];
-                
+
                 // Build parent paths (e.g., /a, /a/b, /a/b/c for file /a/b/c/file.txt)
                 for (let i = 1; i < pathParts.length - 1; i++) {
                     const parentPath = pathParts.slice(0, i + 1).join('/');
@@ -483,6 +556,9 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                 if (fileItem && !fileItem.isSelected()) {
                     fileItem.select();
                 }
+
+                // Mark this file as expanded to prevent re-running
+                lastExpandedFileRef.current = activeFile;
             } catch (err) {
                 console.error('[FileExplorer] Failed to expand/select active file:', err);
             }
@@ -490,7 +566,8 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
 
         // Small delay to ensure tree is ready
         setTimeout(expandAndSelect, 150);
-    }, [activeFile, tree]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [activeFile]);
 
     return (
         <div className="flex flex-col h-full w-full">

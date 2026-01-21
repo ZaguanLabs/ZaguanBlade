@@ -52,13 +52,21 @@ lazy_static::lazy_static! {
     static ref MODEL_CACHE: Arc<Mutex<Option<ModelCache>>> = Arc::new(Mutex::new(None));
 }
 
-async fn fetch_models_from_server(blade_url: &str) -> Result<Vec<ModelInfo>, Box<dyn std::error::Error>> {
+async fn fetch_models_from_server(
+    blade_url: &str,
+    api_key: &str,
+) -> Result<Vec<ModelInfo>, Box<dyn std::error::Error + Send + Sync>> {
     let url = format!("{}/v1/blade/models", blade_url);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()?;
 
-    let response = client.get(&url).send().await?;
+    let mut request = client.get(&url);
+    if !api_key.is_empty() {
+        request = request.header("Authorization", format!("Bearer {}", api_key));
+    }
+
+    let response = request.send().await?;
     let blade_response: BladeModelsResponse = response.json().await?;
 
     let models = blade_response
@@ -86,8 +94,8 @@ async fn fetch_models_from_server(blade_url: &str) -> Result<Vec<ModelInfo>, Box
     Ok(models)
 }
 
-pub async fn get_models(blade_url: &str) -> Vec<ModelInfo> {
-    // Try to use cached models if still valid
+pub async fn get_models(blade_url: &str, api_key: &str) -> Vec<ModelInfo> {
+    // 1. Try to use recently cached models if still valid
     if let Ok(cache) = MODEL_CACHE.lock() {
         if let Some(ref cached) = *cache {
             if cached.last_fetch.elapsed() < CACHE_TTL {
@@ -96,30 +104,54 @@ pub async fn get_models(blade_url: &str) -> Vec<ModelInfo> {
         }
     }
 
-    // Cache expired or missing - fetch from server
-    match fetch_models_from_server(blade_url).await {
-        Ok(models) => {
-            if let Ok(mut cache) = MODEL_CACHE.lock() {
-                *cache = Some(ModelCache {
-                    models: models.clone(),
-                    last_fetch: Instant::now(),
-                });
-                eprintln!(
-                    "[MODEL REGISTRY] Successfully fetched {} models from {}",
-                    models.len(),
-                    blade_url
-                );
+    // 2. Cache expired or missing - fetch from server with retry logic
+    let mut retry_count = 0;
+    let max_retries = 3;
+
+    loop {
+        match fetch_models_from_server(blade_url, api_key).await {
+            Ok(models) => {
+                if let Ok(mut cache) = MODEL_CACHE.lock() {
+                    *cache = Some(ModelCache {
+                        models: models.clone(),
+                        last_fetch: Instant::now(),
+                    });
+                    eprintln!(
+                        "[MODEL REGISTRY] Successfully fetched {} models from {}",
+                        models.len(),
+                        blade_url
+                    );
+                }
+                return models;
             }
-            models
-        }
-        Err(e) => {
-            eprintln!(
-                "[MODEL REGISTRY] Failed to fetch models from {}: {}",
-                blade_url,
-                e
-            );
-            // Return empty list on failure - let the UI handle it or retry
-            Vec::new()
+            Err(e) => {
+                retry_count += 1;
+                if retry_count > max_retries {
+                    eprintln!(
+                        "[MODEL REGISTRY] Failed to fetch models from {} after {} retries: {}",
+                        blade_url, max_retries, e
+                    );
+                    break;
+                }
+
+                let delay = Duration::from_millis(500 * (1 << (retry_count - 1)));
+                eprintln!(
+                    "[MODEL REGISTRY] Fetch failed ({}): {}. Retrying in {:?}...",
+                    retry_count, e, delay
+                );
+                tokio::time::sleep(delay).await;
+            }
         }
     }
+
+    // 3. Fallback: If fetch failed but we have expired cache, use it anyway
+    if let Ok(cache) = MODEL_CACHE.lock() {
+        if let Some(ref cached) = *cache {
+            eprintln!("[MODEL REGISTRY] Using EXPIRED cache as fallback");
+            return cached.models.clone();
+        }
+    }
+
+    // 4. Final fallback: empty list
+    Vec::new()
 }

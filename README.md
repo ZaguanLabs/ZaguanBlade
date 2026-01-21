@@ -1,76 +1,46 @@
 # Zaguán Blade
 
-> **The AI Editor (The Body)**
+**The AI-Native Code Editor.**
 
-Zaguán Blade (`zblade`) is the graphical frontend for the Zaguán AI system. It serves as the "Body" to the "Brain" ([zcoderd](#zcoderd-the-brain)).
+Zaguán Blade (`zblade`) is a high-performance, AI-first code editor built for the future of development. It serves as the graphical interface (the "Body") that connects to the Zaguán AI system (the "Brain").
 
-Built with **Tauri v2** and **Next.js**, it provides a modern, high-performance interface for AI-assisted coding, featuring a custom CodeMirror 6 editor and deep integration with the Blade Protocol.
+> [!WARNING]
+> **Alpha Release (v0.0.4-alpha)**
+> This is an early Alpha release. It is functional and "good enough" for daily use, but please expect bugs and incomplete features.
+> *   Current Limitation: **Diff views are currently non-functional.**
+> *   Stability: Experimental but usable.
 
-## Architecture
+## Requirement: Zaguán AI Subscription
 
-The system follows a strict Body/Brain separation:
+Zaguán Blade is powered by our hosted AI backend. To use the AI features (Chat, Code Generation, Auto-fix), you **must have an active subscription**.
 
-*   **Zaguán Blade (The Body)**: This repository. A lightweight GUI client that handles user input, file rendering, and editor visualizations. It possesses no AI logic itself.
-*   **Zcoderd (The Brain)**: An external, high-performance Go server that manages state, executes tools, performs web research, and drives the AI models.
-*   **Blade Protocol v2**: The communication layer between Body and Brain, allowing the AI to "pilot" the editor.
+👉 **[Get a Subscription at ZaguanAI.com](https://zaguanai.com/pricing)**
 
-## Project Status: Alpha
-
-> [!IMPORTANT]
-> **External Dependency Required**: This project is the *client only*. To function, it requires a running instance of `zcoderd`.
->
-> currently, `zcoderd` is:
-> 1.  **Mandatory**: The client cannot function without it.
-> 2.  **Hardcoded**: The client expects the server at a specific localhost address.
-> 3.  **Private**: The `zcoderd` repository is currently private ("The Secret Sauce").
->
-> Future versions aim to make `zcoderd` optional.
+Without a subscription and a valid API Key, Zaguán Blade functions as a standard (albeit very nice) text editor.
 
 ## Key Features
 
-*   **Visual Editor**: A heavily customized CodeMirror 6 implementation with "Vertical Diff Blocks" for AI code generation.
-*   **Web Tools Visualization**: The client visualizes the server's research context, showing what the AI is reading and thinking.
-*   **Blade Protocol Integration**: seamless, real-time sync between the editor state and the AI's context.
+*   **AI-Native Workflow**: Deeply integrated AI that understands your project context.
+*   **Performance**: Built with **Rust** (Tauri v2) and **React**, offering near-native performance with the flexibility of web technologies.
+*   **Blade Protocol**: Utilizes our custom BP (Blade Protocol) for high-fidelity communication between the editor and the AI. *Note: The Blade Protocol specification is currently internal.*
 
-## Getting Started
+## Installation
 
-### Prerequisites
+We provide pre-built binaries for Windows (`.msi`, `.exe`), macOS (`.dmg`, `.app`), and Linux (`.AppImage`, `.deb`, `.rpm`).
 
-*   Node.js (v18+)
-*   Rust (v1.70+)
-*   pnpm
-*   **A running instance of `zcoderd`**
+Check the **[Releases](https://github.com/ZaguanLabs/ZaguanBlade/releases)** page for the latest version.
 
-### Installation
+### Building from Source
 
-1.  Clone the repository:
-    ```bash
-    git clone https://github.com/ZaguanLabs/ZaguanBlade.git
-    cd zaguan-blade
-    ```
+If you prefer to build the editor yourself, please refer to our **[Build Guide](docs/BUILD_FROM_SOURCE.md)**.
 
-2.  Install dependencies:
-    ```bash
-    pnpm install
-    ```
+## Feedback & Contributions
 
-### Development
+We welcome feedback, bug reports, and Pull Requests!
 
-Start the Taurus development window:
-
-```bash
-pnpm tauri dev
-```
-
-This will spin up the Next.js frontend and the Tauri Rust, backend.
-
-### Building
-
-To build the application for release:
-
-```bash
-pnpm tauri build
-```
+*   **Found a bug?** Please open an issue on our [GitHub Issue Tracker](https://github.com/ZaguanLabs/ZaguanBlade/issues).
+*   **Have an idea?** Start a discussion or submit a PR.
+*   **Community:** Join us in building the next generation of coding tools.
 
 ## License
 

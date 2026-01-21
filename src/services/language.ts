@@ -10,8 +10,18 @@ import type {
     LanguageLocation,
     LanguageDocumentSymbol,
     LanguageDiagnostic,
-    LanguageEvent
+    LanguageEvent,
+    SignatureInfo,
+    CodeActionInfo,
+    LanguageWorkspaceEdit
 } from '../types/blade';
+
+// Result type for signature help
+export interface SignatureHelpResult {
+    signatures: SignatureInfo[];
+    activeSignature: number | null;
+    activeParameter: number | null;
+}
 
 /**
  * Service for interacting with the backend Language Service (Tree-sitter + LSP).
@@ -101,6 +111,119 @@ export class LanguageService {
             payload: { file_path: filePath }
         }, (event) => {
             if (event.type === 'DocumentSymbolsReady') return event.payload.symbols;
+            return undefined;
+        });
+    }
+
+    /**
+     * Notify the backend that a file was opened.
+     * This enables LSP servers to track the file content.
+     */
+    static async didOpen(filePath: string, content: string, languageId: string): Promise<void> {
+        await BladeDispatcher.language({
+            type: "DidOpen",
+            payload: { file_path: filePath, content, language_id: languageId }
+        });
+    }
+
+    /**
+     * Notify the backend that a file's content changed.
+     * Should be called on each edit (debounced for performance).
+     */
+    static async didChange(filePath: string, content: string, version: number): Promise<void> {
+        await BladeDispatcher.language({
+            type: "DidChange",
+            payload: { file_path: filePath, content, version }
+        });
+    }
+
+    /**
+     * Notify the backend that a file was closed.
+     */
+    static async didClose(filePath: string): Promise<void> {
+        await BladeDispatcher.language({
+            type: "DidClose",
+            payload: { file_path: filePath }
+        });
+    }
+
+    /**
+     * Get diagnostics for a file (errors, warnings, etc.)
+     */
+    static async getDiagnostics(filePath: string): Promise<LanguageDiagnostic[]> {
+        return this.request<LanguageDiagnostic[]>("GetDiagnostics", {
+            type: "GetDiagnostics",
+            payload: { file_path: filePath }
+        }, (event) => {
+            if (event.type === 'DiagnosticsUpdated') return event.payload.diagnostics;
+            return undefined;
+        });
+    }
+
+    /**
+     * Get signature help (parameter hints) at position
+     */
+    static async getSignatureHelp(filePath: string, line: number, character: number): Promise<SignatureHelpResult | null> {
+        return this.request<SignatureHelpResult | null>("GetSignatureHelp", {
+            type: "GetSignatureHelp",
+            payload: { file_path: filePath, line, character }
+        }, (event) => {
+            if (event.type === 'SignatureHelpReady') {
+                if (event.payload.signatures.length === 0) return null;
+                return {
+                    signatures: event.payload.signatures,
+                    activeSignature: event.payload.active_signature,
+                    activeParameter: event.payload.active_parameter
+                };
+            }
+            return undefined;
+        });
+    }
+
+    /**
+     * Get code actions (quick fixes) for a range
+     */
+    static async getCodeActions(
+        filePath: string,
+        startLine: number,
+        startCharacter: number,
+        endLine: number,
+        endCharacter: number
+    ): Promise<CodeActionInfo[]> {
+        return this.request<CodeActionInfo[]>("GetCodeActions", {
+            type: "GetCodeActions",
+            payload: {
+                file_path: filePath,
+                start_line: startLine,
+                start_character: startCharacter,
+                end_line: endLine,
+                end_character: endCharacter
+            }
+        }, (event) => {
+            if (event.type === 'CodeActionsReady') return event.payload.actions;
+            return undefined;
+        });
+    }
+
+    /**
+     * Rename a symbol at position
+     */
+    static async renameSymbol(
+        filePath: string,
+        line: number,
+        character: number,
+        newName: string
+    ): Promise<LanguageWorkspaceEdit | null> {
+        return this.request<LanguageWorkspaceEdit | null>("Rename", {
+            type: "Rename",
+            payload: {
+                file_path: filePath,
+                line,
+                character,
+                new_name: newName
+            }
+        }, (event) => {
+            if (event.type === 'RenameEditsReady') return event.payload.edit;
             return undefined;
         });
     }

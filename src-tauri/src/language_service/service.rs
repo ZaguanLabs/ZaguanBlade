@@ -414,6 +414,78 @@ impl LanguageService {
         }
     }
 
+    /// Get signature help (parameter hints)
+    pub fn get_signature_help(
+        &self,
+        file_path: &str,
+        line: u32,
+        character: u32,
+    ) -> Result<Option<crate::lsp::types::SignatureHelp>, LanguageError> {
+        let mut lsp = self.lsp_manager.write().unwrap();
+        match lsp.as_mut() {
+            Some(manager) => {
+                let full_path = self.resolve_path(file_path);
+                let help = manager.signature_help(
+                    full_path.to_string_lossy().as_ref(),
+                    line,
+                    character,
+                )?;
+                Ok(help)
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Rename a symbol
+    pub fn rename_symbol(
+        &self,
+        file_path: &str,
+        line: u32,
+        character: u32,
+        new_name: &str,
+    ) -> Result<Option<crate::lsp::types::WorkspaceEdit>, LanguageError> {
+        let mut lsp = self.lsp_manager.write().unwrap();
+        match lsp.as_mut() {
+            Some(manager) => {
+                let full_path = self.resolve_path(file_path);
+                let edit = manager.rename(
+                    full_path.to_string_lossy().as_ref(),
+                    line,
+                    character,
+                    new_name,
+                )?;
+                Ok(edit)
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Get code actions (quick fixes, refactorings)
+    pub fn get_code_actions(
+        &self,
+        file_path: &str,
+        start_line: u32,
+        start_character: u32,
+        end_line: u32,
+        end_character: u32,
+    ) -> Result<Vec<crate::lsp::types::CodeAction>, LanguageError> {
+        let mut lsp = self.lsp_manager.write().unwrap();
+        match lsp.as_mut() {
+            Some(manager) => {
+                let full_path = self.resolve_path(file_path);
+                let actions = manager.code_actions(
+                    full_path.to_string_lossy().as_ref(),
+                    start_line,
+                    start_character,
+                    end_line,
+                    end_character,
+                )?;
+                Ok(actions)
+            }
+            None => Ok(vec![]),
+        }
+    }
+
     // =========================================================================
     // Document Synchronization
     // =========================================================================

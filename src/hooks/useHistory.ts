@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { BladeDispatcher } from '../services/blade';
 import type { ConversationSummary, BladeEventEnvelope } from '../types/blade';
 import type { ChatMessage } from '../types/chat';
+import { ensureMessagesHaveBlocks } from '../utils/messageBlocks';
 
 export function useHistory() {
     const [conversations, setConversations] = useState<ConversationSummary[]>([]);
@@ -34,8 +35,8 @@ export function useHistory() {
                         if (historyEvent.payload.conversations.length > 0) {
                             const sample = historyEvent.payload.conversations[0];
                             // Use Tauri's invoke to log to terminal
-                            invoke('log_frontend', { 
-                                message: `[useHistory] Sample conversation: id=${sample.id}, created_at=${sample.created_at}, last_active_at=${sample.last_active_at}` 
+                            invoke('log_frontend', {
+                                message: `[useHistory] Sample conversation: id=${sample.id}, created_at=${sample.created_at}, last_active_at=${sample.last_active_at}`
                             });
                         }
                         setConversations(historyEvent.payload.conversations);
@@ -63,7 +64,7 @@ export function useHistory() {
             console.log('[useHistory] fetchConversations called with userId:', userId, 'projectId:', projectId);
             setLoading(true);
             setError(null);
-            
+
             // Dispatch ListConversations Intent via BCP
             console.log('[useHistory] Dispatching ListConversations intent...');
             await BladeDispatcher.history({
@@ -71,7 +72,7 @@ export function useHistory() {
                 payload: { user_id: userId, project_id: projectId }
             });
             console.log('[useHistory] ListConversations intent dispatched successfully');
-            
+
             // Backend will respond with ConversationList Event
         } catch (e) {
             console.error('[useHistory] Failed to fetch conversation history:', e);
@@ -93,15 +94,15 @@ export function useHistory() {
                     if (envelope.event.type === 'History') {
                         const historyEvent = envelope.event.payload;
 
-                        if (historyEvent.type === 'ConversationLoaded' && 
+                        if (historyEvent.type === 'ConversationLoaded' &&
                             historyEvent.payload.session_id === sessionId) {
-                            
+
                             // Convert history messages to ChatMessage format
                             const messages: ChatMessage[] = historyEvent.payload.messages.map(msg => ({
                                 id: crypto.randomUUID(),
-                                role: msg.role === 'user' ? 'User' : 
-                                      msg.role === 'assistant' ? 'Assistant' : 
-                                      msg.role === 'tool' ? 'Tool' : 'System',
+                                role: msg.role === 'user' ? 'User' :
+                                    msg.role === 'assistant' ? 'Assistant' :
+                                        msg.role === 'tool' ? 'Tool' : 'System',
                                 content: msg.content,
                                 // Mark all tool calls as complete since they're historical
                                 tool_calls: msg.tool_calls?.map(tc => ({
@@ -113,7 +114,8 @@ export function useHistory() {
 
                             unlisten();
                             setLoading(false);
-                            resolve(messages);
+                            // Reconstruct blocks for proper conversation flow ordering
+                            resolve(ensureMessagesHaveBlocks(messages));
                         }
                     }
                 });

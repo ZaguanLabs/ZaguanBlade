@@ -27,7 +27,7 @@ export const DocumentTabs: React.FC<DocumentTabsProps> = ({
   if (tabs.length === 0) return null;
 
   return (
-    <div className="flex items-center bg-[#252526] border-b border-[#3c3c3c] overflow-x-auto">
+    <div className="flex items-center bg-[#252526] border-b border-[#3c3c3c] overflow-x-auto scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-transparent">
       {tabs.map((tab) => {
         const isActive = activeTabId === tab.id;
         const { icon, color } = getFileIcon(tab.title, isActive);
@@ -39,7 +39,7 @@ export const DocumentTabs: React.FC<DocumentTabsProps> = ({
               group flex items-center gap-2 px-3 py-2 min-w-[120px] max-w-[200px] cursor-pointer
               border-r border-[#3c3c3c] transition-colors relative
               ${isActive
-                ? 'bg-[#1e1e1e] text-white border-t-2 border-t-emerald-500' 
+                ? 'bg-[#1e1e1e] text-white border-t-2 border-t-emerald-500'
                 : 'bg-[#2d2d2d] text-zinc-400 hover:bg-[#323233]'
               }
             `}
@@ -53,8 +53,8 @@ export const DocumentTabs: React.FC<DocumentTabsProps> = ({
               {tab.title}
             </span>
             {tab.hasVirtualChanges && (
-              <span 
-                className="w-1.5 h-1.5 rounded-full bg-orange-400 shrink-0 animate-pulse" 
+              <span
+                className="w-1.5 h-1.5 rounded-full bg-orange-400 shrink-0 animate-pulse"
                 title="Virtual changes (not saved to disk)"
               />
             )}

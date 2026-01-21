@@ -98,6 +98,11 @@ pub mod event_names {
 
     /// Todo list updated by AI for task progress tracking
     pub const TODO_UPDATED: &str = "todo_updated";
+
+    // === Terminal ===
+
+    /// Terminal reported a cwd change
+    pub const TERMINAL_CWD_CHANGED: &str = "terminal-cwd-changed";
 }
 
 /// Payload for chat-update event
@@ -159,6 +164,13 @@ pub struct TodoItem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TodoUpdatedPayload {
     pub todos: Vec<TodoItem>,
+}
+
+/// Payload for terminal-cwd-changed event
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalCwdChangedPayload {
+    pub id: String,
+    pub cwd: String,
 }
 
 /// Payload for tool-execution-started event

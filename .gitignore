@@ -20,6 +20,7 @@
 # production
 /build
 /dist
+/.zblade/
 
 # misc
 .DS_Store
@@ -62,9 +63,10 @@ src-tauri/Cargo.lock
 tmp/
 temp_next/
 
-# Legacy/archived code
-legacy_frontend/
+# Internal documentation
+/docs/internal/
 
 # IDE
 .vscode/
 .idea/
+.old.env

@@ -30,11 +30,34 @@ import {
     smoothCursor,
     scrollPastEnd,
     languageFeatures,
+    diagnosticsExtension,
+    signatureHelpExtension,
+    codeActionsExtension,
+    referencesExtension,
+    renameExtension,
 } from "./editor/extensions";
 import { useEditor } from "../contexts/EditorContext";
 import { useContextMenu, type ContextMenuItem } from "./ui/ContextMenu";
 import { Copy, Scissors, Clipboard, Undo2, Redo2, Search } from "lucide-react";
 import type { Change } from "../types/change";
+import { LanguageService } from "../services/language";
+
+// Map file extension to LSP language ID
+function getLanguageId(filename: string): string {
+    const ext = filename.split('.').pop()?.toLowerCase() || '';
+    switch (ext) {
+        case 'ts': case 'tsx': return 'typescript';
+        case 'js': case 'jsx': return 'javascript';
+        case 'rs': return 'rust';
+        case 'py': return 'python';
+        case 'go': return 'go';
+        case 'json': return 'json';
+        case 'html': return 'html';
+        case 'css': return 'css';
+        case 'md': return 'markdown';
+        default: return 'plaintext';
+    }
+}
 
 interface CodeEditorProps {
     content: string;
@@ -64,8 +87,26 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     const viewRef = useRef<EditorView | null>(null);
     const languageConf = useRef(new Compartment());
     const languageFeaturesConf = useRef(new Compartment());
+    const diagnosticsConf = useRef(new Compartment());
+    const signatureHelpConf = useRef(new Compartment());
+    const codeActionsConf = useRef(new Compartment());
+    const referencesConf = useRef(new Compartment());
+    const renameConf = useRef(new Compartment());
     const { setCursorPosition, setSelection, clearSelection } = useEditor();
     const { showMenu } = useContextMenu();
+
+    // LSP document sync tracking
+    const documentVersion = useRef(0);
+    const didChangeTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // Track whether a content change was user-initiated (to avoid update loops)
+    const isUserEditRef = useRef(false);
+
+    // Ref to capture the latest onSave callback (avoids stale closure in keymap)
+    const onSaveRef = useRef(onSave);
+    useEffect(() => {
+        onSaveRef.current = onSave;
+    }, [onSave]);
 
     // Expose methods to parent via ref
     useImperativeHandle(ref, () => ({
@@ -198,6 +239,18 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 // Language support (dynamic)
                 languageConf.current.of(getLanguageExtension(filename)),
                 languageFeaturesConf.current.of(languageFeatures(filename || "", onNavigate)),
+                diagnosticsConf.current.of(diagnosticsExtension(filename || "")),
+                signatureHelpConf.current.of(signatureHelpExtension(filename || "")),
+                codeActionsConf.current.of(codeActionsExtension(filename || "")),
+                referencesConf.current.of(referencesExtension(filename || "", (path, line, char) => {
+                    if (onNavigate) onNavigate(path, line, char);
+                })),
+                renameConf.current.of(renameExtension(filename || "", (changes) => {
+                    // Start of handling rename edits
+                    console.log("Applying rename edits:", changes);
+                    // For now we just log, real implementation requires workspace edit handling
+                    // which is currently out of scope for this specific file editor component
+                })),
 
                 // Keymaps
                 keymap.of([
@@ -205,9 +258,11 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                     {
                         key: "Mod-s",
                         run: (view) => {
-                            if (onSave) {
-                                const virtualContent = getVirtualContent(view);
-                                onSave(virtualContent);
+                            if (onSaveRef.current) {
+                                // Use the actual editor document content, not virtual buffer
+                                // The document is the source of truth for user edits
+                                const content = view.state.doc.toString();
+                                onSaveRef.current(content);
                             }
                             return true;
                         }
@@ -221,6 +276,8 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 ]),
                 EditorView.updateListener.of((update) => {
                     if (update.docChanged) {
+                        // Mark this as a user-initiated edit to prevent feedback loops
+                        isUserEditRef.current = true;
                         onChange(update.state.doc.toString());
                     }
 
@@ -276,11 +333,27 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 effects: [
                     languageConf.current.reconfigure(getLanguageExtension(filename)),
                     languageFeaturesConf.current.reconfigure(languageFeatures(filename || "", onNavigate)),
+                    diagnosticsConf.current.reconfigure(diagnosticsExtension(filename || "")),
+                    signatureHelpConf.current.reconfigure(signatureHelpExtension(filename || "")),
+                    codeActionsConf.current.reconfigure(codeActionsExtension(filename || "")),
+                    referencesConf.current.reconfigure(referencesExtension(filename || "", (path, line, char) => {
+                        if (onNavigate) onNavigate(path, line, char);
+                    })),
                     setBaseContent.of(content) // Initialize virtual buffer with base content
                 ]
             });
-        } else {
-            // Same file, but content changed externally (e.g., file loaded)
+
+            // Notify LSP that file was opened
+            if (filename) {
+                const languageId = getLanguageId(filename);
+                documentVersion.current = 1;
+                LanguageService.didOpen(filename, content, languageId).catch(e =>
+                    console.warn('[LSP] didOpen failed:', e)
+                );
+            }
+        } else if (!isUserEditRef.current) {
+            // Only sync external content changes (e.g., file loaded, external modification)
+            // Skip if this was a user edit to prevent feedback loops
             const currentDoc = view.state.doc.toString();
             if (currentDoc !== content) {
                 view.dispatch({
@@ -289,7 +362,46 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 });
             }
         }
+        // Reset the user edit flag after processing
+        isUserEditRef.current = false;
     }, [filename, content, onNavigate]);
+
+    // Send didChange to LSP on document changes (debounced)
+    useEffect(() => {
+        const view = viewRef.current;
+        if (!view || !filename) return;
+
+        // Debounce didChange notifications
+        if (didChangeTimeout.current) {
+            clearTimeout(didChangeTimeout.current);
+        }
+
+        didChangeTimeout.current = setTimeout(async () => {
+            documentVersion.current += 1;
+            try {
+                await LanguageService.didChange(filename, content, documentVersion.current);
+
+                // After a short delay for LSP to process, fetch diagnostics
+                setTimeout(async () => {
+                    try {
+                        const diagnostics = await LanguageService.getDiagnostics(filename);
+                        // Diagnostics will be delivered via DiagnosticsUpdated event
+                        // which the diagnosticsExtension listens for
+                    } catch (e) {
+                        // Diagnostics fetch is best-effort
+                    }
+                }, 200);
+            } catch (e) {
+                console.warn('[LSP] didChange failed:', e);
+            }
+        }, 150); // 150ms debounce
+
+        return () => {
+            if (didChangeTimeout.current) {
+                clearTimeout(didChangeTimeout.current);
+            }
+        };
+    }, [content, filename]);
 
     // Handle line highlighting when highlightLines prop changes or content loads
     useEffect(() => {
@@ -403,6 +515,19 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                     view.contentDOM.dispatchEvent(event);
                 }
             },
+            {
+                id: 'rename',
+                label: 'Rename Symbol',
+                shortcut: 'F2',
+                onClick: () => {
+                    // Dispatch F2 key event to trigger the rename extension
+                    const event = new KeyboardEvent('keydown', {
+                        key: 'F2',
+                        bubbles: true
+                    });
+                    view.contentDOM.dispatchEvent(event);
+                }
+            }
         ];
 
         showMenu({ x: e.clientX, y: e.clientY }, items);

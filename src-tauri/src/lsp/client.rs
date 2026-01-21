@@ -320,6 +320,94 @@ impl LspClient {
         serde_json::from_value(response).map_err(LspError::from)
     }
 
+    /// Get signature help (parameter hints)
+    pub fn signature_help(
+        &mut self,
+        uri: &str,
+        line: u32,
+        character: u32,
+    ) -> Result<Option<super::types::SignatureHelp>, LspError> {
+        if !self.capabilities.signature_help {
+            return Ok(None);
+        }
+
+        let params = json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": line, "character": character }
+        });
+
+        let response = self.send_request_sync("textDocument/signatureHelp", params)?;
+
+        if response.is_null() {
+            return Ok(None);
+        }
+
+        serde_json::from_value(response).map_err(LspError::from)
+    }
+
+    /// Rename a symbol
+    pub fn rename(
+        &mut self,
+        uri: &str,
+        line: u32,
+        character: u32,
+        new_name: &str,
+    ) -> Result<Option<super::types::WorkspaceEdit>, LspError> {
+        if !self.capabilities.rename {
+            return Ok(None);
+        }
+
+        let params = json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": line, "character": character },
+            "newName": new_name
+        });
+
+        let response = self.send_request_sync("textDocument/rename", params)?;
+
+        if response.is_null() {
+            return Ok(None);
+        }
+
+        serde_json::from_value(response).map_err(LspError::from)
+    }
+
+    /// Get code actions (quick fixes, refactorings)
+    pub fn code_actions(
+        &mut self,
+        uri: &str,
+        start_line: u32,
+        start_char: u32,
+        end_line: u32,
+        end_char: u32,
+        diagnostics: &[super::types::Diagnostic],
+    ) -> Result<Vec<super::types::CodeAction>, LspError> {
+        if !self.capabilities.code_action {
+            return Ok(vec![]);
+        }
+
+        let params = json!({
+            "textDocument": { "uri": uri },
+            "range": {
+                "start": { "line": start_line, "character": start_char },
+                "end": { "line": end_line, "character": end_char }
+            },
+            "context": {
+                "diagnostics": diagnostics
+            }
+        });
+
+        let response = self.send_request_sync("textDocument/codeAction", params)?;
+
+        if response.is_null() {
+            return Ok(vec![]);
+        }
+
+        // Code actions can be CodeAction objects or Command objects
+        // For simplicity, we only handle CodeAction objects
+        Ok(serde_json::from_value(response).unwrap_or_else(|_| vec![]))
+    }
+
     /// Get cached diagnostics for a file
     pub fn get_diagnostics(&self, uri: &str) -> Vec<super::types::Diagnostic> {
         self.diagnostics

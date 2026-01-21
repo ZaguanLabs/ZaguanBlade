@@ -246,6 +246,43 @@ pub enum LanguageIntent {
     GetDiagnostics {
         file_path: String,
     },
+
+    // Document synchronization (for LSP)
+    DidOpen {
+        file_path: String,
+        content: String,
+        language_id: String,
+    },
+    DidChange {
+        file_path: String,
+        content: String,
+        version: u32,
+    },
+    DidClose {
+        file_path: String,
+    },
+
+    // Signature help (parameter hints)
+    GetSignatureHelp {
+        file_path: String,
+        line: u32,
+        character: u32,
+    },
+
+    // Code actions (quick fixes)
+    GetCodeActions {
+        file_path: String,
+        start_line: u32,
+        start_character: u32,
+        end_line: u32,
+        end_character: u32,
+    },
+    Rename {
+        file_path: String,
+        line: u32,
+        character: u32,
+        new_name: String,
+    },
 }
 
 // ==============================================================================
@@ -488,6 +525,34 @@ pub enum LanguageEvent {
         file_path: String,
         diagnostics: Vec<LanguageDiagnostic>,
     },
+    SignatureHelpReady {
+        intent_id: Uuid,
+        signatures: Vec<SignatureInfo>,
+        active_signature: Option<u32>,
+        active_parameter: Option<u32>,
+    },
+    CodeActionsReady {
+        intent_id: Uuid,
+        actions: Vec<CodeAction>,
+    },
+    RenameEditsReady {
+        intent_id: Uuid,
+        edit: Option<LanguageWorkspaceEdit>,
+    },
+}
+
+// ... existing structs ...
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LanguageTextEdit {
+    pub range: LanguageRange,
+    pub new_text: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LanguageWorkspaceEdit {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub changes: Option<std::collections::HashMap<String, Vec<LanguageTextEdit>>>,
 }
 
 // Language domain data types
@@ -558,6 +623,33 @@ pub struct LanguageDiagnostic {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     pub message: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SignatureInfo {
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub documentation: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parameters: Vec<ParameterInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ParameterInfo {
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub documentation: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CodeAction {
+    pub title: String,
+    pub kind: Option<String>, // e.g., "quickfix", "refactor"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostics: Option<Vec<LanguageDiagnostic>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edit: Option<LanguageWorkspaceEdit>,
+    pub is_preferred: bool,
 }
 
 // ==============================================================================

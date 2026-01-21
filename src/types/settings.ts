@@ -1,0 +1,31 @@
+export interface ApiConfig {
+    blade_url: string;
+    api_key: string;
+    user_id: string;
+    theme: string;
+    markdown_view: string;
+}
+
+export interface BackendSettings {
+    storage: {
+        mode: 'local' | 'server';
+        sync_metadata: boolean;
+        cache: {
+            enabled: boolean;
+            max_size_mb: number;
+        };
+    };
+    context: {
+        max_tokens: number;
+        compression: {
+            enabled: boolean;
+            model: 'local' | 'remote';
+        };
+    };
+    privacy: {
+        telemetry: boolean;
+    };
+    editor: {
+        enable_lsp: boolean;
+    };
+}

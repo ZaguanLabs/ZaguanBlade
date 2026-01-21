@@ -42,7 +42,7 @@ pub struct PatchHunk {
     pub end_line: Option<usize>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize)]
 pub enum ChangeType {
     Patch {
         old_content: String,
@@ -55,14 +55,17 @@ pub enum ChangeType {
     NewFile {
         content: String,
     },
-    DeleteFile,
+    DeleteFile {
+        old_content: Option<String>,
+    },
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize)]
 pub struct PendingChange {
     pub call: ToolCall,
     pub path: String,
     pub change_type: ChangeType,
+    pub applied: bool,
 }
 
 #[derive(Clone)]
@@ -327,7 +330,71 @@ impl AiWorkflow {
                     &call.function.name,
                 ) {
                     Ok(mut change) => {
-                        // Do NOT push a result yet - we want the agentic loop to block until user approves/rejects
+                        // NEW LOGIC: Apply the change IMMEDIATELY to disk
+                        // This makes it act like an "Undo/Redo" buffer - change is live, can be undone.
+
+                        let full_path = workspace_root.join(&change.path);
+                        let apply_result = (|| -> Result<(), String> {
+                            match &change.change_type {
+                                ChangeType::Patch {
+                                    old_content,
+                                    new_content,
+                                } => {
+                                    let current_content = fs::read_to_string(&full_path)
+                                        .map_err(|e| format!("Failed to read file: {}", e))?;
+                                    let new_file_content = tools::apply_patch_to_string(
+                                        &current_content,
+                                        old_content,
+                                        new_content,
+                                    )?;
+                                    fs::write(&full_path, new_file_content)
+                                        .map_err(|e| format!("Failed to write file: {}", e))?;
+                                    Ok(())
+                                }
+                                ChangeType::MultiPatch { patches } => {
+                                    let mut content = fs::read_to_string(&full_path)
+                                        .map_err(|e| format!("Failed to read file: {}", e))?;
+                                    for patch in patches {
+                                        content = tools::apply_patch_to_string(
+                                            &content,
+                                            &patch.old_text,
+                                            &patch.new_text,
+                                        )?;
+                                    }
+                                    fs::write(&full_path, content)
+                                        .map_err(|e| format!("Failed to write file: {}", e))?;
+                                    Ok(())
+                                }
+                                ChangeType::NewFile { content } => {
+                                    if let Some(parent) = full_path.parent() {
+                                        let _ = fs::create_dir_all(parent);
+                                    }
+                                    fs::write(&full_path, content)
+                                        .map_err(|e| format!("Failed to create file: {}", e))?;
+                                    Ok(())
+                                }
+                                ChangeType::DeleteFile { .. } => {
+                                    // Can't "apply" delete safely in a way that is easily undoable without manual backup?
+                                    // Or we just do it. But logic for undo needs content.
+                                    // For now, let's DELAY delete or apply it?
+                                    // User said "AI-applied changes are immediately written".
+                                    // So we delete it.
+                                    fs::remove_file(&full_path)
+                                        .map_err(|e| format!("Failed to delete file: {}", e))?;
+                                    Ok(())
+                                }
+                            }
+                        })();
+
+                        if let Err(e) = apply_result {
+                            eprintln!("[AI WORKFLOW] Failed to auto-apply change: {}", e);
+                            change.applied = false;
+                            // We still push it as pending, but it's not applied. User will see normal Accept/Reject.
+                        } else {
+                            println!("[AI WORKFLOW] Auto-applied change to {}", change.path);
+                            change.applied = true;
+                        }
+
                         change.call = call.clone();
                         changes.push(change);
                     }
@@ -340,6 +407,26 @@ impl AiWorkflow {
                     &call.function.name,
                 ) {
                     Ok(mut change) => {
+                        // Same immediate apply logic for delete_file
+                        let full_path = workspace_root.join(&change.path);
+
+                        // Capture content for undo
+                        if let ChangeType::DeleteFile {
+                            ref mut old_content,
+                        } = change.change_type
+                        {
+                            if let Ok(content) = fs::read_to_string(&full_path) {
+                                *old_content = Some(content);
+                            }
+                        }
+
+                        if let Err(e) = fs::remove_file(&full_path) {
+                            eprintln!("[AI WORKFLOW] Failed to auto-delete file: {}", e);
+                            change.applied = false;
+                        } else {
+                            change.applied = true;
+                        }
+
                         change.call = call.clone();
                         changes.push(change);
                     }

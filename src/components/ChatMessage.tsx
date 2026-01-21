@@ -8,6 +8,7 @@ import { CommandApprovalCard } from './CommandApprovalCard';
 import { TodoList } from './TodoList';
 import { useContextMenu, ContextMenuItem } from './ui/ContextMenu';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { ChatTerminal } from './ChatTerminal';
 
 const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent?: boolean }> = ({ content, isActive, hasContent }) => {
     const [isExpanded, setIsExpanded] = useState(true); // Start expanded
@@ -56,11 +57,10 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
     const isStreaming = isActive && !hasContent;
 
     return (
-        <div className={`my-2 rounded-md border overflow-hidden transition-all duration-200 ${
-            isStreaming 
-                ? 'border-purple-500/30 bg-purple-950/10' 
-                : 'border-zinc-800/50 bg-zinc-900/20'
-        }`}>
+        <div className={`my-2 rounded-md border overflow-hidden transition-all duration-200 ${isStreaming
+            ? 'border-purple-500/30 bg-purple-950/10'
+            : 'border-zinc-800/50 bg-zinc-900/20'
+            }`}>
             {/* Header - clickable to toggle */}
             <button
                 onClick={handleToggle}
@@ -68,9 +68,8 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
             >
                 <div className="flex items-center gap-2 flex-1 min-w-0">
                     <Brain className={`w-3 h-3 flex-shrink-0 ${isStreaming ? 'text-purple-400 animate-pulse' : 'text-zinc-600'}`} />
-                    <span className={`font-mono text-[9px] uppercase tracking-wider flex-shrink-0 ${
-                        isStreaming ? 'text-purple-400' : 'text-zinc-600'
-                    }`}>
+                    <span className={`font-mono text-[9px] uppercase tracking-wider flex-shrink-0 ${isStreaming ? 'text-purple-400' : 'text-zinc-600'
+                        }`}>
                         {isStreaming ? 'Reasoning' : 'Thought Process'}
                     </span>
                     {!isExpanded && cleanContent && (
@@ -91,7 +90,7 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
 
             {/* Content - scrollable container */}
             {isExpanded && (
-                <div 
+                <div
                     ref={contentRef}
                     className="px-3 py-2 border-t border-zinc-800/30 bg-zinc-950/20 max-h-48 overflow-y-auto"
                 >
@@ -111,6 +110,8 @@ interface ChatMessageProps {
     onSkipCommand?: () => void;
     isContinued?: boolean; // For visual grouping
     isActive?: boolean; // Is this the currently streaming message?
+    activeTerminals?: Map<string, { callId: string, commandId: string, command: string, cwd?: string }>;
+    onTerminalComplete?: (callId: string, output: string, exitCode: number) => void;
 }
 
 export const ChatMessage: React.FC<ChatMessageProps> = ({
@@ -119,7 +120,9 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
     onApproveCommand,
     onSkipCommand,
     isContinued = false,
-    isActive = false
+    isActive = false,
+    activeTerminals,
+    onTerminalComplete
 }) => {
     const isUser = message.role === 'User';
     const isSystem = message.role === 'System';
@@ -301,6 +304,34 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                             } else if (block.type === 'tool_call') {
                                 const toolCall = message.tool_calls?.find(tc => tc.id === block.id);
                                 if (!toolCall) return null;
+
+                                // Skip showing ToolCallDisplay for run_command when it's pending approval
+                                // The CommandApprovalCard will show it instead with Run/Skip buttons
+                                const isRunCommand = toolCall.function.name === 'run_command';
+                                const hasPendingApproval = pendingActions && pendingActions.length > 0;
+                                if (isRunCommand && hasPendingApproval) {
+                                    return null;  // CommandApprovalCard will render this
+                                }
+
+                                // Check if this is an active terminal
+                                const activeTerminal = activeTerminals?.get(block.id);
+                                if (activeTerminal && onTerminalComplete) {
+                                    return (
+                                        <div key={block.id} className="mb-3 space-y-2">
+                                            {/* Show the tool call header (optional, if we want to show args) */}
+                                            {/* <ToolCallDisplay toolCall={toolCall} status="executing" /> */}
+
+                                            {/* Show the interactive terminal */}
+                                            <ChatTerminal
+                                                commandId={activeTerminal.commandId}
+                                                command={activeTerminal.command}
+                                                cwd={activeTerminal.cwd}
+                                                onComplete={(output, exitCode) => onTerminalComplete(activeTerminal.callId, output, exitCode)}
+                                            />
+                                        </div>
+                                    );
+                                }
+
                                 return (
                                     <div key={block.id} className="mb-3 space-y-2">
                                         <ToolCallDisplay
@@ -308,6 +339,29 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                                             status={toolCall.status || 'executing'}
                                             result={toolCall.result}
                                         />
+                                    </div>
+                                );
+                            } else if (block.type === 'command_execution') {
+                                // Find the command execution by ID
+                                const cmdExec = message.commandExecutions?.find(c => c.id === block.id);
+                                if (!cmdExec) return null;
+                                return (
+                                    <div key={block.id} className="mb-3">
+                                        <CommandOutputDisplay
+                                            command={cmdExec.command}
+                                            cwd={cmdExec.cwd}
+                                            output={cmdExec.output}
+                                            exitCode={cmdExec.exitCode}
+                                            duration={cmdExec.duration}
+                                        />
+                                    </div>
+                                );
+                            } else if (block.type === 'todo') {
+                                // Render TODO list inline in the conversation flow
+                                if (!message.todos || message.todos.length === 0) return null;
+                                return (
+                                    <div key={block.id} className="mb-3">
+                                        <TodoList todos={message.todos} />
                                     </div>
                                 );
                             }
@@ -325,22 +379,30 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                             </div>
                         )}
 
-                        {message.todos && message.todos.length > 0 && <TodoList todos={message.todos} />}
+                        {/* Legacy: Render todos if no todo block exists (backward compat) */}
+                        {message.todos && message.todos.length > 0 && !message.blocks?.some(b => b.type === 'todo') && <TodoList todos={message.todos} />}
 
-                        {/* Command Output/Executions are typically appended at end */}
+                        {/* Legacy: Render commandExecutions that don't have block entries (backward compat) */}
                         {message.commandExecutions && message.commandExecutions.length > 0 && (
-                            <div className="mt-3 space-y-2">
-                                {message.commandExecutions.map((cmd, idx) => (
-                                    <CommandOutputDisplay
-                                        key={`${cmd.timestamp}-${idx}`}
-                                        command={cmd.command}
-                                        cwd={cmd.cwd}
-                                        output={cmd.output}
-                                        exitCode={cmd.exitCode}
-                                        duration={cmd.duration}
-                                    />
-                                ))}
-                            </div>
+                            (() => {
+                                const blockIds = new Set((message.blocks || []).filter(b => b.type === 'command_execution').map(b => b.id));
+                                const orphanedCmds = message.commandExecutions.filter(c => !blockIds.has(c.id));
+                                if (orphanedCmds.length === 0) return null;
+                                return (
+                                    <div className="mt-3 space-y-2">
+                                        {orphanedCmds.map((cmd, idx) => (
+                                            <CommandOutputDisplay
+                                                key={`${cmd.timestamp}-${idx}`}
+                                                command={cmd.command}
+                                                cwd={cmd.cwd}
+                                                output={cmd.output}
+                                                exitCode={cmd.exitCode}
+                                                duration={cmd.duration}
+                                            />
+                                        ))}
+                                    </div>
+                                );
+                            })()
                         )}
                     </>
                 ) : (
@@ -391,14 +453,22 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                                 )}
                                 {hasToolCalls && (
                                     <div className="mb-3 space-y-2">
-                                        {toolCalls.map((call, idx) => (
-                                            <ToolCallDisplay
-                                                key={`${call.id}-${idx}`}
-                                                toolCall={call}
-                                                status={call.status || 'executing'}
-                                                result={call.result}
-                                            />
-                                        ))}
+                                        {toolCalls
+                                            .filter(call => {
+                                                // Skip run_command when pending approval - CommandApprovalCard handles it
+                                                if (call.function.name === 'run_command' && pendingActions && pendingActions.length > 0) {
+                                                    return false;
+                                                }
+                                                return true;
+                                            })
+                                            .map((call, idx) => (
+                                                <ToolCallDisplay
+                                                    key={`${call.id}-${idx}`}
+                                                    toolCall={call}
+                                                    status={call.status || 'executing'}
+                                                    result={call.result}
+                                                />
+                                            ))}
                                     </div>
                                 )}
                                 {message.todos && message.todos.length > 0 && <TodoList todos={message.todos} />}

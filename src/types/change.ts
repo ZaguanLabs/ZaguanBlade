@@ -14,6 +14,7 @@ export type Change =
     id: string;
     path: string;
     patches: PatchHunk[];
+    applied?: boolean;
   }
   // Legacy: Single patch
   | {
@@ -22,15 +23,18 @@ export type Change =
     path: string;
     old_content: string;
     new_content: string;
+    applied?: boolean;
   }
   | {
     change_type: "new_file";
     id: string;
     path: string;
     content: string;
+    applied?: boolean;
   }
   | {
     change_type: "delete_file";
     id: string;
     path: string;
+    applied?: boolean;
   };

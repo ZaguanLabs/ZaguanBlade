@@ -92,7 +92,30 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
             'create_file': '📄 Creating File',
             'delete_file': '🗑️ Deleting File',
             'list_directory': '📁 Listing Directory',
-            'get_workspace_structure': '🗂️ Analyzing Workspace'
+            'get_workspace_structure': '🗂️ Analyzing Workspace',
+            'codebase_search': '🔎 Searching Codebase',
+            'get_editor_state': '👀 Getting Editor State',
+            'read_file_range': '📖 Reading File Range',
+            'find_files': '🔍 Finding Files',
+            'find_files_glob': '🌐 Finding Files (Glob)',
+            'glob': '🌐 Glob Search',
+            'find_by_name': '🔍 Find Files by Name',
+            'view_file_outline': '📑 Viewing File Outline',
+            'search_web': '🌐 Searching Web',
+            'read_url_content': '🕸️ Reading URL',
+            'browser_subagent': '🤖 Browser Agent',
+            'command_status': '⏱️ Checking Command',
+            'send_command_input': '⌨️ Sending Input',
+            'read_terminal': '🖥️ Reading Terminal',
+            'list_dir': '📂 Listing Directory',
+            'view_file': '📖 Viewing File',
+            'view_code_item': '🧐 Viewing Code Item',
+            'generate_image': '🎨 Generating Image',
+            'multi_replace_file_content': '📝 Multi-Edit File',
+            'replace_file_content': '📝 Replacing Content',
+            'write_to_file': '💾 Writing to File',
+            'list_resources': '📦 Listing Resources',
+            'read_resource': '📖 Reading Resource'
         };
         return nameMap[name] || name;
     };
@@ -118,7 +141,12 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
         'create_file',
         'delete_file',
         'list_files',
-        'get_workspace_structure'
+        'get_workspace_structure',
+        'view_file',
+        'view_file_outline',
+        'write_to_file',
+        'replace_file_content',
+        'multi_replace_file_content'
     ]);
     const getLastPathSegments = (value: string, count: number) => {
         const parts = value.split(/[/\\]/).filter(Boolean);

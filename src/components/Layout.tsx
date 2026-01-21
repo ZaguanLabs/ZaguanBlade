@@ -9,7 +9,7 @@ import { TerminalPane, TerminalPaneHandle } from './TerminalPane';
 import { DocumentTabs } from './DocumentTabs';
 import { DocumentViewer } from './DocumentViewer';
 import { TitleBar } from './TitleBar';
-import { Settings } from 'lucide-react';
+import { GitBranch, Settings } from 'lucide-react';
 import { EditorProvider } from '../contexts/EditorContext';
 import { useChat } from '../hooks/useChat';
 import { ProtocolExplorer } from './dev/ProtocolExplorer';
@@ -17,6 +17,8 @@ import { SettingsModal } from './SettingsModal';
 import { StorageSetupModal } from './StorageSetupModal';
 import { useProjectState, type ProjectState } from '../hooks/useProjectState';
 import { useWarmup } from '../hooks/useWarmup';
+import { useGitStatus } from '../hooks/useGitStatus';
+import { GitPanel } from './GitPanel';
 
 interface Tab {
     id: string;
@@ -37,12 +39,34 @@ const AppLayoutInner: React.FC = () => {
     const [isDragging, setIsDragging] = useState(false);
     const [isChatDragging, setIsChatDragging] = useState(false);
     const [virtualFiles, setVirtualFiles] = useState<Set<string>>(new Set());
+
+    // Sidebar State
+    const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+    const [activeSidebar, setActiveSidebar] = useState<'explorer' | 'git'>('explorer');
+
     const chat = useChat();
+    const {
+        status: gitStatus,
+        files: gitFiles,
+        error: gitError,
+        filesError: gitFilesError,
+        lastRefreshedAt: gitLastRefreshedAt,
+        refresh: refreshGitStatus,
+        stageFile: stageGitFile,
+        unstageFile: unstageGitFile,
+        stageAll: stageAllGit,
+        unstageAll: unstageAllGit,
+        commit: commitGit,
+        push: pushGit,
+        diff: diffGit,
+        generateCommitMessage: generateGitCommitMessage,
+    } = useGitStatus();
+    const gitChangedCount = gitStatus?.changedCount ?? 0;
     const { pendingChanges, approveChange, rejectChange, selectedModelId, setSelectedModelId, messages } = chat;
     const [chatMessages, setChatMessages] = useState(chat.messages);
     const processingFilesRef = useRef<Set<string>>(new Set());
     const terminalPaneRef = useRef<TerminalPaneHandle>(null);
-    
+
     // Research progress state
     const [researchProgress, setResearchProgress] = useState<{
         message: string;
@@ -53,7 +77,14 @@ const AppLayoutInner: React.FC = () => {
 
     // Settings modal state
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-    
+
+    // Listen for open-settings custom event (from WelcomePage or ChatPanel)
+    useEffect(() => {
+        const handleOpenSettings = () => setIsSettingsOpen(true);
+        document.addEventListener('open-settings', handleOpenSettings);
+        return () => document.removeEventListener('open-settings', handleOpenSettings);
+    }, []);
+
     // First-time setup modal state (RFC-002)
     const [showStorageSetup, setShowStorageSetup] = useState(false);
     const [hasCheckedZblade, setHasCheckedZblade] = useState(false);
@@ -74,7 +105,7 @@ const AppLayoutInner: React.FC = () => {
             try {
                 const path = await invoke<string | null>('get_current_workspace');
                 setWorkspacePath(path);
-                
+
                 // Fetch project_id for this workspace
                 if (path) {
                     try {
@@ -100,7 +131,7 @@ const AppLayoutInner: React.FC = () => {
         };
         fetchWorkspace();
         fetchUserId();
-        
+
         // Poll for user_id until we get it (it's set when WebSocket connects)
         const userIdInterval = setInterval(async () => {
             if (!userId) {
@@ -109,7 +140,7 @@ const AppLayoutInner: React.FC = () => {
                 clearInterval(userIdInterval);
             }
         }, 1000);
-        
+
         return () => clearInterval(userIdInterval);
     }, [userId]);
 
@@ -117,7 +148,7 @@ const AppLayoutInner: React.FC = () => {
     useEffect(() => {
         const checkZbladeDir = async () => {
             if (!workspacePath || hasCheckedZblade) return;
-            
+
             try {
                 const exists = await invoke<boolean>('has_zblade_directory', { projectPath: workspacePath });
                 setHasCheckedZblade(true);
@@ -129,7 +160,7 @@ const AppLayoutInner: React.FC = () => {
                 setHasCheckedZblade(true);
             }
         };
-        
+
         checkZbladeDir();
     }, [workspacePath, hasCheckedZblade]);
 
@@ -329,11 +360,13 @@ const AppLayoutInner: React.FC = () => {
         if (isDragging) {
             document.addEventListener('mousemove', handleMouseMove);
             document.addEventListener('mouseup', handleMouseUp);
+            document.body.style.cursor = 'row-resize';
         }
 
         return () => {
             document.removeEventListener('mousemove', handleMouseMove);
             document.removeEventListener('mouseup', handleMouseUp);
+            document.body.style.removeProperty('cursor');
         };
     }, [isDragging]);
 
@@ -361,11 +394,13 @@ const AppLayoutInner: React.FC = () => {
         if (isChatDragging) {
             document.addEventListener('mousemove', handleChatMouseMove);
             document.addEventListener('mouseup', handleChatMouseUp);
+            document.body.style.cursor = 'col-resize';
         }
 
         return () => {
             document.removeEventListener('mousemove', handleChatMouseMove);
             document.removeEventListener('mouseup', handleChatMouseUp);
+            document.body.style.removeProperty('cursor');
         };
     }, [isChatDragging]);
 
@@ -379,7 +414,7 @@ const AppLayoutInner: React.FC = () => {
                     handleTabClose(activeTabId);
                 }
             }
-            
+
             // F12 to toggle DevTools
             if (e.key === 'F12') {
                 e.preventDefault();
@@ -419,6 +454,7 @@ const AppLayoutInner: React.FC = () => {
         let unlistenEphemeral: (() => void) | undefined;
         let unlistenResearchProgress: (() => void) | undefined;
         let unlistenChangeApplied: (() => void) | undefined;
+        let unlistenChatError: (() => void) | undefined;
 
         const setupListeners = async () => {
             const handleOpenFile = (path: string, sourceEvent: string) => {
@@ -529,6 +565,18 @@ const AppLayoutInner: React.FC = () => {
                     ...event.payload,
                     isActive: true
                 });
+
+                // Auto-hide after delay if complete
+                if (event.payload.percent >= 100) {
+                    setTimeout(() => {
+                        setResearchProgress(prev => (prev && prev.percent >= 100 ? null : prev));
+                    }, 2500);
+                }
+            });
+
+            // Listen for chat errors to clear progress
+            unlistenChatError = await listen('chat-error', () => {
+                setResearchProgress(null);
             });
 
             // Listen for change-applied events to convert ephemeral tabs to file tabs
@@ -538,10 +586,10 @@ const AppLayoutInner: React.FC = () => {
 
                 // Find ephemeral tab associated with this change
                 const ephemeralTabId = `new-file-${change_id}`;
-                
+
                 // Mark this file as being processed to prevent duplicate tab creation from open-file event
                 processingFilesRef.current.add(file_path);
-                
+
                 setTabs(prev => {
                     const ephemeralTab = prev.find(t => t.id === ephemeralTabId);
                     if (!ephemeralTab) {
@@ -564,7 +612,7 @@ const AppLayoutInner: React.FC = () => {
 
                 // Switch to the new file tab
                 setActiveTabId(`file-${file_path}`);
-                
+
                 // Clear the processing flag after a short delay to allow the open-file event to be ignored
                 setTimeout(() => {
                     processingFilesRef.current.delete(file_path);
@@ -581,8 +629,26 @@ const AppLayoutInner: React.FC = () => {
             if (unlistenEphemeral) unlistenEphemeral();
             if (unlistenResearchProgress) unlistenResearchProgress();
             if (unlistenChangeApplied) unlistenChangeApplied();
+            if (unlistenChatError) unlistenChatError();
         };
     }, [tabs]);
+
+    // Clear progress when chat stops loading (turn complete)
+    useEffect(() => {
+        if (!chat.loading) {
+            setResearchProgress(null);
+        }
+    }, [chat.loading]);
+
+    // Toggle sidebar function
+    const toggleSidebar = (view: 'explorer' | 'git') => {
+        if (isSidebarOpen && activeSidebar === view) {
+            setIsSidebarOpen(false);
+        } else {
+            setActiveSidebar(view);
+            setIsSidebarOpen(true);
+        }
+    };
 
     return (
         <div className="h-screen w-screen bg-[var(--bg-app)] overflow-hidden flex flex-col font-sans text-[var(--fg-primary)]">
@@ -591,18 +657,38 @@ const AppLayoutInner: React.FC = () => {
 
             <div className="flex-1 flex overflow-hidden">
                 {/* Activity Bar (Vertical) */}
-                <div className="w-[50px] bg-[var(--bg-app)] border-r border-[var(--border-subtle)] flex flex-col items-center py-4 gap-6 z-20 shrink-0">
-                    <div className="p-2 rounded-md bg-[var(--bg-surface)] text-[var(--fg-primary)] shadow-sm border border-[var(--border-subtle)] group cursor-pointer hover:border-[var(--border-focus)] transition-colors">
-                        <svg className="w-5 h-5 opacity-90 group-hover:opacity-100 transition-opacity" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <div className="w-[50px] bg-[var(--bg-app)] border-r border-[var(--border-subtle)] flex flex-col items-center py-4 gap-6 z-50 shrink-0 relative">
+                    <div
+                        onClick={() => toggleSidebar('explorer')}
+                        className={`p-2 rounded-md shadow-sm border transition-colors cursor-pointer ${isSidebarOpen && activeSidebar === 'explorer'
+                            ? 'bg-[var(--bg-surface)] text-[var(--fg-primary)] border-[var(--border-focus)]'
+                            : 'border-transparent text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]'}
+                        `}
+                    >
+                        <svg className="w-5 h-5 opacity-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
                         </svg>
+                    </div>
+                    <div
+                        onClick={() => toggleSidebar('git')}
+                        className={`relative p-2 rounded-md shadow-sm border transition-colors cursor-pointer ${isSidebarOpen && activeSidebar === 'git'
+                            ? 'bg-[var(--bg-surface)] text-[var(--fg-primary)] border-[var(--border-focus)]'
+                            : 'border-transparent text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]'}
+                        `}
+                    >
+                        <GitBranch className="w-5 h-5" />
+                        {gitStatus?.isRepo && gitChangedCount > 0 && (
+                            <span className="absolute bottom-0 right-0 min-w-[14px] h-3 px-1 rounded-full bg-sky-500 text-[9px] leading-3 text-white text-center">
+                                {Math.min(gitChangedCount, 99)}
+                            </span>
+                        )}
                     </div>
                     <div className="p-2 rounded-md text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)] transition-all cursor-pointer">
                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                         </svg>
                     </div>
-                    <div 
+                    <div
                         onClick={() => setIsSettingsOpen(true)}
                         className="mt-auto p-2 rounded-md text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)] transition-all cursor-pointer"
                     >
@@ -611,15 +697,38 @@ const AppLayoutInner: React.FC = () => {
                 </div>
 
                 {/* Content Area */}
-                <div className="flex-1 flex w-full relative">
+                <div className="flex-1 flex min-w-0 relative">
 
-                    {/* Explorer */}
-                    <div className="w-64 min-w-[200px] flex flex-col border-r border-[var(--border-subtle)] bg-[var(--bg-panel)]">
-                        <ExplorerPanel onFileSelect={handleFileSelect} activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
+                    {/* Explorer / Sidebar (Floating) */}
+                    <div className={`
+                        absolute top-0 bottom-0 left-0 w-80 bg-[var(--bg-panel)] border-r border-[var(--border-subtle)] 
+                        shadow-2xl z-30 transition-transform duration-300 ease-in-out flex flex-col
+                        ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+                    `}>
+                        {activeSidebar === 'explorer' ? (
+                            <ExplorerPanel onFileSelect={handleFileSelect} activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
+                        ) : (
+                            <GitPanel
+                                status={gitStatus}
+                                files={gitFiles}
+                                error={gitError}
+                                filesError={gitFilesError}
+                                lastRefreshedAt={gitLastRefreshedAt}
+                                onRefresh={refreshGitStatus}
+                                onStageFile={stageGitFile}
+                                onUnstageFile={unstageGitFile}
+                                onStageAll={stageAllGit}
+                                onUnstageAll={unstageAllGit}
+                                onCommit={commitGit}
+                                onPush={pushGit}
+                                onDiff={diffGit}
+                                onGenerateCommitMessage={() => generateGitCommitMessage(selectedModelId)}
+                            />
+                        )}
                     </div>
 
                     {/* Editor & Terminal */}
-                    <div className="flex-1 flex flex-col min-w-[300px] bg-[var(--bg-app)] relative">
+                    <div className="flex-1 flex flex-col min-w-0 bg-[var(--bg-app)] relative">
                         {/* Document Tabs */}
                         {tabs.length > 0 && (
                             <DocumentTabs
@@ -661,8 +770,8 @@ const AppLayoutInner: React.FC = () => {
                                             const currentFileIndex = tab.path ? filesWithChanges.indexOf(tab.path) + 1 : 0;
 
                                             return (
-                                                <div 
-                                                    key={tab.id} 
+                                                <div
+                                                    key={tab.id}
                                                     className={`absolute inset-0 ${isActive ? 'z-10' : 'z-0 pointer-events-none opacity-0'}`}
                                                 >
                                                     <EditorPanel
@@ -675,10 +784,21 @@ const AppLayoutInner: React.FC = () => {
                                                         currentFileIndex={currentFileIndex || 1}
                                                         onNextFile={filesWithChanges.length > 1 && currentFileIndex < filesWithChanges.length ? () => navigateToFile(filesWithChanges[currentFileIndex]) : undefined}
                                                         onPrevFile={filesWithChanges.length > 1 && currentFileIndex > 1 ? () => navigateToFile(filesWithChanges[currentFileIndex - 2]) : undefined}
+                                                        onOpenSettings={() => setIsSettingsOpen(true)}
                                                     />
                                                 </div>
                                             );
                                         })}
+
+                                        {/* Render Welcome Page if no tabs */}
+                                        {tabs.length === 0 && (
+                                            <div className="absolute inset-0 z-10">
+                                                <EditorPanel
+                                                    activeFile={null}
+                                                    onOpenSettings={() => setIsSettingsOpen(true)}
+                                                />
+                                            </div>
+                                        )}
 
                                         {/* Render ephemeral tabs */}
                                         {tabs.filter(t => t.type === 'ephemeral').map(tab => {
@@ -687,8 +807,8 @@ const AppLayoutInner: React.FC = () => {
                                             const changeId = isNewFileProposal ? tab.id.replace('new-file-', '') : undefined;
 
                                             return (
-                                                <div 
-                                                    key={tab.id} 
+                                                <div
+                                                    key={tab.id}
                                                     className={`absolute inset-0 ${isActive ? 'z-10' : 'z-0 pointer-events-none opacity-0'}`}
                                                 >
                                                     <DocumentViewer
@@ -732,8 +852,8 @@ const AppLayoutInner: React.FC = () => {
                     />
 
                     {/* AI Chat */}
-                    <div 
-                        style={{ width: chatPanelWidth }} 
+                    <div
+                        style={{ width: chatPanelWidth }}
                         className="min-w-[280px] max-w-[800px] border-l border-[var(--border-subtle)] bg-[var(--bg-panel)] flex flex-col shadow-xl z-30"
                     >
                         <ChatPanel

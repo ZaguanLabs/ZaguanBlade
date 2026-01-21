@@ -9,6 +9,7 @@ import { useEditor } from '../contexts/EditorContext';
 import { MessageBuffer } from '../utils/eventBuffer';
 import type { BladeEventEnvelope } from '../types/blade';
 import { getOrCreateIdempotencyKey, IDEMPOTENT_OPERATIONS } from '../utils/idempotency';
+import { ensureMessagesHaveBlocks } from '../utils/messageBlocks';
 
 export function useChat() {
     const { editorState } = useEditor();
@@ -68,7 +69,8 @@ export function useChat() {
                 ]);
 
                 console.log('Loaded conversation:', history);
-                setMessages(history);
+                // Reconstruct blocks for historical messages
+                setMessages(ensureMessagesHaveBlocks(history));
                 setModels(modelList);
 
                 // Set a default model - project state will override this if available
@@ -116,7 +118,7 @@ export function useChat() {
                     // Handle reasoning
                     if (type === 'reasoning') {
                         console.log(`[v1.1 MessageBuffer] Processing reasoning chunk: id=${id}, chunk_len=${chunk.length}, is_final=${is_final}`);
-                        
+
                         if (accumulatedReasoningRef.current.id !== id) {
                             accumulatedReasoningRef.current = { id, content: '' };
                         }
@@ -312,18 +314,31 @@ export function useChat() {
 
                     const updated = [...prev];
                     const msg = updated[lastAssistantIndex];
+
+                    // Generate unique ID for this command execution
+                    const cmdId = crypto.randomUUID();
+
+                    // Add to commandExecutions array
+                    const newExecution = {
+                        id: cmdId,
+                        command: event.payload.command,
+                        cwd: event.payload.cwd,
+                        output: event.payload.output,
+                        exitCode: event.payload.exitCode,
+                        duration: event.payload.duration,
+                        timestamp: Date.now(),
+                    };
+
+                    // Add block entry for proper ordering in conversation flow
+                    const newBlocks = [...(msg.blocks || [])];
+                    newBlocks.push({ type: 'command_execution', id: cmdId });
+
                     updated[lastAssistantIndex] = {
                         ...msg,
+                        blocks: newBlocks,
                         commandExecutions: [
                             ...(msg.commandExecutions || []),
-                            {
-                                command: event.payload.command,
-                                cwd: event.payload.cwd,
-                                output: event.payload.output,
-                                exitCode: event.payload.exitCode,
-                                duration: event.payload.duration,
-                                timestamp: Date.now(),
-                            },
+                            newExecution,
                         ],
                     };
                     return updated;
@@ -357,9 +372,24 @@ export function useChat() {
                     let found = false;
                     for (let i = updated.length - 1; i >= 0; i--) {
                         if (updated[i].role === 'Assistant') {
+                            const msg = updated[i];
+                            const newBlocks = [...(msg.blocks || [])];
+
+                            // Check if we already have a todo block - update it if so, otherwise add one
+                            const existingTodoBlockIdx = newBlocks.findIndex(b => b.type === 'todo');
+                            const todoBlockId = existingTodoBlockIdx >= 0
+                                ? newBlocks[existingTodoBlockIdx].id
+                                : crypto.randomUUID();
+
+                            if (existingTodoBlockIdx < 0) {
+                                // Add new todo block at current position in the conversation flow
+                                newBlocks.push({ type: 'todo', id: todoBlockId });
+                            }
+
                             updated[i] = {
-                                ...updated[i],
-                                todos: event.payload.todos
+                                ...msg,
+                                todos: event.payload.todos,
+                                blocks: newBlocks
                             };
                             found = true;
                             invoke('log_frontend', { message: `[FRONTEND] Attached todos to message at index ${i}, message has ${updated[i].todos?.length} todos` });

@@ -20,10 +20,10 @@ interface CommandCenterProps {
     setSelectedModelId: (modelId: string) => void;
 }
 
-export const CommandCenter: React.FC<CommandCenterProps> = ({ 
-    onSend, 
-    onStop, 
-    disabled, 
+export const CommandCenter: React.FC<CommandCenterProps> = ({
+    onSend,
+    onStop,
+    disabled,
     loading,
     models,
     selectedModelId,
@@ -55,8 +55,8 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
             }
             // Add the @ command with distinct styling
             parts.push(
-                <span 
-                    key={`cmd-${match.index}`} 
+                <span
+                    key={`cmd-${match.index}`}
                     className="text-[var(--accent-primary)] font-semibold"
                 >
                     {match[0]}
@@ -78,7 +78,7 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
     }, []);
 
     // Filter commands based on what user typed after @
-    const filteredCommands = COMMANDS.filter(cmd => 
+    const filteredCommands = COMMANDS.filter(cmd =>
         cmd.name.toLowerCase().startsWith(commandFilter.toLowerCase())
     );
 
@@ -89,6 +89,12 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
         }
     }, [text]);
 
+    // Memoize the formatted text to avoid expensive re-renders on every keystroke
+    const formattedText = React.useMemo(() => {
+        if (!text) return null;
+        return renderFormattedText(text);
+    }, [text, renderFormattedText]);
+
     // Detect @ and show command popup
     const handleTextChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
         const newText = e.target.value;
@@ -98,7 +104,7 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
         const cursorPos = e.target.selectionStart;
         const textBeforeCursor = newText.slice(0, cursorPos);
         const lastAtIndex = textBeforeCursor.lastIndexOf('@');
-        
+
         if (lastAtIndex !== -1) {
             // Check if @ is at start or after whitespace
             const charBefore = lastAtIndex > 0 ? textBeforeCursor[lastAtIndex - 1] : ' ';
@@ -122,12 +128,12 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
         const textBeforeCursor = text.slice(0, cursorPos);
         const textAfterCursor = text.slice(cursorPos);
         const lastAtIndex = textBeforeCursor.lastIndexOf('@');
-        
+
         if (lastAtIndex !== -1) {
             const newText = textBeforeCursor.slice(0, lastAtIndex) + `@${commandName} ` + textAfterCursor;
             setText(newText);
             setShowCommands(false);
-            
+
             // Focus and set cursor position after command
             setTimeout(() => {
                 if (textareaRef.current) {
@@ -144,14 +150,14 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
         if (showCommands && filteredCommands.length > 0) {
             if (e.key === 'ArrowDown') {
                 e.preventDefault();
-                setSelectedCommandIndex(prev => 
+                setSelectedCommandIndex(prev =>
                     prev < filteredCommands.length - 1 ? prev + 1 : 0
                 );
                 return;
             }
             if (e.key === 'ArrowUp') {
                 e.preventDefault();
-                setSelectedCommandIndex(prev => 
+                setSelectedCommandIndex(prev =>
                     prev > 0 ? prev - 1 : filteredCommands.length - 1
                 );
                 return;
@@ -194,15 +200,15 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
                     {/* Chat Input */}
                     <div className={`relative transition-colors ${loading ? 'bg-[var(--bg-surface)]' : ''}`}>
                         {/* Formatted text overlay - shows styled @ commands */}
-                        <div 
-                            className="absolute inset-0 p-3 pr-10 pointer-events-none whitespace-pre-wrap break-words text-xs leading-relaxed overflow-y-auto"
+                        <div
+                            className="absolute inset-0 p-3 pr-10 pointer-events-none whitespace-pre-wrap break-words text-xs font-sans leading-relaxed overflow-y-auto"
                             style={{ color: 'var(--fg-secondary)' }}
                         >
-                            {text ? renderFormattedText(text) : null}
+                            {formattedText}
                         </div>
                         {/* Command Autocomplete Popup */}
                         {showCommands && filteredCommands.length > 0 && (
-                            <div 
+                            <div
                                 ref={popupRef}
                                 className="absolute bottom-full left-0 right-0 mb-1 mx-2 bg-[var(--bg-surface)] border border-[var(--border-subtle)] rounded-md shadow-lg overflow-hidden z-50"
                             >
@@ -212,11 +218,10 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
                                         <button
                                             key={cmd.name}
                                             onClick={() => insertCommand(cmd.name)}
-                                            className={`w-full flex items-center gap-3 px-3 py-2 text-left transition-colors ${
-                                                idx === selectedCommandIndex 
-                                                    ? 'bg-[var(--accent-primary)]/15 text-[var(--fg-primary)]' 
-                                                    : 'text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)]'
-                                            }`}
+                                            className={`w-full flex items-center gap-3 px-3 py-2 text-left transition-colors ${idx === selectedCommandIndex
+                                                ? 'bg-[var(--accent-primary)]/15 text-[var(--fg-primary)]'
+                                                : 'text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)]'
+                                                }`}
                                         >
                                             <Icon className="w-4 h-4 text-[var(--accent-primary)]" />
                                             <div className="flex-1">
@@ -249,7 +254,7 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
                                 }
                             }}
                             disabled={(!text.trim() && !loading) || disabled}
-                            className={`absolute right-2 bottom-2 p-1.5 transition-colors rounded hover:bg-[var(--bg-surface-hover)] ${loading && !text.trim()
+                            className={`absolute right-2 bottom-2 p-1.5 transition-colors rounded hover:bg-[var(--bg-surface-hover)] z-20 ${loading && !text.trim()
                                 ? 'text-red-400'
                                 : 'text-[var(--fg-tertiary)] hover:text-[var(--fg-primary)] disabled:opacity-30 disabled:cursor-not-allowed'
                                 }`}
