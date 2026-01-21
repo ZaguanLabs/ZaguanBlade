@@ -590,6 +590,17 @@ export function useChat() {
         }
     }, []);
 
+    const newConversation = useCallback(async () => {
+        try {
+            await invoke('new_conversation');
+            setMessages([]);
+            setLoading(false);
+            setPendingActions(null);
+        } catch (e) {
+            console.error('Failed to start new conversation:', e);
+        }
+    }, []);
+
     return {
         messages,
         loading,
@@ -602,5 +613,6 @@ export function useChat() {
         pendingActions,
         approveTool,
         approveToolDecision,
+        newConversation,
     };
 }

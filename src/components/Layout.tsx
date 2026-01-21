@@ -894,6 +894,7 @@ const AppLayoutInner: React.FC = () => {
                             projectId={projectId || "default-project"}
                             onLoadConversation={setChatMessages}
                             researchProgress={researchProgress}
+                            onNewConversation={chat.newConversation}
                         />
                     </div>
 

@@ -37,6 +37,7 @@ interface ChatPanelProps {
     projectId: string;
     onLoadConversation: (messages: ChatMessageType[]) => void;
     researchProgress?: ResearchProgress | null;
+    onNewConversation: () => void;
 }
 
 export const ChatPanel: React.FC<ChatPanelProps> = ({
@@ -53,6 +54,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     projectId,
     onLoadConversation,
     researchProgress,
+    onNewConversation,
 }) => {
     const { t } = useTranslation();
     const { executions, handleCommandComplete } = useCommandExecution();
@@ -104,8 +106,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     }, []);
 
     const handleNewConversation = () => {
-        // TODO: Implement new conversation logic (clear current messages)
-        console.log('New conversation clicked');
+        onNewConversation();
         setActiveTab('chat');
     };
 
