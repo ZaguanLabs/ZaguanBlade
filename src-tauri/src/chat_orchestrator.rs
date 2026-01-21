@@ -166,11 +166,11 @@ pub async fn handle_send_message<R: Runtime>(
             let state = app_handle.state::<AppState>();
 
             // Fetch models asynchronously before acquiring locks
-            let blade_url = {
+            let (blade_url, api_key) = {
                 let config = state.config.lock().unwrap();
-                config.blade_url.clone()
+                (config.blade_url.clone(), config.api_key.clone())
             };
-            let models = get_models(&blade_url).await;
+            let models = get_models(&blade_url, &api_key).await;
 
             let (result, is_streaming, session_id) = {
                 let mut mgr = state.chat_manager.lock().unwrap();
@@ -860,11 +860,11 @@ pub async fn handle_send_message<R: Runtime>(
                         eprintln!("[AGENTIC LOOP] Stopping due to loop detection");
 
                         // Fetch models before acquiring locks
-                        let blade_url = {
+                        let (blade_url, api_key) = {
                             let config = state.config.lock().unwrap();
-                            config.blade_url.clone()
+                            (config.blade_url.clone(), config.api_key.clone())
                         };
-                        let models = get_models(&blade_url).await;
+                        let models = get_models(&blade_url, &api_key).await;
 
                         {
                             let mut mgr = state.chat_manager.lock().unwrap();
