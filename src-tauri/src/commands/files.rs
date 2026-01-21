@@ -69,13 +69,7 @@ pub async fn list_files(
 }
 
 pub fn read_file_content_logic(path: String, state: &AppState) -> Result<String, String> {
-    // Check if there's virtual content for this file
-    let virtual_buffers = state.virtual_buffers.lock().unwrap();
-    if let Some(virtual_content) = virtual_buffers.get(&path) {
-        println!("[VIRTUAL BUFFER] Returning virtual content for: {}", path);
-        return Ok(virtual_content.clone());
-    }
-    drop(virtual_buffers);
+    // Virtual buffers removal - surgically removed.
 
     // Resolve path relative to workspace if needed
     let resolved_path = {

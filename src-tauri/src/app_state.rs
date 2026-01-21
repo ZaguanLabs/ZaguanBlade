@@ -28,7 +28,7 @@ pub struct AppState {
     pub cursor_column: Mutex<Option<usize>>,
     pub selection_start_line: Mutex<Option<usize>>,
     pub selection_end_line: Mutex<Option<usize>>,
-    pub virtual_buffers: Mutex<std::collections::HashMap<String, String>>, // path -> virtual content
+    // virtual_buffers removed
     pub approved_command_roots: Mutex<std::collections::HashSet<String>>,
     pub executing_commands: std::sync::Arc<
         Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>>,
@@ -154,7 +154,7 @@ impl AppState {
             user_id: Mutex::new(Some(user_id)),
             selection_start_line: Mutex::new(None),
             selection_end_line: Mutex::new(None),
-            virtual_buffers: Mutex::new(std::collections::HashMap::new()),
+            // virtual_buffers removed
             approved_command_roots: Mutex::new(std::collections::HashSet::new()),
             executing_commands: std::sync::Arc::new(Mutex::new(std::collections::HashMap::new())),
             idempotency_cache: crate::idempotency::IdempotencyCache::default(), // 24h TTL
