@@ -212,6 +212,7 @@ pub struct CommandExecutedPayload {
     pub command: String,
     pub cwd: Option<String>,
     pub output: String,
+    #[serde(rename = "exitCode")]
     pub exit_code: i32,
     pub duration: Option<u64>,
     pub call_id: String,
