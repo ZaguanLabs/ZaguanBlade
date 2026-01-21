@@ -620,30 +620,43 @@ const AppLayoutInner: React.FC = () => {
                 console.log('[LAYOUT] Change applied:', event.payload);
                 const { change_id, file_path } = event.payload;
 
-                // Find ephemeral tab associated with this change
-                const ephemeralTabId = `new-file-${change_id}`;
+                // Find any ephemeral tab that might be associated with this change
+                // 1. Check for explicit "new-file-toolId" tabs
+                // 2. Check for generic ephemeral tabs that match the filename
+                const filename = file_path.split('/').pop() || file_path;
 
-                // Mark this file as being processed to prevent duplicate tab creation from open-file event
+                // Mark this file as being processed
                 processingFilesRef.current.add(file_path);
 
                 setTabs(prev => {
-                    const ephemeralTab = prev.find(t => t.id === ephemeralTabId);
+                    const ephemeralTab = prev.find(t =>
+                        t.id === `new-file-${change_id}` ||
+                        (t.type === 'ephemeral' && (
+                            t.suggestedName === filename ||
+                            t.title === filename ||
+                            t.suggestedName?.includes(filename)
+                        ))
+                    );
+
                     if (!ephemeralTab) {
+                        // Even if no ephemeral tab matches, we might still want to open the file 
+                        // if it's a new file or important. But for now, we only replace if found.
                         processingFilesRef.current.delete(file_path);
                         return prev;
                     }
 
-                    console.log('[LAYOUT] Converting ephemeral tab to file tab:', ephemeralTabId, '→', file_path);
-                    const filename = file_path.split('/').pop() || file_path;
-                    const newTab: Tab = {
+                    console.log('[LAYOUT] Found matching ephemeral tab, converting to file tab:', ephemeralTab.id, '→', file_path);
+                    const fileTab: Tab = {
                         id: `file-${file_path}`,
                         title: filename,
                         type: 'file',
                         path: file_path,
                     };
 
-                    // Remove ephemeral tab and add file tab
-                    return [...prev.filter(t => t.id !== ephemeralTabId), newTab];
+                    // Remove the ephemeral tab and add the new file tab
+                    // We try to keep the same position in the tab bar
+                    const newTabs = prev.filter(t => t.id !== ephemeralTab.id);
+                    return [...newTabs, fileTab];
                 });
 
                 // Switch to the new file tab

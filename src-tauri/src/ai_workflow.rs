@@ -418,6 +418,16 @@ impl AiWorkflow {
                         match apply_result {
                             Ok(_) => {
                                 println!("[AI WORKFLOW] Auto-applied change to {}", change.path);
+                                if let Some(app) = &context.app_handle {
+                                    let _ = app.emit("refresh-explorer", ());
+                                    let _ = app.emit(
+                                        crate::events::event_names::CHANGE_APPLIED,
+                                        crate::events::ChangeAppliedPayload {
+                                            change_id: call.id.clone(),
+                                            file_path: change.path.clone(),
+                                        },
+                                    );
+                                }
                                 file_results.push((
                                     call.clone(),
                                     tools::ToolResult::ok(format!(
@@ -491,6 +501,16 @@ impl AiWorkflow {
 
                         match fs::remove_file(&full_path) {
                             Ok(_) => {
+                                if let Some(app) = &context.app_handle {
+                                    let _ = app.emit("refresh-explorer", ());
+                                    let _ = app.emit(
+                                        crate::events::event_names::CHANGE_APPLIED,
+                                        crate::events::ChangeAppliedPayload {
+                                            change_id: call.id.clone(),
+                                            file_path: change.path.clone(),
+                                        },
+                                    );
+                                }
                                 file_results.push((
                                     call.clone(),
                                     tools::ToolResult::ok(format!("File deleted: {}", change.path)),
