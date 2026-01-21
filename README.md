@@ -10,6 +10,25 @@ Zaguán Blade (`zblade`) is a high-performance, AI-first code editor built for t
 > *   Current Limitation: **Diff views are currently non-functional.**
 > *   Stability: Experimental but usable.
 
+## Why build another AI editor?
+
+Zaguán Blade isn't just another AI editor. It's a combination of a code editor and an AI system backend. Together they create a whole and I had two goals in mind when I started this project:
+
+1. **AI-Native Workflow**: Deeply integrated AI that understands your project context.
+2. **Save Money**: Vibe Coding sends a lot of data to the providers and they charge a lot for it. The server I created does its best to send only what is relevant while also making sure that the model has enough context to understand your project.
+
+These 2 systems work together to create a whole that is much more than the sum of its parts. I spent a lot of time getting the server to work well and borrowed a lot of knowledge from many other open source projects like Cline, Roo-Code, OpenCode, Codex, Gemini-CLI, Qwen-Code, and many others.
+
+### Active Development
+
+Zaguán Blade is currently in active development. We are working on many new features and improvements and things may be unstable at times while I update the server. I will try my very best to keep the updates regular and give a heads up, but that's not a guarantee during this phase of development.
+
+There are many things that I've planned for both Zaguán Blade and the server too numerous to list here.
+
+The server and the system prompts are relatively opinionated tailored to my preferences and the way I like to work.
+
+I'm also planning on updating the GUI that emphasizes more the AI-first approach and workflow. I was mostly inspired by the many VSCode forks out there like Windsurf, Cursor et al during the initial development just to get something working.
+
 ## Requirement: Zaguán AI Subscription
 
 Zaguán Blade is powered by our hosted AI backend. To use the AI features (Chat, Code Generation, Auto-fix), you **must have an active subscription**.
