@@ -219,7 +219,7 @@ impl AiWorkflow {
 
         let mut file_results: Vec<(ToolCall, tools::ToolResult)> = Vec::new();
         let mut commands: Vec<PendingCommand> = Vec::new();
-        let mut changes: Vec<PendingChange> = Vec::new();
+        let changes: Vec<PendingChange> = Vec::new();
         let mut confirms: Vec<PendingConfirm> = Vec::new();
         let mut loop_detected = false;
         let mut seen_in_batch: HashMap<(String, String), usize> = HashMap::new();
@@ -330,7 +330,7 @@ impl AiWorkflow {
                     workspace_root,
                     &call.function.name,
                 ) {
-                    Ok(mut change) => {
+                    Ok(change) => {
                         // NEW LOGIC: Apply the change IMMEDIATELY to disk
                         // This makes it act like an "Undo/Redo" buffer - change is live, can be undone.
 
