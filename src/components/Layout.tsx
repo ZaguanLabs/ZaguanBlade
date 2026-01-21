@@ -9,10 +9,11 @@ import { TerminalPane, TerminalPaneHandle } from './TerminalPane';
 import { DocumentTabs } from './DocumentTabs';
 import { DocumentViewer } from './DocumentViewer';
 import { TitleBar } from './TitleBar';
-import { GitBranch, Settings } from 'lucide-react';
+import { GitBranch, Settings, Clock } from 'lucide-react';
 import { EditorProvider, useEditor } from '../contexts/EditorContext';
 import { useChat } from '../hooks/useChat';
 import { ProtocolExplorer } from './dev/ProtocolExplorer';
+import { FileHistoryPanel } from './FileHistoryPanel';
 import { SettingsModal } from './SettingsModal';
 import { StorageSetupModal } from './StorageSetupModal';
 import { useProjectState, type ProjectState } from '../hooks/useProjectState';
@@ -43,7 +44,7 @@ const AppLayoutInner: React.FC = () => {
 
     // Sidebar State
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-    const [activeSidebar, setActiveSidebar] = useState<'explorer' | 'git'>('explorer');
+    const [activeSidebar, setActiveSidebar] = useState<'explorer' | 'git' | 'history'>('explorer');
 
     const chat = useChat();
     const {
@@ -63,7 +64,7 @@ const AppLayoutInner: React.FC = () => {
         generateCommitMessage: generateGitCommitMessage,
     } = useGitStatus();
     const gitChangedCount = gitStatus?.changedCount ?? 0;
-    const { pendingChanges, approveChange, rejectChange, selectedModelId, setSelectedModelId, messages } = chat;
+    const { selectedModelId, setSelectedModelId, messages } = chat;
     const [chatMessages, setChatMessages] = useState(chat.messages);
     const processingFilesRef = useRef<Set<string>>(new Set());
     const terminalPaneRef = useRef<TerminalPaneHandle>(null);
@@ -676,7 +677,7 @@ const AppLayoutInner: React.FC = () => {
     }, [chat.loading]);
 
     // Toggle sidebar function
-    const toggleSidebar = (view: 'explorer' | 'git') => {
+    const toggleSidebar = (view: 'explorer' | 'git' | 'history') => {
         if (isSidebarOpen && activeSidebar === view) {
             setIsSidebarOpen(false);
         } else {
@@ -718,6 +719,15 @@ const AppLayoutInner: React.FC = () => {
                             </span>
                         )}
                     </div>
+                    <div
+                        onClick={() => toggleSidebar('history')}
+                        className={`p-2 rounded-md transition-colors cursor-pointer ${isSidebarOpen && activeSidebar === 'history'
+                            ? 'bg-[var(--bg-surface)] text-[var(--fg-primary)] border-[var(--border-focus)] border shadow-sm'
+                            : 'border border-transparent text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]'}
+                        `}
+                    >
+                        <Clock className="w-5 h-5" />
+                    </div>
                     <div className="p-2 rounded-md text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)] transition-all cursor-pointer">
                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -740,9 +750,10 @@ const AppLayoutInner: React.FC = () => {
                         shadow-2xl z-30 transition-transform duration-300 ease-in-out flex flex-col
                         ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}
                     `}>
-                        {activeSidebar === 'explorer' ? (
+                        {activeSidebar === 'explorer' && (
                             <ExplorerPanel onFileSelect={handleFileSelect} activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
-                        ) : (
+                        )}
+                        {activeSidebar === 'git' && (
                             <GitPanel
                                 status={gitStatus}
                                 files={gitFiles}
@@ -759,6 +770,9 @@ const AppLayoutInner: React.FC = () => {
                                 onDiff={diffGit}
                                 onGenerateCommitMessage={() => generateGitCommitMessage(selectedModelId)}
                             />
+                        )}
+                        {activeSidebar === 'history' && (
+                            <FileHistoryPanel activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
                         )}
                     </div>
 
@@ -783,26 +797,12 @@ const AppLayoutInner: React.FC = () => {
                         <div className="flex-1 overflow-hidden relative">
                             {(() => {
                                 const activeTab = tabs.find(t => t.id === activeTabId);
-                                const filesWithChanges = [...new Set(pendingChanges.map(c => c.path))];
-
-                                const navigateToFile = (path: string) => {
-                                    const tabId = `file-${path}`;
-                                    const existingTab = tabs.find(t => t.type === 'file' && t.path === path);
-                                    if (existingTab) setActiveTabId(existingTab.id);
-                                    else {
-                                        const filename = path.split('/').pop() || path;
-                                        setTabs(prev => [...prev, { id: tabId, title: filename, type: 'file', path }]);
-                                        setActiveTabId(tabId);
-                                    }
-                                };
 
                                 return (
                                     <>
                                         {/* Render all file tabs (hidden when not active) */}
                                         {tabs.filter(t => t.type === 'file').map(tab => {
                                             const isActive = tab.id === activeTabId;
-                                            const pendingChange = pendingChanges.find(c => c.path === tab.path);
-                                            const currentFileIndex = tab.path ? filesWithChanges.indexOf(tab.path) + 1 : 0;
 
                                             return (
                                                 <div
@@ -812,13 +812,6 @@ const AppLayoutInner: React.FC = () => {
                                                     <EditorPanel
                                                         activeFile={tab.path || null}
                                                         highlightLines={tab.highlightLines || null}
-                                                        pendingEdit={pendingChange}
-                                                        onAcceptEdit={approveChange}
-                                                        onRejectEdit={rejectChange}
-                                                        totalPendingFiles={filesWithChanges.length}
-                                                        currentFileIndex={currentFileIndex || 1}
-                                                        onNextFile={filesWithChanges.length > 1 && currentFileIndex < filesWithChanges.length ? () => navigateToFile(filesWithChanges[currentFileIndex]) : undefined}
-                                                        onPrevFile={filesWithChanges.length > 1 && currentFileIndex > 1 ? () => navigateToFile(filesWithChanges[currentFileIndex - 2]) : undefined}
                                                         onOpenSettings={() => setIsSettingsOpen(true)}
                                                     />
                                                 </div>
@@ -838,9 +831,6 @@ const AppLayoutInner: React.FC = () => {
                                         {/* Render ephemeral tabs */}
                                         {tabs.filter(t => t.type === 'ephemeral').map(tab => {
                                             const isActive = tab.id === activeTabId;
-                                            const isNewFileProposal = tab.id.startsWith('new-file-');
-                                            const changeId = isNewFileProposal ? tab.id.replace('new-file-', '') : undefined;
-
                                             return (
                                                 <div
                                                     key={tab.id}
@@ -854,8 +844,6 @@ const AppLayoutInner: React.FC = () => {
                                                         suggestedName={tab.suggestedName}
                                                         onClose={() => handleTabClose(tab.id)}
                                                         onSave={(savedPath) => handleEphemeralSave(tab.id, savedPath)}
-                                                        changeId={changeId}
-                                                        onApprove={changeId ? () => approveChange(changeId) : undefined}
                                                     />
                                                 </div>
                                             );
@@ -902,9 +890,7 @@ const AppLayoutInner: React.FC = () => {
                             setSelectedModelId={chat.setSelectedModelId}
                             pendingActions={chat.pendingActions}
                             approveToolDecision={chat.approveToolDecision}
-                            pendingChanges={chat.pendingChanges}
-                            approveAllChanges={chat.approveAllChanges}
-                            rejectChange={chat.rejectChange}
+
                             projectId={projectId || "default-project"}
                             onLoadConversation={setChatMessages}
                             researchProgress={researchProgress}

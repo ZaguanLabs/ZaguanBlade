@@ -136,6 +136,9 @@ pub fn run() {
             // Tools & Changes
             commands::tools::submit_command_result,
             commands::tools::approve_tool_decision,
+            // History
+            commands::history::get_file_history,
+            commands::history::revert_file_to_snapshot,
             // Cache
             commands::cache::warmup_cache,
             commands::cache::should_rewarm_cache,

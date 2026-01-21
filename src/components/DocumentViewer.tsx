@@ -17,8 +17,7 @@ interface DocumentViewerProps {
   suggestedName?: string;
   onClose: () => void;
   onSave?: (path: string) => void;
-  changeId?: string;
-  onApprove?: () => void;
+
 }
 
 export const DocumentViewer: React.FC<DocumentViewerProps> = ({
@@ -29,29 +28,14 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
   suggestedName,
   onClose,
   onSave,
-  changeId,
-  onApprove,
+
 }) => {
   const [isSaving, setIsSaving] = useState(false);
 
   const handleSave = async () => {
     if (!isEphemeral) return;
 
-    console.log('[DocumentViewer] Save clicked:', { changeId, hasOnApprove: !!onApprove });
 
-    // If this is a new file proposal (has changeId and onApprove), approve the change directly
-    if (changeId && onApprove) {
-      console.log('[DocumentViewer] Approving change:', changeId);
-      setIsSaving(true);
-      try {
-        onApprove();
-      } catch (error) {
-        console.error('Failed to approve change:', error);
-      } finally {
-        setIsSaving(false);
-      }
-      return;
-    }
 
     // Otherwise, use the save dialog for generic ephemeral documents
     setIsSaving(true);
@@ -69,7 +53,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
           id: documentId,
           path: filePath
         });
-        
+
         if (onSave) {
           onSave(filePath);
         }
@@ -106,7 +90,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
             </span>
           )}
         </div>
-        
+
         <div className="flex items-center gap-2">
           {isEphemeral && (
             <button

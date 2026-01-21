@@ -8,9 +8,6 @@ import { PdfViewer } from './PdfViewer';
 import { useEditor } from '../contexts/EditorContext';
 import { BladeDispatcher } from '../services/blade';
 import { BladeEvent, FileEvent } from '../types/blade';
-import { ChangeActionBar } from './editor/ChangeActionBar';
-import { EventNames, type ChangeAppliedPayload, type AllEditsAppliedPayload } from '../types/events';
-import type { Change } from '../types/change';
 import { ArrowRight, Settings } from 'lucide-react';
 
 const WelcomePage: React.FC<{ onOpenSettings?: () => void }> = ({ onOpenSettings }) => (
@@ -66,30 +63,12 @@ const WelcomePage: React.FC<{ onOpenSettings?: () => void }> = ({ onOpenSettings
 interface EditorPanelProps {
     activeFile: string | null;
     highlightLines?: { startLine: number; endLine: number } | null;
-    pendingEdit?: Change | null;
-    onAcceptEdit?: (changeId: string) => void;
-    onRejectEdit?: (changeId: string) => void;
-    /** Total number of files with pending changes */
-    totalPendingFiles?: number;
-    /** Current file index (1-based) among files with pending changes */
-    currentFileIndex?: number;
-    /** Callback to navigate to next file with pending changes */
-    onNextFile?: () => void;
-    /** Callback to navigate to previous file with pending changes */
-    onPrevFile?: () => void;
     onOpenSettings?: () => void;
 }
 
 export const EditorPanel: React.FC<EditorPanelProps> = ({
     activeFile,
     highlightLines,
-    pendingEdit,
-    onAcceptEdit,
-    onRejectEdit,
-    totalPendingFiles = 1,
-    currentFileIndex = 1,
-    onNextFile,
-    onPrevFile,
     onOpenSettings,
 }) => {
     const [content, setContent] = useState('');
@@ -108,24 +87,13 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     useEffect(() => {
         if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
 
-        let unlistenEditApplied: (() => void) | undefined;
-        let unlistenAllApplied: (() => void) | undefined;
+        let unlistenFileChanges: (() => void) | undefined;
 
         const setupListeners = async () => {
-            unlistenEditApplied = await listen<ChangeAppliedPayload>(EventNames.CHANGE_APPLIED, (event) => {
-                if (event.payload.file_path === activeFile) {
-                    console.log('[EDITOR] Change applied, reloading:', activeFile);
-                    if (editorRef.current) editorRef.current.clearDiffs();
-                    // Instead of trigger reload, we can just let the content update via FileEvent if backend emits it
-                    // But for now, we'll keep the reload trigger to force a fresh read intent
-                    setReloadTrigger(prev => prev + 1);
-                }
-            });
-
-            unlistenAllApplied = await listen<AllEditsAppliedPayload>(EventNames.ALL_EDITS_APPLIED, (event) => {
-                if (event.payload.file_paths.includes(activeFile || '')) {
-                    console.log('[EDITOR] All edits applied, reloading:', activeFile);
-                    if (editorRef.current) editorRef.current.clearDiffs();
+            unlistenFileChanges = await listen<{ count: number, paths: string[] }>('file-changes-detected', (event) => {
+                // If the active file is in the changed paths, reload it
+                if (activeFile && event.payload.paths.some(p => p === activeFile)) {
+                    console.log('[EDITOR] File changed on disk, reloading:', activeFile);
                     setReloadTrigger(prev => prev + 1);
                 }
             });
@@ -134,8 +102,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         setupListeners();
 
         return () => {
-            if (unlistenEditApplied) unlistenEditApplied();
-            if (unlistenAllApplied) unlistenAllApplied();
+            if (unlistenFileChanges) unlistenFileChanges();
         };
     }, [activeFile]);
 
@@ -288,23 +255,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     onNavigate={handleNavigate}
                 />
             )}
-            {/* Non-invasive bottom action bar for pending changes */}
-            {pendingEdit && pendingEdit.path === activeFile && onAcceptEdit && onRejectEdit && (
-                <ChangeActionBar
-                    currentFileIndex={currentFileIndex}
-                    totalFiles={totalPendingFiles}
-                    onAccept={async () => {
-                        await onAcceptEdit(pendingEdit.id);
-                        setTimeout(() => setReloadTrigger(prev => prev + 1), 100);
-                    }}
-                    onReject={() => {
-                        onRejectEdit(pendingEdit.id);
-                    }}
-                    onNextFile={onNextFile}
-                    onPrevFile={onPrevFile}
-                    filename={pendingEdit.path.split('/').pop()}
-                />
-            )}
+
         </div>
     );
 };
