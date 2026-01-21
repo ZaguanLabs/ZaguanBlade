@@ -44,20 +44,43 @@ export function reconstructBlocks(message: ChatMessage): MessageBlock[] {
         });
     }
 
-    // 3. Add tool call blocks (exclude todo_write as it's handled separately)
+    // 3. Add tool calls and their corresponding executions
     if (message.tool_calls && message.tool_calls.length > 0) {
+        const addedExecIds = new Set<string>();
+
         for (const toolCall of message.tool_calls) {
+            // Add the tool call block
             if (toolCall.function.name !== 'todo_write') {
                 blocks.push({
                     type: 'tool_call',
                     id: toolCall.id
                 });
+
+                // Check if we have a matching command execution for this tool call
+                const matchingExec = message.commandExecutions?.find(cmd => cmd.id === toolCall.id);
+                if (matchingExec) {
+                    blocks.push({
+                        type: 'command_execution',
+                        id: matchingExec.id
+                    });
+                    addedExecIds.add(matchingExec.id);
+                }
             }
         }
-    }
 
-    // 4. Add command execution blocks
-    if (message.commandExecutions && message.commandExecutions.length > 0) {
+        // 4. Add any remaining (orphaned) command execution blocks
+        if (message.commandExecutions && message.commandExecutions.length > 0) {
+            for (const cmd of message.commandExecutions) {
+                if (!addedExecIds.has(cmd.id)) {
+                    blocks.push({
+                        type: 'command_execution',
+                        id: cmd.id
+                    });
+                }
+            }
+        }
+    } else if (message.commandExecutions && message.commandExecutions.length > 0) {
+        // Fallback: No tool calls, but we have executions (unlikely in valid protocol flow)
         for (const cmd of message.commandExecutions) {
             blocks.push({
                 type: 'command_execution',

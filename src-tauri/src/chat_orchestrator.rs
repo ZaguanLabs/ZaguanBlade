@@ -586,6 +586,7 @@ pub async fn handle_send_message<R: Runtime>(
                                 old_content: String,
                                 new_content: String,
                                 applied: bool,
+                                error: Option<String>,
                             },
                             #[serde(rename = "multi_patch")]
                             MultiPatch {
@@ -593,6 +594,7 @@ pub async fn handle_send_message<R: Runtime>(
                                 path: String,
                                 patches: Vec<crate::ai_workflow::PatchHunk>,
                                 applied: bool,
+                                error: Option<String>,
                             },
                             #[serde(rename = "new_file")]
                             NewFile {
@@ -600,12 +602,14 @@ pub async fn handle_send_message<R: Runtime>(
                                 path: String,
                                 content: String,
                                 applied: bool,
+                                error: Option<String>,
                             },
                             #[serde(rename = "delete_file")]
                             DeleteFile {
                                 id: String,
                                 path: String,
                                 applied: bool,
+                                error: Option<String>,
                             },
                         }
 
@@ -622,6 +626,7 @@ pub async fn handle_send_message<R: Runtime>(
                                     old_content: old_content.clone(),
                                     new_content: new_content.clone(),
                                     applied: change.applied,
+                                    error: change.error.clone(),
                                 },
                                 crate::ai_workflow::ChangeType::MultiPatch { patches } => {
                                     ChangeProposal::MultiPatch {
@@ -629,6 +634,7 @@ pub async fn handle_send_message<R: Runtime>(
                                         path: change.path.clone(),
                                         patches: patches.clone(),
                                         applied: change.applied,
+                                        error: change.error.clone(),
                                     }
                                 }
                                 crate::ai_workflow::ChangeType::NewFile { content } => {
@@ -637,6 +643,7 @@ pub async fn handle_send_message<R: Runtime>(
                                         path: change.path.clone(),
                                         content: content.clone(),
                                         applied: change.applied,
+                                        error: change.error.clone(),
                                     }
                                 }
                                 crate::ai_workflow::ChangeType::DeleteFile { .. } => {
@@ -644,6 +651,7 @@ pub async fn handle_send_message<R: Runtime>(
                                         id: change.call.id.clone(),
                                         path: change.path.clone(),
                                         applied: change.applied,
+                                        error: change.error.clone(),
                                     }
                                 }
                             })
@@ -661,12 +669,17 @@ pub async fn handle_send_message<R: Runtime>(
                                 .iter()
                                 .any(|(c, _)| c.id == change.call.id)
                             {
-                                modified_batch.file_results.push((
-                                    change.call.clone(),
+                                let res = if let Some(ref err) = change.error {
+                                    crate::tools::ToolResult::err(format!(
+                                        "Failed to apply change to {}: {}",
+                                        change.path, err
+                                    ))
+                                } else {
                                     crate::tools::ToolResult::ok(
                                         "Change buffered in editor. Please proceed.",
-                                    ),
-                                ));
+                                    )
+                                };
+                                modified_batch.file_results.push((change.call.clone(), res));
                             }
                         }
                         // Clear changes so downstream logic doesn't think we need approval

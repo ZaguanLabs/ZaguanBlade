@@ -203,6 +203,7 @@ pub struct CommandExecutedPayload {
     pub output: String,
     pub exit_code: i32,
     pub duration: Option<u64>,
+    pub call_id: String,
 }
 
 /// Payload for change-applied event

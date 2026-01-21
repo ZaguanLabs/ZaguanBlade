@@ -313,6 +313,13 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                                     return null;  // CommandApprovalCard will render this
                                 }
 
+                                // Skip showing ToolCallDisplay if we have a corresponding command_execution block
+                                // This prevents duplicate display (one for request, one for result)
+                                const hasExecutionBlock = message.blocks?.some(b => b.type === 'command_execution' && b.id === block.id);
+                                if (isRunCommand && hasExecutionBlock) {
+                                    return null;
+                                }
+
                                 // Check if this is an active terminal
                                 const activeTerminal = activeTerminals?.get(block.id);
                                 if (activeTerminal && onTerminalComplete) {
@@ -345,6 +352,11 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                                 // Find the command execution by ID
                                 const cmdExec = message.commandExecutions?.find(c => c.id === block.id);
                                 if (!cmdExec) return null;
+
+                                // Prevent duplicate rendering if terminal is still active
+                                // The ChatTerminal is rendered by the tool_call block
+                                if (activeTerminals?.has(block.id)) return null;
+
                                 return (
                                     <div key={block.id} className="mb-3">
                                         <CommandOutputDisplay

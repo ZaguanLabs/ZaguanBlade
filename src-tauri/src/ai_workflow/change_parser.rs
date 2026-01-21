@@ -99,6 +99,7 @@ pub fn parse_change_args(
                             path,
                             change_type: ChangeType::MultiPatch { patches },
                             applied: false,
+                            error: None,
                         });
                     }
                 }
@@ -153,5 +154,6 @@ pub fn parse_change_args(
         path,
         change_type,
         applied: false,
+        error: None,
     })
 }

@@ -58,13 +58,17 @@ export const ChatTerminal: React.FC<ChatTerminalProps> = ({
         // Write command header
         term.write(`\x1b[1;36m$ ${command}\x1b[0m\r\n`);
 
+        let unlistenOutput: (() => void) | null = null;
+        let unlistenExit: (() => void) | null = null;
+        let xtermOnData: { dispose: () => void } | null = null;
+
         // Execute command via backend
         const executeCommand = async () => {
             try {
                 const terminalId = `chat-cmd-${commandId}`;
 
                 // Capture input and forward to backend
-                const disposable = term.onData((data) => {
+                xtermOnData = term.onData((data) => {
                     if (!isRunningRef.current) return;
                     BladeDispatcher.terminal({
                         type: 'Input',
@@ -76,7 +80,7 @@ export const ChatTerminal: React.FC<ChatTerminalProps> = ({
                 });
 
                 // Listen for output
-                const unlistenOutput = await listen<{ id: string; data: string }>(
+                unlistenOutput = await listen<{ id: string; data: string }>(
                     'terminal-output',
                     (event) => {
                         if (event.payload.id === terminalId) {
@@ -87,7 +91,7 @@ export const ChatTerminal: React.FC<ChatTerminalProps> = ({
                 );
 
                 // Listen for exit
-                const unlistenExit = await listen<{ id: string; exit_code: number }>(
+                unlistenExit = await listen<{ id: string; exit_code: number }>(
                     'terminal-exit',
                     (event) => {
                         if (event.payload.id === terminalId) {
@@ -106,9 +110,9 @@ export const ChatTerminal: React.FC<ChatTerminalProps> = ({
                                 onCompleteRef.current(outputBufferRef.current, exitCode);
                             }
 
-                            unlistenOutput();
-                            unlistenExit();
-                            disposable.dispose(); // Cleanup input listener
+                            if (unlistenOutput) unlistenOutput();
+                            if (unlistenExit) unlistenExit();
+                            if (xtermOnData) xtermOnData.dispose();
                         }
                     }
                 );
@@ -138,6 +142,9 @@ export const ChatTerminal: React.FC<ChatTerminalProps> = ({
         executeCommand();
 
         return () => {
+            if (unlistenOutput) unlistenOutput();
+            if (unlistenExit) unlistenExit();
+            if (xtermOnData) xtermOnData.dispose();
             term.dispose();
             xtermRef.current = null;
         };

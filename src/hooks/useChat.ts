@@ -304,42 +304,67 @@ export function useChat() {
             unlistenChanges = u5;
 
             // Listen for command executions
-            const u6 = await listen<{ command: string; cwd?: string; output: string; exitCode: number; duration?: number }>('command-executed', (event) => {
-                console.log('[COMMAND EXECUTED]', event.payload);
+            const u6 = await listen<{ command: string; cwd?: string; output: string; exitCode: number; duration?: number; call_id: string }>('command-executed', (event) => {
+                const { command, cwd, output, exitCode, duration, call_id } = event.payload;
+                console.log('[COMMAND EXECUTED]', { command, call_id, exitCode });
+
                 setMessages(prev => {
-                    const lastAssistantIndex = prev.findIndex((m, i) =>
-                        m.role === 'Assistant' && i === prev.length - 1
+                    // 1. Find the message containing this tool call ID
+                    const msgIndex = prev.findIndex(m =>
+                        m.tool_calls?.some(tc => tc.id === call_id)
                     );
-                    if (lastAssistantIndex === -1) return prev;
+
+                    if (msgIndex === -1) {
+                        console.warn('[COMMAND EXECUTED] Could not find message for call_id:', call_id);
+                        return prev;
+                    }
 
                     const updated = [...prev];
-                    const msg = updated[lastAssistantIndex];
+                    const msg = { ...updated[msgIndex] };
 
-                    // Generate unique ID for this command execution
-                    const cmdId = crypto.randomUUID();
-
-                    // Add to commandExecutions array
+                    // 2. Add to commandExecutions array (use call_id as execution ID)
                     const newExecution = {
-                        id: cmdId,
-                        command: event.payload.command,
-                        cwd: event.payload.cwd,
-                        output: event.payload.output,
-                        exitCode: event.payload.exitCode,
-                        duration: event.payload.duration,
+                        id: call_id,
+                        command,
+                        cwd,
+                        output,
+                        exitCode,
+                        duration,
                         timestamp: Date.now(),
                     };
 
-                    // Add block entry for proper ordering in conversation flow
-                    const newBlocks = [...(msg.blocks || [])];
-                    newBlocks.push({ type: 'command_execution', id: cmdId });
+                    // Avoid duplicates if event is received twice
+                    const existingExecIndex = (msg.commandExecutions || []).findIndex(c => c.id === call_id);
+                    let newExecutions = [...(msg.commandExecutions || [])];
+                    if (existingExecIndex >= 0) {
+                        newExecutions[existingExecIndex] = newExecution;
+                    } else {
+                        newExecutions.push(newExecution);
+                    }
 
-                    updated[lastAssistantIndex] = {
+                    // 3. Update blocks for proper interleaving
+                    const newBlocks = [...(msg.blocks || [])];
+
+                    // Find if block already exists
+                    const existingBlockIndex = newBlocks.findIndex(b => b.type === 'command_execution' && b.id === call_id);
+
+                    if (existingBlockIndex === -1) {
+                        // Find the corresponding tool_call block to insert after it
+                        const toolCallBlockIndex = newBlocks.findIndex(b => b.type === 'tool_call' && b.id === call_id);
+
+                        if (toolCallBlockIndex >= 0) {
+                            // Insert immediately after the tool call
+                            newBlocks.splice(toolCallBlockIndex + 1, 0, { type: 'command_execution', id: call_id });
+                        } else {
+                            // Fallback: push to end if tool_call block not found (shouldn't happen)
+                            newBlocks.push({ type: 'command_execution', id: call_id });
+                        }
+                    }
+
+                    updated[msgIndex] = {
                         ...msg,
                         blocks: newBlocks,
-                        commandExecutions: [
-                            ...(msg.commandExecutions || []),
-                            newExecution,
-                        ],
+                        commandExecutions: newExecutions,
                     };
                     return updated;
                 });

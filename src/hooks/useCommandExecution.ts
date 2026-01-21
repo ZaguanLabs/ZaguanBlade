@@ -27,7 +27,7 @@ export function useCommandExecution() {
                 cwd?: string;
             }>('command-execution-started', (event) => {
                 console.log('[CMD EXEC] Started:', event.payload);
-                
+
                 setExecutions(prev => {
                     const next = new Map(prev);
                     next.set(event.payload.call_id, {
@@ -51,19 +51,11 @@ export function useCommandExecution() {
 
     const handleCommandComplete = async (callId: string, output: string, exitCode: number) => {
         console.log('[CMD EXEC] Complete:', { callId, exitCode, outputLength: output.length });
-        
-        // Update local state
+
+        // Update local state - Remove execution to unmount terminal
         setExecutions(prev => {
             const next = new Map(prev);
-            const exec = next.get(callId);
-            if (exec) {
-                next.set(callId, {
-                    ...exec,
-                    output,
-                    exitCode,
-                    isRunning: false,
-                });
-            }
+            next.delete(callId);
             return next;
         });
 

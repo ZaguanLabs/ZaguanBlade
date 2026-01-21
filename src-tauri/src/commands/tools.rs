@@ -178,7 +178,7 @@ pub fn submit_command_result(
             // Check if result already exists
             if !batch.file_results.iter().any(|(c, _)| c.id == call_id) {
                 let result = if exit_code == 0 {
-                    crate::tools::ToolResult::ok(output)
+                    crate::tools::ToolResult::ok(output.clone())
                 } else if exit_code == 130 {
                     // Exit code 130 means the command was cancelled (SIGINT)
                     // Treat it as a skip
@@ -199,7 +199,7 @@ pub fn submit_command_result(
                     let error_msg = if output.trim().is_empty() {
                         format!("Command failed with exit code {} (no output)", exit_code)
                     } else {
-                        format!("Command failed with exit code {}:\n{}", exit_code, output)
+                        format!("Command failed with exit code {}:\n{}", exit_code, &output)
                     };
                     crate::tools::ToolResult::err(error_msg)
                 };
@@ -212,6 +212,19 @@ pub fn submit_command_result(
                         tool_name: "run_command".to_string(),
                         tool_call_id: call_id.clone(),
                         success: exit_code == 0,
+                    },
+                );
+
+                // Emit command-executed event with rich output for message blocks
+                let _ = app_handle.emit(
+                    events::event_names::COMMAND_EXECUTED,
+                    events::CommandExecutedPayload {
+                        command: cmd.command.clone(),
+                        cwd: cmd.cwd.clone(),
+                        output: output.clone(),
+                        exit_code,
+                        duration: None,
+                        call_id: call_id.clone(),
                     },
                 );
             }

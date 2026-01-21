@@ -66,6 +66,7 @@ pub struct PendingChange {
     pub path: String,
     pub change_type: ChangeType,
     pub applied: bool,
+    pub error: Option<String>,
 }
 
 #[derive(Clone)]
@@ -386,13 +387,18 @@ impl AiWorkflow {
                             }
                         })();
 
-                        if let Err(e) = apply_result {
-                            eprintln!("[AI WORKFLOW] Failed to auto-apply change: {}", e);
-                            change.applied = false;
-                            // We still push it as pending, but it's not applied. User will see normal Accept/Reject.
-                        } else {
-                            println!("[AI WORKFLOW] Auto-applied change to {}", change.path);
-                            change.applied = true;
+                        match apply_result {
+                            Ok(_) => {
+                                println!("[AI WORKFLOW] Auto-applied change to {}", change.path);
+                                change.applied = true;
+                                change.error = None;
+                            }
+                            Err(e) => {
+                                eprintln!("[AI WORKFLOW] Failed to auto-apply change: {}", e);
+                                change.applied = false;
+                                change.error = Some(e);
+                                // We still push it as pending, but it's not applied. User will see normal Accept/Reject.
+                            }
                         }
 
                         change.call = call.clone();
@@ -420,11 +426,17 @@ impl AiWorkflow {
                             }
                         }
 
-                        if let Err(e) = fs::remove_file(&full_path) {
-                            eprintln!("[AI WORKFLOW] Failed to auto-delete file: {}", e);
-                            change.applied = false;
-                        } else {
-                            change.applied = true;
+                        match fs::remove_file(&full_path) {
+                            Ok(_) => {
+                                change.applied = true;
+                                change.error = None;
+                            }
+                            Err(e) => {
+                                let err_msg = e.to_string();
+                                eprintln!("[AI WORKFLOW] Failed to auto-delete file: {}", err_msg);
+                                change.applied = false;
+                                change.error = Some(err_msg);
+                            }
                         }
 
                         change.call = call.clone();
