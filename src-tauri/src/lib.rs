@@ -136,10 +136,6 @@ pub fn run() {
             // Tools & Changes
             commands::tools::submit_command_result,
             commands::tools::approve_tool_decision,
-            commands::changes::approve_change,
-            commands::changes::approve_changes_for_file,
-            commands::changes::approve_all_changes,
-            commands::changes::reject_change,
             // Cache
             commands::cache::warmup_cache,
             commands::cache::should_rewarm_cache,

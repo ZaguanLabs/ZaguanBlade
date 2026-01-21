@@ -1,7 +1,7 @@
 use crate::app_state::AppState;
 use crate::blade_protocol::{self, BladeError, BladeIntent, SystemEvent, Version};
 use crate::chat_orchestrator::handle_send_message;
-use crate::commands::{changes, chat, files, tools};
+use crate::commands::{chat, files, tools};
 use tauri::{Emitter, State};
 
 #[tauri::command]
@@ -355,53 +355,44 @@ pub async fn dispatch(
         }
         BladeIntent::Workflow(workflow_intent) => match workflow_intent {
             blade_protocol::WorkflowIntent::ApproveAction { action_id } => {
-                changes::approve_change_logic(action_id, window.clone(), &*state)
-                    .await
-                    .map_err(|e| blade_protocol::BladeError::Internal {
-                        trace_id: intent_id.to_string(),
-                        message: e,
-                    })
+                println!(
+                    "[BladeProtocol] Deprecated intent: ApproveAction({})",
+                    action_id
+                );
+                Ok(())
             }
-            blade_protocol::WorkflowIntent::ApproveAll { batch_id: _ } => {
-                changes::approve_all_changes_logic(window.clone(), &*state)
-                    .await
-                    .map_err(|e| blade_protocol::BladeError::Internal {
-                        trace_id: intent_id.to_string(),
-                        message: e,
-                    })
+            blade_protocol::WorkflowIntent::ApproveAll { batch_id } => {
+                println!(
+                    "[BladeProtocol] Deprecated intent: ApproveAll({})",
+                    batch_id
+                );
+                Ok(())
             }
             blade_protocol::WorkflowIntent::RejectAction { action_id } => {
-                changes::reject_change_logic(action_id, window.clone(), &*state)
-                    .await
-                    .map_err(|e| blade_protocol::BladeError::Internal {
-                        trace_id: intent_id.to_string(),
-                        message: e,
-                    })
+                println!(
+                    "[BladeProtocol] Deprecated intent: RejectAction({})",
+                    action_id
+                );
+                Ok(())
             }
             blade_protocol::WorkflowIntent::RejectAll { batch_id: _ } => Ok(()),
             blade_protocol::WorkflowIntent::ApproveChange { change_id } => {
-                changes::approve_change_logic(change_id, window.clone(), &*state)
-                    .await
-                    .map_err(|e| blade_protocol::BladeError::Internal {
-                        trace_id: intent_id.to_string(),
-                        message: e,
-                    })
+                println!(
+                    "[BladeProtocol] Deprecated intent: ApproveChange({})",
+                    change_id
+                );
+                Ok(())
             }
             blade_protocol::WorkflowIntent::RejectChange { change_id } => {
-                changes::reject_change_logic(change_id, window.clone(), &*state)
-                    .await
-                    .map_err(|e| blade_protocol::BladeError::Internal {
-                        trace_id: intent_id.to_string(),
-                        message: e,
-                    })
+                println!(
+                    "[BladeProtocol] Deprecated intent: RejectChange({})",
+                    change_id
+                );
+                Ok(())
             }
             blade_protocol::WorkflowIntent::ApproveAllChanges => {
-                changes::approve_all_changes_logic(window.clone(), &*state)
-                    .await
-                    .map_err(|e| blade_protocol::BladeError::Internal {
-                        trace_id: intent_id.to_string(),
-                        message: e,
-                    })
+                println!("[BladeProtocol] Deprecated intent: ApproveAllChanges");
+                Ok(())
             }
             blade_protocol::WorkflowIntent::ApproveTool { approved } => {
                 tools::approve_tool(approved, window.clone(), state.clone());

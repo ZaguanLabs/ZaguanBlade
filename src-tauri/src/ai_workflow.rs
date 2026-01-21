@@ -14,6 +14,7 @@ use std::process::Command;
 use crate::protocol::ToolCall;
 use crate::tool_execution::ToolExecutionContext;
 use crate::tools;
+use tauri::Emitter;
 
 pub use tool_defs::get_tool_definitions;
 
@@ -341,14 +342,20 @@ impl AiWorkflow {
                             use tauri::Manager;
                             let state = app.state::<crate::app_state::AppState>();
                             if full_path.exists() {
-                                if let Err(e) = state.history_service.create_snapshot(&full_path) {
-                                    eprintln!(
-                                        "[HISTORY] Failed to create snapshot for {}: {}",
-                                        change.path, e
-                                    );
-                                } else {
-                                    println!("[HISTORY] Snapshot created for {}", change.path);
-                                    // TODO: Emit event?
+                                match state.history_service.create_snapshot(&full_path) {
+                                    Ok(entry) => {
+                                        println!("[HISTORY] Snapshot created for {}", change.path);
+                                        let _ = app.emit(
+                                            crate::events::event_names::HISTORY_ENTRY_ADDED,
+                                            crate::events::HistoryEntryAddedPayload { entry },
+                                        );
+                                    }
+                                    Err(e) => {
+                                        eprintln!(
+                                            "[HISTORY] Failed to create snapshot for {}: {}",
+                                            change.path, e
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -448,13 +455,20 @@ impl AiWorkflow {
                             use tauri::Manager;
                             let state = app.state::<crate::app_state::AppState>();
                             if full_path.exists() {
-                                if let Err(e) = state.history_service.create_snapshot(&full_path) {
-                                    eprintln!(
-                                        "[HISTORY] Failed to create snapshot for {}: {}",
-                                        change.path, e
-                                    );
-                                } else {
-                                    println!("[HISTORY] Snapshot created for {}", change.path);
+                                match state.history_service.create_snapshot(&full_path) {
+                                    Ok(entry) => {
+                                        println!("[HISTORY] Snapshot created for {}", change.path);
+                                        let _ = app.emit(
+                                            crate::events::event_names::HISTORY_ENTRY_ADDED,
+                                            crate::events::HistoryEntryAddedPayload { entry },
+                                        );
+                                    }
+                                    Err(e) => {
+                                        eprintln!(
+                                            "[HISTORY] Failed to create snapshot for {}: {}",
+                                            change.path, e
+                                        );
+                                    }
                                 }
                             }
                         }

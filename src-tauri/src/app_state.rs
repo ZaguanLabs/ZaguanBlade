@@ -17,8 +17,8 @@ pub struct AppState {
     pub workspace: Mutex<WorkspaceManager>,
     pub config: Mutex<ApiConfig>,
     pub workflow: Mutex<AiWorkflow>,
+
     pub pending_approval: Mutex<Option<tokio::sync::oneshot::Sender<bool>>>,
-    pub pending_changes: Mutex<Vec<crate::ai_workflow::PendingChange>>,
     pub pending_batch: Mutex<Option<crate::ai_workflow::PendingToolBatch>>,
     pub selected_model_index: Mutex<usize>,
     pub ephemeral_docs: ephemeral_documents::EphemeralDocumentStore,
@@ -150,7 +150,6 @@ impl AppState {
             config: Mutex::new(config),
             workflow: Mutex::new(AiWorkflow::new()),
             pending_approval: Mutex::new(None),
-            pending_changes: Mutex::new(Vec::new()),
             pending_batch: Mutex::new(None),
             selected_model_index: Mutex::new(initial_model_index),
             ephemeral_docs: ephemeral_documents::EphemeralDocumentStore::new(),

@@ -1,5 +1,5 @@
 pub mod cache;
-pub mod changes;
+
 pub mod chat;
 pub mod files;
 pub mod local_context;
