@@ -7,6 +7,7 @@ interface EditorState {
     cursorColumn: number | null;
     selectionStartLine: number | null;
     selectionEndLine: number | null;
+    enableLsp: boolean;
 }
 
 interface EditorContextType {
@@ -15,6 +16,7 @@ interface EditorContextType {
     setCursorPosition: (line: number, column: number) => void;
     setSelection: (startLine: number, endLine: number) => void;
     clearSelection: () => void;
+    setEnableLsp: (enabled: boolean) => void;
 }
 
 const EditorContext = createContext<EditorContextType | undefined>(undefined);
@@ -26,6 +28,7 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         cursorColumn: null,
         selectionStartLine: null,
         selectionEndLine: null,
+        enableLsp: true, // Default to true
     });
 
     const setActiveFile = useCallback((file: string | null) => {
@@ -56,13 +59,18 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }));
     }, []);
 
+    const setEnableLsp = useCallback((enabled: boolean) => {
+        setEditorState(prev => ({ ...prev, enableLsp: enabled }));
+    }, []);
+
     return (
         <EditorContext.Provider value={{
             editorState,
             setActiveFile,
             setCursorPosition,
             setSelection,
-            clearSelection
+            clearSelection,
+            setEnableLsp
         }}>
             {children}
         </EditorContext.Provider>

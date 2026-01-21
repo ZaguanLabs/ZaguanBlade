@@ -19,6 +19,7 @@ import { useProjectState, type ProjectState } from '../hooks/useProjectState';
 import { useWarmup } from '../hooks/useWarmup';
 import { useGitStatus } from '../hooks/useGitStatus';
 import { GitPanel } from './GitPanel';
+import type { BackendSettings } from '../types/settings';
 
 interface Tab {
     id: string;
@@ -68,11 +69,13 @@ const AppLayoutInner: React.FC = () => {
     const terminalPaneRef = useRef<TerminalPaneHandle>(null);
 
     // Sync active tab to EditorContext
-    const { setActiveFile } = useEditor();
+    const { setActiveFile, setEnableLsp } = useEditor();
     useEffect(() => {
         const activeTab = tabs.find(t => t.id === activeTabId);
         setActiveFile(activeTab?.path || null);
     }, [activeTabId, tabs, setActiveFile]);
+
+
 
     // Research progress state
     const [researchProgress, setResearchProgress] = useState<{
@@ -101,10 +104,35 @@ const AppLayoutInner: React.FC = () => {
         setChatMessages(chat.messages);
     }, [chat.messages]);
 
-    // Workspace path for project state persistence
     const [workspacePath, setWorkspacePath] = useState<string | null>(null);
     const [userId, setUserId] = useState<string | null>(null);
     const [projectId, setProjectId] = useState<string | null>(null);
+
+    // Fetch project settings and sync to EditorContext
+    useEffect(() => {
+        if (!workspacePath) return;
+
+        const loadSettings = async () => {
+            try {
+                const settings = await invoke<BackendSettings>('load_project_settings', {
+                    projectPath: workspacePath,
+                });
+                setEnableLsp(settings.editor.enable_lsp);
+                console.log('[Layout] Synced enableLsp:', settings.editor.enable_lsp);
+            } catch (e) {
+                console.error('[Layout] Failed to load project settings:', e);
+            }
+        };
+
+        loadSettings();
+
+        // Listen for settings changes from SettingsModal
+        const unlistenPromise = listen('global-settings-changed', loadSettings);
+
+        return () => {
+            unlistenPromise.then(unlisten => unlisten());
+        };
+    }, [workspacePath, setEnableLsp]);
 
     // Fetch current workspace and user_id on mount
     useEffect(() => {

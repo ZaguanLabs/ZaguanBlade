@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { LanguageDocumentSymbol } from '../types/blade';
 import { LanguageService } from '../services/language';
 import { ChevronRight, Box, FunctionSquare, Variable, Tag } from 'lucide-react';
+import { useEditor } from '../contexts/EditorContext';
 
 interface OutlinePanelProps {
     filePath: string | null;
@@ -99,9 +100,11 @@ const OutlineItem: React.FC<{
 export const OutlinePanel: React.FC<OutlinePanelProps> = ({ filePath, onNavigate }) => {
     const [symbols, setSymbols] = useState<LanguageDocumentSymbol[]>([]);
     const [loading, setLoading] = useState(false);
+    const { editorState } = useEditor();
+    const { enableLsp } = editorState;
 
     useEffect(() => {
-        if (!filePath) {
+        if (!filePath || !enableLsp) {
             setSymbols([]);
             return;
         }
@@ -131,9 +134,17 @@ export const OutlinePanel: React.FC<OutlinePanelProps> = ({ filePath, onNavigate
         fetchSymbols();
 
         return () => { isMounted = false; };
-    }, [filePath]);
+    }, [filePath, enableLsp]);
 
     if (!filePath) return null;
+
+    if (!enableLsp) {
+        return (
+            <div className="p-4 text-[10px] text-[var(--fg-tertiary)] italic text-center">
+                Language Intelligence is disabled. Enable it in settings to see the outline.
+            </div>
+        );
+    }
 
     if (loading) {
         return (

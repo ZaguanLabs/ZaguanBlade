@@ -92,7 +92,8 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     const codeActionsConf = useRef(new Compartment());
     const referencesConf = useRef(new Compartment());
     const renameConf = useRef(new Compartment());
-    const { setCursorPosition, setSelection, clearSelection } = useEditor();
+    const { editorState, setCursorPosition, setSelection, clearSelection } = useEditor();
+    const { enableLsp } = editorState;
     const { showMenu } = useContextMenu();
 
     // LSP document sync tracking
@@ -344,7 +345,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
             });
 
             // Notify LSP that file was opened
-            if (filename) {
+            if (filename && enableLsp) {
                 const languageId = getLanguageId(filename);
                 documentVersion.current = 1;
                 LanguageService.didOpen(filename, content, languageId).catch(e =>
@@ -369,7 +370,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     // Send didChange to LSP on document changes (debounced)
     useEffect(() => {
         const view = viewRef.current;
-        if (!view || !filename) return;
+        if (!view || !filename || !enableLsp) return;
 
         // Debounce didChange notifications
         if (didChangeTimeout.current) {
@@ -384,9 +385,8 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 // After a short delay for LSP to process, fetch diagnostics
                 setTimeout(async () => {
                     try {
-                        const diagnostics = await LanguageService.getDiagnostics(filename);
-                        // Diagnostics will be delivered via DiagnosticsUpdated event
-                        // which the diagnosticsExtension listens for
+                        // This will trigger DiagnosticsUpdated event handled by diagnosticsExtension
+                        await LanguageService.getDiagnostics(filename);
                     } catch (e) {
                         // Diagnostics fetch is best-effort
                     }
@@ -401,7 +401,28 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 clearTimeout(didChangeTimeout.current);
             }
         };
-    }, [content, filename]);
+    }, [content, filename, enableLsp]);
+
+    // Handle LSP toggle and reconfigure extensions
+    useEffect(() => {
+        const view = viewRef.current;
+        if (!view) return;
+
+        view.dispatch({
+            effects: [
+                languageFeaturesConf.current.reconfigure(enableLsp ? languageFeatures(filename || "", onNavigate) : []),
+                diagnosticsConf.current.reconfigure(enableLsp ? diagnosticsExtension(filename || "") : []),
+                signatureHelpConf.current.reconfigure(enableLsp ? signatureHelpExtension(filename || "") : []),
+                codeActionsConf.current.reconfigure(enableLsp ? codeActionsExtension(filename || "") : []),
+                referencesConf.current.reconfigure(enableLsp ? referencesExtension(filename || "", (path, line, char) => {
+                    if (onNavigate) onNavigate(path, line, char);
+                }) : []),
+                renameConf.current.reconfigure(enableLsp ? renameExtension(filename || "", (changes) => {
+                    console.log("Applying rename edits:", changes);
+                }) : []),
+            ]
+        });
+    }, [enableLsp, filename, onNavigate]);
 
     // Handle line highlighting when highlightLines prop changes or content loads
     useEffect(() => {
