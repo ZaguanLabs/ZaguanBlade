@@ -51,20 +51,41 @@ export const EditorDiffOverlay: React.FC<EditorDiffOverlayProps> = ({
                     <span className="text-xs text-zinc-400 font-mono">{filename}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
-                    <button
-                        onClick={onAccept}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-emerald-600/90 hover:bg-emerald-500 text-white transition-colors"
-                    >
-                        <Check className="w-3.5 h-3.5" />
-                        {change.change_type === 'new_file' ? 'Create' : change.change_type === 'delete_file' ? 'Delete' : t('diff.accept')}
-                    </button>
-                    <button
-                        onClick={onReject}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-red-600/90 hover:bg-red-500 text-white transition-colors"
-                    >
-                        <X className="w-3.5 h-3.5" />
-                        {t('diff.reject')}
-                    </button>
+                    {change.applied ? (
+                        <>
+                            <button
+                                onClick={onAccept}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-zinc-700 hover:bg-zinc-600 text-white transition-colors"
+                            >
+                                <Check className="w-3.5 h-3.5" />
+                                Done
+                            </button>
+                            <button
+                                onClick={onReject}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-blue-600/90 hover:bg-blue-500 text-white transition-colors"
+                            >
+                                <X className="w-3.5 h-3.5" />
+                                Undo
+                            </button>
+                        </>
+                    ) : (
+                        <>
+                            <button
+                                onClick={onAccept}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-emerald-600/90 hover:bg-emerald-500 text-white transition-colors"
+                            >
+                                <Check className="w-3.5 h-3.5" />
+                                {change.change_type === 'new_file' ? 'Create' : change.change_type === 'delete_file' ? 'Delete' : t('diff.accept')}
+                            </button>
+                            <button
+                                onClick={onReject}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-red-600/90 hover:bg-red-500 text-white transition-colors"
+                            >
+                                <X className="w-3.5 h-3.5" />
+                                {t('diff.reject')}
+                            </button>
+                        </>
+                    )}
                 </div>
             </div>
 

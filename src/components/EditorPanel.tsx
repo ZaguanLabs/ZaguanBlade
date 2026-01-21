@@ -11,6 +11,56 @@ import { BladeEvent, FileEvent } from '../types/blade';
 import { ChangeActionBar } from './editor/ChangeActionBar';
 import { EventNames, type ChangeAppliedPayload, type AllEditsAppliedPayload } from '../types/events';
 import type { Change } from '../types/change';
+import { ArrowRight, Settings } from 'lucide-react';
+
+const WelcomePage: React.FC<{ onOpenSettings?: () => void }> = ({ onOpenSettings }) => (
+    <div className="h-full flex flex-col items-center justify-center bg-[var(--bg-app)] text-center p-8 animate-in fade-in duration-300">
+        <div className="max-w-xl w-full">
+            <div className="mb-8 flex justify-center">
+                <div className="relative w-24 h-24 rounded-2xl bg-gradient-to-br from-emerald-500/20 to-sky-500/20 flex items-center justify-center border border-[var(--border-subtle)] shadow-xl">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="text-emerald-500">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 3v18M3 12h18M5 5l14 14M5 19L19 5" />
+                    </svg>
+                </div>
+            </div>
+
+            <h1 className="text-3xl font-bold text-[var(--fg-primary)] mb-3 tracking-tight">
+                Zaguán Blade
+            </h1>
+            <p className="text-[var(--fg-secondary)] text-lg mb-8 leading-relaxed">
+                The AI-Native Code Editor for the future of development.
+            </p>
+
+            <div className="grid gap-4 max-w-sm mx-auto">
+                <button
+                    onClick={onOpenSettings}
+                    className="flex items-center justify-center gap-2 w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium transition-colors shadow-lg shadow-emerald-900/20"
+                >
+                    <Settings className="w-4 h-4" />
+                    Configure API Key
+                </button>
+
+                <a
+                    href="https://zaguanai.com/pricing"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center justify-center gap-2 w-full py-3 px-4 bg-[var(--bg-surface)] hover:bg-[var(--bg-surface-hover)] border border-[var(--border-subtle)] hover:border-[var(--border-focus)] text-[var(--fg-primary)] rounded-lg font-medium transition-all"
+                >
+                    Get Subscription
+                    <ArrowRight className="w-4 h-4 opacity-50" />
+                </a>
+            </div>
+
+            <div className="mt-12 pt-8 border-t border-[var(--border-subtle)]">
+                <p className="text-xs text-[var(--fg-tertiary)]">
+                    To use AI features, you need an active Zaguán Blade subscription and valid API Key.
+                    <br />
+                    Code is processed securely according to our privacy policy.
+                </p>
+            </div>
+        </div>
+    </div>
+);
 
 
 interface EditorPanelProps {
@@ -27,6 +77,7 @@ interface EditorPanelProps {
     onNextFile?: () => void;
     /** Callback to navigate to previous file with pending changes */
     onPrevFile?: () => void;
+    onOpenSettings?: () => void;
 }
 
 export const EditorPanel: React.FC<EditorPanelProps> = ({
@@ -39,6 +90,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     currentFileIndex = 1,
     onNextFile,
     onPrevFile,
+    onOpenSettings,
 }) => {
     const [content, setContent] = useState('');
     const [loading, setLoading] = useState(false);
@@ -197,15 +249,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     };
 
     if (!activeFile) {
-        return (
-            <div
-                className="h-full flex flex-col items-center justify-center text-zinc-600 select-none bg-zinc-900/50"
-                onContextMenu={(e) => e.preventDefault()}
-            >
-                <div className="text-4xl opacity-20 mb-4 font-thin">∅</div>
-                <p className="font-mono text-xs uppercase tracking-widest opacity-50">No Active Buffer</p>
-            </div>
-        );
+        return <WelcomePage onOpenSettings={onOpenSettings} />;
     }
 
     // Check file type

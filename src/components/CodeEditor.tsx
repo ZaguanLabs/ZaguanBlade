@@ -99,6 +99,15 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     const documentVersion = useRef(0);
     const didChangeTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+    // Track whether a content change was user-initiated (to avoid update loops)
+    const isUserEditRef = useRef(false);
+
+    // Ref to capture the latest onSave callback (avoids stale closure in keymap)
+    const onSaveRef = useRef(onSave);
+    useEffect(() => {
+        onSaveRef.current = onSave;
+    }, [onSave]);
+
     // Expose methods to parent via ref
     useImperativeHandle(ref, () => ({
         getView: () => viewRef.current,
@@ -249,9 +258,11 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                     {
                         key: "Mod-s",
                         run: (view) => {
-                            if (onSave) {
-                                const virtualContent = getVirtualContent(view);
-                                onSave(virtualContent);
+                            if (onSaveRef.current) {
+                                // Use the actual editor document content, not virtual buffer
+                                // The document is the source of truth for user edits
+                                const content = view.state.doc.toString();
+                                onSaveRef.current(content);
                             }
                             return true;
                         }
@@ -265,6 +276,8 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 ]),
                 EditorView.updateListener.of((update) => {
                     if (update.docChanged) {
+                        // Mark this as a user-initiated edit to prevent feedback loops
+                        isUserEditRef.current = true;
                         onChange(update.state.doc.toString());
                     }
 
@@ -338,8 +351,9 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                     console.warn('[LSP] didOpen failed:', e)
                 );
             }
-        } else {
-            // Same file, but content changed externally (e.g., file loaded)
+        } else if (!isUserEditRef.current) {
+            // Only sync external content changes (e.g., file loaded, external modification)
+            // Skip if this was a user edit to prevent feedback loops
             const currentDoc = view.state.doc.toString();
             if (currentDoc !== content) {
                 view.dispatch({
@@ -348,6 +362,8 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 });
             }
         }
+        // Reset the user edit flag after processing
+        isUserEditRef.current = false;
     }, [filename, content, onNavigate]);
 
     // Send didChange to LSP on document changes (debounced)

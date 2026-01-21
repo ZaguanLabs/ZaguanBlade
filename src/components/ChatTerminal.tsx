@@ -48,7 +48,7 @@ export const ChatTerminal: React.FC<ChatTerminalProps> = ({
             rows: 8,
             cols: 80,
             scrollback: 1000,
-            disableStdin: true, // Read-only for chat display
+            disableStdin: false, // Enable interactive input
         });
 
         term.open(terminalRef.current);
@@ -62,6 +62,18 @@ export const ChatTerminal: React.FC<ChatTerminalProps> = ({
         const executeCommand = async () => {
             try {
                 const terminalId = `chat-cmd-${commandId}`;
+
+                // Capture input and forward to backend
+                const disposable = term.onData((data) => {
+                    if (!isRunningRef.current) return;
+                    BladeDispatcher.terminal({
+                        type: 'Input',
+                        payload: {
+                            id: terminalId,
+                            data: data
+                        }
+                    }).catch(err => console.error('Failed to send input:', err));
+                });
 
                 // Listen for output
                 const unlistenOutput = await listen<{ id: string; data: string }>(
@@ -96,18 +108,19 @@ export const ChatTerminal: React.FC<ChatTerminalProps> = ({
 
                             unlistenOutput();
                             unlistenExit();
+                            disposable.dispose(); // Cleanup input listener
                         }
                     }
                 );
 
-                // Execute the command via Blade Protocol (Spawn, non-interactive)
+                // Execute the command via Blade Protocol (Spawn, interactive)
                 await BladeDispatcher.terminal({
                     type: 'Spawn',
                     payload: {
                         id: terminalId,
                         command,
                         cwd: cwd || undefined,
-                        interactive: false // Explicitly non-interactive
+                        interactive: true // Enable interactive mode
                     }
                 });
 

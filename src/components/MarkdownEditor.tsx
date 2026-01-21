@@ -10,11 +10,11 @@ interface MarkdownEditorProps {
     filename?: string;
 }
 
-export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ 
-    content, 
-    onChange, 
-    onSave, 
-    filename 
+export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
+    content,
+    onChange,
+    onSave,
+    filename
 }) => {
     const [mode, setMode] = useState<'edit' | 'view'>('edit');
     const editorRef = React.useRef<CodeEditorHandle>(null);
@@ -47,32 +47,32 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
                         {filename?.split('/').pop() || 'Untitled.md'}
                     </span>
                 </div>
-                
+
                 <div className="flex items-center gap-1 bg-zinc-800/50 rounded-md p-0.5">
                     <button
-                        onClick={() => setMode('edit')}
-                        className={`flex items-center gap-1.5 px-3 py-1 rounded text-xs font-medium transition-all ${
-                            mode === 'edit'
-                                ? 'bg-zinc-700 text-zinc-100 shadow-sm'
-                                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
-                        }`}
-                        title="Edit Mode (Ctrl+E)"
+                        onClick={() => setMode(mode === 'edit' ? 'view' : 'edit')}
+                        className={`flex items-center gap-2 px-3 py-1 rounded text-xs font-medium transition-all ${mode === 'edit'
+                                ? 'bg-zinc-700 text-zinc-100 shadow-sm border border-zinc-600'
+                                : 'bg-emerald-900/40 text-emerald-200 shadow-sm border border-emerald-800/50'
+                            }`}
+                        title={mode === 'edit' ? "Switch to View Mode (Ctrl+Shift+V)" : "Switch to Edit Mode (Ctrl+E)"}
                     >
-                        <Edit3 className="w-3.5 h-3.5" />
-                        <span>Edit</span>
+                        {mode === 'edit' ? (
+                            <>
+                                <Edit3 className="w-3.5 h-3.5" />
+                                <span>Editing</span>
+                            </>
+                        ) : (
+                            <>
+                                <Eye className="w-3.5 h-3.5" />
+                                <span>Viewing</span>
+                            </>
+                        )}
                     </button>
-                    <button
-                        onClick={() => setMode('view')}
-                        className={`flex items-center gap-1.5 px-3 py-1 rounded text-xs font-medium transition-all ${
-                            mode === 'view'
-                                ? 'bg-zinc-700 text-zinc-100 shadow-sm'
-                                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
-                        }`}
-                        title="View Mode (Ctrl+Shift+V)"
-                    >
-                        <Eye className="w-3.5 h-3.5" />
-                        <span>View</span>
-                    </button>
+                    {/* Helper hint */}
+                    <span className="text-[10px] text-zinc-500 px-1 font-mono hidden sm:inline-block">
+                        {mode === 'edit' ? 'Ctrl+Shift+V' : 'Ctrl+E'}
+                    </span>
                 </div>
             </div>
 

@@ -21,7 +21,8 @@ export type MessageBlock =
     | { type: 'text'; content: string; id: string }
     | { type: 'reasoning'; content: string; id: string }
     | { type: 'tool_call'; id: string }
-    | { type: 'command_execution'; id: string };  // References commandExecutions by id
+    | { type: 'command_execution'; id: string }  // References commandExecutions by id
+    | { type: 'todo'; id: string };  // References todos by id (or latest snapshot)
 
 export interface ProgressInfo {
     message: string;

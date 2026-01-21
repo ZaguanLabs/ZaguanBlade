@@ -8,6 +8,7 @@ import { CommandApprovalCard } from './CommandApprovalCard';
 import { TodoList } from './TodoList';
 import { useContextMenu, ContextMenuItem } from './ui/ContextMenu';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { ChatTerminal } from './ChatTerminal';
 
 const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent?: boolean }> = ({ content, isActive, hasContent }) => {
     const [isExpanded, setIsExpanded] = useState(true); // Start expanded
@@ -109,6 +110,8 @@ interface ChatMessageProps {
     onSkipCommand?: () => void;
     isContinued?: boolean; // For visual grouping
     isActive?: boolean; // Is this the currently streaming message?
+    activeTerminals?: Map<string, { callId: string, commandId: string, command: string, cwd?: string }>;
+    onTerminalComplete?: (callId: string, output: string, exitCode: number) => void;
 }
 
 export const ChatMessage: React.FC<ChatMessageProps> = ({
@@ -117,7 +120,9 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
     onApproveCommand,
     onSkipCommand,
     isContinued = false,
-    isActive = false
+    isActive = false,
+    activeTerminals,
+    onTerminalComplete
 }) => {
     const isUser = message.role === 'User';
     const isSystem = message.role === 'System';
@@ -308,6 +313,25 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                                     return null;  // CommandApprovalCard will render this
                                 }
 
+                                // Check if this is an active terminal
+                                const activeTerminal = activeTerminals?.get(block.id);
+                                if (activeTerminal && onTerminalComplete) {
+                                    return (
+                                        <div key={block.id} className="mb-3 space-y-2">
+                                            {/* Show the tool call header (optional, if we want to show args) */}
+                                            {/* <ToolCallDisplay toolCall={toolCall} status="executing" /> */}
+
+                                            {/* Show the interactive terminal */}
+                                            <ChatTerminal
+                                                commandId={activeTerminal.commandId}
+                                                command={activeTerminal.command}
+                                                cwd={activeTerminal.cwd}
+                                                onComplete={(output, exitCode) => onTerminalComplete(activeTerminal.callId, output, exitCode)}
+                                            />
+                                        </div>
+                                    );
+                                }
+
                                 return (
                                     <div key={block.id} className="mb-3 space-y-2">
                                         <ToolCallDisplay
@@ -332,6 +356,14 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                                         />
                                     </div>
                                 );
+                            } else if (block.type === 'todo') {
+                                // Render TODO list inline in the conversation flow
+                                if (!message.todos || message.todos.length === 0) return null;
+                                return (
+                                    <div key={block.id} className="mb-3">
+                                        <TodoList todos={message.todos} />
+                                    </div>
+                                );
                             }
                             return null;
                         })}
@@ -347,7 +379,8 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                             </div>
                         )}
 
-                        {message.todos && message.todos.length > 0 && <TodoList todos={message.todos} />}
+                        {/* Legacy: Render todos if no todo block exists (backward compat) */}
+                        {message.todos && message.todos.length > 0 && !message.blocks?.some(b => b.type === 'todo') && <TodoList todos={message.todos} />}
 
                         {/* Legacy: Render commandExecutions that don't have block entries (backward compat) */}
                         {message.commandExecutions && message.commandExecutions.length > 0 && (

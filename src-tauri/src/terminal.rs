@@ -39,6 +39,7 @@ impl TerminalManager {
 pub fn create_terminal<R: Runtime>(
     id: String,
     cwd: Option<String>,
+    command: Option<String>,
     app_handle: tauri::AppHandle<R>,
     state: tauri::State<'_, TerminalManager>,
 ) -> Result<(), String> {
@@ -54,13 +55,21 @@ pub fn create_terminal<R: Runtime>(
         })
         .map_err(|e| e.to_string())?;
 
-    // Spawn the shell (bash for now, or use user's SHELL env)
+    // Determine shell and command mode
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string());
     let shell_name = std::path::Path::new(&shell)
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("sh");
-    let mut cmd = CommandBuilder::new(shell.clone());
+
+    let (mut cmd, is_interactive) = if let Some(cmd_str) = command {
+        let mut builder = CommandBuilder::new(shell.clone());
+        builder.arg("-c");
+        builder.arg(cmd_str);
+        (builder, false)
+    } else {
+        (CommandBuilder::new(shell.clone()), true)
+    };
 
     // Set working directory if provided
     if let Some(path) = cwd {
@@ -71,22 +80,24 @@ pub fn create_terminal<R: Runtime>(
     cmd.env("COLORTERM", "truecolor");
 
     // Ensure shells emit OSC 7 working-directory updates so the UI can track cwd changes.
-    if shell_name == "bash" {
-        let osc7_cmd = "printf '\\e]7;file://localhost%s\\e\\\\' \"$PWD\"";
-        let prompt_command = std::env::var("PROMPT_COMMAND").ok();
-        let combined = if let Some(existing) = prompt_command {
-            if existing.trim().is_empty() {
-                osc7_cmd.to_string()
+    if is_interactive {
+        if shell_name == "bash" {
+            let osc7_cmd = "printf '\\e]7;file://localhost%s\\e\\\\' \"$PWD\"";
+            let prompt_command = std::env::var("PROMPT_COMMAND").ok();
+            let combined = if let Some(existing) = prompt_command {
+                if existing.trim().is_empty() {
+                    osc7_cmd.to_string()
+                } else {
+                    format!("{existing};{osc7_cmd}")
+                }
             } else {
-                format!("{existing};{osc7_cmd}")
+                osc7_cmd.to_string()
+            };
+            cmd.env("PROMPT_COMMAND", combined);
+        } else if shell_name == "zsh" {
+            if let Some(zdotdir) = ensure_zsh_zdotdir() {
+                cmd.env("ZDOTDIR", zdotdir);
             }
-        } else {
-            osc7_cmd.to_string()
-        };
-        cmd.env("PROMPT_COMMAND", combined);
-    } else if shell_name == "zsh" {
-        if let Some(zdotdir) = ensure_zsh_zdotdir() {
-            cmd.env("ZDOTDIR", zdotdir);
         }
     }
 
@@ -134,6 +145,8 @@ pub fn create_terminal<R: Runtime>(
     // Spawn a thread to read output and emit to frontend
     let id_clone = id.clone();
     let app_handle_clone = app_handle.clone();
+    let ptys_arc = state.ptys.clone();
+
     thread::spawn(move || {
         let mut buffer = [0u8; 1024];
         let mut pending_osc = String::new();
@@ -174,14 +187,37 @@ pub fn create_terminal<R: Runtime>(
                         data: output,
                     };
                     // Emit 'terminal-output' event (legacy format)
-                    // TODO: Migrate to BladeEvent::Terminal(TerminalEvent::Output { id, seq, data })
-                    let _ = app_handle.emit("terminal-output", payload);
+                    let _ = app_handle_clone.emit("terminal-output", payload);
                 }
                 Ok(_) => break,  // EOF
                 Err(_) => break, // Error
             }
         }
-        // Emit exit event?
+
+        // Emit exit event and cleanup PTY
+        let exit_code = {
+            let mut ptys = ptys_arc.lock().unwrap();
+            if let Some(mut pty) = ptys.remove(&id_clone) {
+                match pty.child.wait() {
+                    Ok(status) => status.exit_code() as i32,
+                    Err(_) => 1,
+                }
+            } else {
+                0
+            }
+        };
+
+        let _ = app_handle_clone.emit(
+            "terminal-exit",
+            TerminalExit {
+                id: id_clone,
+                exit_code,
+            },
+        );
+
+        // Refresh explorer to show changes from command
+        let _ = app_handle_clone.emit("refresh-explorer", ());
+        let _ = app_handle_clone.emit(event_names::REFRESH_EXPLORER, ());
     });
 
     Ok(())

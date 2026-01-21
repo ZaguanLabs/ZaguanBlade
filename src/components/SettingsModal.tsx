@@ -1,7 +1,9 @@
 'use client';
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { X, Database, Cloud, Shield, Zap, HardDrive, Server, ChevronRight, Info, Loader2, Code } from 'lucide-react';
+import { emit } from '@tauri-apps/api/event';
+import { X, Database, Cloud, Shield, Zap, HardDrive, Server, ChevronRight, Info, Loader2, Code, Key, CheckCircle2 } from 'lucide-react';
+import type { ApiConfig, BackendSettings } from '../types/settings';
 
 type StorageMode = 'local' | 'server';
 
@@ -27,6 +29,13 @@ interface SettingsState {
     editor: {
         enableLsp: boolean;
     };
+    account: {
+        bladeUrl: string;
+        apiKey: string;
+        userId: string;
+        theme: string;
+        markdownView: string;
+    };
 }
 
 const defaultSettings: SettingsState = {
@@ -51,33 +60,42 @@ const defaultSettings: SettingsState = {
     editor: {
         enableLsp: true,
     },
+    account: {
+        bladeUrl: '',
+        apiKey: '',
+        userId: '',
+        theme: 'system',
+        markdownView: 'split',
+    },
 };
 
-interface BackendSettings {
-    storage: {
-        mode: 'local' | 'server';
-        sync_metadata: boolean;
-        cache: {
-            enabled: boolean;
-            max_size_mb: number;
-        };
-    };
-    context: {
-        max_tokens: number;
-        compression: {
-            enabled: boolean;
-            model: 'local' | 'remote';
-        };
-    };
-    privacy: {
-        telemetry: boolean;
-    };
-    editor: {
-        enable_lsp: boolean;
+
+
+
+
+
+
+function backendAccountToFrontend(backend: ApiConfig): SettingsState['account'] {
+    return {
+        bladeUrl: '', // Always empty, internal only
+        apiKey: backend.api_key,
+        userId: backend.user_id,
+        theme: backend.theme,
+        markdownView: backend.markdown_view,
     };
 }
 
-function backendToFrontend(backend: BackendSettings): SettingsState {
+function frontendAccountToBackend(frontend: SettingsState['account']): ApiConfig {
+    return {
+        blade_url: '', // Frontend does not set this
+        api_key: frontend.apiKey,
+        user_id: frontend.userId,
+        theme: frontend.theme,
+        markdown_view: frontend.markdownView,
+    };
+}
+
+function backendToFrontend(backend: BackendSettings): Omit<SettingsState, 'account'> {
     return {
         storage: {
             mode: backend.storage.mode,
@@ -121,7 +139,7 @@ function frontendToBackend(frontend: SettingsState): BackendSettings {
             },
         },
         privacy: {
-            telemetry: frontend.privacy.telemetry,
+            telemetry: false,
         },
         editor: {
             enable_lsp: frontend.editor.enableLsp,
@@ -135,11 +153,11 @@ interface SettingsModalProps {
     workspacePath?: string | null;
 }
 
-type SettingsSection = 'storage' | 'context' | 'privacy' | 'editor';
+type SettingsSection = 'account' | 'storage' | 'context' | 'privacy' | 'editor';
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, workspacePath }) => {
     const [settings, setSettings] = useState<SettingsState>(defaultSettings);
-    const [activeSection, setActiveSection] = useState<SettingsSection>('storage');
+    const [activeSection, setActiveSection] = useState<SettingsSection>('account');
     const [hasChanges, setHasChanges] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
@@ -159,20 +177,40 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
     }, [isOpen, onClose]);
 
     useEffect(() => {
-        if (!isOpen || !workspacePath) return;
+        if (!isOpen) return;
 
         const loadSettings = async () => {
             setIsLoading(true);
             setError(null);
             try {
-                const backendSettings = await invoke<BackendSettings>('load_project_settings', {
-                    projectPath: workspacePath,
-                });
-                setSettings(backendToFrontend(backendSettings));
+                // Load Global Settings (Account)
+                const globalSettings = await invoke<ApiConfig>('get_global_settings');
+                const accountSettings = backendAccountToFrontend(globalSettings);
+
+                let mergedSettings = { ...defaultSettings, account: accountSettings };
+
+                // Load Project Settings (if workspace open)
+                if (workspacePath) {
+                    try {
+                        const backendSettings = await invoke<BackendSettings>('load_project_settings', {
+                            projectPath: workspacePath,
+                        });
+                        mergedSettings = {
+                            ...mergedSettings,
+                            ...backendToFrontend(backendSettings),
+                        };
+                        console.log('[Settings] Loaded project settings:', backendSettings);
+                    } catch (e) {
+                        console.error('[Settings] Failed to load project settings:', e);
+                        // Don't fail completely, just use defaults for project
+                    }
+                }
+
+                setSettings(mergedSettings);
                 setHasChanges(false);
-                console.log('[Settings] Loaded from backend:', backendSettings);
+                console.log('[Settings] Loaded settings:', mergedSettings);
             } catch (e) {
-                console.error('[Settings] Failed to load:', e);
+                console.error('[Settings] Failed to load global settings:', e);
                 setError(String(e));
                 setSettings(defaultSettings);
             } finally {
@@ -195,20 +233,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
     };
 
     const handleSave = async () => {
-        if (!workspacePath) {
-            setError('No workspace path available');
-            return;
-        }
-
         setIsSaving(true);
         setError(null);
         try {
-            const backendSettings = frontendToBackend(settings);
-            await invoke('save_project_settings', {
-                projectPath: workspacePath,
-                settings: backendSettings,
+            // Save Global Settings
+            const globalSettings = frontendAccountToBackend(settings.account);
+            await invoke('save_global_settings', {
+                settings: globalSettings,
             });
-            console.log('[Settings] Saved to backend:', backendSettings);
+            await emit('global-settings-changed');
+
+            // Save Project Settings (if workspace is open)
+            if (workspacePath) {
+                const backendSettings = frontendToBackend(settings);
+                await invoke('save_project_settings', {
+                    projectPath: workspacePath,
+                    settings: backendSettings,
+                });
+            }
+
+            console.log('[Settings] Saved settings');
             setHasChanges(false);
             onClose();
         } catch (e) {
@@ -222,10 +266,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
     if (!isOpen) return null;
 
     const sections: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
+        { id: 'account', label: 'Account', icon: <Key className="w-4 h-4" /> },
         { id: 'storage', label: 'Storage', icon: <Database className="w-4 h-4" /> },
-        { id: 'editor', label: 'Editor', icon: <Code className="w-4 h-4" /> },
-        { id: 'context', label: 'Context', icon: <Zap className="w-4 h-4" /> },
-        { id: 'privacy', label: 'Privacy', icon: <Shield className="w-4 h-4" /> },
+        ...(workspacePath ? [
+            { id: 'editor', label: 'Editor', icon: <Code className="w-4 h-4" /> },
+            { id: 'context', label: 'Context', icon: <Zap className="w-4 h-4" /> },
+            // { id: 'privacy', label: 'Privacy', icon: <Shield className="w-4 h-4" /> },
+        ] as const : []),
     ];
 
     return (
@@ -297,6 +344,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
                                     <PrivacySettings
                                         settings={settings.privacy}
                                         onChange={(updates) => updateSettings('privacy', updates)}
+                                    />
+                                )}
+                                {activeSection === 'account' && (
+                                    <AccountSettings
+                                        settings={settings.account}
+                                        onChange={(updates) => updateSettings('account', updates)}
                                     />
                                 )}
                                 {activeSection === 'editor' && (
@@ -597,13 +650,9 @@ const PrivacySettings: React.FC<PrivacySettingsProps> = ({ settings, onChange })
                 <div>
                     <div className="text-sm font-medium text-[var(--fg-primary)]">Usage Telemetry</div>
                     <div className="text-xs text-[var(--fg-tertiary)]">
-                        Help improve Zaguán Blade by sending anonymous usage data
+                        We do not collect any telemetry data.
                     </div>
                 </div>
-                <Toggle
-                    checked={settings.telemetry}
-                    onChange={(checked) => onChange({ telemetry: checked })}
-                />
             </div>
 
             <div className="p-3 bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded-lg">
@@ -679,5 +728,86 @@ const Toggle: React.FC<ToggleProps> = ({ checked, onChange }) => {
                     }`}
             />
         </button>
+    );
+};
+
+interface AccountSettingsProps {
+    settings: SettingsState['account'];
+    onChange: (updates: Partial<SettingsState['account']>) => void;
+}
+
+const AccountSettings: React.FC<AccountSettingsProps> = ({ settings, onChange }) => {
+    const [showKey, setShowKey] = useState(false);
+
+    return (
+        <div className="space-y-6">
+            <div>
+                <h3 className="text-base font-semibold text-[var(--fg-primary)] mb-1">Account & API</h3>
+                <p className="text-sm text-[var(--fg-tertiary)] mb-4">
+                    Manage your Zaguán Blade connection and subscription.
+                </p>
+            </div>
+
+            <div className={`border rounded-lg p-4 mb-6 ${settings.apiKey ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-[var(--bg-app)] border-[var(--border-subtle)]'}`}>
+                <div className="flex gap-4">
+                    <div className={`p-3 rounded-full h-fit ${settings.apiKey ? 'bg-emerald-500/20' : 'bg-[var(--bg-app)]'}`}>
+                        {settings.apiKey ? (
+                            <CheckCircle2 className="w-6 h-6 text-emerald-500" />
+                        ) : (
+                            <Key className="w-6 h-6 text-emerald-500" />
+                        )}
+                    </div>
+                    <div className="flex-1">
+                        <h4 className="font-medium text-[var(--fg-primary)] mb-1">
+                            {settings.apiKey ? 'Active Subscription' : 'Zaguán Blade Pro'}
+                        </h4>
+                        <p className="text-sm text-[var(--fg-secondary)] mb-3">
+                            {settings.apiKey
+                                ? 'Your subscription is active. AI features are enabled.'
+                                : 'You need an active subscription to use AI features.'}
+                        </p>
+                        <a
+                            href={settings.apiKey ? "https://zaguanai.com/dashboard" : "https://zaguanai.com/pricing"}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-sm text-emerald-500 hover:text-emerald-400 font-medium"
+                        >
+                            {settings.apiKey ? "Manage Subscription →" : "Get Subscription →"}
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <div className="space-y-2">
+                <label className="text-sm font-medium text-[var(--fg-primary)] block">
+                    API Key
+                </label>
+                <div className="flex gap-2">
+                    <div className="relative flex-1">
+                        <input
+                            type={showKey ? 'text' : 'password'}
+                            value={settings.apiKey}
+                            onChange={(e) => onChange({ apiKey: e.target.value })}
+                            placeholder="sk-..."
+                            className="w-full bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded-lg py-2 pl-3 pr-10 text-sm text-[var(--fg-primary)] focus:outline-none focus:border-[var(--accent-primary)] placeholder-[var(--fg-tertiary)]"
+                        />
+                        <button
+                            type="button"
+                            onClick={() => setShowKey(!showKey)}
+                            className="absolute right-3 top-2 text-[var(--fg-tertiary)] hover:text-[var(--fg-secondary)]"
+                        >
+                            {showKey ? (
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" /><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" /><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" /><line x1="2" x2="22" y1="2" y2="22" /></svg>
+                            ) : (
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></svg>
+                            )}
+                        </button>
+                    </div>
+                </div>
+
+            </div>
+
+
+        </div>
     );
 };

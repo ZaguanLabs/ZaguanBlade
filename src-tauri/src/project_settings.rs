@@ -105,17 +105,15 @@ pub struct PrivacySettings {
 /// Editor settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EditorSettings {
-    // IMPORTANT: LSP is disabled by default because the current implementation
-    // uses synchronous blocking I/O that starves the tokio async runtime.
-    // This was causing WebSocket messages to be delayed by 30+ seconds.
-    // TODO: Fix by wrapping LSP calls in tokio::task::spawn_blocking
-    #[serde(default)] // defaults to false
+    // LSP is enabled by default. Calls are wrapped in spawn_blocking
+    // to prevent starving the tokio runtime.
+    #[serde(default = "default_true")]
     pub enable_lsp: bool,
 }
 
 impl Default for EditorSettings {
     fn default() -> Self {
-        Self { enable_lsp: false }
+        Self { enable_lsp: true }
     }
 }
 

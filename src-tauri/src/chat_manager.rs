@@ -151,6 +151,49 @@ impl ChatManager {
         let ws_client = crate::blade_ws_client::BladeWsClient::new(blade_url, api_key);
         let session_id = self.session_id.clone();
 
+        // RFC-002: Clone conversation messages for local storage mode context retrieval
+        // Convert to BladeMessage format that zcoderd expects
+        let conversation_messages: Vec<serde_json::Value> = conversation
+            .get_messages()
+            .iter()
+            .map(|msg| {
+                let role = match msg.role {
+                    ChatRole::User => "user",
+                    ChatRole::Assistant => "assistant",
+                    ChatRole::System => "system",
+                    ChatRole::Tool => "tool",
+                };
+                let mut blade_msg = serde_json::json!({
+                    "role": role,
+                    "content": msg.content,
+                });
+                if let Some(ref reasoning) = msg.reasoning {
+                    blade_msg["reasoning"] = serde_json::json!(reasoning);
+                }
+                if let Some(ref tool_call_id) = msg.tool_call_id {
+                    blade_msg["tool_call_id"] = serde_json::json!(tool_call_id);
+                }
+                if let Some(ref tool_calls) = msg.tool_calls {
+                    // Convert tool calls to the format zcoderd expects
+                    let tc_json: Vec<serde_json::Value> = tool_calls
+                        .iter()
+                        .map(|tc| {
+                            serde_json::json!({
+                                "id": tc.id,
+                                "type": tc.typ,
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments
+                                }
+                            })
+                        })
+                        .collect();
+                    blade_msg["tool_calls"] = serde_json::json!(tc_json);
+                }
+                blade_msg
+            })
+            .collect();
+
         // Convert WebSocket events to ChatEvent channel
         let (tx, rx) = mpsc::channel();
 
@@ -324,23 +367,25 @@ impl ChatManager {
                                     t0.elapsed()
                                 );
                                 eprintln!(
-                                    "[CHAT MGR] T+{:?} session_id={}",
+                                    "[CHAT MGR] T+{:?} session_id={}, message_count={}",
                                     t0.elapsed(),
-                                    req_session_id
+                                    req_session_id,
+                                    conversation_messages.len()
                                 );
 
                                 // RFC-002: Send conversation context back to server
-                                let messages: Vec<serde_json::Value> = vec![];
+                                // Use the pre-cloned conversation messages in BladeMessage format
 
                                 eprintln!(
-                                    "[CHAT MGR] T+{:?} Calling send_conversation_context...",
-                                    t0.elapsed()
+                                    "[CHAT MGR] T+{:?} Calling send_conversation_context with {} messages...",
+                                    t0.elapsed(),
+                                    conversation_messages.len()
                                 );
                                 let result = ws_client
                                     .send_conversation_context(
                                         request_id.clone(),
                                         req_session_id.clone(),
-                                        messages,
+                                        conversation_messages.clone(),
                                     )
                                     .await;
                                 eprintln!(
@@ -436,6 +481,48 @@ impl ChatManager {
         // Create the client once
         let ws_client = crate::blade_ws_client::BladeWsClient::new(blade_url, api_key);
         let results = batch.file_results.clone(); // Clone for the task
+
+        // RFC-002: Clone conversation messages for local storage mode context retrieval
+        // Convert to BladeMessage format that zcoderd expects
+        let conversation_messages: Vec<serde_json::Value> = conversation
+            .get_messages()
+            .iter()
+            .map(|msg| {
+                let role = match msg.role {
+                    ChatRole::User => "user",
+                    ChatRole::Assistant => "assistant",
+                    ChatRole::System => "system",
+                    ChatRole::Tool => "tool",
+                };
+                let mut blade_msg = serde_json::json!({
+                    "role": role,
+                    "content": msg.content,
+                });
+                if let Some(ref reasoning) = msg.reasoning {
+                    blade_msg["reasoning"] = serde_json::json!(reasoning);
+                }
+                if let Some(ref tool_call_id) = msg.tool_call_id {
+                    blade_msg["tool_call_id"] = serde_json::json!(tool_call_id);
+                }
+                if let Some(ref tool_calls) = msg.tool_calls {
+                    let tc_json: Vec<serde_json::Value> = tool_calls
+                        .iter()
+                        .map(|tc| {
+                            serde_json::json!({
+                                "id": tc.id,
+                                "type": tc.typ,
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments
+                                }
+                            })
+                        })
+                        .collect();
+                    blade_msg["tool_calls"] = serde_json::json!(tc_json);
+                }
+                blade_msg
+            })
+            .collect();
 
         // Channel for the main thread
         let (tx, rx) = mpsc::channel();
@@ -587,6 +674,29 @@ impl ChatManager {
                                 }
                                 break;
                             }
+                            crate::blade_ws_client::BladeWsEvent::GetConversationContext {
+                                request_id,
+                                session_id: req_session_id,
+                            } => {
+                                // RFC-002: Send conversation context back to server
+                                eprintln!(
+                                    "[CHAT MGR BATCH] GetConversationContext received, sending {} messages",
+                                    conversation_messages.len()
+                                );
+                                let result = ws_client
+                                    .send_conversation_context(
+                                        request_id.clone(),
+                                        req_session_id.clone(),
+                                        conversation_messages.clone(),
+                                    )
+                                    .await;
+                                if let Err(e) = result {
+                                    eprintln!(
+                                        "[CHAT MGR BATCH] Failed to send conversation context: {}",
+                                        e
+                                    );
+                                }
+                            }
                             _ => {}
                         }
 
@@ -690,9 +800,31 @@ impl ChatManager {
         for ev in events {
             match ev {
                 ChatEvent::Chunk(s) => {
+                    if let Some(last) = conversation.last_assistant_mut() {
+                        if last.progress.is_some() {
+                            // Clear progress state as text generation has started
+                            last.progress = None;
+                            // Notify frontend to hide progress bar
+                            self.pending_results.push_back(DrainResult::Progress {
+                                message: "Generated".to_string(),
+                                stage: "complete".to_string(),
+                                percent: 100,
+                            });
+                        }
+                    }
                     batched_chunk.push_str(&s);
                 }
                 ChatEvent::ReasoningChunk(s) => {
+                    if let Some(last) = conversation.last_assistant_mut() {
+                        if last.progress.is_some() {
+                            last.progress = None;
+                            self.pending_results.push_back(DrainResult::Progress {
+                                message: "Thinking".to_string(),
+                                stage: "complete".to_string(),
+                                percent: 100,
+                            });
+                        }
+                    }
                     flush_batch!();
                     if let Some(assistant_msg) = conversation.last_assistant_mut() {
                         let r = assistant_msg.reasoning.get_or_insert_with(String::new);
@@ -770,6 +902,18 @@ impl ChatManager {
                                 .push_back(DrainResult::TodoUpdated(todos));
                         }
                         ChatEvent::Done => {
+                            // Ensure progress is cleared on done
+                            if let Some(last) = conversation.last_assistant_mut() {
+                                if last.progress.is_some() {
+                                    last.progress = None;
+                                    self.pending_results.push_back(DrainResult::Progress {
+                                        message: "Complete".to_string(),
+                                        stage: "complete".to_string(),
+                                        percent: 100,
+                                    });
+                                }
+                            }
+
                             // Flush any remaining XML buffer content
                             if !self.xml_buffer.is_empty() {
                                 if let Some(last) = conversation.last_mut() {
@@ -808,6 +952,14 @@ impl ChatManager {
                             done = true;
                         }
                         ChatEvent::Error(e) => {
+                            // Ensure progress is cleared on error
+                            if let Some(last) = conversation.last_assistant_mut() {
+                                if last.progress.is_some() {
+                                    last.progress = None;
+                                    // Don't emit 'complete' here, let Layout handle 'chat-error' or we can emit error state if needed
+                                    // Layout.tsx listens for 'chat-error' to clear, so we just update backend state.
+                                }
+                            }
                             error_msg = Some(e);
                             done = true;
                         }

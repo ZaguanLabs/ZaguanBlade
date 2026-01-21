@@ -97,13 +97,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
     // Declared here (before useTree) so it can be reset when refreshKey changes
     const lastExpandedFileRef = React.useRef<string | null>(null);
 
-    // Clear cache and pending requests on refresh to force re-fetch
-    // Also reset lastExpandedFileRef so the tree re-expands to active file after refresh
-    React.useEffect(() => {
-        itemCache.current.clear();
-        pendingRequests.current.clear();
-        lastExpandedFileRef.current = null;
-    }, [refreshKey]);
+
 
     // File operation handlers
     const handleCreateFile = async (name: string, parentPath: string, isDir: boolean) => {
@@ -466,6 +460,51 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
             }
         },
     });
+
+    // Clear cache and pending requests on refresh to force re-fetch
+    // Also reset lastExpandedFileRef so the tree re-expands to active file after refresh
+    React.useEffect(() => {
+        itemCache.current.clear();
+        pendingRequests.current.clear();
+        lastExpandedFileRef.current = null;
+        if ((tree as any).invalidateItem) {
+            (tree as any).invalidateItem('root');
+        }
+    }, [refreshKey, tree]);
+
+    // Listen for file system events to update tree dynamically
+    React.useEffect(() => {
+        let unlisten: (() => void) | undefined;
+        const setup = async () => {
+            unlisten = await listen<any>('sys-event', (eventRaw) => {
+                let evt = eventRaw.payload;
+                if (evt.event) evt = evt.event;
+
+                if (evt.type === 'File') {
+                    const filePayload = evt.payload;
+                    const pathsToInvalidate: string[] = [];
+
+                    if (filePayload.type === 'Created' || filePayload.type === 'Deleted') {
+                        pathsToInvalidate.push(filePayload.payload.path);
+                    } else if (filePayload.type === 'Renamed') {
+                        pathsToInvalidate.push(filePayload.payload.old_path);
+                        pathsToInvalidate.push(filePayload.payload.new_path);
+                    }
+
+                    pathsToInvalidate.forEach(path => {
+                        const parentPath = path.substring(0, path.lastIndexOf('/'));
+                        if (parentPath && (tree as any).invalidateItem) {
+                            (tree as any).invalidateItem(parentPath);
+                        } else if ((tree as any).invalidateItem) {
+                            (tree as any).invalidateItem('root');
+                        }
+                    });
+                }
+            });
+        };
+        setup();
+        return () => { if (unlisten) unlisten(); };
+    }, [tree]);
 
     // Auto-expand and select active file in the tree
     // NOTE: We intentionally exclude 'tree' from dependencies to prevent infinite loops.

@@ -15,6 +15,7 @@ use crate::blade_protocol::{
 };
 use crate::language_service::LanguageService;
 use crate::tree_sitter::SymbolType;
+use tauri::async_runtime::spawn_blocking;
 
 /// Handler for language intents
 pub struct LanguageHandler {
@@ -33,15 +34,21 @@ impl LanguageHandler {
         intent: LanguageIntent,
         intent_id: Uuid,
     ) -> BladeResult<Option<BladeEventEnvelope>> {
+        let service = self.service.clone();
         let event_payload = match intent {
             LanguageIntent::IndexFile { file_path } => {
-                let symbols =
-                    self.service
-                        .index_file(&file_path)
-                        .map_err(|e| BladeError::Internal {
-                            trace_id: Uuid::new_v4().to_string(),
-                            message: format!("Parsing failed: {}", e),
-                        })?;
+                let s = service.clone();
+                let f = file_path.clone();
+                let symbols = spawn_blocking(move || s.index_file(&f))
+                    .await
+                    .map_err(|e| BladeError::Internal {
+                        trace_id: Uuid::new_v4().to_string(),
+                        message: format!("Task join error: {}", e),
+                    })?
+                    .map_err(|e| BladeError::Internal {
+                        trace_id: Uuid::new_v4().to_string(),
+                        message: format!("Parsing failed: {}", e),
+                    })?;
 
                 LanguageEvent::FileIndexed {
                     file_path,
@@ -49,13 +56,17 @@ impl LanguageHandler {
                 }
             }
             LanguageIntent::IndexWorkspace => {
-                let stats =
-                    self.service
-                        .index_directory(".")
-                        .map_err(|e| BladeError::Internal {
-                            trace_id: Uuid::new_v4().to_string(),
-                            message: format!("Indexing failed: {}", e),
-                        })?;
+                let s = service.clone();
+                let stats = spawn_blocking(move || s.index_directory("."))
+                    .await
+                    .map_err(|e| BladeError::Internal {
+                        trace_id: Uuid::new_v4().to_string(),
+                        message: format!("Task join error: {}", e),
+                    })?
+                    .map_err(|e| BladeError::Internal {
+                        trace_id: Uuid::new_v4().to_string(),
+                        message: format!("Indexing failed: {}", e),
+                    })?;
 
                 LanguageEvent::WorkspaceIndexed {
                     file_count: stats.files_indexed,
@@ -68,24 +79,30 @@ impl LanguageHandler {
                 file_path,
                 symbol_types,
             } => {
+                let s = service.clone();
                 let types = symbol_types.map(|ts| {
                     ts.iter()
                         .filter_map(|t| SymbolType::from_str(t).ok())
                         .collect()
                 });
 
-                let results = self
-                    .service
-                    .search_symbols_filtered(
+                let results = spawn_blocking(move || {
+                    s.search_symbols_filtered(
                         &query,
                         file_path.as_deref(),
                         types,
                         50, // default limit
                     )
-                    .map_err(|e| BladeError::Internal {
-                        trace_id: Uuid::new_v4().to_string(),
-                        message: format!("Search failed: {}", e),
-                    })?;
+                })
+                .await
+                .map_err(|e| BladeError::Internal {
+                    trace_id: Uuid::new_v4().to_string(),
+                    message: format!("Task join error: {}", e),
+                })?
+                .map_err(|e| BladeError::Internal {
+                    trace_id: Uuid::new_v4().to_string(),
+                    message: format!("Search failed: {}", e),
+                })?;
 
                 let symbols = results
                     .into_iter()
@@ -117,9 +134,13 @@ impl LanguageHandler {
                 line,
                 character,
             } => {
-                let symbol = self
-                    .service
-                    .get_symbol_at(&file_path, line, character)
+                let s = service.clone();
+                let symbol = spawn_blocking(move || s.get_symbol_at(&file_path, line, character))
+                    .await
+                    .map_err(|e| BladeError::Internal {
+                        trace_id: Uuid::new_v4().to_string(),
+                        message: format!("Task join error: {}", e),
+                    })?
                     .map_err(|e| BladeError::Internal {
                         trace_id: Uuid::new_v4().to_string(),
                         message: format!("Lookup failed: {}", e),
@@ -155,9 +176,13 @@ impl LanguageHandler {
                 line,
                 character,
             } => {
-                let items = self
-                    .service
-                    .get_completions(&file_path, line, character)
+                let s = service.clone();
+                let items = spawn_blocking(move || s.get_completions(&file_path, line, character))
+                    .await
+                    .map_err(|e| BladeError::Internal {
+                        trace_id: Uuid::new_v4().to_string(),
+                        message: format!("Task join error: {}", e),
+                    })?
                     .map_err(|e| BladeError::Internal {
                         trace_id: Uuid::new_v4().to_string(),
                         message: format!("Completion failed: {}", e),
@@ -165,22 +190,20 @@ impl LanguageHandler {
 
                 let completion_items = items
                     .into_iter()
-                    .map(|i| {
-                        CompletionItem {
-                            label: i.label,
-                            kind: i.kind.map(|k| format!("{}", k)), // Map integer kind to string
-                            detail: i.detail,
-                            documentation: i.documentation.map(|d| match d {
-                                serde_json::Value::String(s) => s,
-                                serde_json::Value::Object(o) => o
-                                    .get("value")
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| s.to_string())
-                                    .unwrap_or_default(),
-                                _ => d.to_string(),
-                            }),
-                            insert_text: i.insert_text,
-                        }
+                    .map(|i| CompletionItem {
+                        label: i.label,
+                        kind: i.kind.map(|k| format!("{}", k)),
+                        detail: i.detail,
+                        documentation: i.documentation.map(|d| match d {
+                            serde_json::Value::String(s) => s,
+                            serde_json::Value::Object(o) => o
+                                .get("value")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
+                                .unwrap_or_default(),
+                            _ => d.to_string(),
+                        }),
+                        insert_text: i.insert_text,
                     })
                     .collect();
 
@@ -194,9 +217,13 @@ impl LanguageHandler {
                 line,
                 character,
             } => {
-                let hover = self
-                    .service
-                    .get_hover(&file_path, line, character)
+                let s = service.clone();
+                let hover = spawn_blocking(move || s.get_hover(&file_path, line, character))
+                    .await
+                    .map_err(|e| BladeError::Internal {
+                        trace_id: Uuid::new_v4().to_string(),
+                        message: format!("Task join error: {}", e),
+                    })?
                     .map_err(|e| BladeError::Internal {
                         trace_id: Uuid::new_v4().to_string(),
                         message: format!("Hover failed: {}", e),
@@ -220,13 +247,18 @@ impl LanguageHandler {
                 line,
                 character,
             } => {
-                let locations = self
-                    .service
-                    .get_definition(&file_path, line, character)
-                    .map_err(|e| BladeError::Internal {
-                        trace_id: Uuid::new_v4().to_string(),
-                        message: format!("Definition failed: {}", e),
-                    })?;
+                let s = service.clone();
+                let locations =
+                    spawn_blocking(move || s.get_definition(&file_path, line, character))
+                        .await
+                        .map_err(|e| BladeError::Internal {
+                            trace_id: Uuid::new_v4().to_string(),
+                            message: format!("Task join error: {}", e),
+                        })?
+                        .map_err(|e| BladeError::Internal {
+                            trace_id: Uuid::new_v4().to_string(),
+                            message: format!("Definition failed: {}", e),
+                        })?;
 
                 let def_locations = locations
                     .into_iter()
@@ -244,13 +276,19 @@ impl LanguageHandler {
                 character,
                 include_declaration,
             } => {
-                let locations = self
-                    .service
-                    .get_references(&file_path, line, character, include_declaration)
-                    .map_err(|e| BladeError::Internal {
-                        trace_id: Uuid::new_v4().to_string(),
-                        message: format!("References failed: {}", e),
-                    })?;
+                let s = service.clone();
+                let locations = spawn_blocking(move || {
+                    s.get_references(&file_path, line, character, include_declaration)
+                })
+                .await
+                .map_err(|e| BladeError::Internal {
+                    trace_id: Uuid::new_v4().to_string(),
+                    message: format!("Task join error: {}", e),
+                })?
+                .map_err(|e| BladeError::Internal {
+                    trace_id: Uuid::new_v4().to_string(),
+                    message: format!("References failed: {}", e),
+                })?;
 
                 let ref_locations = locations
                     .into_iter()
@@ -263,9 +301,13 @@ impl LanguageHandler {
                 }
             }
             LanguageIntent::GetDocumentSymbols { file_path } => {
-                let symbols = self
-                    .service
-                    .get_document_symbols_lsp(&file_path)
+                let s = service.clone();
+                let symbols = spawn_blocking(move || s.get_document_symbols_lsp(&file_path))
+                    .await
+                    .map_err(|e| BladeError::Internal {
+                        trace_id: Uuid::new_v4().to_string(),
+                        message: format!("Task join error: {}", e),
+                    })?
                     .map_err(|e| BladeError::Internal {
                         trace_id: Uuid::new_v4().to_string(),
                         message: format!("Document symbols failed: {}", e),
@@ -282,7 +324,14 @@ impl LanguageHandler {
                 }
             }
             LanguageIntent::GetDiagnostics { file_path } => {
-                let diagnostics = self.service.get_diagnostics(&file_path);
+                let s = service.clone();
+                let f = file_path.clone();
+                let diagnostics = spawn_blocking(move || s.get_diagnostics(&f))
+                    .await
+                    .map_err(|e| BladeError::Internal {
+                        trace_id: Uuid::new_v4().to_string(),
+                        message: format!("Task join error: {}", e),
+                    })?; // get_diagnostics does not return Result in service.rs, just Vec
 
                 let diag_items = diagnostics
                     .into_iter()
@@ -304,23 +353,29 @@ impl LanguageHandler {
                 }
             }
 
-            // Document synchronization (no response events - just update state)
+            // Document synchronization
             LanguageIntent::DidOpen {
                 file_path,
                 content,
                 language_id: _,
             } => {
-                self.service
-                    .did_open(&file_path, &content)
+                let s = service.clone();
+                let f = file_path.clone();
+                let c = content.clone();
+                spawn_blocking(move || s.did_open(&f, &c))
+                    .await
+                    .map_err(|e| BladeError::Internal {
+                        trace_id: Uuid::new_v4().to_string(),
+                        message: format!("Task join error: {}", e),
+                    })?
                     .map_err(|e| BladeError::Internal {
                         trace_id: Uuid::new_v4().to_string(),
                         message: format!("DidOpen failed: {}", e),
                     })?;
 
-                // Return a simple acknowledgment event
                 LanguageEvent::FileIndexed {
                     file_path,
-                    symbol_count: 0, // Placeholder, could be enhanced
+                    symbol_count: 0,
                 }
             }
             LanguageIntent::DidChange {
@@ -328,25 +383,33 @@ impl LanguageHandler {
                 content,
                 version,
             } => {
-                self.service
-                    .did_change(&file_path, version as i32, &content)
+                let s = service.clone();
+                spawn_blocking(move || s.did_change(&file_path, version as i32, &content))
+                    .await
+                    .map_err(|e| BladeError::Internal {
+                        trace_id: Uuid::new_v4().to_string(),
+                        message: format!("Task join error: {}", e),
+                    })?
                     .map_err(|e| BladeError::Internal {
                         trace_id: Uuid::new_v4().to_string(),
                         message: format!("DidChange failed: {}", e),
                     })?;
 
-                // No event for change - diagnostics will come separately
                 return Ok(None);
             }
             LanguageIntent::DidClose { file_path } => {
-                self.service
-                    .did_close(&file_path)
+                let s = service.clone();
+                spawn_blocking(move || s.did_close(&file_path))
+                    .await
+                    .map_err(|e| BladeError::Internal {
+                        trace_id: Uuid::new_v4().to_string(),
+                        message: format!("Task join error: {}", e),
+                    })?
                     .map_err(|e| BladeError::Internal {
                         trace_id: Uuid::new_v4().to_string(),
                         message: format!("DidClose failed: {}", e),
                     })?;
 
-                // No event for close
                 return Ok(None);
             }
 
@@ -355,13 +418,18 @@ impl LanguageHandler {
                 line,
                 character,
             } => {
-                let help = self
-                    .service
-                    .get_signature_help(&file_path, line, character)
-                    .map_err(|e| BladeError::Internal {
-                        trace_id: Uuid::new_v4().to_string(),
-                        message: format!("SignatureHelp failed: {}", e),
-                    })?;
+                let s = service.clone();
+                let help =
+                    spawn_blocking(move || s.get_signature_help(&file_path, line, character))
+                        .await
+                        .map_err(|e| BladeError::Internal {
+                            trace_id: Uuid::new_v4().to_string(),
+                            message: format!("Task join error: {}", e),
+                        })?
+                        .map_err(|e| BladeError::Internal {
+                            trace_id: Uuid::new_v4().to_string(),
+                            message: format!("SignatureHelp failed: {}", e),
+                        })?;
 
                 let (signatures, active_sig, active_param) = if let Some(h) = help {
                     let sigs: Vec<SignatureInfo> = h
@@ -383,7 +451,6 @@ impl LanguageHandler {
                                     label: match p.label {
                                         serde_json::Value::String(s) => s,
                                         serde_json::Value::Array(arr) if arr.len() == 2 => {
-                                            // [start, end] offsets - just return as string for now
                                             format!("[{}, {}]", arr[0], arr[1])
                                         }
                                         _ => p.label.to_string(),
@@ -419,19 +486,25 @@ impl LanguageHandler {
                 end_line,
                 end_character,
             } => {
-                let actions = self
-                    .service
-                    .get_code_actions(
+                let s = service.clone();
+                let actions = spawn_blocking(move || {
+                    s.get_code_actions(
                         &file_path,
                         start_line,
                         start_character,
                         end_line,
                         end_character,
                     )
-                    .map_err(|e| BladeError::Internal {
-                        trace_id: Uuid::new_v4().to_string(),
-                        message: format!("CodeActions failed: {}", e),
-                    })?;
+                })
+                .await
+                .map_err(|e| BladeError::Internal {
+                    trace_id: Uuid::new_v4().to_string(),
+                    message: format!("Task join error: {}", e),
+                })?
+                .map_err(|e| BladeError::Internal {
+                    trace_id: Uuid::new_v4().to_string(),
+                    message: format!("CodeActions failed: {}", e),
+                })?;
 
                 let action_items: Vec<CodeAction> = actions
                     .into_iter()
@@ -469,7 +542,6 @@ impl LanguageHandler {
                                             new_text: te.new_text,
                                         })
                                         .collect();
-                                    // Simple URI to path conversion
                                     let file_path = uri.replace("file://", "");
                                     changes.insert(file_path, converted_edits);
                                 }
@@ -492,15 +564,19 @@ impl LanguageHandler {
                 character,
                 new_name,
             } => {
-                let edit = self
-                    .service
-                    .rename_symbol(&file_path, line, character, &new_name)
-                    .map_err(|e| BladeError::Internal {
-                        trace_id: Uuid::new_v4().to_string(),
-                        message: format!("Rename failed: {}", e),
-                    })?;
+                let s = service.clone();
+                let edit =
+                    spawn_blocking(move || s.rename_symbol(&file_path, line, character, &new_name))
+                        .await
+                        .map_err(|e| BladeError::Internal {
+                            trace_id: Uuid::new_v4().to_string(),
+                            message: format!("Task join error: {}", e),
+                        })?
+                        .map_err(|e| BladeError::Internal {
+                            trace_id: Uuid::new_v4().to_string(),
+                            message: format!("Rename failed: {}", e),
+                        })?;
 
-                // Convert to Blade protocol types
                 let blade_edit = edit.map(|e| {
                     let mut changes = std::collections::HashMap::new();
                     if let Some(e_changes) = e.changes {
@@ -512,8 +588,6 @@ impl LanguageHandler {
                                     new_text: te.new_text,
                                 })
                                 .collect();
-                            // Simple URI to path conversion (may need better logic)
-                            // Assuming file:// URIs for now or direct paths
                             let file_path = uri.replace("file://", "");
                             changes.insert(file_path, converted_edits);
                         }

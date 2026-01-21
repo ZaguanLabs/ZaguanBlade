@@ -9,7 +9,7 @@ interface CompactModelSelectorProps {
     disabled?: boolean;
 }
 
-export const CompactModelSelector: React.FC<CompactModelSelectorProps> = ({ models, selectedId, onSelect, disabled }) => {
+const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ models, selectedId, onSelect, disabled }) => {
     const [isOpen, setIsOpen] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
     const selectedModel = models.find(m => m.id === selectedId) || null;
@@ -108,3 +108,5 @@ export const CompactModelSelector: React.FC<CompactModelSelectorProps> = ({ mode
         </div>
     );
 };
+
+export const CompactModelSelector = React.memo(CompactModelSelectorComponent);

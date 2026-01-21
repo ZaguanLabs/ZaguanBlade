@@ -187,7 +187,7 @@ impl BladeWsClient {
         }
     }
 
-    /// Connect to the WebSocket server and authenticate
+    /// Connect to the WebSocket server and authenticate with retry logic
     pub async fn connect(&self) -> Result<mpsc::UnboundedReceiver<BladeWsEvent>, String> {
         // Convert HTTP URL to WebSocket URL
         let ws_url = self
@@ -196,14 +196,46 @@ impl BladeWsClient {
             .replace("https://", "wss://");
         let url = format!("{}/v1/blade/v2", ws_url);
 
-        eprintln!("[BLADE WS] Connecting to {}", url);
+        let mut retry_count = 0;
+        let max_retries = 8; // ~2 minutes total wait time with exponential backoff
+        let ws_stream;
 
-        // Connect to WebSocket
-        let (ws_stream, _) = connect_async(&url)
-            .await
-            .map_err(|e| format!("WebSocket connection failed: {}", e))?;
+        loop {
+            eprintln!(
+                "[BLADE WS] Connecting to {} (attempt {}/{})",
+                url,
+                retry_count + 1,
+                max_retries + 1
+            );
 
-        eprintln!("[BLADE WS] Connected successfully");
+            match connect_async(&url).await {
+                Ok((stream, _)) => {
+                    eprintln!("[BLADE WS] Connected successfully");
+                    ws_stream = stream;
+                    break;
+                }
+                Err(e) => {
+                    retry_count += 1;
+                    if retry_count > max_retries {
+                        return Err(format!(
+                            "WebSocket connection failed after {} retries: {}",
+                            max_retries, e
+                        ));
+                    }
+
+                    // Exponential backoff: 500ms, 1s, 2s, 4s, 8s, 16s, 32s, 64s
+                    let delay_ms = 500 * (1 << (retry_count - 1));
+                    let delay = std::time::Duration::from_millis(delay_ms);
+
+                    eprintln!(
+                        "[BLADE WS] Connection failed: {}. Retrying in {:?}... ({}/{})",
+                        e, delay, retry_count, max_retries
+                    );
+
+                    tokio::time::sleep(delay).await;
+                }
+            }
+        }
 
         let (mut write, mut read) = ws_stream.split();
 

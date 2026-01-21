@@ -49,7 +49,7 @@ pub fn parse_change_args(
 
     // Determine change type based on tool name and file existence
     let change_type = match tool_name {
-        "delete_file" => ChangeType::DeleteFile,
+        "delete_file" => ChangeType::DeleteFile { old_content: None },
         "write_file" | "create_file" => {
             // Always a new file for these tools
             let content = obj
@@ -98,6 +98,7 @@ pub fn parse_change_args(
                             },
                             path,
                             change_type: ChangeType::MultiPatch { patches },
+                            applied: false,
                         });
                     }
                 }
@@ -151,5 +152,6 @@ pub fn parse_change_args(
         },
         path,
         change_type,
+        applied: false,
     })
 }

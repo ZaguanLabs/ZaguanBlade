@@ -1,13 +1,17 @@
 {
   "name": "zblade",
-  "version": "0.0.3-alpha",
+  "version": "0.0.4-alpha",
   "private": true,
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint",
-    "tauri": "RAYON_NUM_THREADS=8 tauri"
+    "tauri": "RAYON_NUM_THREADS=8 tauri",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx}": "eslint --fix"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.0",
@@ -70,6 +74,9 @@
     "@vitejs/plugin-react": "^5.1.2",
     "babel-plugin-react-compiler": "1.0.0",
     "eslint": "^9.39.2",
+    "eslint-config-next": "^16.1.4",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.7",
     "tailwindcss": "^4.1.18",
     "terser": "^5.46.0",
     "typescript": "^5.9.3",
