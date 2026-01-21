@@ -98,8 +98,8 @@ export type TerminalIntent =
     | { type: "Kill"; payload: { id: string } };
 
 export type HistoryIntent =
-    | { type: "ListConversations"; payload: { user_id: string; project_id: string } }
-    | { type: "LoadConversation"; payload: { session_id: string; user_id: string } };
+    | { type: "ListConversations"; payload: { project_id: string } }
+    | { type: "LoadConversation"; payload: { session_id: string } };
 
 export type SystemIntent =
     | { type: "SetLogLevel"; payload: { level: string } };

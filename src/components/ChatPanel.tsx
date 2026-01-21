@@ -37,7 +37,6 @@ interface ChatPanelProps {
     pendingChanges: Change[];
     approveAllChanges: () => void;
     rejectChange: (changeId: string) => void;
-    userId: string;
     projectId: string;
     onLoadConversation: (messages: ChatMessageType[]) => void;
     researchProgress?: ResearchProgress | null;
@@ -57,7 +56,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     pendingChanges,
     approveAllChanges,
     rejectChange,
-    userId,
     projectId,
     onLoadConversation,
     researchProgress,
@@ -119,13 +117,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
     const handleSelectConversation = useCallback(async (sessionId: string) => {
         try {
-            const conversationMessages = await loadConversation(sessionId, userId);
+            const conversationMessages = await loadConversation(sessionId);
             onLoadConversation(conversationMessages);
             setActiveTab('chat');
         } catch (e) {
             console.error('Failed to load conversation:', e);
         }
-    }, [loadConversation, userId, onLoadConversation]);
+    }, [loadConversation, onLoadConversation]);
 
     return (
         <div className="flex flex-col h-full bg-[var(--bg-app)] text-[var(--fg-primary)] font-sans tracking-tight" onContextMenu={handleContextMenu}>
@@ -236,7 +234,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 </div>
             ) : (
                 <HistoryTab
-                    userId={userId}
                     projectId={projectId}
                     onSelectConversation={handleSelectConversation}
                 />

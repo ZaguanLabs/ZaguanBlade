@@ -184,8 +184,8 @@ pub enum TerminalIntent {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", content = "payload")]
 pub enum HistoryIntent {
-    ListConversations { user_id: String, project_id: String },
-    LoadConversation { session_id: String, user_id: String },
+    ListConversations { project_id: String },
+    LoadConversation { session_id: String },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -440,15 +440,18 @@ pub enum HistoryEvent {
     ConversationList {
         conversations: Vec<ConversationSummary>,
     },
-    ConversationLoaded {
-        session_id: String,
-        project_id: String,
-        title: String,
-        created_at: String,
-        last_active_at: String,
-        message_count: u32,
-        messages: Vec<HistoryMessage>,
-    },
+    ConversationLoaded(FullConversation),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FullConversation {
+    pub session_id: String,
+    pub project_id: String,
+    pub title: String,
+    pub created_at: String,
+    pub last_active_at: String,
+    pub message_count: u32,
+    pub messages: Vec<HistoryMessage>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

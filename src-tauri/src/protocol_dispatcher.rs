@@ -474,14 +474,8 @@ pub async fn dispatch(
         },
         BladeIntent::History(history_intent) => {
             match history_intent {
-                blade_protocol::HistoryIntent::ListConversations {
-                    user_id,
-                    project_id,
-                } => {
-                    println!(
-                        "[History] ListConversations: user={}, project={}",
-                        user_id, project_id
-                    );
+                blade_protocol::HistoryIntent::ListConversations { project_id } => {
+                    println!("[History] ListConversations: project={}", project_id);
 
                     // Get config to create BladeClient
                     let (blade_url, api_key) = {
@@ -495,10 +489,7 @@ pub async fn dispatch(
                         crate::blade_client::BladeClient::new(blade_url, http_client, api_key);
 
                     // Call API
-                    match blade_client
-                        .get_conversation_history(&user_id, &project_id)
-                        .await
-                    {
+                    match blade_client.get_conversation_history(&project_id).await {
                         Ok(response) => {
                             // Parse response into ConversationSummary vec
                             let conversations: Vec<blade_protocol::ConversationSummary> =
@@ -512,15 +503,104 @@ pub async fn dispatch(
                                 };
 
                             let _ = window.emit(
-                                "sys-event",
-                                blade_protocol::BladeEvent::History(
-                                    blade_protocol::HistoryEvent::ConversationList {
-                                        conversations,
-                                    },
-                                ),
+                                "blade-event",
+                                blade_protocol::BladeEventEnvelope {
+                                    id: uuid::Uuid::new_v4(),
+                                    timestamp: std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_millis()
+                                        as u64,
+                                    causality_id: Some(intent_id.to_string()),
+                                    event: blade_protocol::BladeEvent::History(
+                                        blade_protocol::HistoryEvent::ConversationList {
+                                            conversations,
+                                        },
+                                    ),
+                                },
                             );
 
                             Ok(())
+                        }
+                        Err(e) => {
+                            let error = blade_protocol::BladeError::Internal {
+                                trace_id: intent_id.to_string(),
+                                message: format!("{:?}", e),
+                            };
+                            let _ = window.emit(
+                                "blade-event",
+                                blade_protocol::BladeEventEnvelope {
+                                    id: uuid::Uuid::new_v4(),
+                                    timestamp: std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_millis()
+                                        as u64,
+                                    causality_id: Some(intent_id.to_string()),
+                                    event: blade_protocol::BladeEvent::System(
+                                        blade_protocol::SystemEvent::IntentFailed {
+                                            intent_id,
+                                            error: error.clone(),
+                                        },
+                                    ),
+                                },
+                            );
+                            Err(error)
+                        }
+                    }
+                }
+                blade_protocol::HistoryIntent::LoadConversation { session_id } => {
+                    println!("[History] LoadConversation: session={}", session_id);
+
+                    // Get config to create BladeClient
+                    let (blade_url, api_key) = {
+                        let config = state.config.lock().unwrap();
+                        (config.blade_url.clone(), config.api_key.clone())
+                    };
+
+                    // Create HTTP client and BladeClient
+                    let http_client = reqwest::Client::new();
+                    let blade_client =
+                        crate::blade_client::BladeClient::new(blade_url, http_client, api_key);
+
+                    // Call API
+                    match blade_client.get_conversation(&session_id).await {
+                        Ok(response) => {
+                            // Parse response as FullConversation
+                            match serde_json::from_value::<blade_protocol::FullConversation>(
+                                response,
+                            ) {
+                                Ok(full_conversation) => {
+                                    let _ = window.emit(
+                                        "blade-event",
+                                        blade_protocol::BladeEventEnvelope {
+                                            id: uuid::Uuid::new_v4(),
+                                            timestamp: std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_millis()
+                                                as u64,
+                                            causality_id: Some(intent_id.to_string()),
+                                            event: blade_protocol::BladeEvent::History(
+                                                blade_protocol::HistoryEvent::ConversationLoaded(
+                                                    full_conversation,
+                                                ),
+                                            ),
+                                        },
+                                    );
+                                    Ok(())
+                                }
+                                Err(e) => {
+                                    eprintln!("[History] Failed to parse conversation data: {}", e);
+                                    Err(blade_protocol::BladeError::Internal {
+                                        trace_id: intent_id.to_string(),
+                                        message: format!(
+                                            "Failed to parse conversation data: {}",
+                                            e
+                                        ),
+                                    })
+                                }
+                            }
                         }
                         Err(e) => Err(blade_protocol::BladeError::Internal {
                             trace_id: intent_id.to_string(),
@@ -528,7 +608,6 @@ pub async fn dispatch(
                         }),
                     }
                 }
-                _ => Ok(()), // Placeholder for other history intents if needed
             }
         }
         BladeIntent::System(system_intent) => {

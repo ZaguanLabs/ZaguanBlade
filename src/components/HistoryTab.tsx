@@ -4,31 +4,30 @@ import { useHistory } from '../hooks/useHistory';
 import type { ConversationSummary } from '../types/history';
 
 interface HistoryTabProps {
-    userId: string;
     projectId: string;
     onSelectConversation: (sessionId: string) => void;
 }
 
-export const HistoryTab: React.FC<HistoryTabProps> = ({ userId, projectId, onSelectConversation }) => {
+export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConversation }) => {
     const { conversations, loading, error, fetchConversations } = useHistory();
 
     useEffect(() => {
-        console.log('[HistoryTab] userId:', userId, 'projectId:', projectId);
+        console.log('[HistoryTab] projectId:', projectId);
         console.log('[HistoryTab] conversations.length:', conversations.length);
-        
-        if (userId && projectId) {
+
+        if (projectId) {
             console.log('[HistoryTab] Fetching conversations...');
-            fetchConversations(userId, projectId);
+            fetchConversations(projectId);
         } else {
-            console.warn('[HistoryTab] Missing userId or projectId, not fetching');
+            console.warn('[HistoryTab] Missing projectId, not fetching');
         }
-    }, [userId, projectId, fetchConversations]);
+    }, [projectId, fetchConversations]);
 
     const formatTimestamp = (timestamp: string) => {
         if (!timestamp) {
             return 'Unknown';
         }
-        
+
         const date = new Date(timestamp);
         if (Number.isNaN(date.getTime())) {
             return 'Unknown';

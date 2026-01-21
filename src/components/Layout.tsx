@@ -905,7 +905,6 @@ const AppLayoutInner: React.FC = () => {
                             pendingChanges={chat.pendingChanges}
                             approveAllChanges={chat.approveAllChanges}
                             rejectChange={chat.rejectChange}
-                            userId={userId || "user-1"}
                             projectId={projectId || "default-project"}
                             onLoadConversation={setChatMessages}
                             researchProgress={researchProgress}

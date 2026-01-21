@@ -166,14 +166,10 @@ impl BladeClient {
     }
 
     /// Get conversation history list
-    pub async fn get_conversation_history(
-        &self,
-        user_id: &str,
-        project_id: &str,
-    ) -> Result<Value, String> {
+    pub async fn get_conversation_history(&self, project_id: &str) -> Result<Value, String> {
         let url = format!(
-            "{}/v1/blade/history?user_id={}&project_id={}",
-            self.base_url, user_id, project_id
+            "{}/v1/blade/history?project_id={}&api_key={}",
+            self.base_url, project_id, self.api_key
         );
 
         let response = self
@@ -197,14 +193,10 @@ impl BladeClient {
     }
 
     /// Get full conversation by session ID
-    pub async fn get_conversation(
-        &self,
-        session_id: &str,
-        user_id: &str,
-    ) -> Result<Value, String> {
+    pub async fn get_conversation(&self, session_id: &str) -> Result<Value, String> {
         let url = format!(
-            "{}/v1/blade/history/{}?user_id={}",
-            self.base_url, session_id, user_id
+            "{}/v1/blade/history/{}?api_key={}",
+            self.base_url, session_id, self.api_key
         );
 
         let response = self

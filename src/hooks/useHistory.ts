@@ -59,9 +59,9 @@ export function useHistory() {
         };
     }, []);
 
-    const fetchConversations = useCallback(async (userId: string, projectId: string) => {
+    const fetchConversations = useCallback(async (projectId: string) => {
         try {
-            console.log('[useHistory] fetchConversations called with userId:', userId, 'projectId:', projectId);
+            console.log('[useHistory] fetchConversations called with projectId:', projectId);
             setLoading(true);
             setError(null);
 
@@ -69,7 +69,7 @@ export function useHistory() {
             console.log('[useHistory] Dispatching ListConversations intent...');
             await BladeDispatcher.history({
                 type: 'ListConversations',
-                payload: { user_id: userId, project_id: projectId }
+                payload: { project_id: projectId }
             });
             console.log('[useHistory] ListConversations intent dispatched successfully');
 
@@ -81,7 +81,7 @@ export function useHistory() {
         }
     }, []);
 
-    const loadConversation = useCallback(async (sessionId: string, userId: string): Promise<ChatMessage[]> => {
+    const loadConversation = useCallback(async (sessionId: string): Promise<ChatMessage[]> => {
         return new Promise((resolve, reject) => {
             setLoading(true);
             setError(null);
@@ -124,7 +124,7 @@ export function useHistory() {
                 try {
                     await BladeDispatcher.history({
                         type: 'LoadConversation',
-                        payload: { session_id: sessionId, user_id: userId }
+                        payload: { session_id: sessionId }
                     });
                 } catch (e) {
                     console.error('Failed to load conversation:', e);
