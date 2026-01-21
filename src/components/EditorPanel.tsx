@@ -100,10 +100,10 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     const editorRef = useRef<CodeEditorHandle>(null);
     const pendingNavigation = useRef<{ path: string, line: number, col: number } | null>(null);
 
-    useEffect(() => {
-        // Update editor context when active file changes
-        setActiveFile(activeFile);
-    }, [activeFile, setActiveFile]);
+    // useEffect(() => {
+    //     // Update editor context when active file changes
+    //     setActiveFile(activeFile);
+    // }, [activeFile, setActiveFile]);
 
     useEffect(() => {
         if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;

@@ -10,7 +10,7 @@ import { DocumentTabs } from './DocumentTabs';
 import { DocumentViewer } from './DocumentViewer';
 import { TitleBar } from './TitleBar';
 import { GitBranch, Settings } from 'lucide-react';
-import { EditorProvider } from '../contexts/EditorContext';
+import { EditorProvider, useEditor } from '../contexts/EditorContext';
 import { useChat } from '../hooks/useChat';
 import { ProtocolExplorer } from './dev/ProtocolExplorer';
 import { SettingsModal } from './SettingsModal';
@@ -66,6 +66,13 @@ const AppLayoutInner: React.FC = () => {
     const [chatMessages, setChatMessages] = useState(chat.messages);
     const processingFilesRef = useRef<Set<string>>(new Set());
     const terminalPaneRef = useRef<TerminalPaneHandle>(null);
+
+    // Sync active tab to EditorContext
+    const { setActiveFile } = useEditor();
+    useEffect(() => {
+        const activeTab = tabs.find(t => t.id === activeTabId);
+        setActiveFile(activeTab?.path || null);
+    }, [activeTabId, tabs, setActiveFile]);
 
     // Research progress state
     const [researchProgress, setResearchProgress] = useState<{
