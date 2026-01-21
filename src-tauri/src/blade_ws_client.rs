@@ -194,7 +194,7 @@ impl BladeWsClient {
             .base_url
             .replace("http://", "ws://")
             .replace("https://", "wss://");
-        let url = format!("{}/v1/blade/v2", ws_url);
+        let url = format!("{}/v1/blade/v2?api_key={}", ws_url, self.api_key);
 
         let mut retry_count = 0;
         let max_retries = 8; // ~2 minutes total wait time with exponential backoff
