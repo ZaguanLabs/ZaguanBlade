@@ -627,5 +627,6 @@ export function useChat() {
         approveToolDecision,
         newConversation,
         undoTool,
+        setConversation: setMessages,
     };
 }

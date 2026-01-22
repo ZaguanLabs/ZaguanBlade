@@ -25,7 +25,5 @@ export interface BackendSettings {
     privacy: {
         telemetry: boolean;
     };
-    editor: {
-        enable_lsp: boolean;
-    };
+    editor: {};
 }

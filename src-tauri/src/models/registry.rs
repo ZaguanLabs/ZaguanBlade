@@ -50,6 +50,7 @@ struct ModelCache {
 
 lazy_static::lazy_static! {
     static ref MODEL_CACHE: Arc<Mutex<Option<ModelCache>>> = Arc::new(Mutex::new(None));
+    static ref FETCH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::new(());
 }
 
 async fn fetch_models_from_server(
@@ -67,7 +68,20 @@ async fn fetch_models_from_server(
     }
 
     let response = request.send().await?;
-    let blade_response: BladeModelsResponse = response.json().await?;
+    let response_text = response.text().await?;
+
+    // Try to deserialize
+    let blade_response: BladeModelsResponse = match serde_json::from_str(&response_text) {
+        Ok(res) => res,
+        Err(e) => {
+            eprintln!("[MODEL REGISTRY] Failed to deserialize response: {}", e);
+            eprintln!(
+                "[MODEL REGISTRY] Raw response preview: {:.1000}",
+                response_text
+            );
+            return Err(Box::new(e));
+        }
+    };
 
     let models = blade_response
         .models
@@ -95,7 +109,7 @@ async fn fetch_models_from_server(
 }
 
 pub async fn get_models(blade_url: &str, api_key: &str) -> Vec<ModelInfo> {
-    // 1. Try to use recently cached models if still valid
+    // 1. Fast path: Check cache first
     if let Ok(cache) = MODEL_CACHE.lock() {
         if let Some(ref cached) = *cache {
             if cached.last_fetch.elapsed() < CACHE_TTL {
@@ -104,7 +118,19 @@ pub async fn get_models(blade_url: &str, api_key: &str) -> Vec<ModelInfo> {
         }
     }
 
-    // 2. Cache expired or missing - fetch from server with retry logic
+    // 2. Cache expired or missing - Acquire lock to coordinate fetching
+    let _lock = FETCH_LOCK.lock().await;
+
+    // 3. Double-check cache after acquiring lock (in case another thread just finished fetching)
+    if let Ok(cache) = MODEL_CACHE.lock() {
+        if let Some(ref cached) = *cache {
+            if cached.last_fetch.elapsed() < CACHE_TTL {
+                return cached.models.clone();
+            }
+        }
+    }
+
+    // 4. Truly need to fetch
     let mut retry_count = 0;
     let max_retries = 3;
 
@@ -144,7 +170,7 @@ pub async fn get_models(blade_url: &str, api_key: &str) -> Vec<ModelInfo> {
         }
     }
 
-    // 3. Fallback: If fetch failed but we have expired cache, use it anyway
+    // 5. Fallback: If fetch failed but we have expired cache, use it anyway
     if let Ok(cache) = MODEL_CACHE.lock() {
         if let Some(ref cached) = *cache {
             eprintln!("[MODEL REGISTRY] Using EXPIRED cache as fallback");
@@ -152,6 +178,6 @@ pub async fn get_models(blade_url: &str, api_key: &str) -> Vec<ModelInfo> {
         }
     }
 
-    // 4. Final fallback: empty list
+    // 6. Final fallback: empty list
     Vec::new()
 }

@@ -2,26 +2,14 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { v4 as uuidv4 } from 'uuid';
 import { BladeDispatcher } from './blade';
-import { BladeEventEnvelope } from '../types/blade';
-import type {
+import {
+    BladeEventEnvelope,
     LanguageIntent,
-    CompletionItem,
     LanguageSymbol,
-    LanguageLocation,
-    LanguageDocumentSymbol,
-    LanguageDiagnostic,
-    LanguageEvent,
-    SignatureInfo,
-    CodeActionInfo,
-    LanguageWorkspaceEdit
+    LanguageEvent
 } from '../types/blade';
 
-// Result type for signature help
-export interface SignatureHelpResult {
-    signatures: SignatureInfo[];
-    activeSignature: number | null;
-    activeParameter: number | null;
-}
+
 
 /**
  * Service for interacting with the backend Language Service (Tree-sitter + LSP).
@@ -65,55 +53,7 @@ export class LanguageService {
         });
     }
 
-    static async getCompletions(filePath: string, line: number, character: number): Promise<CompletionItem[]> {
-        return this.request<CompletionItem[]>("GetCompletions", {
-            type: "GetCompletions",
-            payload: { file_path: filePath, line, character }
-        }, (event) => {
-            if (event.type === 'CompletionsReady') return event.payload.items;
-            return undefined;
-        });
-    }
 
-    static async getHover(filePath: string, line: number, character: number): Promise<{ contents: string | null; range: any | null }> {
-        return this.request<{ contents: string | null; range: any | null }>("GetHover", {
-            type: "GetHover",
-            payload: { file_path: filePath, line, character }
-        }, (event) => {
-            if (event.type === 'HoverReady') return { contents: event.payload.contents, range: event.payload.range };
-            return undefined;
-        });
-    }
-
-    static async getDefinition(filePath: string, line: number, character: number): Promise<LanguageLocation[]> {
-        return this.request<LanguageLocation[]>("GetDefinition", {
-            type: "GetDefinition",
-            payload: { file_path: filePath, line, character }
-        }, (event) => {
-            if (event.type === 'DefinitionReady') return event.payload.locations;
-            return undefined;
-        });
-    }
-
-    static async getReferences(filePath: string, line: number, character: number, includeDeclaration: boolean): Promise<LanguageLocation[]> {
-        return this.request<LanguageLocation[]>("GetReferences", {
-            type: "GetReferences",
-            payload: { file_path: filePath, line, character, include_declaration: includeDeclaration }
-        }, (event) => {
-            if (event.type === 'ReferencesReady') return event.payload.locations;
-            return undefined;
-        });
-    }
-
-    static async getDocumentSymbols(filePath: string): Promise<LanguageDocumentSymbol[]> {
-        return this.request<LanguageDocumentSymbol[]>("GetDocumentSymbols", {
-            type: "GetDocumentSymbols",
-            payload: { file_path: filePath }
-        }, (event) => {
-            if (event.type === 'DocumentSymbolsReady') return event.payload.symbols;
-            return undefined;
-        });
-    }
 
     /**
      * Notify the backend that a file was opened.
@@ -147,86 +87,7 @@ export class LanguageService {
         });
     }
 
-    /**
-     * Get diagnostics for a file (errors, warnings, etc.)
-     */
-    static async getDiagnostics(filePath: string): Promise<LanguageDiagnostic[]> {
-        return this.request<LanguageDiagnostic[]>("GetDiagnostics", {
-            type: "GetDiagnostics",
-            payload: { file_path: filePath }
-        }, (event) => {
-            if (event.type === 'DiagnosticsUpdated') return event.payload.diagnostics;
-            return undefined;
-        });
-    }
 
-    /**
-     * Get signature help (parameter hints) at position
-     */
-    static async getSignatureHelp(filePath: string, line: number, character: number): Promise<SignatureHelpResult | null> {
-        return this.request<SignatureHelpResult | null>("GetSignatureHelp", {
-            type: "GetSignatureHelp",
-            payload: { file_path: filePath, line, character }
-        }, (event) => {
-            if (event.type === 'SignatureHelpReady') {
-                if (event.payload.signatures.length === 0) return null;
-                return {
-                    signatures: event.payload.signatures,
-                    activeSignature: event.payload.active_signature,
-                    activeParameter: event.payload.active_parameter
-                };
-            }
-            return undefined;
-        });
-    }
-
-    /**
-     * Get code actions (quick fixes) for a range
-     */
-    static async getCodeActions(
-        filePath: string,
-        startLine: number,
-        startCharacter: number,
-        endLine: number,
-        endCharacter: number
-    ): Promise<CodeActionInfo[]> {
-        return this.request<CodeActionInfo[]>("GetCodeActions", {
-            type: "GetCodeActions",
-            payload: {
-                file_path: filePath,
-                start_line: startLine,
-                start_character: startCharacter,
-                end_line: endLine,
-                end_character: endCharacter
-            }
-        }, (event) => {
-            if (event.type === 'CodeActionsReady') return event.payload.actions;
-            return undefined;
-        });
-    }
-
-    /**
-     * Rename a symbol at position
-     */
-    static async renameSymbol(
-        filePath: string,
-        line: number,
-        character: number,
-        newName: string
-    ): Promise<LanguageWorkspaceEdit | null> {
-        return this.request<LanguageWorkspaceEdit | null>("Rename", {
-            type: "Rename",
-            payload: {
-                file_path: filePath,
-                line,
-                character,
-                new_name: newName
-            }
-        }, (event) => {
-            if (event.type === 'RenameEditsReady') return event.payload.edit;
-            return undefined;
-        });
-    }
 
     /**
      * Helper to correlate a request intent with its corresponding response event.

@@ -122,7 +122,7 @@ export const TitleBar: React.FC = () => {
 
     return (
         <div
-            className="h-9 bg-[var(--bg-app)] flex items-center justify-between px-1 select-none border-b border-[var(--border-subtle)] relative z-50"
+            className="h-9 bg-[var(--bg-app)] flex items-center justify-between px-1 select-none border-b border-[var(--border-subtle)] relative z-[51]"
             data-tauri-drag-region
         >
             {/* Left: File Menu */}
@@ -131,11 +131,10 @@ export const TitleBar: React.FC = () => {
                     <div className="relative">
                         <button
                             onClick={handleFileMenuClick}
-                            className={`flex items-center gap-1 px-3 h-9 text-[11px] font-medium transition-colors ${
-                                fileMenuOpen 
-                                    ? 'bg-[var(--bg-surface)] text-[var(--fg-primary)]' 
+                            className={`flex items-center gap-1 px-3 h-9 text-[11px] font-medium transition-colors ${fileMenuOpen
+                                    ? 'bg-[var(--bg-surface)] text-[var(--fg-primary)]'
                                     : 'text-[var(--fg-tertiary)] hover:bg-[var(--bg-surface)] hover:text-[var(--fg-secondary)]'
-                            }`}
+                                }`}
                         >
                             File
                             <ChevronDown className={`w-3 h-3 transition-transform ${fileMenuOpen ? 'rotate-180' : ''}`} />

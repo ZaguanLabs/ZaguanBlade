@@ -463,12 +463,26 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
 
     // Clear cache and pending requests on refresh to force re-fetch
     // Also reset lastExpandedFileRef so the tree re-expands to active file after refresh
+    // Clear cache and pending requests on refresh to force re-fetch
+    // Also reset lastExpandedFileRef so the tree re-expands to active file after refresh
     React.useEffect(() => {
+        console.log('[Explorer] Refreshing tree view (Key: ' + refreshKey + ')');
         itemCache.current.clear();
         pendingRequests.current.clear();
         lastExpandedFileRef.current = null;
+
         if ((tree as any).invalidateItem) {
+            // Invalidate root first
             (tree as any).invalidateItem('root');
+
+            // Also invalidate all currently expanded folders to ensure deep refresh
+            // We get all known items from the tree state
+            const items = tree.getItems();
+            items.forEach(item => {
+                if (item.isFolder() && item.isExpanded()) {
+                    (tree as any).invalidateItem(item.getId());
+                }
+            });
         }
     }, [refreshKey, tree]);
 

@@ -40,7 +40,7 @@ const AppLayoutInner: React.FC = () => {
     const [chatPanelWidth, setChatPanelWidth] = useState(400);
     const [isDragging, setIsDragging] = useState(false);
     const [isChatDragging, setIsChatDragging] = useState(false);
-    const [virtualFiles, setVirtualFiles] = useState<Set<string>>(new Set());
+
 
     // Sidebar State
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -65,12 +65,11 @@ const AppLayoutInner: React.FC = () => {
     } = useGitStatus();
     const gitChangedCount = gitStatus?.changedCount ?? 0;
     const { selectedModelId, setSelectedModelId, messages } = chat;
-    const [chatMessages, setChatMessages] = useState(chat.messages);
     const processingFilesRef = useRef<Set<string>>(new Set());
     const terminalPaneRef = useRef<TerminalPaneHandle>(null);
 
     // Sync active tab to EditorContext
-    const { setActiveFile, setEnableLsp } = useEditor();
+    const { setActiveFile } = useEditor();
     useEffect(() => {
         const activeTab = tabs.find(t => t.id === activeTabId);
         setActiveFile(activeTab?.path || null);
@@ -100,11 +99,6 @@ const AppLayoutInner: React.FC = () => {
     const [showStorageSetup, setShowStorageSetup] = useState(false);
     const [hasCheckedZblade, setHasCheckedZblade] = useState(false);
 
-    // Sync chatMessages with chat.messages from useChat
-    useEffect(() => {
-        setChatMessages(chat.messages);
-    }, [chat.messages]);
-
     const [workspacePath, setWorkspacePath] = useState<string | null>(null);
     const [userId, setUserId] = useState<string | null>(null);
     const [projectId, setProjectId] = useState<string | null>(null);
@@ -118,8 +112,8 @@ const AppLayoutInner: React.FC = () => {
                 const settings = await invoke<BackendSettings>('load_project_settings', {
                     projectPath: workspacePath,
                 });
-                setEnableLsp(settings.editor.enable_lsp);
-                console.log('[Layout] Synced enableLsp:', settings.editor.enable_lsp);
+                // setEnableLsp(settings.editor.enable_lsp);
+                // console.log('[Layout] Synced enableLsp:', settings.editor.enable_lsp);
             } catch (e) {
                 console.error('[Layout] Failed to load project settings:', e);
             }
@@ -133,10 +127,14 @@ const AppLayoutInner: React.FC = () => {
         return () => {
             unlistenPromise.then(unlisten => unlisten());
         };
-    }, [workspacePath, setEnableLsp]);
+    }, [workspacePath]);
 
     // Fetch current workspace and user_id on mount
+    const initializedRef = useRef(false);
     useEffect(() => {
+        if (initializedRef.current) return;
+        initializedRef.current = true;
+
         const fetchWorkspace = async () => {
             try {
                 const path = await invoke<string | null>('get_current_workspace');
@@ -167,18 +165,7 @@ const AppLayoutInner: React.FC = () => {
         };
         fetchWorkspace();
         fetchUserId();
-
-        // Poll for user_id until we get it (it's set when WebSocket connects)
-        const userIdInterval = setInterval(async () => {
-            if (!userId) {
-                await fetchUserId();
-            } else {
-                clearInterval(userIdInterval);
-            }
-        }, 1000);
-
-        return () => clearInterval(userIdInterval);
-    }, [userId]);
+    }, []);
 
     // RFC-002: Check if .zblade directory exists for first-time setup
     useEffect(() => {
@@ -255,7 +242,7 @@ const AppLayoutInner: React.FC = () => {
     const terminalState = getTerminalState();
 
     // Project state persistence
-    const { loaded: stateLoaded } = useProjectState({
+    const { loaded: stateLoaded, isClosing } = useProjectState({
         projectPath: workspacePath,
         tabs: tabs.map(t => ({ id: t.id, title: t.title, type: t.type, path: t.path })),
         activeTabId,
@@ -271,21 +258,7 @@ const AppLayoutInner: React.FC = () => {
     // Wait for stateLoaded to prevent multiple warmups during initialization
     const { trackActivity } = useWarmup(workspacePath, selectedModelId, stateLoaded);
 
-    // Poll for virtual buffer state
-    useEffect(() => {
-        const checkVirtualBuffers = async () => {
-            try {
-                const files = await invoke<string[]>('get_virtual_files');
-                setVirtualFiles(new Set(files));
-            } catch (e) {
-                console.error('[VIRTUAL BUFFER] Failed to get virtual files:', e);
-            }
-        };
 
-        checkVirtualBuffers();
-        const interval = setInterval(checkVirtualBuffers, 1000);
-        return () => clearInterval(interval);
-    }, []);
 
     // Auto-open files when edit proposals arrive
     useEffect(() => {
@@ -799,7 +772,7 @@ const AppLayoutInner: React.FC = () => {
                                     title: t.title,
                                     isEphemeral: t.type === 'ephemeral',
                                     isDirty: false,
-                                    hasVirtualChanges: t.path ? virtualFiles.has(t.path) : false,
+                                    hasVirtualChanges: false,
                                 }))}
                                 activeTabId={activeTabId}
                                 onTabClick={setActiveTabId}
@@ -893,7 +866,7 @@ const AppLayoutInner: React.FC = () => {
                         className="min-w-[280px] max-w-[800px] border-l border-[var(--border-subtle)] bg-[var(--bg-panel)] flex flex-col shadow-xl z-30"
                     >
                         <ChatPanel
-                            messages={chatMessages}
+                            messages={chat.messages}
                             loading={chat.loading}
                             error={chat.error}
                             sendMessage={chat.sendMessage}
@@ -905,7 +878,7 @@ const AppLayoutInner: React.FC = () => {
                             approveToolDecision={chat.approveToolDecision}
 
                             projectId={projectId || "default-project"}
-                            onLoadConversation={setChatMessages}
+                            onLoadConversation={chat.setConversation}
                             researchProgress={researchProgress}
                             onNewConversation={chat.newConversation}
                             onUndoTool={chat.undoTool}
@@ -928,6 +901,10 @@ const AppLayoutInner: React.FC = () => {
                     })()}</span>
                 </div>
                 <div className="flex items-center gap-4 opacity-70">
+                    {/* Saving Indicator */}
+                    {isClosing && (
+                        <span className="text-emerald-500 animate-pulse font-semibold">Saving...</span>
+                    )}
                     <span>{t('editor.encoding')}</span>
                     <span>Rust</span>
                     <span>{t('app.name')}</span>

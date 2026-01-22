@@ -9,7 +9,7 @@ pub async fn open_workspace_logic(
     let mut ws = state.workspace.lock().unwrap();
     ws.set_workspace(std::path::PathBuf::from(&path));
     drop(ws);
-    crate::fs_watcher::restart_fs_watcher(app_handle, state);
+    crate::fs_watcher::restart_fs_watcher(app_handle);
     let _ = app_handle.emit(crate::events::event_names::REFRESH_EXPLORER, ());
 
     let language_service = state.language_service.clone();
@@ -143,6 +143,9 @@ pub async fn write_file_content(
     path: String,
     content: String,
     state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
-    write_file_content_logic(path, content, &*state)
+    write_file_content_logic(path, content, &*state)?;
+    let _ = app_handle.emit(crate::events::event_names::REFRESH_EXPLORER, ());
+    Ok(())
 }

@@ -77,6 +77,11 @@ pub enum BladeWsEvent {
         message: String,
     },
     Disconnected,
+    ToolActivity {
+        tool_name: String,
+        file_path: String,
+        action: String,
+    },
 }
 
 /// Workspace information sent to zcoderd
@@ -751,6 +756,36 @@ impl BladeWsClient {
                     content.len()
                 );
                 let _ = tx.send(BladeWsEvent::Research { content });
+            }
+            "tool_activity" => {
+                let tool_name = msg
+                    .payload
+                    .get("tool_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let file_path = msg
+                    .payload
+                    .get("file_path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let action = msg
+                    .payload
+                    .get("action")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("processing")
+                    .to_string();
+
+                eprintln!(
+                    "[BLADE WS] Tool Activity: {} on {} ({})",
+                    tool_name, file_path, action
+                );
+                let _ = tx.send(BladeWsEvent::ToolActivity {
+                    tool_name,
+                    file_path,
+                    action,
+                });
             }
             "get_conversation_context" => {
                 // zcoderd sends payload as Base64-encoded JSON string

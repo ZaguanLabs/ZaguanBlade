@@ -61,6 +61,13 @@ impl AppState {
             }
         }
 
+        // Fallback for api_key from environment variable
+        if config.api_key.trim().is_empty() {
+            if let Ok(key) = std::env::var("BLADE_API_KEY") {
+                config.api_key = key;
+            }
+        }
+
         // Initialize selected model index from config
         // We can't fetch models synchronously here, so we default to 0
         // The actual index will be corrected when models are fetched or when set_selected_model is called
@@ -127,17 +134,7 @@ impl AppState {
             .expect("Failed to initialize Language Service"),
         );
 
-        // Enable LSP based on project settings
-        let settings =
-            crate::project_settings::load_project_settings(&std::path::PathBuf::from(ls_root));
-
-        if settings.editor.enable_lsp {
-            if let Err(e) = language_service.enable_lsp() {
-                eprintln!("Warning: Failed to enable LSP: {}", e);
-            }
-        } else {
-            println!("LSP support is disabled in project settings.");
-        }
+        // Initialize Language Handler
 
         let language_handler =
             crate::language_service::LanguageHandler::new(language_service.clone());

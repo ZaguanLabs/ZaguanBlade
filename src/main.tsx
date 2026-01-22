@@ -26,7 +26,7 @@ const AppWrapper = () => {
                 } else {
                     console.log('[WINDOW] Not in Tauri environment, skipping window.show()');
                 }
-                
+
                 // Remove loading screen after window is shown
                 setTimeout(() => {
                     const loadingScreen = document.getElementById('loading-screen');
@@ -62,11 +62,9 @@ const AppWrapper = () => {
 };
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
-    <React.StrictMode>
-        <BrowserRouter>
-            <ContextMenuProvider>
-                <AppWrapper />
-            </ContextMenuProvider>
-        </BrowserRouter>
-    </React.StrictMode>
+    <BrowserRouter>
+        <ContextMenuProvider>
+            <AppWrapper />
+        </ContextMenuProvider>
+    </BrowserRouter>
 );

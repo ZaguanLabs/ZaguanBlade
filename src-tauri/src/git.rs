@@ -299,6 +299,7 @@ pub fn git_status_summary(state: State<'_, AppState>) -> Result<GitStatusSummary
         .arg(&root)
         .arg("status")
         .arg("--porcelain=v2")
+        .arg("-uall")
         .arg("--branch")
         .output()
         .map_err(|e| format!("failed to run git status: {}", e))?;
@@ -326,6 +327,7 @@ pub fn git_status_files(state: State<'_, AppState>) -> Result<Vec<GitFileStatus>
         .arg(&root)
         .arg("status")
         .arg("--porcelain=v2")
+        .arg("-uall")
         .output()
         .map_err(|e| format!("failed to run git status: {}", e))?;
 

@@ -30,6 +30,11 @@ pub enum DrainResult {
     ToolCalls(Vec<ToolCall>, Option<String>),
     ToolCreated(ChatMessage, Vec<ToolCall>),
     ToolStatusUpdate(ChatMessage),
+    ToolActivity {
+        tool_name: String,
+        file_path: String,
+        action: String,
+    },
     TodoUpdated(Vec<crate::protocol::TodoItem>),
     Error(String),
 }
@@ -356,6 +361,23 @@ impl ChatManager {
                                     content,
                                     suggested_name: String::new(),
                                 });
+                            }
+                            crate::blade_ws_client::BladeWsEvent::ToolActivity {
+                                tool_name,
+                                file_path,
+                                action,
+                            } => {
+                                eprintln!(
+                                    "[CHAT MGR] Tool Activity: {} on {} ({})",
+                                    tool_name, file_path, action
+                                );
+                                let _ = tx.send(ChatEvent::ToolActivity(
+                                    crate::protocol::ToolActivityPayload {
+                                        tool_name,
+                                        file_path,
+                                        action,
+                                    },
+                                ));
                             }
                             crate::blade_ws_client::BladeWsEvent::GetConversationContext {
                                 request_id,
@@ -813,6 +835,14 @@ impl ChatManager {
                         }
                     }
                     batched_chunk.push_str(&s);
+                }
+                ChatEvent::ToolActivity(payload) => {
+                    flush_batch!();
+                    self.pending_results.push_back(DrainResult::ToolActivity {
+                        tool_name: payload.tool_name,
+                        file_path: payload.file_path,
+                        action: payload.action,
+                    });
                 }
                 ChatEvent::ReasoningChunk(s) => {
                     if let Some(last) = conversation.last_assistant_mut() {

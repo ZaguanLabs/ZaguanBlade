@@ -66,7 +66,19 @@ pub fn load_conversation(id: String, state: State<'_, AppState>) -> Result<(), S
     let stored = store.load_conversation(&id)?;
 
     let mut conversation = state.conversation.lock().unwrap();
-    *conversation = ConversationHistory::from_stored(stored);
+    *conversation = ConversationHistory::from_stored(stored.clone());
+
+    // Restore session ID to ChatManager so it can resume the session
+    {
+        let mut mgr = state.chat_manager.lock().unwrap();
+        if let Some(session_id) = &stored.metadata.session_id {
+            mgr.session_id = Some(session_id.clone());
+            eprintln!("[CHAT] Restored session ID: {}", session_id);
+        } else {
+            mgr.session_id = None;
+            eprintln!("[CHAT] No session ID in loaded conversation");
+        }
+    }
 
     Ok(())
 }
@@ -79,8 +91,20 @@ pub fn new_conversation(model_id: String, state: State<'_, AppState>) -> Result<
         if conversation.len() > 0 {
             let mut store = state.conversation_store.lock().unwrap();
             let stored = conversation.to_stored();
+            // Note: session_id is auto-saved by background loop, but we should make sure
+            // we don't lose the current session ID if we switch away.
+            // However, conversation.to_stored() uses ConversationMetadata which we don't hold in ConversationHistory.
+            // This logic relies on `store` having the correct metadata already or creating new.
+            // The background loop in chat_orchestrator handles continuous saving with session_id.
+
             store.save_conversation(&stored)?;
         }
+    }
+
+    // Clear session ID in ChatManager for the new conversation
+    {
+        let mut mgr = state.chat_manager.lock().unwrap();
+        mgr.session_id = None;
     }
 
     // Create new conversation

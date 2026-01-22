@@ -29,18 +29,16 @@ import {
     rainbowBrackets,
     smoothCursor,
     scrollPastEnd,
-    languageFeatures,
-    diagnosticsExtension,
-    signatureHelpExtension,
-    codeActionsExtension,
-    referencesExtension,
-    renameExtension,
 } from "./editor/extensions";
+import { zlpLinter } from "./editor/extensions/zlpLinter";
 import { useEditor } from "../contexts/EditorContext";
 import { useContextMenu, type ContextMenuItem } from "./ui/ContextMenu";
-import { Copy, Scissors, Clipboard, Undo2, Redo2, Search } from "lucide-react";
+import { Copy, Scissors, Clipboard, Undo2, Redo2, Search, Network } from "lucide-react";
 import type { Change } from "../types/change";
 import { LanguageService } from "../services/language";
+import { ZLPService } from "../services/zlp";
+import { StructureNode } from "../types/zlp";
+import { GraphInspector } from "./GraphInspector";
 
 // Map file extension to LSP language ID
 function getLanguageId(filename: string): string {
@@ -86,15 +84,11 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     const editorRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     const languageConf = useRef(new Compartment());
-    const languageFeaturesConf = useRef(new Compartment());
-    const diagnosticsConf = useRef(new Compartment());
-    const signatureHelpConf = useRef(new Compartment());
-    const codeActionsConf = useRef(new Compartment());
-    const referencesConf = useRef(new Compartment());
-    const renameConf = useRef(new Compartment());
     const { editorState, setCursorPosition, setSelection, clearSelection } = useEditor();
-    const { enableLsp } = editorState;
     const { showMenu } = useContextMenu();
+
+    // Call Graph Inspector State
+    const [inspectorData, setInspectorData] = React.useState<{ id: string; name: string } | null>(null);
 
     // LSP document sync tracking
     const documentVersion = useRef(0);
@@ -239,19 +233,9 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
 
                 // Language support (dynamic)
                 languageConf.current.of(getLanguageExtension(filename)),
-                languageFeaturesConf.current.of(languageFeatures(filename || "", onNavigate)),
-                diagnosticsConf.current.of(diagnosticsExtension(filename || "")),
-                signatureHelpConf.current.of(signatureHelpExtension(filename || "")),
-                codeActionsConf.current.of(codeActionsExtension(filename || "")),
-                referencesConf.current.of(referencesExtension(filename || "", (path, line, char) => {
-                    if (onNavigate) onNavigate(path, line, char);
-                })),
-                renameConf.current.of(renameExtension(filename || "", (changes) => {
-                    // Start of handling rename edits
-                    console.log("Applying rename edits:", changes);
-                    // For now we just log, real implementation requires workspace edit handling
-                    // which is currently out of scope for this specific file editor component
-                })),
+
+                // ZLP Linter
+                zlpLinter(filename || ''),
 
                 // Keymaps
                 keymap.of([
@@ -333,19 +317,12 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 changes: { from: 0, to: view.state.doc.length, insert: content },
                 effects: [
                     languageConf.current.reconfigure(getLanguageExtension(filename)),
-                    languageFeaturesConf.current.reconfigure(languageFeatures(filename || "", onNavigate)),
-                    diagnosticsConf.current.reconfigure(diagnosticsExtension(filename || "")),
-                    signatureHelpConf.current.reconfigure(signatureHelpExtension(filename || "")),
-                    codeActionsConf.current.reconfigure(codeActionsExtension(filename || "")),
-                    referencesConf.current.reconfigure(referencesExtension(filename || "", (path, line, char) => {
-                        if (onNavigate) onNavigate(path, line, char);
-                    })),
                     setBaseContent.of(content) // Initialize virtual buffer with base content
                 ]
             });
 
             // Notify LSP that file was opened
-            if (filename && enableLsp) {
+            if (filename) {
                 const languageId = getLanguageId(filename);
                 documentVersion.current = 1;
                 LanguageService.didOpen(filename, content, languageId).catch(e =>
@@ -368,9 +345,10 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     }, [filename, content, onNavigate]);
 
     // Send didChange to LSP on document changes (debounced)
+    // Send didChange to LSP on document changes (debounced)
     useEffect(() => {
         const view = viewRef.current;
-        if (!view || !filename || !enableLsp) return;
+        if (!view || !filename) return;
 
         // Debounce didChange notifications
         if (didChangeTimeout.current) {
@@ -381,16 +359,6 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
             documentVersion.current += 1;
             try {
                 await LanguageService.didChange(filename, content, documentVersion.current);
-
-                // After a short delay for LSP to process, fetch diagnostics
-                setTimeout(async () => {
-                    try {
-                        // This will trigger DiagnosticsUpdated event handled by diagnosticsExtension
-                        await LanguageService.getDiagnostics(filename);
-                    } catch (e) {
-                        // Diagnostics fetch is best-effort
-                    }
-                }, 200);
             } catch (e) {
                 console.warn('[LSP] didChange failed:', e);
             }
@@ -401,28 +369,9 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 clearTimeout(didChangeTimeout.current);
             }
         };
-    }, [content, filename, enableLsp]);
+    }, [content, filename]);
 
-    // Handle LSP toggle and reconfigure extensions
-    useEffect(() => {
-        const view = viewRef.current;
-        if (!view) return;
 
-        view.dispatch({
-            effects: [
-                languageFeaturesConf.current.reconfigure(enableLsp ? languageFeatures(filename || "", onNavigate) : []),
-                diagnosticsConf.current.reconfigure(enableLsp ? diagnosticsExtension(filename || "") : []),
-                signatureHelpConf.current.reconfigure(enableLsp ? signatureHelpExtension(filename || "") : []),
-                codeActionsConf.current.reconfigure(enableLsp ? codeActionsExtension(filename || "") : []),
-                referencesConf.current.reconfigure(enableLsp ? referencesExtension(filename || "", (path, line, char) => {
-                    if (onNavigate) onNavigate(path, line, char);
-                }) : []),
-                renameConf.current.reconfigure(enableLsp ? renameExtension(filename || "", (changes) => {
-                    console.log("Applying rename edits:", changes);
-                }) : []),
-            ]
-        });
-    }, [enableLsp, filename, onNavigate]);
 
     // Handle line highlighting when highlightLines prop changes or content loads
     useEffect(() => {
@@ -548,6 +497,48 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                     });
                     view.contentDOM.dispatchEvent(event);
                 }
+            },
+            { id: 'div-3', label: '', divider: true },
+            {
+                id: 'graph',
+                label: 'Show Call Graph',
+                icon: <Network className="w-4 h-4" />,
+                onClick: async () => {
+                    if (!filename) return;
+                    const pos = view.state.selection.main.head;
+                    const line = view.state.doc.lineAt(pos);
+
+                    try {
+                        const structure = await ZLPService.getStructure(filename, "");
+
+                        const findNode = (nodes: StructureNode[]): StructureNode | null => {
+                            for (const node of nodes) {
+                                // Structure ranges are 0-based in ZLP (usually)
+                                const startLine = node.range.start.line;
+                                const endLine = node.range.end.line;
+                                const currentLine0 = line.number - 1;
+
+                                if (currentLine0 >= startLine && currentLine0 <= endLine) {
+                                    if (node.children) {
+                                        const child = findNode(node.children);
+                                        if (child) return child;
+                                    }
+                                    return node;
+                                }
+                            }
+                            return null;
+                        };
+
+                        const node = findNode(structure);
+                        if (node) {
+                            setInspectorData({ id: node.name, name: node.name });
+                        } else {
+                            console.warn("No symbol found at cursor for graph");
+                        }
+                    } catch (e) {
+                        console.error("Failed to resolve symbol for graph", e);
+                    }
+                }
             }
         ];
 
@@ -557,6 +548,18 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     return (
         <div className="h-full w-full relative" onContextMenu={handleContextMenu}>
             <div ref={editorRef} className="h-full w-full overflow-hidden text-base" />
+
+            {inspectorData && filename && (
+                <GraphInspector
+                    symbolId={inspectorData.id}
+                    symbolName={inspectorData.name}
+                    filePath={filename}
+                    onClose={() => setInspectorData(null)}
+                    onNavigate={(p, l, c) => {
+                        if (onNavigate) onNavigate(p, l, c);
+                    }}
+                />
+            )}
         </div>
     );
 });

@@ -78,6 +78,15 @@ pub fn create_terminal<R: Runtime>(
 
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
+    // Explicitly set LANG to ensure UTF-8 support in the PTY
+    let lang = std::env::var("LANG").unwrap_or_else(|_| "en_US.UTF-8".to_string());
+    cmd.env("LANG", &lang);
+    // Also set LC_ALL to be safe
+    if let Ok(lc_all) = std::env::var("LC_ALL") {
+        cmd.env("LC_ALL", lc_all);
+    } else {
+        cmd.env("LC_ALL", &lang);
+    }
 
     // Ensure shells emit OSC 7 working-directory updates so the UI can track cwd changes.
     if is_interactive {
@@ -408,6 +417,15 @@ pub fn execute_command_in_terminal<R: Runtime>(
 
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
+    // Explicitly set LANG to ensure UTF-8 support in the PTY
+    let lang = std::env::var("LANG").unwrap_or_else(|_| "en_US.UTF-8".to_string());
+    cmd.env("LANG", &lang);
+    // Also set LC_ALL to be safe
+    if let Ok(lc_all) = std::env::var("LC_ALL") {
+        cmd.env("LC_ALL", lc_all);
+    } else {
+        cmd.env("LC_ALL", &lang);
+    }
 
     let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;

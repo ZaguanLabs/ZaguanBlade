@@ -199,7 +199,7 @@ pub async fn handle_send_message<R: Runtime>(
                     let mut cache = state.approved_command_roots.lock().unwrap();
                     cache.clear();
                 }
-                last_session_id = session_id;
+                last_session_id = session_id.clone();
             }
 
             if let DrainResult::None = result {
@@ -208,7 +208,9 @@ pub async fn handle_send_message<R: Runtime>(
                     {
                         let conversation = state.conversation.lock().unwrap();
                         let mut store = state.conversation_store.lock().unwrap();
-                        let stored = conversation.to_stored();
+                        let mut stored = conversation.to_stored();
+                        // Persist the current session ID to the stored metadata
+                        stored.metadata.session_id = session_id.clone();
                         if let Err(e) = store.save_conversation(&stored) {
                             eprintln!("Failed to auto-save conversation: {}", e);
                         } else {
@@ -418,6 +420,30 @@ pub async fn handle_send_message<R: Runtime>(
                         },
                     );
                 }
+            } else if let DrainResult::ToolActivity {
+                tool_name,
+                file_path,
+                action,
+            } = result
+            {
+                let _ = window.emit(
+                    "blade-event",
+                    blade_protocol::BladeEventEnvelope {
+                        id: uuid::Uuid::new_v4(),
+                        timestamp: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64,
+                        causality_id: None,
+                        event: blade_protocol::BladeEvent::Chat(
+                            blade_protocol::ChatEvent::ToolActivity {
+                                tool_name,
+                                file_path,
+                                action,
+                            },
+                        ),
+                    },
+                );
             } else if let DrainResult::ToolStatusUpdate(msg) = result {
                 // v1.1: Emit ToolUpdate events via blade-event
                 if let Some(tool_calls) = &msg.tool_calls {
@@ -721,15 +747,24 @@ pub async fn handle_send_message<R: Runtime>(
                     for (call, result) in &batch.file_results {
                         if result.success
                             && (call.function.name == "write_file"
-                                || call.function.name == "create_file")
+                                || call.function.name == "create_file"
+                                || call.function.name == "replace_file_content"
+                                || call.function.name == "apply_edit"
+                                || call.function.name == "edit_file"
+                                || call.function.name == "multi_replace_file_content")
                         {
                             // Extract path from tool arguments
                             if let Ok(args) = serde_json::from_str::<
                                 std::collections::HashMap<String, serde_json::Value>,
                             >(&call.function.arguments)
                             {
-                                if let Some(path_value) =
-                                    args.get("path").or_else(|| args.get("file_path"))
+                                if let Some(path_value) = args
+                                    .get("path")
+                                    .or_else(|| args.get("file_path"))
+                                    .or_else(|| args.get("filepath"))
+                                    .or_else(|| args.get("filename"))
+                                    .or_else(|| args.get("TargetFile")) // For replace_file_content
+                                    .or_else(|| args.get("target_file"))
                                 {
                                     if let Some(path) = path_value.as_str() {
                                         eprintln!("[AUTO OPEN] Opening file in editor: {}", path);

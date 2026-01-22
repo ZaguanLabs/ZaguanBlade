@@ -46,6 +46,7 @@ pub enum BladeEvent {
         message: String,
         details: String,
     },
+    ZlpResponse(Value),
 }
 
 /// Workspace information sent to zcoderd
@@ -163,6 +164,69 @@ impl BladeClient {
         };
 
         self.send_blade_request(request).await
+    }
+
+    /// Send a raw ZLP request to /v1/zlp
+    pub async fn send_zlp_request(
+        &self,
+        payload: Value,
+    ) -> Result<mpsc::UnboundedReceiver<BladeEvent>, String> {
+        let url = format!("{}/v1/zlp", self.base_url);
+
+        let response = self
+            .http_client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to send ZLP request: {}", e))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("ZLP error {}: {}", status, text));
+        }
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+
+        if content_type.contains("text/event-stream") {
+            // Spawn task to parse SSE stream
+            tokio::spawn(async move {
+                if let Err(e) = Self::parse_sse_stream(response, tx.clone()).await {
+                    let _ = tx.send(BladeEvent::Error {
+                        code: "stream_error".to_string(),
+                        message: e,
+                        details: String::new(),
+                    });
+                }
+            });
+        } else {
+            // Assume single JSON response
+            tokio::spawn(async move {
+                match response.json::<Value>().await {
+                    Ok(json) => {
+                        let _ = tx.send(BladeEvent::ZlpResponse(json));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(BladeEvent::Error {
+                            code: "json_error".to_string(),
+                            message: e.to_string(),
+                            details: String::new(),
+                        });
+                    }
+                }
+            });
+        }
+
+        Ok(rx)
     }
 
     /// Get conversation history list
