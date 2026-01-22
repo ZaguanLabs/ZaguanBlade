@@ -20,7 +20,47 @@ interface CommandCenterProps {
     setSelectedModelId: (modelId: string) => void;
 }
 
-export const CommandCenter: React.FC<CommandCenterProps> = ({
+// Optimized rendering component for the formatted text overlay
+const FormattedOverlay: React.FC<{ text: string }> = React.memo(({ text }) => {
+    if (!text.includes('@')) return null;
+
+    const parts: React.ReactNode[] = [];
+    const regex = /@(\w+)/g;
+    let lastIndex = 0;
+    let match;
+
+    while ((match = regex.exec(text)) !== null) {
+        if (match.index > lastIndex) {
+            parts.push(
+                <span key={`text-${lastIndex}`} className="font-sans">
+                    {text.slice(lastIndex, match.index)}
+                </span>
+            );
+        }
+        parts.push(
+            <span
+                key={`cmd-${match.index}`}
+                className="text-[var(--accent-primary)] font-semibold"
+            >
+                {match[0]}
+            </span>
+        );
+        lastIndex = regex.lastIndex;
+    }
+
+    if (lastIndex < text.length) {
+        parts.push(
+            <span key={`text-${lastIndex}`} className="font-sans">
+                {text.slice(lastIndex)}
+            </span>
+        );
+    }
+
+    return <>{parts}</>;
+});
+FormattedOverlay.displayName = 'FormattedOverlay';
+
+const CommandCenterComponent: React.FC<CommandCenterProps> = ({
     onSend,
     onStop,
     disabled,
@@ -37,63 +77,42 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const popupRef = useRef<HTMLDivElement>(null);
 
-    // Render text with @ commands styled differently
-    const renderFormattedText = useCallback((inputText: string) => {
-        const parts: React.ReactNode[] = [];
-        const regex = /@(\w+)/g;
-        let lastIndex = 0;
-        let match;
+    // Unified height adjustment to minimize reflows
+    const adjustHeight = useCallback(() => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
 
-        while ((match = regex.exec(inputText)) !== null) {
-            // Add text before the match
-            if (match.index > lastIndex) {
-                parts.push(
-                    <span key={`text-${lastIndex}`} className="font-sans">
-                        {inputText.slice(lastIndex, match.index)}
-                    </span>
-                );
-            }
-            // Add the @ command with distinct styling
-            parts.push(
-                <span
-                    key={`cmd-${match.index}`}
-                    className="text-[var(--accent-primary)] font-semibold"
-                >
-                    {match[0]}
-                </span>
-            );
-            lastIndex = regex.lastIndex;
+        // Use a temporary scroll preserve
+        const scrollPos = window.scrollY;
+        textarea.style.height = 'auto';
+        const scrollHeight = textarea.scrollHeight;
+        textarea.style.height = `${Math.min(Math.max(42, scrollHeight), 400)}px`;
+
+        // Restore window scroll if it shifted
+        if (scrollPos !== window.scrollY) {
+            window.scrollTo(0, scrollPos);
         }
-
-        // Add remaining text
-        if (lastIndex < inputText.length) {
-            parts.push(
-                <span key={`text-${lastIndex}`} className="font-sans">
-                    {inputText.slice(lastIndex)}
-                </span>
-            );
-        }
-
-        return parts.length > 0 ? parts : <span className="font-sans">{inputText}</span>;
     }, []);
 
-    // Filter commands based on what user typed after @
-    const filteredCommands = COMMANDS.filter(cmd =>
-        cmd.name.toLowerCase().startsWith(commandFilter.toLowerCase())
-    );
-
     useEffect(() => {
-        if (textareaRef.current) {
-            textareaRef.current.style.height = 'auto';
-            textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
-        }
-    }, [text]);
+        adjustHeight();
+    }, [text, adjustHeight]);
 
-    // Memoize the formatted text to avoid expensive re-renders on every keystroke
-    const formattedText = React.useMemo(() => {
-        if (!text) return null;
-        return renderFormattedText(text);
-    }, [text, renderFormattedText]);
+    // Handle scroll syncing between textarea and overlay
+    const handleScroll = useCallback((e: React.UIEvent<HTMLTextAreaElement>) => {
+        if (popupRef.current) {
+            popupRef.current.scrollTop = e.currentTarget.scrollTop;
+        }
+    }, []);
+
+    const hasCommand = text.includes('@');
+
+    // Filter commands based on what user typed after @
+    const filteredCommands = React.useMemo(() =>
+        COMMANDS.filter(cmd =>
+            cmd.name.toLowerCase().startsWith(commandFilter.toLowerCase())
+        ),
+        [commandFilter]);
 
     // Detect @ and show command popup
     const handleTextChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -199,17 +218,19 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
 
                     {/* Chat Input */}
                     <div className={`relative transition-colors ${loading ? 'bg-[var(--bg-surface)]' : ''}`}>
-                        {/* Formatted text overlay - shows styled @ commands */}
-                        <div
-                            className="absolute inset-0 p-3 pr-10 pointer-events-none whitespace-pre-wrap break-words text-xs font-sans leading-relaxed overflow-y-auto"
-                            style={{ color: 'var(--fg-secondary)' }}
-                        >
-                            {formattedText}
-                        </div>
-                        {/* Command Autocomplete Popup */}
-                        {showCommands && filteredCommands.length > 0 && (
+                        {/* Formatted text overlay - only rendered when commands are present */}
+                        {hasCommand && (
                             <div
                                 ref={popupRef}
+                                className="absolute inset-0 p-3 pr-10 pointer-events-none whitespace-pre-wrap break-words text-xs font-sans leading-relaxed overflow-hidden"
+                                style={{ color: 'var(--fg-secondary)' }}
+                            >
+                                <FormattedOverlay text={text} />
+                            </div>
+                        )}
+                        {/* Command Autocomplete Popup */}
+                        {showCommands && (
+                            <div
                                 className="absolute bottom-full left-0 right-0 mb-1 mx-2 bg-[var(--bg-surface)] border border-[var(--border-subtle)] rounded-md shadow-lg overflow-hidden z-50"
                             >
                                 {filteredCommands.map((cmd, idx) => {
@@ -238,8 +259,10 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
                             value={text}
                             onChange={handleTextChange}
                             onKeyDown={handleKeyDown}
+                            onScroll={handleScroll}
                             placeholder={t('chat.inputPlaceholder')}
-                            className="w-full bg-transparent text-transparent caret-[var(--fg-secondary)] p-3 pr-10 outline-none resize-none min-h-[42px] max-h-[400px] overflow-y-auto text-xs font-sans placeholder-[var(--fg-tertiary)] leading-relaxed relative z-10"
+                            className={`w-full bg-transparent p-3 pr-10 outline-none resize-none min-h-[42px] max-h-[400px] overflow-y-auto text-xs font-sans placeholder-[var(--fg-tertiary)] leading-relaxed relative z-10 ${hasCommand ? 'text-transparent caret-[var(--fg-secondary)]' : 'text-[var(--fg-secondary)]'
+                                }`}
                             rows={1}
                             disabled={disabled}
                         />
@@ -271,3 +294,5 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
         </div>
     );
 };
+
+export const CommandCenter = React.memo(CommandCenterComponent);
