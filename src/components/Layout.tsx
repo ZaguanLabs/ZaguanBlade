@@ -1,8 +1,7 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
-import { ChatPanel } from './ChatPanel';
 import { ExplorerPanel } from './ExplorerPanel';
 import { EditorPanel } from './EditorPanel';
 import { TerminalPane, TerminalPaneHandle } from './TerminalPane';
@@ -12,14 +11,15 @@ import { TitleBar } from './TitleBar';
 import { GitBranch, Settings, Clock } from 'lucide-react';
 import { EditorProvider, useEditor } from '../contexts/EditorContext';
 import { useChat } from '../hooks/useChat';
-import { ProtocolExplorer } from './dev/ProtocolExplorer';
-import { FileHistoryPanel } from './FileHistoryPanel';
-import { SettingsModal } from './SettingsModal';
 import { StorageSetupModal } from './StorageSetupModal';
 import { useProjectState, type ProjectState } from '../hooks/useProjectState';
 import { useWarmup } from '../hooks/useWarmup';
 import { useGitStatus } from '../hooks/useGitStatus';
-import { GitPanel } from './GitPanel';
+const ChatPanel = React.lazy(() => import('./ChatPanel').then(module => ({ default: module.ChatPanel })));
+const GitPanel = React.lazy(() => import('./GitPanel').then(module => ({ default: module.GitPanel })));
+const FileHistoryPanel = React.lazy(() => import('./FileHistoryPanel').then(module => ({ default: module.FileHistoryPanel })));
+const SettingsModal = React.lazy(() => import('./SettingsModal').then(module => ({ default: module.SettingsModal })));
+const ProtocolExplorer = React.lazy(() => import('./dev/ProtocolExplorer').then(module => ({ default: module.ProtocolExplorer })));
 import type { BackendSettings } from '../types/settings';
 
 interface Tab {
@@ -740,25 +740,29 @@ const AppLayoutInner: React.FC = () => {
                             <ExplorerPanel onFileSelect={handleFileSelect} activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
                         )}
                         {activeSidebar === 'git' && (
-                            <GitPanel
-                                status={gitStatus}
-                                files={gitFiles}
-                                error={gitError}
-                                filesError={gitFilesError}
-                                lastRefreshedAt={gitLastRefreshedAt}
-                                onRefresh={refreshGitStatus}
-                                onStageFile={stageGitFile}
-                                onUnstageFile={unstageGitFile}
-                                onStageAll={stageAllGit}
-                                onUnstageAll={unstageAllGit}
-                                onCommit={commitGit}
-                                onPush={pushGit}
-                                onDiff={diffGit}
-                                onGenerateCommitMessage={() => generateGitCommitMessage(selectedModelId)}
-                            />
+                            <Suspense fallback={<div className="h-full flex items-center justify-center text-[var(--fg-subtle)]">Loading Git...</div>}>
+                                <GitPanel
+                                    status={gitStatus}
+                                    files={gitFiles}
+                                    error={gitError}
+                                    filesError={gitFilesError}
+                                    lastRefreshedAt={gitLastRefreshedAt}
+                                    onRefresh={refreshGitStatus}
+                                    onStageFile={stageGitFile}
+                                    onUnstageFile={unstageGitFile}
+                                    onStageAll={stageAllGit}
+                                    onUnstageAll={unstageAllGit}
+                                    onCommit={commitGit}
+                                    onPush={pushGit}
+                                    onDiff={diffGit}
+                                    onGenerateCommitMessage={() => generateGitCommitMessage(selectedModelId)}
+                                />
+                            </Suspense>
                         )}
                         {activeSidebar === 'history' && (
-                            <FileHistoryPanel activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
+                            <Suspense fallback={<div className="h-full flex items-center justify-center text-[var(--fg-subtle)]">Loading History...</div>}>
+                                <FileHistoryPanel activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
+                            </Suspense>
                         )}
                     </div>
 
@@ -865,24 +869,26 @@ const AppLayoutInner: React.FC = () => {
                         style={{ width: chatPanelWidth }}
                         className="min-w-[280px] max-w-[800px] border-l border-[var(--border-subtle)] bg-[var(--bg-panel)] flex flex-col shadow-xl z-30"
                     >
-                        <ChatPanel
-                            messages={chat.messages}
-                            loading={chat.loading}
-                            error={chat.error}
-                            sendMessage={chat.sendMessage}
-                            stopGeneration={chat.stopGeneration}
-                            models={chat.models}
-                            selectedModelId={chat.selectedModelId}
-                            setSelectedModelId={chat.setSelectedModelId}
-                            pendingActions={chat.pendingActions}
-                            approveToolDecision={chat.approveToolDecision}
+                        <Suspense fallback={<div className="flex-1 bg-[var(--bg-panel)] h-full w-full" />}>
+                            <ChatPanel
+                                messages={chat.messages}
+                                loading={chat.loading}
+                                error={chat.error}
+                                sendMessage={chat.sendMessage}
+                                stopGeneration={chat.stopGeneration}
+                                models={chat.models}
+                                selectedModelId={chat.selectedModelId}
+                                setSelectedModelId={chat.setSelectedModelId}
+                                pendingActions={chat.pendingActions}
+                                approveToolDecision={chat.approveToolDecision}
 
-                            projectId={projectId || "default-project"}
-                            onLoadConversation={chat.setConversation}
-                            researchProgress={researchProgress}
-                            onNewConversation={chat.newConversation}
-                            onUndoTool={chat.undoTool}
-                        />
+                                projectId={projectId || "default-project"}
+                                onLoadConversation={chat.setConversation}
+                                researchProgress={researchProgress}
+                                onNewConversation={chat.newConversation}
+                                onUndoTool={chat.undoTool}
+                            />
+                        </Suspense>
                     </div>
 
                 </div>
@@ -912,10 +918,16 @@ const AppLayoutInner: React.FC = () => {
             </div>
 
             {/* Dev Tools */}
-            <ProtocolExplorer />
+            <Suspense fallback={null}>
+                <ProtocolExplorer />
+            </Suspense>
 
             {/* Settings Modal */}
-            <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} workspacePath={workspacePath} />
+            <Suspense fallback={null}>
+                {isSettingsOpen && (
+                    <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} workspacePath={workspacePath} />
+                )}
+            </Suspense>
 
             {/* First-time Storage Setup Modal (RFC-002) */}
             {workspacePath && (

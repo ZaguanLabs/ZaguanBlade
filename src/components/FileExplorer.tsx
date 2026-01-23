@@ -1,15 +1,16 @@
 import React, { useMemo, useCallback, useState } from 'react';
 import { useTree } from '@headless-tree/react';
 import {
-    syncDataLoaderFeature,
     selectionFeature,
     asyncDataLoaderFeature,
     hotkeysCoreFeature,
-    searchFeature
+    searchFeature,
+    renamingFeature,
+    dragAndDropFeature
 } from '@headless-tree/core';
 import { BladeDispatcher } from '../services/blade';
 import { FileEntry } from '../types/blade';
-import { Folder, ChevronRight, FileCode, FileText, FileBox, Search, FilePlus, FolderPlus, Pencil, Trash2, Copy, Scissors, Clipboard, Terminal } from 'lucide-react';
+import { Folder, ChevronRight, FileCode, FileText, FileBox, Search, FilePlus, FolderPlus, Pencil, Trash2, Copy, Scissors, Clipboard, Terminal, Loader2 } from 'lucide-react';
 import { useContextMenu, ContextMenuItem } from './ui/ContextMenu';
 import { InputModal, ConfirmModal } from './ui/Modal';
 import { listen, emit } from '@tauri-apps/api/event';
@@ -96,6 +97,24 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
     // Track the last expanded activeFile to prevent repeated expansions for the same file
     // Declared here (before useTree) so it can be reset when refreshKey changes
     const lastExpandedFileRef = React.useRef<string | null>(null);
+
+    // Helper function to invalidate a folder's children in the tree
+    const invalidateFolderChildren = useCallback((tree: any, folderPath: string) => {
+        try {
+            const item = tree.getItemInstance(folderPath);
+            if (item && typeof item.invalidateChildrenIds === 'function') {
+                // Clear from local cache first
+                pendingRequests.current.delete(folderPath === 'root' ? null : folderPath);
+                // Use optimistic invalidation to avoid loading flicker
+                item.invalidateChildrenIds(true);
+                console.log('[Explorer] Invalidated children for:', folderPath);
+                return true;
+            }
+        } catch (err) {
+            console.warn('[Explorer] Failed to invalidate:', folderPath, err);
+        }
+        return false;
+    }, []);
 
 
 
@@ -376,13 +395,69 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
         getItemName: (item) => item.getItemData()?.name || 'Unknown',
         isItemFolder: (item) => item.getItemData()?.is_dir || false,
 
+        indent: 12,
+        canReorder: true,
+
         features: [
-            syncDataLoaderFeature,
             asyncDataLoaderFeature,
             selectionFeature,
             hotkeysCoreFeature,
-            searchFeature
+            searchFeature,
+            renamingFeature,
+            dragAndDropFeature
         ],
+
+        onRename: async (item, newName) => {
+            const oldPath = item.getId();
+            const parentPath = oldPath.substring(0, oldPath.lastIndexOf('/'));
+            const newPath = `${parentPath}/${newName}`;
+            try {
+                await BladeDispatcher.file({
+                    type: 'Rename',
+                    payload: { old_path: oldPath, new_path: newPath }
+                });
+                console.log('[Explorer] Renamed via inline:', oldPath, '->', newPath);
+            } catch (err) {
+                console.error('[Explorer] Failed to rename:', err);
+            }
+        },
+
+        onDrop: async (items, target) => {
+            // Handle drag and drop - move files/folders
+            for (const item of items) {
+                const sourcePath = item.getId();
+                const sourceName = item.getItemName();
+                
+                // Determine target folder
+                let targetFolder: string;
+                if ('item' in target && target.item) {
+                    targetFolder = target.item.getId();
+                } else {
+                    continue; // Skip if no valid target
+                }
+                
+                const newPath = `${targetFolder}/${sourceName}`;
+                
+                // Don't move to same location
+                if (sourcePath === newPath) continue;
+                
+                // Don't move into itself
+                if (newPath.startsWith(sourcePath + '/')) {
+                    console.warn('[Explorer] Cannot move folder into itself');
+                    continue;
+                }
+                
+                try {
+                    await BladeDispatcher.file({
+                        type: 'Rename',
+                        payload: { old_path: sourcePath, new_path: newPath }
+                    });
+                    console.log('[Explorer] Moved via drag:', sourcePath, '->', newPath);
+                } catch (err) {
+                    console.error('[Explorer] Failed to move:', err);
+                }
+            }
+        },
 
         createLoadingItemData: () => ({
             id: 'loading',
@@ -461,8 +536,10 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
         },
     });
 
-    // Clear cache and pending requests on refresh to force re-fetch
-    // Also reset lastExpandedFileRef so the tree re-expands to active file after refresh
+    // Store tree in a ref to avoid dependency issues
+    const treeRef = React.useRef(tree);
+    treeRef.current = tree;
+
     // Clear cache and pending requests on refresh to force re-fetch
     // Also reset lastExpandedFileRef so the tree re-expands to active file after refresh
     React.useEffect(() => {
@@ -471,20 +548,18 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
         pendingRequests.current.clear();
         lastExpandedFileRef.current = null;
 
-        if ((tree as any).invalidateItem) {
-            // Invalidate root first
-            (tree as any).invalidateItem('root');
+        const currentTree = treeRef.current;
+        // Invalidate root first using the correct API
+        invalidateFolderChildren(currentTree, 'root');
 
-            // Also invalidate all currently expanded folders to ensure deep refresh
-            // We get all known items from the tree state
-            const items = tree.getItems();
-            items.forEach(item => {
-                if (item.isFolder() && item.isExpanded()) {
-                    (tree as any).invalidateItem(item.getId());
-                }
-            });
-        }
-    }, [refreshKey, tree]);
+        // Also invalidate all currently expanded folders to ensure deep refresh
+        const items = currentTree.getItems();
+        items.forEach(item => {
+            if (item.isFolder() && item.isExpanded()) {
+                invalidateFolderChildren(currentTree, item.getId());
+            }
+        });
+    }, [refreshKey, invalidateFolderChildren]);
 
     // Listen for file system events to update tree dynamically
     React.useEffect(() => {
@@ -505,12 +580,18 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                         pathsToInvalidate.push(filePayload.payload.new_path);
                     }
 
+                    // Invalidate parent folders using the correct API
+                    const currentTree = treeRef.current;
                     pathsToInvalidate.forEach(path => {
                         const parentPath = path.substring(0, path.lastIndexOf('/'));
-                        if (parentPath && (tree as any).invalidateItem) {
-                            (tree as any).invalidateItem(parentPath);
-                        } else if ((tree as any).invalidateItem) {
-                            (tree as any).invalidateItem('root');
+                        // Clear from local cache
+                        itemCache.current.delete(path);
+                        pendingRequests.current.delete(parentPath);
+                        
+                        if (parentPath) {
+                            invalidateFolderChildren(currentTree, parentPath);
+                        } else {
+                            invalidateFolderChildren(currentTree, 'root');
                         }
                     });
                 }
@@ -518,7 +599,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
         };
         setup();
         return () => { if (unlisten) unlisten(); };
-    }, [tree]);
+    }, [invalidateFolderChildren]);
 
     // Auto-expand and select active file in the tree
     // NOTE: We intentionally exclude 'tree' from dependencies to prevent infinite loops.
@@ -615,6 +696,9 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                         `}
                         style={{ paddingLeft: `${(item.getItemMeta().level) * 12 + 8}px` }}
                         onClick={(e) => {
+                            // Don't handle click if renaming
+                            if (item.isRenaming?.()) return;
+                            
                             if (item.isFolder()) {
                                 if (item.isExpanded()) {
                                     item.collapse();
@@ -643,11 +727,33 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
 
                         {getIcon(item.getItemName(), item.isFolder(), item.isExpanded())}
 
-                        <span className="truncate opacity-90 group-hover:opacity-100 transition-opacity">
-                            {item.getItemName()}
-                        </span>
+                        {/* Loading indicator */}
+                        {item.isLoading?.() && (
+                            <Loader2 className="w-3 h-3 text-[var(--fg-tertiary)] animate-spin" />
+                        )}
+
+                        {/* Inline rename input or item name */}
+                        {item.isRenaming?.() ? (
+                            <input
+                                {...(item.getRenameInputProps?.() || {})}
+                                className="bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded px-1 text-xs text-[var(--fg-primary)] outline-none flex-1 min-w-0"
+                                autoFocus
+                            />
+                        ) : (
+                            <span className="truncate opacity-90 group-hover:opacity-100 transition-opacity">
+                                {item.getItemName()}
+                            </span>
+                        )}
                     </div>
                 ))}
+
+                {/* Drag line for drag-and-drop */}
+                <div 
+                    style={tree.getDragLineStyle?.()} 
+                    className="h-0.5 bg-[var(--accent-primary)] pointer-events-none relative"
+                >
+                    <div className="absolute left-0 top-[-3px] h-2 w-2 bg-[var(--bg-panel)] border-2 border-[var(--accent-primary)] rounded-full" />
+                </div>
 
                 {tree.getItems().length === 0 && (
                     <div className="p-4 text-[var(--fg-tertiary)] italic">

@@ -24,7 +24,7 @@ export default defineConfig(async () => ({
         },
     },
     build: {
-        chunkSizeWarningLimit: 1000,
+        chunkSizeWarningLimit: 1200,
         minify: 'terser' as const,
         terserOptions: {
             compress: {
@@ -38,10 +38,6 @@ export default defineConfig(async () => ({
             output: {
                 manualChunks: (id) => {
                     if (id.includes('node_modules')) {
-                        // Syntax Highlighting (Large & isolated)
-                        if (id.includes('react-syntax-highlighter') || id.includes('refractor')) {
-                            return 'vendor-syntax';
-                        }
                         // CodeMirror (Editor)
                         if (id.includes('@codemirror') || id.includes('codemirror') || id.includes('@lezer')) {
                             return 'vendor-codemirror';
@@ -58,9 +54,9 @@ export default defineConfig(async () => ({
                         if (id.includes('pdfjs-dist')) {
                             return 'vendor-pdf';
                         }
-
-                        // Core Framework, Markdown, and Common Libs
-                        // Grouped together to avoid circular dependencies (react-markdown depends on React)
+                        // Core React Framework + Markdown + Syntax Highlighting
+                        // These are merged to avoid circular dependencies:
+                        // react-syntax-highlighter -> refractor, react-markdown -> unified -> refractor
                         if (
                             id.includes('/react/') ||
                             id.includes('/react-dom/') ||
@@ -69,7 +65,10 @@ export default defineConfig(async () => ({
                             id.includes('/scheduler/') ||
                             id.includes('i18next') ||
                             id.includes('lucide-react') ||
+                            id.includes('react-syntax-highlighter') ||
                             id.includes('react-markdown') ||
+                            id.includes('refractor') ||
+                            id.includes('prismjs') ||
                             id.includes('remark') ||
                             id.includes('unified') ||
                             id.includes('unist') ||

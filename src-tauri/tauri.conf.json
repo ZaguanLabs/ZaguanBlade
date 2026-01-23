@@ -4,9 +4,9 @@
   "version": "0.0.4-alpha",
   "identifier": "com.zaguan.zblade",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "bun run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -17,7 +17,10 @@
         "height": 1080,
         "resizable": true,
         "decorations": false,
-        "center": true
+        "center": true,
+        "visible": false,
+        "transparent": false,
+        "backgroundColor": [10, 10, 10, 255]
       }
     ],
     "security": {
