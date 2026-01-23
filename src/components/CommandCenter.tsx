@@ -1,12 +1,10 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Send, Square, Globe, Search, BookOpen } from 'lucide-react';
+import { Send, Square, BookOpen } from 'lucide-react';
 import { CompactModelSelector } from './CompactModelSelector';
 import type { ModelInfo } from '../types/chat';
 
 const COMMANDS = [
-    { name: 'web', description: 'Fetch a URL', icon: Globe },
-    { name: 'search', description: 'Search the web', icon: Search },
     { name: 'research', description: 'Deep research', icon: BookOpen },
 ];
 

@@ -216,72 +216,9 @@ pub enum LanguageIntent {
         line: u32,
         character: u32,
     },
-
-    // LSP operations
-    GetCompletions {
-        file_path: String,
-        line: u32,
-        character: u32,
-    },
-    GetHover {
-        file_path: String,
-        line: u32,
-        character: u32,
-    },
-    GetDefinition {
-        file_path: String,
-        line: u32,
-        character: u32,
-    },
-    GetReferences {
-        file_path: String,
-        line: u32,
-        character: u32,
-        #[serde(default)]
-        include_declaration: bool,
-    },
-    GetDocumentSymbols {
-        file_path: String,
-    },
-    GetDiagnostics {
-        file_path: String,
-    },
-
-    // Document synchronization (for LSP)
-    DidOpen {
-        file_path: String,
-        content: String,
-        language_id: String,
-    },
-    DidChange {
-        file_path: String,
-        content: String,
-        version: u32,
-    },
-    DidClose {
-        file_path: String,
-    },
-
-    // Signature help (parameter hints)
-    GetSignatureHelp {
-        file_path: String,
-        line: u32,
-        character: u32,
-    },
-
-    // Code actions (quick fixes)
-    GetCodeActions {
-        file_path: String,
-        start_line: u32,
-        start_character: u32,
-        end_line: u32,
-        end_character: u32,
-    },
-    Rename {
-        file_path: String,
-        line: u32,
-        character: u32,
-        new_name: String,
+    // Raw ZLP operations (v1.4)
+    ZlpMessage {
+        payload: serde_json::Value,
     },
 }
 
@@ -334,6 +271,18 @@ pub enum ChatEvent {
     GenerationSignal {
         is_generating: bool,
     }, // Signal
+    ToolActivity {
+        tool_name: String,
+        file_path: String,
+        action: String,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ToolActivityPayload {
+    pub tool_name: String,
+    pub file_path: String,
+    pub action: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -501,62 +450,14 @@ pub enum LanguageEvent {
         intent_id: Uuid,
         symbol: Option<LanguageSymbol>,
     },
-
-    // LSP events
-    CompletionsReady {
-        intent_id: Uuid,
-        items: Vec<CompletionItem>,
-    },
-    HoverReady {
-        intent_id: Uuid,
-        contents: Option<String>,
-        range: Option<LanguageRange>,
-    },
-    DefinitionReady {
-        intent_id: Uuid,
-        locations: Vec<LanguageLocation>,
-    },
-    ReferencesReady {
-        intent_id: Uuid,
-        locations: Vec<LanguageLocation>,
-    },
-    DocumentSymbolsReady {
-        intent_id: Uuid,
-        symbols: Vec<LanguageDocumentSymbol>,
-    },
-    DiagnosticsUpdated {
-        file_path: String,
-        diagnostics: Vec<LanguageDiagnostic>,
-    },
-    SignatureHelpReady {
-        intent_id: Uuid,
-        signatures: Vec<SignatureInfo>,
-        active_signature: Option<u32>,
-        active_parameter: Option<u32>,
-    },
-    CodeActionsReady {
-        intent_id: Uuid,
-        actions: Vec<CodeAction>,
-    },
-    RenameEditsReady {
-        intent_id: Uuid,
-        edit: Option<LanguageWorkspaceEdit>,
+    // Raw ZLP response (v1.4)
+    ZlpResponse {
+        original_request_id: String,
+        payload: serde_json::Value,
     },
 }
 
 // ... existing structs ...
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct LanguageTextEdit {
-    pub range: LanguageRange,
-    pub new_text: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct LanguageWorkspaceEdit {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub changes: Option<std::collections::HashMap<String, Vec<LanguageTextEdit>>>,
-}
 
 // Language domain data types
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -590,69 +491,6 @@ pub struct LanguageRange {
 pub struct LanguageLocation {
     pub file_path: String,
     pub range: LanguageRange,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct CompletionItem {
-    pub label: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub documentation: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub insert_text: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct LanguageDocumentSymbol {
-    pub name: String,
-    pub kind: String,
-    pub range: LanguageRange,
-    pub selection_range: LanguageRange,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub children: Vec<LanguageDocumentSymbol>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct LanguageDiagnostic {
-    pub range: LanguageRange,
-    pub severity: String, // "error", "warning", "information", "hint"
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub code: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
-    pub message: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct SignatureInfo {
-    pub label: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub documentation: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub parameters: Vec<ParameterInfo>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ParameterInfo {
-    pub label: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub documentation: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct CodeAction {
-    pub title: String,
-    pub kind: Option<String>, // e.g., "quickfix", "refactor"
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub diagnostics: Option<Vec<LanguageDiagnostic>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub edit: Option<LanguageWorkspaceEdit>,
-    pub is_preferred: bool,
 }
 
 // ==============================================================================

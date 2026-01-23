@@ -21,6 +21,7 @@ impl ConversationHistory {
                 updated_at: Utc::now(),
                 model_id: "claude-sonnet".to_string(), // Default
                 message_count: 0,
+                session_id: None,
             },
         }
     }
@@ -70,7 +71,11 @@ impl ConversationHistory {
                                 // Determine status based on result
                                 tc.status = Some(if result.success {
                                     "complete".to_string()
-                                } else if result.error.as_ref().map_or(false, |e| e.contains("User skipped")) {
+                                } else if result
+                                    .error
+                                    .as_ref()
+                                    .map_or(false, |e| e.contains("User skipped"))
+                                {
                                     "skipped".to_string()
                                 } else {
                                     "error".to_string()

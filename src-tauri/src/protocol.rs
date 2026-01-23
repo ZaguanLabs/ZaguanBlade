@@ -76,8 +76,16 @@ pub enum ChatEvent {
         stage: String,
         percent: i32,
     },
+    ToolActivity(ToolActivityPayload),
     Done,
     Error(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolActivityPayload {
+    pub tool_name: String,
+    pub file_path: String,
+    pub action: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

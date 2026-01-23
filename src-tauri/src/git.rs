@@ -161,7 +161,14 @@ fn run_git(root: &str, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn collect_changes_for_message(root: &str) -> Result<(Vec<String>, String, bool), String> {
+struct CommitContext {
+    files: Vec<String>,
+    diff: String,
+    new_file_content: String,
+    staged: bool,
+}
+
+fn collect_changes_for_message(root: &str) -> Result<CommitContext, String> {
     let staged_files = run_git(root, &["diff", "--cached", "--name-only"])?;
     let mut files: Vec<String> = staged_files
         .lines()
@@ -180,6 +187,19 @@ fn collect_changes_for_message(root: &str) -> Result<(Vec<String>, String, bool)
             .collect();
     }
 
+    // Get untracked files
+    let untracked_output = run_git(root, &["ls-files", "--others", "--exclude-standard"])?;
+    let untracked: Vec<String> = untracked_output
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    // Add untracked to file list if not looking at staged
+    if !staged {
+        files.extend(untracked.clone());
+    }
+
     let diff_args = if staged {
         vec!["diff", "--cached", "--unified=3"]
     } else {
@@ -187,13 +207,39 @@ fn collect_changes_for_message(root: &str) -> Result<(Vec<String>, String, bool)
     };
     let mut diff = run_git(root, &diff_args)?;
 
+    // For untracked files, include a preview of their content
+    let mut new_file_content = String::new();
+    let files_to_preview = if staged { vec![] } else { untracked };
+    const MAX_PREVIEW_PER_FILE: usize = 2000;
+    const MAX_TOTAL_PREVIEW: usize = 6000;
+
+    for file in files_to_preview {
+        if new_file_content.len() >= MAX_TOTAL_PREVIEW {
+            new_file_content.push_str("\n...more new files omitted...");
+            break;
+        }
+        let path = std::path::Path::new(root).join(&file);
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            let preview: String = content.chars().take(MAX_PREVIEW_PER_FILE).collect();
+            new_file_content.push_str(&format!("\n=== NEW FILE: {} ===\n{}", file, preview));
+            if content.len() > MAX_PREVIEW_PER_FILE {
+                new_file_content.push_str("\n...truncated...");
+            }
+        }
+    }
+
     const DIFF_LIMIT: usize = 8000;
     if diff.len() > DIFF_LIMIT {
         diff.truncate(DIFF_LIMIT);
         diff.push_str("\n...diff truncated...");
     }
 
-    Ok((files, diff, staged))
+    Ok(CommitContext {
+        files,
+        diff,
+        new_file_content,
+        staged,
+    })
 }
 
 fn parse_git_status_files(output: &str) -> Vec<GitFileStatus> {
@@ -299,6 +345,7 @@ pub fn git_status_summary(state: State<'_, AppState>) -> Result<GitStatusSummary
         .arg(&root)
         .arg("status")
         .arg("--porcelain=v2")
+        .arg("-uall")
         .arg("--branch")
         .output()
         .map_err(|e| format!("failed to run git status: {}", e))?;
@@ -326,6 +373,7 @@ pub fn git_status_files(state: State<'_, AppState>) -> Result<Vec<GitFileStatus>
         .arg(&root)
         .arg("status")
         .arg("--porcelain=v2")
+        .arg("-uall")
         .output()
         .map_err(|e| format!("failed to run git status: {}", e))?;
 
@@ -518,18 +566,18 @@ pub fn git_generate_commit_message(state: State<'_, AppState>) -> Result<String,
         return Err("No workspace open".to_string());
     };
 
-    let (files, _diff, _staged) = collect_changes_for_message(&root)?;
+    let ctx = collect_changes_for_message(&root)?;
 
-    if files.is_empty() {
-        return Ok("Update files".to_string());
+    if ctx.files.is_empty() {
+        return Err("No changes to commit".to_string());
     }
 
-    let message = if files.len() == 1 {
-        format!("Update {}", files[0])
-    } else if files.len() <= 3 {
-        format!("Update {}", files.join(", "))
+    let message = if ctx.files.len() == 1 {
+        format!("Update {}", ctx.files[0])
+    } else if ctx.files.len() <= 3 {
+        format!("Update {}", ctx.files.join(", "))
     } else {
-        format!("Update {} files", files.len())
+        format!("Update {} files", ctx.files.len())
     };
 
     Ok(message)
@@ -544,38 +592,40 @@ pub async fn git_generate_commit_message_ai(
         return Err("No workspace open".to_string());
     };
 
-    let (files, diff, staged) = collect_changes_for_message(&root)?;
-    if files.is_empty() {
-        return Ok("Update files".to_string());
+    let ctx = collect_changes_for_message(&root)?;
+    if ctx.files.is_empty() {
+        return Err("No changes to commit".to_string());
     }
 
-    let file_list = files
+    let file_list = ctx.files
         .iter()
         .map(|f| format!("- {}", f))
         .collect::<Vec<_>>()
         .join("\n");
 
+    let new_files_section = if ctx.new_file_content.is_empty() {
+        String::new()
+    } else {
+        format!("\nNEW FILES CONTENT:\n{}", ctx.new_file_content)
+    };
+
     let prompt = format!(
-        r#"You are a Git commit message expert. Generate a professional commit message for the following changes.
+        r#"Generate a Git commit message for these changes. Use Conventional Commits: type(scope): description
 
-RULES:
-1. Use Conventional Commits format: type(scope): description
-2. Types: feat, fix, refactor, docs, style, test, chore, perf
-3. Scope is optional but helpful (e.g., component name, file area)
-4. Description should be imperative mood, lowercase, no period at end
-5. Keep the first line under 72 characters
-6. If the changes are significant, add a blank line and a brief body (2-3 lines max)
+Types: feat, fix, refactor, docs, style, test, chore, perf
+Keep under 72 chars. Imperative mood. No period at end.
 
-CHANGED FILES ({stage}):
+FILES ({stage}):
 {files}
-
+{new_files}
 DIFF:
 {diff}
 
-Respond with ONLY the commit message, nothing else. No quotes, no explanation."#,
-        stage = if staged { "staged" } else { "unstaged" },
+Respond with ONLY the commit message, nothing else."#,
+        stage = if ctx.staged { "staged" } else { "unstaged" },
         files = file_list,
-        diff = diff
+        new_files = new_files_section,
+        diff = ctx.diff
     );
 
     let (blade_url, api_key) = {
@@ -614,9 +664,9 @@ Respond with ONLY the commit message, nothing else. No quotes, no explanation."#
         }
     }
 
-    let message = content.lines().next().unwrap_or("Update files").trim();
+    let message = content.lines().next().unwrap_or("").trim();
     if message.is_empty() {
-        Ok("Update files".to_string())
+        Err("AI returned empty response".to_string())
     } else {
         Ok(message.to_string())
     }

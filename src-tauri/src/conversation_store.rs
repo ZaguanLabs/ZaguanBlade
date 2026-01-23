@@ -15,6 +15,8 @@ pub struct ConversationMetadata {
     pub updated_at: DateTime<Utc>,
     pub model_id: String,
     pub message_count: usize,
+    #[serde(default)]
+    pub session_id: Option<String>,
 }
 
 /// A complete conversation with metadata and messages
@@ -163,6 +165,7 @@ impl ConversationStore {
             updated_at: now,
             model_id,
             message_count: 0,
+            session_id: None,
         };
 
         self.index.conversations.push(metadata.clone());

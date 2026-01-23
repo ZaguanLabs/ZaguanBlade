@@ -48,8 +48,37 @@ pub fn save_api_config(path: &Path, cfg: &ApiConfig) -> Result<(), String> {
 pub fn get_or_create_user_id(config_path: &Path) -> String {
     let mut config = load_api_config(config_path);
 
-    // If user_id is empty or invalid, generate a new one
-    if config.user_id.trim().is_empty() || !config.user_id.starts_with("user_") {
+    let mut save_needed = false;
+
+    // First, try to derive from API key if present (ps_live_ or ps_test_)
+    if !config.api_key.is_empty() {
+        if let Some(start_idx) = config
+            .api_key
+            .find("ps_live_")
+            .or_else(|| config.api_key.find("ps_test_"))
+        {
+            let prefix_len = 8; // length of "ps_live_" or "ps_test_"
+            let hash_start = start_idx + prefix_len;
+            if config.api_key.len() >= hash_start + 8 {
+                let suffix = &config.api_key[hash_start..hash_start + 8];
+                let derived_id = format!("user_{}", suffix);
+
+                // Only update if different
+                if config.user_id != derived_id {
+                    config.user_id = derived_id;
+                    save_needed = true;
+                    eprintln!("[CONFIG] Derived user_id from API key: {}", config.user_id);
+                }
+            }
+        }
+    }
+
+    // Fallback: If user_id is still empty or invalid (and couldn't be derived), generate a new random one
+    if config.user_id.trim().is_empty()
+        || (!config.api_key.contains("ps_")
+            && !config.user_id.starts_with("user_")
+            && config.user_id.len() != 8)
+    {
         // Generate a short random suffix using base62 encoding of UUID
         let uuid = uuid::Uuid::new_v4();
         let uuid_bytes = uuid.as_bytes();
@@ -64,9 +93,12 @@ pub fn get_or_create_user_id(config_path: &Path) -> String {
             .collect();
 
         config.user_id = format!("user_{}", suffix);
-        eprintln!("[CONFIG] Generated new user_id: {}", config.user_id);
+        save_needed = true;
+        eprintln!("[CONFIG] Generated new random user_id: {}", config.user_id);
+    }
 
-        // Save the config with the new user_id
+    // Save the config if changed
+    if save_needed {
         if let Err(e) = save_api_config(config_path, &config) {
             eprintln!("[CONFIG] Failed to save user_id: {}", e);
         }

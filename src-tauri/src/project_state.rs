@@ -126,10 +126,13 @@ pub fn load_project_state(project_path: &str) -> Option<ProjectState> {
 
 /// Save project state to disk
 pub fn save_project_state(state: &ProjectState) -> Result<(), String> {
-    let state_dir = get_state_dir().ok_or_else(|| "Could not determine config directory".to_string())?;
+    println!("[ProjectState] Starting save_project_state logic...");
+    let state_dir =
+        get_state_dir().ok_or_else(|| "Could not determine config directory".to_string())?;
 
     // Ensure directory exists
-    fs::create_dir_all(&state_dir).map_err(|e| format!("Failed to create state directory: {}", e))?;
+    fs::create_dir_all(&state_dir)
+        .map_err(|e| format!("Failed to create state directory: {}", e))?;
 
     let state_path = state_dir.join(project_state_filename(&state.project_path));
 

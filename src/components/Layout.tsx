@@ -1,8 +1,7 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
-import { ChatPanel } from './ChatPanel';
 import { ExplorerPanel } from './ExplorerPanel';
 import { EditorPanel } from './EditorPanel';
 import { TerminalPane, TerminalPaneHandle } from './TerminalPane';
@@ -12,14 +11,15 @@ import { TitleBar } from './TitleBar';
 import { GitBranch, Settings, Clock } from 'lucide-react';
 import { EditorProvider, useEditor } from '../contexts/EditorContext';
 import { useChat } from '../hooks/useChat';
-import { ProtocolExplorer } from './dev/ProtocolExplorer';
-import { FileHistoryPanel } from './FileHistoryPanel';
-import { SettingsModal } from './SettingsModal';
 import { StorageSetupModal } from './StorageSetupModal';
 import { useProjectState, type ProjectState } from '../hooks/useProjectState';
 import { useWarmup } from '../hooks/useWarmup';
 import { useGitStatus } from '../hooks/useGitStatus';
-import { GitPanel } from './GitPanel';
+const ChatPanel = React.lazy(() => import('./ChatPanel').then(module => ({ default: module.ChatPanel })));
+const GitPanel = React.lazy(() => import('./GitPanel').then(module => ({ default: module.GitPanel })));
+const FileHistoryPanel = React.lazy(() => import('./FileHistoryPanel').then(module => ({ default: module.FileHistoryPanel })));
+const SettingsModal = React.lazy(() => import('./SettingsModal').then(module => ({ default: module.SettingsModal })));
+const ProtocolExplorer = React.lazy(() => import('./dev/ProtocolExplorer').then(module => ({ default: module.ProtocolExplorer })));
 import type { BackendSettings } from '../types/settings';
 
 interface Tab {
@@ -40,7 +40,7 @@ const AppLayoutInner: React.FC = () => {
     const [chatPanelWidth, setChatPanelWidth] = useState(400);
     const [isDragging, setIsDragging] = useState(false);
     const [isChatDragging, setIsChatDragging] = useState(false);
-    const [virtualFiles, setVirtualFiles] = useState<Set<string>>(new Set());
+
 
     // Sidebar State
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -65,12 +65,11 @@ const AppLayoutInner: React.FC = () => {
     } = useGitStatus();
     const gitChangedCount = gitStatus?.changedCount ?? 0;
     const { selectedModelId, setSelectedModelId, messages } = chat;
-    const [chatMessages, setChatMessages] = useState(chat.messages);
     const processingFilesRef = useRef<Set<string>>(new Set());
     const terminalPaneRef = useRef<TerminalPaneHandle>(null);
 
     // Sync active tab to EditorContext
-    const { setActiveFile, setEnableLsp } = useEditor();
+    const { setActiveFile } = useEditor();
     useEffect(() => {
         const activeTab = tabs.find(t => t.id === activeTabId);
         setActiveFile(activeTab?.path || null);
@@ -100,11 +99,6 @@ const AppLayoutInner: React.FC = () => {
     const [showStorageSetup, setShowStorageSetup] = useState(false);
     const [hasCheckedZblade, setHasCheckedZblade] = useState(false);
 
-    // Sync chatMessages with chat.messages from useChat
-    useEffect(() => {
-        setChatMessages(chat.messages);
-    }, [chat.messages]);
-
     const [workspacePath, setWorkspacePath] = useState<string | null>(null);
     const [userId, setUserId] = useState<string | null>(null);
     const [projectId, setProjectId] = useState<string | null>(null);
@@ -118,8 +112,8 @@ const AppLayoutInner: React.FC = () => {
                 const settings = await invoke<BackendSettings>('load_project_settings', {
                     projectPath: workspacePath,
                 });
-                setEnableLsp(settings.editor.enable_lsp);
-                console.log('[Layout] Synced enableLsp:', settings.editor.enable_lsp);
+                // setEnableLsp(settings.editor.enable_lsp);
+                // console.log('[Layout] Synced enableLsp:', settings.editor.enable_lsp);
             } catch (e) {
                 console.error('[Layout] Failed to load project settings:', e);
             }
@@ -133,10 +127,14 @@ const AppLayoutInner: React.FC = () => {
         return () => {
             unlistenPromise.then(unlisten => unlisten());
         };
-    }, [workspacePath, setEnableLsp]);
+    }, [workspacePath]);
 
     // Fetch current workspace and user_id on mount
+    const initializedRef = useRef(false);
     useEffect(() => {
+        if (initializedRef.current) return;
+        initializedRef.current = true;
+
         const fetchWorkspace = async () => {
             try {
                 const path = await invoke<string | null>('get_current_workspace');
@@ -167,18 +165,7 @@ const AppLayoutInner: React.FC = () => {
         };
         fetchWorkspace();
         fetchUserId();
-
-        // Poll for user_id until we get it (it's set when WebSocket connects)
-        const userIdInterval = setInterval(async () => {
-            if (!userId) {
-                await fetchUserId();
-            } else {
-                clearInterval(userIdInterval);
-            }
-        }, 1000);
-
-        return () => clearInterval(userIdInterval);
-    }, [userId]);
+    }, []);
 
     // RFC-002: Check if .zblade directory exists for first-time setup
     useEffect(() => {
@@ -255,7 +242,7 @@ const AppLayoutInner: React.FC = () => {
     const terminalState = getTerminalState();
 
     // Project state persistence
-    const { loaded: stateLoaded } = useProjectState({
+    const { loaded: stateLoaded, isClosing } = useProjectState({
         projectPath: workspacePath,
         tabs: tabs.map(t => ({ id: t.id, title: t.title, type: t.type, path: t.path })),
         activeTabId,
@@ -271,21 +258,7 @@ const AppLayoutInner: React.FC = () => {
     // Wait for stateLoaded to prevent multiple warmups during initialization
     const { trackActivity } = useWarmup(workspacePath, selectedModelId, stateLoaded);
 
-    // Poll for virtual buffer state
-    useEffect(() => {
-        const checkVirtualBuffers = async () => {
-            try {
-                const files = await invoke<string[]>('get_virtual_files');
-                setVirtualFiles(new Set(files));
-            } catch (e) {
-                console.error('[VIRTUAL BUFFER] Failed to get virtual files:', e);
-            }
-        };
 
-        checkVirtualBuffers();
-        const interval = setInterval(checkVirtualBuffers, 1000);
-        return () => clearInterval(interval);
-    }, []);
 
     // Auto-open files when edit proposals arrive
     useEffect(() => {
@@ -767,25 +740,29 @@ const AppLayoutInner: React.FC = () => {
                             <ExplorerPanel onFileSelect={handleFileSelect} activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
                         )}
                         {activeSidebar === 'git' && (
-                            <GitPanel
-                                status={gitStatus}
-                                files={gitFiles}
-                                error={gitError}
-                                filesError={gitFilesError}
-                                lastRefreshedAt={gitLastRefreshedAt}
-                                onRefresh={refreshGitStatus}
-                                onStageFile={stageGitFile}
-                                onUnstageFile={unstageGitFile}
-                                onStageAll={stageAllGit}
-                                onUnstageAll={unstageAllGit}
-                                onCommit={commitGit}
-                                onPush={pushGit}
-                                onDiff={diffGit}
-                                onGenerateCommitMessage={() => generateGitCommitMessage(selectedModelId)}
-                            />
+                            <Suspense fallback={<div className="h-full flex items-center justify-center text-[var(--fg-subtle)]">Loading Git...</div>}>
+                                <GitPanel
+                                    status={gitStatus}
+                                    files={gitFiles}
+                                    error={gitError}
+                                    filesError={gitFilesError}
+                                    lastRefreshedAt={gitLastRefreshedAt}
+                                    onRefresh={refreshGitStatus}
+                                    onStageFile={stageGitFile}
+                                    onUnstageFile={unstageGitFile}
+                                    onStageAll={stageAllGit}
+                                    onUnstageAll={unstageAllGit}
+                                    onCommit={commitGit}
+                                    onPush={pushGit}
+                                    onDiff={diffGit}
+                                    onGenerateCommitMessage={() => generateGitCommitMessage(selectedModelId)}
+                                />
+                            </Suspense>
                         )}
                         {activeSidebar === 'history' && (
-                            <FileHistoryPanel activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
+                            <Suspense fallback={<div className="h-full flex items-center justify-center text-[var(--fg-subtle)]">Loading History...</div>}>
+                                <FileHistoryPanel activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
+                            </Suspense>
                         )}
                     </div>
 
@@ -799,7 +776,7 @@ const AppLayoutInner: React.FC = () => {
                                     title: t.title,
                                     isEphemeral: t.type === 'ephemeral',
                                     isDirty: false,
-                                    hasVirtualChanges: t.path ? virtualFiles.has(t.path) : false,
+                                    hasVirtualChanges: false,
                                 }))}
                                 activeTabId={activeTabId}
                                 onTabClick={setActiveTabId}
@@ -892,24 +869,26 @@ const AppLayoutInner: React.FC = () => {
                         style={{ width: chatPanelWidth }}
                         className="min-w-[280px] max-w-[800px] border-l border-[var(--border-subtle)] bg-[var(--bg-panel)] flex flex-col shadow-xl z-30"
                     >
-                        <ChatPanel
-                            messages={chatMessages}
-                            loading={chat.loading}
-                            error={chat.error}
-                            sendMessage={chat.sendMessage}
-                            stopGeneration={chat.stopGeneration}
-                            models={chat.models}
-                            selectedModelId={chat.selectedModelId}
-                            setSelectedModelId={chat.setSelectedModelId}
-                            pendingActions={chat.pendingActions}
-                            approveToolDecision={chat.approveToolDecision}
+                        <Suspense fallback={<div className="flex-1 bg-[var(--bg-panel)] h-full w-full" />}>
+                            <ChatPanel
+                                messages={chat.messages}
+                                loading={chat.loading}
+                                error={chat.error}
+                                sendMessage={chat.sendMessage}
+                                stopGeneration={chat.stopGeneration}
+                                models={chat.models}
+                                selectedModelId={chat.selectedModelId}
+                                setSelectedModelId={chat.setSelectedModelId}
+                                pendingActions={chat.pendingActions}
+                                approveToolDecision={chat.approveToolDecision}
 
-                            projectId={projectId || "default-project"}
-                            onLoadConversation={setChatMessages}
-                            researchProgress={researchProgress}
-                            onNewConversation={chat.newConversation}
-                            onUndoTool={chat.undoTool}
-                        />
+                                projectId={projectId || "default-project"}
+                                onLoadConversation={chat.setConversation}
+                                researchProgress={researchProgress}
+                                onNewConversation={chat.newConversation}
+                                onUndoTool={chat.undoTool}
+                            />
+                        </Suspense>
                     </div>
 
                 </div>
@@ -928,6 +907,10 @@ const AppLayoutInner: React.FC = () => {
                     })()}</span>
                 </div>
                 <div className="flex items-center gap-4 opacity-70">
+                    {/* Saving Indicator */}
+                    {isClosing && (
+                        <span className="text-emerald-500 animate-pulse font-semibold">Saving...</span>
+                    )}
                     <span>{t('editor.encoding')}</span>
                     <span>Rust</span>
                     <span>{t('app.name')}</span>
@@ -935,10 +918,16 @@ const AppLayoutInner: React.FC = () => {
             </div>
 
             {/* Dev Tools */}
-            <ProtocolExplorer />
+            <Suspense fallback={null}>
+                <ProtocolExplorer />
+            </Suspense>
 
             {/* Settings Modal */}
-            <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} workspacePath={workspacePath} />
+            <Suspense fallback={null}>
+                {isSettingsOpen && (
+                    <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} workspacePath={workspacePath} />
+                )}
+            </Suspense>
 
             {/* First-time Storage Setup Modal (RFC-002) */}
             {workspacePath && (

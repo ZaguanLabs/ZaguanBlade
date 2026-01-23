@@ -23,7 +23,7 @@ pub mod idempotency;
 pub mod language_service;
 pub mod local_artifacts;
 pub mod local_index;
-pub mod lsp;
+
 pub mod models;
 pub mod project;
 pub mod project_settings;
@@ -80,9 +80,46 @@ pub fn run() {
     });
 
     tauri::Builder::default()
+        .manage(AppState::new(resolved_path))
+        .manage(terminal::TerminalManager::new())
+        .on_page_load(|webview, _payload| {
+            // Show window after webview content has loaded
+            let _ = webview.window().show();
+        })
         .setup(|app| {
-            let state = app.state::<AppState>();
-            crate::fs_watcher::restart_fs_watcher(&app.handle(), &state);
+            let start = std::time::Instant::now();
+            crate::fs_watcher::restart_fs_watcher(&app.handle());
+
+            // Background workspace indexing
+            let app_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let state = app_handle.state::<AppState>();
+                // Check if we have a workspace set
+                let workspace = state.workspace.lock().unwrap().workspace.clone();
+
+                if let Some(path) = workspace {
+                    let path_str = path.to_string_lossy().to_string();
+                    eprintln!(
+                        "[LanguageService] Triggering startup indexing for: {}",
+                        path_str
+                    );
+                    let service = state.language_service.clone();
+
+                    match service.index_directory(".") {
+                        Ok(stats) => {
+                            eprintln!(
+                                "[LanguageService] Startup indexing complete: {} files in {}ms",
+                                stats.files_indexed, stats.duration_ms
+                            );
+                        }
+                        Err(e) => {
+                            eprintln!("[LanguageService] Startup indexing failed: {}", e);
+                        }
+                    }
+                }
+            });
+
+            eprintln!("[PERF] setup initialization took {:?}", start.elapsed());
             Ok(())
         })
         .plugin(tauri_plugin_opener::init())
@@ -90,8 +127,6 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
-        .manage(AppState::new(resolved_path))
-        .manage(terminal::TerminalManager::new())
         .invoke_handler(tauri::generate_handler![
             // Misc
             commands::misc::greet,
@@ -112,6 +147,7 @@ pub fn run() {
             commands::project::get_current_workspace,
             commands::project::load_project_state,
             commands::project::save_project_state,
+            commands::project::graceful_shutdown_with_state,
             commands::project::get_project_state_path,
             commands::project::get_user_id,
             commands::project::get_project_id,

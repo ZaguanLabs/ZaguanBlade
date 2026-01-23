@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
-use crate::lsp::LspManager;
 use crate::symbol_index::{SearchQuery, SearchResult, SymbolStore};
 use crate::tree_sitter::{extract_symbols, Language, Symbol, SymbolType, TreeSitterParser};
 
@@ -19,8 +18,7 @@ pub struct LanguageService {
     parser: Mutex<TreeSitterParser>,
     /// Symbol index for persistent storage
     symbol_store: Arc<SymbolStore>,
-    /// LSP manager for language server features
-    lsp_manager: RwLock<Option<LspManager>>,
+
     /// In-memory cache of recently parsed files
     file_cache: RwLock<HashMap<String, CachedFile>>,
 }
@@ -39,7 +37,7 @@ struct CachedFile {
 pub enum LanguageError {
     Parse(String),
     Index(String),
-    Lsp(String),
+
     Io(std::io::Error),
     NotSupported(String),
 }
@@ -49,7 +47,7 @@ impl std::fmt::Display for LanguageError {
         match self {
             LanguageError::Parse(msg) => write!(f, "Parse error: {}", msg),
             LanguageError::Index(msg) => write!(f, "Index error: {}", msg),
-            LanguageError::Lsp(msg) => write!(f, "LSP error: {}", msg),
+
             LanguageError::Io(e) => write!(f, "IO error: {}", e),
             LanguageError::NotSupported(msg) => write!(f, "Not supported: {}", msg),
         }
@@ -70,12 +68,6 @@ impl From<crate::symbol_index::store::SymbolStoreError> for LanguageError {
     }
 }
 
-impl From<crate::lsp::LspError> for LanguageError {
-    fn from(e: crate::lsp::LspError) -> Self {
-        LanguageError::Lsp(e.to_string())
-    }
-}
-
 impl LanguageService {
     /// Create a new language service for a workspace
     pub fn new(
@@ -88,32 +80,9 @@ impl LanguageService {
             workspace_root,
             parser: Mutex::new(parser),
             symbol_store,
-            lsp_manager: RwLock::new(None),
+
             file_cache: RwLock::new(HashMap::new()),
         })
-    }
-
-    /// Enable LSP support
-    pub fn enable_lsp(&self) -> Result<(), LanguageError> {
-        let mut lsp = self.lsp_manager.write().unwrap();
-        if lsp.is_none() {
-            let manager = LspManager::new(self.workspace_root.to_string_lossy().as_ref());
-            *lsp = Some(manager);
-            eprintln!("[LanguageService] LSP support enabled");
-        }
-        Ok(())
-    }
-
-    /// Disable LSP support
-    pub fn disable_lsp(&self) {
-        let mut lsp = self.lsp_manager.write().unwrap();
-        *lsp = None;
-        eprintln!("[LanguageService] LSP support disabled");
-    }
-
-    /// Check if LSP is enabled
-    pub fn is_lsp_enabled(&self) -> bool {
-        self.lsp_manager.read().unwrap().is_some()
     }
 
     // =========================================================================
@@ -303,190 +272,6 @@ impl LanguageService {
     }
 
     // =========================================================================
-    // LSP Operations (pass-through to LSP manager)
-    // =========================================================================
-
-    /// Get completions at position
-    pub fn get_completions(
-        &self,
-        file_path: &str,
-        line: u32,
-        character: u32,
-    ) -> Result<Vec<crate::lsp::types::CompletionItem>, LanguageError> {
-        let mut lsp = self.lsp_manager.write().unwrap();
-        match lsp.as_mut() {
-            Some(manager) => {
-                let full_path = self.resolve_path(file_path);
-                let items =
-                    manager.completion(full_path.to_string_lossy().as_ref(), line, character)?;
-                Ok(items)
-            }
-            None => Ok(vec![]),
-        }
-    }
-
-    /// Get hover information at position
-    pub fn get_hover(
-        &self,
-        file_path: &str,
-        line: u32,
-        character: u32,
-    ) -> Result<Option<crate::lsp::types::Hover>, LanguageError> {
-        let mut lsp = self.lsp_manager.write().unwrap();
-        match lsp.as_mut() {
-            Some(manager) => {
-                let full_path = self.resolve_path(file_path);
-                let hover = manager.hover(full_path.to_string_lossy().as_ref(), line, character)?;
-                Ok(hover)
-            }
-            None => Ok(None),
-        }
-    }
-
-    /// Go to definition
-    pub fn get_definition(
-        &self,
-        file_path: &str,
-        line: u32,
-        character: u32,
-    ) -> Result<Vec<crate::lsp::types::Location>, LanguageError> {
-        let mut lsp = self.lsp_manager.write().unwrap();
-        match lsp.as_mut() {
-            Some(manager) => {
-                let full_path = self.resolve_path(file_path);
-                let locations =
-                    manager.definition(full_path.to_string_lossy().as_ref(), line, character)?;
-                Ok(locations)
-            }
-            None => Ok(vec![]),
-        }
-    }
-
-    /// Find references
-    pub fn get_references(
-        &self,
-        file_path: &str,
-        line: u32,
-        character: u32,
-        include_declaration: bool,
-    ) -> Result<Vec<crate::lsp::types::Location>, LanguageError> {
-        let mut lsp = self.lsp_manager.write().unwrap();
-        match lsp.as_mut() {
-            Some(manager) => {
-                let full_path = self.resolve_path(file_path);
-                let locations = manager.references(
-                    full_path.to_string_lossy().as_ref(),
-                    line,
-                    character,
-                    include_declaration,
-                )?;
-                Ok(locations)
-            }
-            None => Ok(vec![]),
-        }
-    }
-
-    /// Get document symbols from LSP
-    pub fn get_document_symbols_lsp(
-        &self,
-        file_path: &str,
-    ) -> Result<Vec<crate::lsp::types::DocumentSymbol>, LanguageError> {
-        let mut lsp = self.lsp_manager.write().unwrap();
-        match lsp.as_mut() {
-            Some(manager) => {
-                let full_path = self.resolve_path(file_path);
-                let symbols = manager.document_symbols(full_path.to_string_lossy().as_ref())?;
-                Ok(symbols)
-            }
-            None => Ok(vec![]),
-        }
-    }
-
-    /// Get diagnostics for a file
-    pub fn get_diagnostics(&self, file_path: &str) -> Vec<crate::lsp::types::Diagnostic> {
-        let lsp = self.lsp_manager.read().unwrap();
-        match lsp.as_ref() {
-            Some(manager) => {
-                let full_path = self.resolve_path(file_path);
-                manager.get_diagnostics(full_path.to_string_lossy().as_ref())
-            }
-            None => vec![],
-        }
-    }
-
-    /// Get signature help (parameter hints)
-    pub fn get_signature_help(
-        &self,
-        file_path: &str,
-        line: u32,
-        character: u32,
-    ) -> Result<Option<crate::lsp::types::SignatureHelp>, LanguageError> {
-        let mut lsp = self.lsp_manager.write().unwrap();
-        match lsp.as_mut() {
-            Some(manager) => {
-                let full_path = self.resolve_path(file_path);
-                let help = manager.signature_help(
-                    full_path.to_string_lossy().as_ref(),
-                    line,
-                    character,
-                )?;
-                Ok(help)
-            }
-            None => Ok(None),
-        }
-    }
-
-    /// Rename a symbol
-    pub fn rename_symbol(
-        &self,
-        file_path: &str,
-        line: u32,
-        character: u32,
-        new_name: &str,
-    ) -> Result<Option<crate::lsp::types::WorkspaceEdit>, LanguageError> {
-        let mut lsp = self.lsp_manager.write().unwrap();
-        match lsp.as_mut() {
-            Some(manager) => {
-                let full_path = self.resolve_path(file_path);
-                let edit = manager.rename(
-                    full_path.to_string_lossy().as_ref(),
-                    line,
-                    character,
-                    new_name,
-                )?;
-                Ok(edit)
-            }
-            None => Ok(None),
-        }
-    }
-
-    /// Get code actions (quick fixes, refactorings)
-    pub fn get_code_actions(
-        &self,
-        file_path: &str,
-        start_line: u32,
-        start_character: u32,
-        end_line: u32,
-        end_character: u32,
-    ) -> Result<Vec<crate::lsp::types::CodeAction>, LanguageError> {
-        let mut lsp = self.lsp_manager.write().unwrap();
-        match lsp.as_mut() {
-            Some(manager) => {
-                let full_path = self.resolve_path(file_path);
-                let actions = manager.code_actions(
-                    full_path.to_string_lossy().as_ref(),
-                    start_line,
-                    start_character,
-                    end_line,
-                    end_character,
-                )?;
-                Ok(actions)
-            }
-            None => Ok(vec![]),
-        }
-    }
-
-    // =========================================================================
     // Document Synchronization
     // =========================================================================
 
@@ -495,13 +280,6 @@ impl LanguageService {
         // Index the file
         let _ = self.index_file_content(file_path, content)?;
 
-        // Notify LSP if enabled
-        let mut lsp = self.lsp_manager.write().unwrap();
-        if let Some(manager) = lsp.as_mut() {
-            let full_path = self.resolve_path(file_path);
-            let _ = manager.did_open(full_path.to_string_lossy().as_ref(), content);
-        }
-
         Ok(())
     }
 
@@ -509,18 +287,11 @@ impl LanguageService {
     pub fn did_change(
         &self,
         file_path: &str,
-        version: i32,
+        _version: i32,
         content: &str,
     ) -> Result<(), LanguageError> {
         // Re-index the file
         let _ = self.index_file_content(file_path, content)?;
-
-        // Notify LSP if enabled
-        let mut lsp = self.lsp_manager.write().unwrap();
-        if let Some(manager) = lsp.as_mut() {
-            let full_path = self.resolve_path(file_path);
-            let _ = manager.did_change(full_path.to_string_lossy().as_ref(), version, content);
-        }
 
         Ok(())
     }
@@ -531,13 +302,6 @@ impl LanguageService {
         {
             let mut cache = self.file_cache.write().unwrap();
             cache.remove(file_path);
-        }
-
-        // Notify LSP if enabled
-        let mut lsp = self.lsp_manager.write().unwrap();
-        if let Some(manager) = lsp.as_mut() {
-            let full_path = self.resolve_path(file_path);
-            let _ = manager.did_close(full_path.to_string_lossy().as_ref());
         }
 
         Ok(())

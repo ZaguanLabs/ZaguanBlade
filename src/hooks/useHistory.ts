@@ -65,15 +65,46 @@ export function useHistory() {
             setLoading(true);
             setError(null);
 
-            // Dispatch ListConversations Intent via BCP
-            console.log('[useHistory] Dispatching ListConversations intent...');
-            await BladeDispatcher.history({
-                type: 'ListConversations',
-                payload: { project_id: projectId }
-            });
-            console.log('[useHistory] ListConversations intent dispatched successfully');
+            // Check storage mode settings
+            let useLocal = false;
+            try {
+                const settings = await invoke<any>('load_project_settings', { projectPath: projectId });
+                if (settings?.storage?.mode === 'local') {
+                    useLocal = true;
+                }
+            } catch (e) {
+                console.warn('[useHistory] Failed to load settings, defaulting to server mode', e);
+            }
 
-            // Backend will respond with ConversationList Event
+            if (useLocal) {
+                console.log('[useHistory] Loading conversations from LOCAL storage');
+                const localConversations = await invoke<any[]>('list_conversations');
+
+                // Map Rust metadata to UI Summary format
+                const conversations: ConversationSummary[] = localConversations.map(c => ({
+                    id: c.id,
+                    project_id: projectId,
+                    title: c.title,
+                    created_at: c.created_at,
+                    last_active_at: c.updated_at, // Map updated_at to last_active_at
+                    message_count: c.message_count,
+                    preview: '', // Local metadata might not have preview yet
+                }));
+
+                setConversations(conversations);
+                setLoading(false);
+            } else {
+                // SERVER mode
+                // Dispatch ListConversations Intent via BCP
+                console.log('[useHistory] Dispatching ListConversations intent (SERVER)...');
+                await BladeDispatcher.history({
+                    type: 'ListConversations',
+                    payload: { project_id: projectId }
+                });
+                console.log('[useHistory] ListConversations intent dispatched successfully');
+                // Backend will respond with ConversationList Event
+            }
+
         } catch (e) {
             console.error('[useHistory] Failed to fetch conversation history:', e);
             setError(e instanceof Error ? e.message : String(e));
@@ -82,61 +113,112 @@ export function useHistory() {
     }, []);
 
     const loadConversation = useCallback(async (sessionId: string): Promise<ChatMessage[]> => {
-        return new Promise((resolve, reject) => {
+        // We need projectId to check settings, but loadConversation doesn't take it as arg.
+        // However, we can assume if we are loading a conversation, we might need to check Global or try local first.
+        // Or better: try local load, if it fails then server?
+        // Actually, if we are in local mode, we should ONLY try local.
+        // Since we don't have projectId here easily (it's in the component), let's try to detect mode via
+        // 'get_current_workspace' or similar?
+        // For now, let's just try local load first if we can, or check global settings?
+        // A safer bet: The ID itself might tell us? No.
+        // Let's assume we can check the current workspace.
+
+        let useLocal = false;
+        try {
+            const currentPath = await invoke<string | null>('get_current_workspace');
+            if (currentPath) {
+                const settings = await invoke<any>('load_project_settings', { projectPath: currentPath });
+                if (settings?.storage?.mode === 'local') {
+                    useLocal = true;
+                }
+            }
+        } catch (e) {
+            console.warn('Failed to check usage mode in loadConversation', e);
+        }
+
+        if (useLocal) {
+            console.log('[useHistory] Loading conversation from LOCAL storage');
             setLoading(true);
             setError(null);
+            try {
+                await invoke('load_conversation', { id: sessionId });
+                const messages = await invoke<any[]>('get_conversation');
 
-            // Set up one-time listener for the ConversationLoaded event
-            const setupOneTimeListener = async () => {
-                const unlisten = await listen<BladeEventEnvelope>('blade-event', (event) => {
-                    const envelope = event.payload;
+                // Map to ChatMessage
+                const chatMessages: ChatMessage[] = messages.map(msg => ({
+                    id: crypto.randomUUID(), // Local messages might not have UUIDs stored in message struct if not migrated
+                    role: msg.role === 'User' ? 'User' : msg.role === 'Assistant' ? 'Assistant' : msg.role === 'Tool' ? 'Tool' : 'System', // Rust types might be different
+                    content: msg.content,
+                    reasoning: msg.reasoning,
+                    tool_call_id: msg.tool_call_id,
+                    tool_calls: msg.tool_calls // Ensure this field exists or is mapped
+                }));
 
-                    if (envelope.event.type === 'History') {
-                        const historyEvent = envelope.event.payload;
+                setLoading(false);
+                return ensureMessagesHaveBlocks(chatMessages);
+            } catch (e) {
+                console.error('Failed local load:', e);
+                setError(String(e));
+                setLoading(false);
+                throw e;
+            }
+        } else {
+            return new Promise((resolve, reject) => {
+                setLoading(true);
+                setError(null);
 
-                        if (historyEvent.type === 'ConversationLoaded' &&
-                            historyEvent.payload.session_id === sessionId) {
+                // Set up one-time listener for the ConversationLoaded event
+                const setupOneTimeListener = async () => {
+                    const unlisten = await listen<BladeEventEnvelope>('blade-event', (event) => {
+                        const envelope = event.payload;
 
-                            // Convert history messages to ChatMessage format
-                            const messages: ChatMessage[] = historyEvent.payload.messages.map(msg => ({
-                                id: crypto.randomUUID(),
-                                role: msg.role === 'user' ? 'User' :
-                                    msg.role === 'assistant' ? 'Assistant' :
-                                        msg.role === 'tool' ? 'Tool' : 'System',
-                                content: msg.content,
-                                // Mark all tool calls as complete since they're historical
-                                tool_calls: msg.tool_calls?.map(tc => ({
-                                    ...tc,
-                                    status: 'complete' as const
-                                })),
-                                tool_call_id: msg.tool_call_id
-                            }));
+                        if (envelope.event.type === 'History') {
+                            const historyEvent = envelope.event.payload;
 
-                            unlisten();
-                            setLoading(false);
-                            // Reconstruct blocks for proper conversation flow ordering
-                            resolve(ensureMessagesHaveBlocks(messages));
+                            if (historyEvent.type === 'ConversationLoaded' &&
+                                historyEvent.payload.session_id === sessionId) {
+
+                                // Convert history messages to ChatMessage format
+                                const messages: ChatMessage[] = historyEvent.payload.messages.map(msg => ({
+                                    id: crypto.randomUUID(),
+                                    role: msg.role === 'user' ? 'User' :
+                                        msg.role === 'assistant' ? 'Assistant' :
+                                            msg.role === 'tool' ? 'Tool' : 'System',
+                                    content: msg.content,
+                                    // Mark all tool calls as complete since they're historical
+                                    tool_calls: msg.tool_calls?.map(tc => ({
+                                        ...tc,
+                                        status: 'complete' as const
+                                    })),
+                                    tool_call_id: msg.tool_call_id
+                                }));
+
+                                unlisten();
+                                setLoading(false);
+                                // Reconstruct blocks for proper conversation flow ordering
+                                resolve(ensureMessagesHaveBlocks(messages));
+                            }
                         }
-                    }
-                });
-
-                // Dispatch LoadConversation Intent via BCP
-                try {
-                    await BladeDispatcher.history({
-                        type: 'LoadConversation',
-                        payload: { session_id: sessionId }
                     });
-                } catch (e) {
-                    console.error('Failed to load conversation:', e);
-                    setError(e instanceof Error ? e.message : String(e));
-                    setLoading(false);
-                    unlisten();
-                    reject(e);
-                }
-            };
 
-            setupOneTimeListener();
-        });
+                    // Dispatch LoadConversation Intent via BCP
+                    try {
+                        await BladeDispatcher.history({
+                            type: 'LoadConversation',
+                            payload: { session_id: sessionId }
+                        });
+                    } catch (e) {
+                        console.error('Failed to load conversation:', e);
+                        setError(e instanceof Error ? e.message : String(e));
+                        setLoading(false);
+                        unlisten();
+                        reject(e);
+                    }
+                };
+
+                setupOneTimeListener();
+            });
+        }
     }, []);
 
     return {

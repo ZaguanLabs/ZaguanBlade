@@ -26,6 +26,22 @@ pub fn save_project_state(state_data: project_state::ProjectState) -> Result<(),
 }
 
 #[tauri::command]
+pub fn graceful_shutdown_with_state(
+    app_handle: tauri::AppHandle,
+    state_data: project_state::ProjectState,
+) -> Result<(), String> {
+    if let Err(e) = project_state::save_project_state(&state_data) {
+        println!("[Backend] Failed to save state during shutdown: {}", e);
+        // We continue to exit even if save fails, to prevent hanging
+    } else {
+        println!("[Backend] State saved successfully. Exiting.");
+    }
+
+    app_handle.exit(0);
+    Ok(())
+}
+
+#[tauri::command]
 pub fn get_project_state_path(project_path: String) -> Option<String> {
     project_state::get_project_state_path(&project_path).map(|p| p.to_string_lossy().to_string())
 }

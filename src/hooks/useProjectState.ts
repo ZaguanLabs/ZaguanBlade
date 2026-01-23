@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
 export interface TabState {
     id: string;
@@ -41,6 +42,7 @@ interface UseProjectStateReturn {
     saveState: () => Promise<void>;
     loadState: () => Promise<ProjectState | null>;
     loaded: boolean;
+    isClosing: boolean;
 }
 
 export function useProjectState({
@@ -53,17 +55,23 @@ export function useProjectState({
     terminalHeight,
     onStateLoaded,
 }: UseProjectStateOptions): UseProjectStateReturn {
-    const hasLoadedRef = useRef(false);
     const [loaded, setLoaded] = useState(false);
+    const [isClosing, setIsClosing] = useState(false);
+
+    // Refs for state tracking
+    const isClosingRef = useRef(false);
+    const isDirtyRef = useRef(false);
+    const isRestoringRef = useRef(false);
     const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    const saveState = useCallback(async () => {
-        if (!projectPath) return;
+    // Helper to construct state object
+    const constructState = useCallback((): ProjectState | null => {
+        if (!projectPath) return null;
 
         const activeTab = tabs.find(t => t.id === activeTabId);
         const activeFile = activeTab?.type === 'file' ? activeTab.path || null : null;
 
-        const state: ProjectState = {
+        return {
             project_path: projectPath,
             active_file: activeFile,
             open_tabs: tabs.filter(t => t.type === 'file').map(t => ({
@@ -80,26 +88,39 @@ export function useProjectState({
             })),
             active_terminal_id: activeTerminalId,
             terminal_height: terminalHeight,
+            // These UI dimensions are currently not tracked in React state in a way we can easily retrieve here
+            // They would need to be passed in props if we want to persist them accurately
             chat_panel_width: null,
             explorer_width: null,
         };
+    }, [projectPath, tabs, activeTabId, selectedModelId, terminals, activeTerminalId, terminalHeight]);
+
+    const saveState = useCallback(async () => {
+        if (!projectPath) return;
+
+        // Optimization: Don't save if state hasn't changed (clean)
+        if (!isDirtyRef.current) {
+            return;
+        }
+
+        const state = constructState();
+        if (!state) return;
 
         try {
             await invoke('save_project_state', { stateData: state });
-            console.log('[ProjectState] Saved state for:', projectPath);
+            // console.log('[ProjectState] Saved state for:', projectPath); // Disabled log for cleaner output
+            isDirtyRef.current = false;
         } catch (e) {
             console.error('[ProjectState] Failed to save state:', e);
         }
-    }, [projectPath, tabs, activeTabId, selectedModelId, terminals, activeTerminalId, terminalHeight]);
+    }, [projectPath, constructState]);
 
     const loadState = useCallback(async (): Promise<ProjectState | null> => {
         if (!projectPath) return null;
 
         try {
             const state = await invoke<ProjectState | null>('load_project_state', { projectPath });
-            if (state) {
-                console.log('[ProjectState] Loaded state for:', projectPath, state);
-            }
+            // console.log('[ProjectState] Loaded state invoked'); // Disabled log
             return state;
         } catch (e) {
             console.error('[ProjectState] Failed to load state:', e);
@@ -107,35 +128,44 @@ export function useProjectState({
         }
     }, [projectPath]);
 
-    // Load state on mount when project path is available
+    // Initial Load Effect
     useEffect(() => {
-        if (!projectPath || hasLoadedRef.current) return;
+        if (!projectPath || loaded) return;
 
         const load = async () => {
+            // Flag that we are restoring state to prevent dirty-marking
+            isRestoringRef.current = true;
+
             const state = await loadState();
-            
-            // IMPORTANT: Call onStateLoaded BEFORE setting loaded to true
-            // This ensures the model is set before useWarmup sees ready=true
+
             if (state && onStateLoaded) {
-                console.log('[ProjectState] Restoring saved state');
                 onStateLoaded(state);
             } else {
-                console.log('[ProjectState] No saved state found, will create on next save');
+                console.log('[ProjectState] No saved state found');
             }
-            
-            // Mark as loaded AFTER state is restored
-            // This ensures useWarmup sees the correct model when it becomes ready
-            hasLoadedRef.current = true;
+
             setLoaded(true);
+
+            // Allow a small tick for React state updates to settle before enabling dirty tracking
+            setTimeout(() => {
+                isRestoringRef.current = false;
+            }, 100);
         };
 
         load();
-    }, [projectPath, loadState, onStateLoaded]);
+    }, [projectPath, loadState, onStateLoaded, loaded]);
 
-    // Debounced auto-save on state changes
+    // Change Detection Effect
     useEffect(() => {
-        if (!projectPath || !hasLoadedRef.current) return;
+        if (!projectPath || !loaded) return;
 
+        // If we represent a change but we are currently restoring, ignore it
+        if (isRestoringRef.current) return;
+
+        // Mark as dirty
+        isDirtyRef.current = true;
+
+        // Debounce save
         if (saveTimeoutRef.current) {
             clearTimeout(saveTimeoutRef.current);
         }
@@ -149,24 +179,59 @@ export function useProjectState({
                 clearTimeout(saveTimeoutRef.current);
             }
         };
-    }, [projectPath, tabs, activeTabId, selectedModelId, terminals, activeTerminalId, terminalHeight, saveState]);
+    }, [projectPath, tabs, activeTabId, selectedModelId, terminals, activeTerminalId, terminalHeight, loaded, saveState]);
 
-    // Save on window unload
+    // Exit Handler - The "Deep Fix"
+    // We delegate the exit-save-sequence entirely to the backend
     useEffect(() => {
-        const handleBeforeUnload = () => {
-            if (projectPath && hasLoadedRef.current) {
-                // Use synchronous approach for beforeunload
-                // Note: invoke is async, so this may not complete
-                // Consider using navigator.sendBeacon in the future
-                saveState();
-            }
+        let unlisten: (() => void) | undefined;
+
+        const setupListener = async () => {
+            const currentWindow = getCurrentWindow();
+
+            unlisten = await currentWindow.onCloseRequested(async (event) => {
+                // Ignore if already closing
+                if (isClosingRef.current) {
+                    event.preventDefault();
+                    return;
+                }
+
+                if (projectPath && loaded) {
+                    event.preventDefault(); // Stop immediate close
+
+                    isClosingRef.current = true;
+                    setIsClosing(true); // Trigger UI overlay
+
+                    // Construct final state
+                    const finalState = constructState();
+
+                    // One-way ticket: Verify state and signal backend to take over
+                    if (finalState) {
+                        // We DO NOT await this. We intentionally fire-and-forget from the frontend perspective
+                        // because the backend command 'graceful_shutdown_with_state' will:
+                        // 1. Save the state synchronously
+                        // 2. Call app_handle.exit() effectively killing the app
+                        // This avoids any frontend event-loop blocking or IPC response issues.
+                        invoke('graceful_shutdown_with_state', { stateData: finalState })
+                            .catch(e => {
+                                console.error('Shutdown failed:', e);
+                                // Fallback force exit if backend command somehow fails to kill app
+                                currentWindow.destroy();
+                            });
+                    } else {
+                        // If no state to save, just destroy
+                        currentWindow.destroy();
+                    }
+                }
+            });
         };
 
-        window.addEventListener('beforeunload', handleBeforeUnload);
+        setupListener();
+
         return () => {
-            window.removeEventListener('beforeunload', handleBeforeUnload);
+            if (unlisten) unlisten();
         };
-    }, [projectPath, saveState]);
+    }, [projectPath, loaded, constructState]);
 
-    return { saveState, loadState, loaded };
+    return { saveState, loadState, loaded, isClosing };
 }

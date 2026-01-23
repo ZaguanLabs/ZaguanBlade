@@ -104,16 +104,11 @@ pub struct PrivacySettings {
 
 /// Editor settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EditorSettings {
-    // LSP is enabled by default. Calls are wrapped in spawn_blocking
-    // to prevent starving the tokio runtime.
-    #[serde(default = "default_true")]
-    pub enable_lsp: bool,
-}
+pub struct EditorSettings {}
 
 impl Default for EditorSettings {
     fn default() -> Self {
-        Self { enable_lsp: true }
+        Self {}
     }
 }
 

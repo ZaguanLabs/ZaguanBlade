@@ -218,33 +218,17 @@ export type LanguageIntent =
     | { type: "IndexWorkspace"; payload?: Record<string, never> }
     | { type: "SearchSymbols"; payload: { query: string; file_path?: string | null; symbol_types?: string[] | null } }
     | { type: "GetSymbolAt"; payload: { file_path: string; line: number; character: number } }
-    | { type: "GetCompletions"; payload: { file_path: string; line: number; character: number } }
-    | { type: "GetHover"; payload: { file_path: string; line: number; character: number } }
-    | { type: "GetDefinition"; payload: { file_path: string; line: number; character: number } }
-    | { type: "GetReferences"; payload: { file_path: string; line: number; character: number; include_declaration: boolean } }
-    | { type: "GetDocumentSymbols"; payload: { file_path: string } }
-    | { type: "GetDiagnostics"; payload: { file_path: string } }
     | { type: "DidOpen"; payload: { file_path: string; content: string; language_id: string } }
     | { type: "DidChange"; payload: { file_path: string; content: string; version: number } }
     | { type: "DidClose"; payload: { file_path: string } }
-    | { type: "GetSignatureHelp"; payload: { file_path: string; line: number; character: number } }
-    | { type: "GetCodeActions"; payload: { file_path: string; start_line: number; start_character: number; end_line: number; end_character: number } }
-    | { type: "Rename"; payload: { file_path: string; line: number; character: number; new_name: string } };
+    | { type: "ZlpMessage"; payload: any };
 
 export type LanguageEvent =
     | { type: "FileIndexed"; payload: { file_path: string; symbol_count: number } }
     | { type: "WorkspaceIndexed"; payload: { file_count: number; symbol_count: number; duration_ms: number } }
     | { type: "SymbolsFound"; payload: { intent_id: string; symbols: LanguageSymbol[] } }
     | { type: "SymbolAt"; payload: { intent_id: string; symbol: LanguageSymbol | null } }
-    | { type: "CompletionsReady"; payload: { intent_id: string; items: CompletionItem[] } }
-    | { type: "HoverReady"; payload: { intent_id: string; contents: string | null; range: LanguageRange | null } }
-    | { type: "DefinitionReady"; payload: { intent_id: string; locations: LanguageLocation[] } }
-    | { type: "ReferencesReady"; payload: { intent_id: string; locations: LanguageLocation[] } }
-    | { type: "DocumentSymbolsReady"; payload: { intent_id: string; symbols: LanguageDocumentSymbol[] } }
-    | { type: "DiagnosticsUpdated"; payload: { file_path: string; diagnostics: LanguageDiagnostic[] } }
-    | { type: "SignatureHelpReady"; payload: { intent_id: string; signatures: SignatureInfo[]; active_signature: number | null; active_parameter: number | null } }
-    | { type: "CodeActionsReady"; payload: { intent_id: string; actions: CodeActionInfo[] } }
-    | { type: "RenameEditsReady"; payload: { intent_id: string; edit: LanguageWorkspaceEdit | null } };
+    | { type: "ZlpResponse"; payload: { original_request_id: string; payload: any } };
 
 export type LanguagePosition = {
     line: number;
@@ -272,56 +256,5 @@ export type LanguageSymbol = {
     signature: string | null;
 }
 
-export type LanguageDocumentSymbol = {
-    name: string;
-    kind: string;
-    range: LanguageRange;
-    selection_range: LanguageRange;
-    detail: string | null;
-    children: LanguageDocumentSymbol[];
-}
 
-export type CompletionItem = {
-    label: string;
-    kind: string | null;
-    detail: string | null;
-    documentation: string | null;
-    insert_text: string | null;
-}
-
-export type LanguageDiagnostic = {
-    range: LanguageRange;
-    severity: string;
-    code: string | null;
-    message: string;
-    source: string | null;
-}
-
-export type SignatureInfo = {
-    label: string;
-    documentation: string | null;
-    parameters: ParameterInfo[];
-}
-
-export type ParameterInfo = {
-    label: string;
-    documentation: string | null;
-}
-
-export type CodeActionInfo = {
-    title: string;
-    kind: string | null;
-    diagnostics: LanguageDiagnostic[] | null;
-    edit?: LanguageWorkspaceEdit | null;
-    is_preferred: boolean;
-}
-
-export type LanguageTextEdit = {
-    range: LanguageRange;
-    new_text: string;
-}
-
-export type LanguageWorkspaceEdit = {
-    changes: Record<string, LanguageTextEdit[]> | null;
-}
 

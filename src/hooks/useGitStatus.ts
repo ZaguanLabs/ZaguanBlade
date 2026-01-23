@@ -104,11 +104,7 @@ export const useGitStatus = () => {
 
     const generateCommitMessage = useCallback(async (modelId?: string) => {
         if (modelId) {
-            try {
-                return await invoke<string>('git_generate_commit_message_ai', { modelId });
-            } catch (e) {
-                console.error('[useGitStatus] AI commit message failed, falling back:', e);
-            }
+            return await invoke<string>('git_generate_commit_message_ai', { modelId });
         }
         return invoke<string>('git_generate_commit_message');
     }, []);

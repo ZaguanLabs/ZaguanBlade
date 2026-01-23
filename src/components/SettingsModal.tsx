@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { emit } from '@tauri-apps/api/event';
 import { X, Database, Cloud, Shield, Zap, HardDrive, Server, ChevronRight, Info, Loader2, Code, Key, CheckCircle2 } from 'lucide-react';
 import type { ApiConfig, BackendSettings } from '../types/settings';
+import { ZLPService } from '../services/zlp';
 
 type StorageMode = 'local' | 'server';
 
@@ -26,9 +27,7 @@ interface SettingsState {
     privacy: {
         telemetry: boolean;
     };
-    editor: {
-        enableLsp: boolean;
-    };
+    editor: {};
     account: {
         bladeUrl: string;
         apiKey: string;
@@ -57,9 +56,7 @@ const defaultSettings: SettingsState = {
     privacy: {
         telemetry: false,
     },
-    editor: {
-        enableLsp: true,
-    },
+    editor: {},
     account: {
         bladeUrl: '',
         apiKey: '',
@@ -115,9 +112,7 @@ function backendToFrontend(backend: BackendSettings): Omit<SettingsState, 'accou
         privacy: {
             telemetry: backend.privacy.telemetry,
         },
-        editor: {
-            enableLsp: backend.editor.enable_lsp,
-        },
+        editor: {},
     };
 }
 
@@ -142,7 +137,7 @@ function frontendToBackend(frontend: SettingsState): BackendSettings {
             telemetry: false,
         },
         editor: {
-            enable_lsp: frontend.editor.enableLsp,
+            // enable_lsp: frontend.editor.enableLsp,
         },
     };
 }
@@ -269,7 +264,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
         { id: 'account', label: 'Account', icon: <Key className="w-4 h-4" /> },
         { id: 'storage', label: 'Storage', icon: <Database className="w-4 h-4" /> },
         ...(workspacePath ? [
-            { id: 'editor', label: 'Editor', icon: <Code className="w-4 h-4" /> },
             { id: 'context', label: 'Context', icon: <Zap className="w-4 h-4" /> },
             // { id: 'privacy', label: 'Privacy', icon: <Shield className="w-4 h-4" /> },
         ] as const : []),
@@ -682,29 +676,10 @@ const EditorSettings: React.FC<EditorSettingsProps> = ({ settings, onChange }) =
             <div>
                 <h3 className="text-base font-semibold text-[var(--fg-primary)] mb-1">Editor</h3>
                 <p className="text-sm text-[var(--fg-tertiary)] mb-4">
-                    Configure editor behavior and intelligence.
+                    Configure editor behavior.
                 </p>
             </div>
-
-            {/* LSP Toggle */}
-            <div className="bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded-lg p-4">
-                <div className="flex items-center justify-between mb-2">
-                    <div>
-                        <div className="text-sm font-medium text-[var(--fg-primary)] flex items-center gap-2">
-                            <Zap className="w-4 h-4 text-emerald-500" />
-                            Language Intelligence (LSP)
-                        </div>
-                    </div>
-                    <Toggle
-                        checked={settings.enableLsp}
-                        onChange={(checked) => onChange({ enableLsp: checked })}
-                    />
-                </div>
-                <div className="text-xs text-[var(--fg-tertiary)] ml-0">
-                    Enable advanced features like Hover, Go to Definition, and Autocomplete.
-                    Requires language servers (e.g. rust-analyzer) to be installed on your system.
-                </div>
-            </div>
+            {/* No settings for now */}
         </div>
     );
 };
@@ -738,6 +713,21 @@ interface AccountSettingsProps {
 
 const AccountSettings: React.FC<AccountSettingsProps> = ({ settings, onChange }) => {
     const [showKey, setShowKey] = useState(false);
+    const [testStatus, setTestStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+    const [testMessage, setTestMessage] = useState<string | null>(null);
+
+    const runCapaTest = async () => {
+        setTestStatus('loading');
+        setTestMessage(null);
+        try {
+            const result = await ZLPService.capabilities();
+            setTestStatus('success');
+            setTestMessage(`Connected to zcoderd! Ver: ${result.server_version}, Features: [${result.features.join(', ')}]`);
+        } catch (e: any) {
+            setTestStatus('error');
+            setTestMessage(`Connection failed: ${e.message || e}`);
+        }
+    };
 
     return (
         <div className="space-y-6">
@@ -805,6 +795,33 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ settings, onChange })
                     </div>
                 </div>
 
+            </div>
+
+            <div className="border-t border-[var(--border-subtle)] pt-6">
+                <h4 className="text-base font-semibold text-[var(--fg-primary)] mb-2">Diagnostic Tools</h4>
+                <div className="p-4 bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded-lg">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <div className="text-sm font-medium text-[var(--fg-primary)]">Test ZLP Connection</div>
+                            <div className="text-xs text-[var(--fg-tertiary)]">
+                                Verify connection to the ZLP Language Server
+                            </div>
+                        </div>
+                        <button
+                            onClick={runCapaTest}
+                            disabled={testStatus === 'loading'}
+                            className="px-3 py-1.5 text-xs font-medium border border-[var(--border-subtle)] hover:bg-[var(--bg-surface-hover)] rounded transition-colors flex items-center gap-2"
+                        >
+                            {testStatus === 'loading' && <Loader2 className="w-3 h-3 animate-spin" />}
+                            Test Connection
+                        </button>
+                    </div>
+                    {testMessage && (
+                        <div className={`mt-3 text-xs p-2 rounded ${testStatus === 'success' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
+                            {testMessage}
+                        </div>
+                    )}
+                </div>
             </div>
 
 
