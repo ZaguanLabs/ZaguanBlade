@@ -26,4 +26,5 @@ export interface BackendSettings {
         telemetry: boolean;
     };
     editor: {};
+    allow_gitignored_files: boolean;
 }

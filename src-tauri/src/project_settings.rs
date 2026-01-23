@@ -123,10 +123,18 @@ pub struct ProjectSettings {
     pub privacy: PrivacySettings,
     #[serde(default)]
     pub editor: EditorSettings,
+    /// Whether to allow access to files matched by .gitignore patterns
+    /// Default: false (respect .gitignore for security)
+    #[serde(default = "default_false")]
+    pub allow_gitignored_files: bool,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_false() -> bool {
+    false
 }
 
 fn default_cache_size() -> u32 {

@@ -18,6 +18,7 @@ pub mod events;
 pub mod explorer;
 pub mod fs_watcher;
 pub mod git;
+pub mod gitignore_filter;
 pub mod history;
 pub mod idempotency;
 pub mod language_service;

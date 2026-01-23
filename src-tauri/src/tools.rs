@@ -6,6 +6,9 @@ use regex::Regex;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
+use crate::gitignore_filter::GitignoreFilter;
+use crate::project_settings;
+
 #[derive(Debug, Clone)]
 pub struct ToolResult {
     pub success: bool,
@@ -58,6 +61,23 @@ fn get_str_arg(args: &HashMap<String, serde_json::Value>, keys: &[&str]) -> Opti
         }
     }
     None
+}
+
+/// Load project settings and create a GitignoreFilter if needed
+/// Returns None if gitignore filtering should not be applied
+fn create_gitignore_filter(workspace_root: &Path) -> Option<GitignoreFilter> {
+    let settings = project_settings::load_project_settings(workspace_root);
+    
+    // If allow_gitignored_files is true, don't create a filter (allow all files)
+    if settings.allow_gitignored_files {
+        eprintln!("[GITIGNORE] Filtering disabled by project settings");
+        return None;
+    }
+    
+    // Create filter to respect .gitignore
+    let filter = GitignoreFilter::new(workspace_root);
+    eprintln!("[GITIGNORE] Filtering enabled for workspace: {}", workspace_root.display());
+    Some(filter)
 }
 
 // Editor state for IDE-specific tools
@@ -318,6 +338,9 @@ fn grep_search(workspace_root: &Path, args: &HashMap<String, serde_json::Value>)
         Err(e) => return ToolResult::err(format!("invalid regex: {e}")),
     };
 
+    // Load gitignore filter
+    let gitignore_filter = create_gitignore_filter(workspace_root);
+
     let mut out = String::new();
     for entry in WalkDir::new(abs)
         .follow_links(false)
@@ -328,7 +351,16 @@ fn grep_search(workspace_root: &Path, args: &HashMap<String, serde_json::Value>)
             continue;
         }
 
-        let Ok(text) = fs::read_to_string(entry.path()) else {
+        let path = entry.path();
+
+        // Check gitignore filter
+        if let Some(ref filter) = gitignore_filter {
+            if filter.should_ignore(path) {
+                continue;
+            }
+        }
+
+        let Ok(text) = fs::read_to_string(path) else {
             continue;
         };
 
@@ -336,7 +368,7 @@ fn grep_search(workspace_root: &Path, args: &HashMap<String, serde_json::Value>)
             if re.is_match(line) {
                 out.push_str(&format!(
                     "{}:{}:{}\n",
-                    entry.path().to_string_lossy(),
+                    path.to_string_lossy(),
                     idx + 1,
                     line
                 ));
@@ -371,6 +403,9 @@ fn codebase_search(workspace_root: &Path, args: &HashMap<String, serde_json::Val
         Err(e) => return ToolResult::err(format!("invalid regex pattern: {}", e)),
     };
 
+    // Load gitignore filter
+    let gitignore_filter = create_gitignore_filter(workspace_root);
+
     let mut results = Vec::new();
     let mut count = 0;
 
@@ -384,6 +419,14 @@ fn codebase_search(workspace_root: &Path, args: &HashMap<String, serde_json::Val
         }
 
         let path = entry.path();
+        
+        // Check gitignore filter
+        if let Some(ref filter) = gitignore_filter {
+            if filter.should_ignore(path) {
+                continue;
+            }
+        }
+
         let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
         // Apply file pattern filter if specified
@@ -933,8 +976,19 @@ fn get_workspace_structure(
         Err(e) => return ToolResult::err(e),
     };
 
+    // Load gitignore filter if needed
+    let gitignore_filter = create_gitignore_filter(workspace_root);
+
     let mut output = format!("Directory: {}\n", abs.to_string_lossy());
-    build_tree_structure(&abs, &mut output, 0, max_depth, include_hidden, "");
+    build_tree_structure(
+        &abs,
+        &mut output,
+        0,
+        max_depth,
+        include_hidden,
+        "",
+        gitignore_filter.as_ref(),
+    );
 
     ToolResult::ok(output)
 }
@@ -946,6 +1000,7 @@ fn build_tree_structure(
     max_depth: usize,
     include_hidden: bool,
     prefix: &str,
+    gitignore_filter: Option<&GitignoreFilter>,
 ) {
     if depth >= max_depth {
         return;
@@ -970,6 +1025,13 @@ fn build_tree_structure(
             continue;
         }
 
+        // Check gitignore filter
+        if let Some(filter) = gitignore_filter {
+            if filter.should_ignore(&entry.path()) {
+                continue;
+            }
+        }
+
         if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
             dirs.push((name, entry.path()));
         } else {
@@ -992,6 +1054,7 @@ fn build_tree_structure(
             max_depth,
             include_hidden,
             &new_prefix,
+            gitignore_filter,
         );
     }
 

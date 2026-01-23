@@ -44,6 +44,7 @@ clap = { version = "4", features = ["derive"] }
 glob = "0.3"
 rusqlite = { version = "0.32", features = ["bundled"] }
 notify = "6.1.1"
+ignore = "0.4"
 
 # Tree-sitter for AST parsing (Rust-first architecture)
 tree-sitter = "0.24"

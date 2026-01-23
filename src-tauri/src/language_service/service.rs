@@ -7,6 +7,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
+use crate::gitignore_filter::GitignoreFilter;
+use crate::project_settings;
 use crate::symbol_index::{SearchQuery, SearchResult, SymbolStore};
 use crate::tree_sitter::{extract_symbols, Language, Symbol, SymbolType, TreeSitterParser};
 
@@ -148,7 +150,10 @@ impl LanguageService {
         let mut stats = IndexStats::default();
         let start = std::time::Instant::now();
 
-        self.index_directory_recursive(&full_path, "", &mut stats)?;
+        // Create gitignore filter if enabled
+        let gitignore_filter = self.create_gitignore_filter();
+
+        self.index_directory_recursive(&full_path, "", &mut stats, gitignore_filter.as_ref())?;
 
         stats.duration_ms = start.elapsed().as_millis() as u64;
         eprintln!(
@@ -159,11 +164,31 @@ impl LanguageService {
         Ok(stats)
     }
 
+    /// Create a GitignoreFilter if gitignore filtering is enabled
+    fn create_gitignore_filter(&self) -> Option<GitignoreFilter> {
+        let settings = project_settings::load_project_settings(&self.workspace_root);
+
+        // If allow_gitignored_files is true, don't create a filter (allow all files)
+        if settings.allow_gitignored_files {
+            eprintln!("[LanguageService] Gitignore filtering disabled by project settings");
+            return None;
+        }
+
+        // Create filter to respect .gitignore
+        let filter = GitignoreFilter::new(&self.workspace_root);
+        eprintln!(
+            "[LanguageService] Gitignore filtering enabled for workspace: {}",
+            self.workspace_root.display()
+        );
+        Some(filter)
+    }
+
     fn index_directory_recursive(
         &self,
         base_path: &Path,
         relative_path: &str,
         stats: &mut IndexStats,
+        gitignore_filter: Option<&GitignoreFilter>,
     ) -> Result<(), LanguageError> {
         let dir_path = if relative_path.is_empty() {
             base_path.to_path_buf()
@@ -180,15 +205,16 @@ impl LanguageService {
             let path = entry.path();
             let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-            // Skip hidden files/dirs and common ignore patterns
-            if file_name.starts_with('.')
-                || file_name == "node_modules"
-                || file_name == "target"
-                || file_name == "dist"
-                || file_name == "__pycache__"
-                || file_name == ".git"
-            {
+            // Skip hidden files/dirs (always skip .git regardless of gitignore setting)
+            if file_name.starts_with('.') {
                 continue;
+            }
+
+            // Check gitignore filter
+            if let Some(filter) = gitignore_filter {
+                if filter.should_ignore(&path) {
+                    continue;
+                }
             }
 
             let relative = if relative_path.is_empty() {
@@ -198,7 +224,7 @@ impl LanguageService {
             };
 
             if path.is_dir() {
-                self.index_directory_recursive(base_path, &relative, stats)?;
+                self.index_directory_recursive(base_path, &relative, stats, gitignore_filter)?;
             } else if path.is_file() {
                 // Check if it's a supported language
                 if Language::from_path(&relative).is_some() {

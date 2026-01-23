@@ -35,6 +35,7 @@ interface SettingsState {
         theme: string;
         markdownView: string;
     };
+    allowGitIgnoredFiles?: boolean;  // Per-project setting
 }
 
 const defaultSettings: SettingsState = {
@@ -64,6 +65,7 @@ const defaultSettings: SettingsState = {
         theme: 'system',
         markdownView: 'split',
     },
+    allowGitIgnoredFiles: false,  // Default: respect .gitignore
 };
 
 
@@ -113,6 +115,7 @@ function backendToFrontend(backend: BackendSettings): Omit<SettingsState, 'accou
             telemetry: backend.privacy.telemetry,
         },
         editor: {},
+        allowGitIgnoredFiles: backend.allow_gitignored_files,
     };
 }
 
@@ -136,9 +139,8 @@ function frontendToBackend(frontend: SettingsState): BackendSettings {
         privacy: {
             telemetry: false,
         },
-        editor: {
-            // enable_lsp: frontend.editor.enableLsp,
-        },
+        editor: {},
+        allow_gitignored_files: frontend.allowGitIgnoredFiles || false,
     };
 }
 
@@ -216,7 +218,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
         loadSettings();
     }, [isOpen, workspacePath]);
 
-    const updateSettings = <K extends keyof SettingsState>(
+    const updateSettings = <K extends 'storage' | 'context' | 'privacy' | 'editor' | 'account'>(
         section: K,
         updates: Partial<SettingsState[K]>
     ) => {
@@ -332,6 +334,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
                                     <ContextSettings
                                         settings={settings.context}
                                         onChange={(updates) => updateSettings('context', updates)}
+                                        allowGitIgnoredFiles={settings.allowGitIgnoredFiles || false}
+                                        onAllowGitIgnoredFilesChange={(value) => {
+                                            setSettings(prev => ({ ...prev, allowGitIgnoredFiles: value }));
+                                            setHasChanges(true);
+                                        }}
                                     />
                                 )}
                                 {activeSection === 'privacy' && (
@@ -537,9 +544,11 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
 interface ContextSettingsProps {
     settings: SettingsState['context'];
     onChange: (updates: Partial<SettingsState['context']>) => void;
+    allowGitIgnoredFiles: boolean;
+    onAllowGitIgnoredFilesChange: (value: boolean) => void;
 }
 
-const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange }) => {
+const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, allowGitIgnoredFiles, onAllowGitIgnoredFilesChange }) => {
     return (
         <div className="space-y-6">
             <div>
@@ -619,6 +628,27 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange })
                         </p>
                     </div>
                 )}
+            </div>
+
+            {/* Gitignore Files */}
+            <div className="border-t border-[var(--border-subtle)] pt-4">
+                <div className="flex items-center justify-between">
+                    <div>
+                        <div className="text-sm font-medium text-[var(--fg-primary)]">Allow .gitignored Files</div>
+                        <div className="text-xs text-[var(--fg-tertiary)]">
+                            Include files matched by .gitignore in context
+                        </div>
+                    </div>
+                    <Toggle
+                        checked={allowGitIgnoredFiles}
+                        onChange={onAllowGitIgnoredFilesChange}
+                    />
+                </div>
+                <p className="text-xs text-[var(--fg-tertiary)] mt-2">
+                    {allowGitIgnoredFiles
+                        ? 'Gitignored files (e.g., build outputs, secrets) will be accessible to the AI.'
+                        : 'Gitignored files are hidden from the AI for security and relevance.'}
+                </p>
             </div>
         </div>
     );
