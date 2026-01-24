@@ -450,12 +450,13 @@ impl AiWorkflow {
                                         println!("[UNCOMMITTED] Tracking change {} for {}", call.id, change.path);
                                     }
 
+                                    let abs_path_str = full_path.to_string_lossy().to_string();
                                     let _ = app.emit("refresh-explorer", ());
                                     let _ = app.emit(
                                         crate::events::event_names::CHANGE_APPLIED,
                                         crate::events::ChangeAppliedPayload {
                                             change_id: call.id.clone(),
-                                            file_path: change.path.clone(),
+                                            file_path: abs_path_str,
                                         },
                                     );
                                 }

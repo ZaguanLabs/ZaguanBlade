@@ -24,35 +24,33 @@ export const GlobalChangeActions: React.FC<GlobalChangeActionsProps> = ({
   const fileCount = new Set(changes.map(c => c.file_path)).size;
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 flex items-center gap-3 px-4 py-2.5 bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded-lg shadow-lg">
-      <div className="flex items-center gap-2 text-sm text-[var(--fg-secondary)]">
-        <FileCode className="w-4 h-4" />
-        <span>
-          {fileCount} {fileCount === 1 ? 'file' : 'files'} changed
-        </span>
+    <div className="fixed bottom-12 right-[420px] z-50 flex items-center gap-2 px-3 py-1.5 bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded-md shadow-lg text-xs">
+      <div className="flex items-center gap-1.5 text-[var(--fg-secondary)]">
+        <FileCode className="w-3 h-3" />
+        <span>{fileCount} file{fileCount !== 1 ? 's' : ''}</span>
         <span className="text-green-500">+{totalAdded}</span>
         <span className="text-red-500">-{totalRemoved}</span>
       </div>
 
-      <div className="w-px h-5 bg-[var(--border-primary)]" />
+      <div className="w-px h-4 bg-[var(--border-primary)]" />
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1.5">
         <button
           onClick={onAcceptAll}
           disabled={disabled}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-green-400 bg-green-500/10 hover:bg-green-500/20 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          className="flex items-center gap-1 px-2 py-0.5 font-medium text-green-400 bg-green-500/10 hover:bg-green-500/20 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           title="Accept all AI changes"
         >
-          <Check className="w-4 h-4" />
+          <Check className="w-3 h-3" />
           Accept All
         </button>
         <button
           onClick={onRejectAll}
           disabled={disabled}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-red-400 bg-red-500/10 hover:bg-red-500/20 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          className="flex items-center gap-1 px-2 py-0.5 font-medium text-red-400 bg-red-500/10 hover:bg-red-500/20 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           title="Reject all AI changes (revert to original)"
         >
-          <X className="w-4 h-4" />
+          <X className="w-3 h-3" />
           Reject All
         </button>
       </div>

@@ -790,8 +790,19 @@ pub async fn handle_send_message<R: Runtime>(
                                     .or_else(|| args.get("target_file"))
                                 {
                                     if let Some(path) = path_value.as_str() {
-                                        eprintln!("[AUTO OPEN] Opening file in editor: {}", path);
-                                        window.emit("open-file", path).unwrap_or_default();
+                                        // Convert to absolute path if relative
+                                        let abs_path = if std::path::Path::new(path).is_absolute() {
+                                            path.to_string()
+                                        } else {
+                                            let ws = state.workspace.lock().unwrap();
+                                            if let Some(workspace) = &ws.workspace {
+                                                workspace.join(path).to_string_lossy().to_string()
+                                            } else {
+                                                path.to_string()
+                                            }
+                                        };
+                                        eprintln!("[AUTO OPEN] Opening file in editor: {}", abs_path);
+                                        window.emit("open-file", &abs_path).unwrap_or_default();
                                     }
                                 }
                             }
