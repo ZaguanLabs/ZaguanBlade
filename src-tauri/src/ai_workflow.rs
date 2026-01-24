@@ -452,11 +452,13 @@ impl AiWorkflow {
 
                                     let abs_path_str = full_path.to_string_lossy().to_string();
                                     let _ = app.emit("refresh-explorer", ());
+                                    // Emit open-file to open the file in editor
+                                    let _ = app.emit("open-file", &abs_path_str);
                                     let _ = app.emit(
                                         crate::events::event_names::CHANGE_APPLIED,
                                         crate::events::ChangeAppliedPayload {
                                             change_id: call.id.clone(),
-                                            file_path: abs_path_str,
+                                            file_path: abs_path_str.clone(),
                                         },
                                     );
                                 }
