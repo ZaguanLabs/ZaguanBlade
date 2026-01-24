@@ -69,22 +69,22 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
 
     return (
         <div className={`my-2 rounded-md border overflow-hidden transition-all duration-200 ${isStreaming
-            ? 'border-purple-500/30 bg-purple-950/10'
-            : 'border-zinc-800/50 bg-zinc-900/20'
+            ? 'border-purple-500/30 bg-purple-950/20'
+            : 'border-zinc-700/40 bg-zinc-800/30'
             }`}>
             {/* Header - clickable to toggle */}
             <button
                 onClick={handleToggle}
-                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-zinc-800/30 transition-colors text-left"
+                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-zinc-700/30 transition-colors text-left"
             >
                 <div className="flex items-center gap-2 flex-1 min-w-0">
-                    <Brain className={`w-3 h-3 flex-shrink-0 ${isStreaming ? 'text-purple-400 animate-pulse' : 'text-zinc-600'}`} />
-                    <span className={`font-mono text-[9px] uppercase tracking-wider flex-shrink-0 ${isStreaming ? 'text-purple-400' : 'text-zinc-600'
+                    <Brain className={`w-3 h-3 flex-shrink-0 ${isStreaming ? 'text-purple-400 animate-pulse' : 'text-zinc-500'}`} />
+                    <span className={`font-mono text-[9px] uppercase tracking-wider flex-shrink-0 ${isStreaming ? 'text-purple-400' : 'text-zinc-500'
                         }`}>
                         {isStreaming ? 'Reasoning' : 'Thought Process'}
                     </span>
                     {!isExpanded && cleanContent && (
-                        <span className="text-[10px] text-zinc-600 truncate font-mono ml-2">
+                        <span className="text-[10px] text-zinc-500 truncate font-mono ml-2">
                             {cleanContent.slice(0, 80)}...
                         </span>
                     )}
@@ -93,9 +93,9 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
                     <Loader2 className="w-2.5 h-2.5 text-purple-400/60 animate-spin mr-1 flex-shrink-0" />
                 )}
                 {isExpanded ? (
-                    <ChevronDown className="w-3 h-3 text-zinc-600 flex-shrink-0" />
+                    <ChevronDown className="w-3 h-3 text-zinc-500 flex-shrink-0" />
                 ) : (
-                    <ChevronRight className="w-3 h-3 text-zinc-600 flex-shrink-0" />
+                    <ChevronRight className="w-3 h-3 text-zinc-500 flex-shrink-0" />
                 )}
             </button>
 
@@ -103,9 +103,9 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
             {isExpanded && (
                 <div
                     ref={contentRef}
-                    className="px-3 py-2 border-t border-zinc-800/30 bg-zinc-950/20 max-h-48 overflow-y-auto"
+                    className="px-3 py-2 border-t border-zinc-700/30 bg-zinc-800/40 max-h-48 overflow-y-auto"
                 >
-                    <div className="text-zinc-500 text-[10px] leading-relaxed select-text whitespace-pre-wrap font-mono">
+                    <div className="text-zinc-400 text-[10px] leading-relaxed select-text whitespace-pre-wrap font-mono">
                         {cleanContent}
                     </div>
                 </div>
