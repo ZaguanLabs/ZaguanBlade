@@ -9,6 +9,8 @@ import { useEditor } from '../contexts/EditorContext';
 import { BladeDispatcher } from '../services/blade';
 import { BladeEvent, FileEvent } from '../types/blade';
 import { ArrowRight, Settings } from 'lucide-react';
+import { FileChangeBar } from './editor/FileChangeBar';
+import { useUncommittedChanges } from '../hooks/useUncommittedChanges';
 
 const WelcomePage: React.FC<{ onOpenSettings?: () => void }> = ({ onOpenSettings }) => {
     const [hasApiKey, setHasApiKey] = useState<boolean>(false);
@@ -291,6 +293,65 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     filename={activeFile}
                 />
             ) : (
+                <EditorWithChangeBar
+                    editorRef={editorRef}
+                    content={content}
+                    setContent={setContent}
+                    handleSave={handleSave}
+                    activeFile={activeFile}
+                    highlightLines={highlightLines ?? null}
+                    handleNavigate={handleNavigate}
+                />
+            )}
+
+        </div>
+    );
+};
+
+interface EditorWithChangeBarProps {
+    editorRef: React.RefObject<CodeEditorHandle | null>;
+    content: string;
+    setContent: (content: string) => void;
+    handleSave: (text: string) => void;
+    activeFile: string;
+    highlightLines: { startLine: number; endLine: number } | null;
+    handleNavigate: (path: string, line: number, character: number) => void;
+}
+
+const EditorWithChangeBar: React.FC<EditorWithChangeBarProps> = ({
+    editorRef,
+    content,
+    setContent,
+    handleSave,
+    activeFile,
+    highlightLines,
+    handleNavigate,
+}) => {
+    const { getChangeForFile, acceptFile, rejectFile, refresh } = useUncommittedChanges();
+    const change = getChangeForFile(activeFile);
+
+    const handleAccept = async () => {
+        await acceptFile(activeFile);
+    };
+
+    const handleReject = async () => {
+        await rejectFile(activeFile);
+        // Reload file content after revert
+        setTimeout(() => {
+            refresh();
+        }, 100);
+    };
+
+    return (
+        <div className="flex flex-col h-full">
+            {change && (
+                <FileChangeBar
+                    change={change}
+                    onAccept={handleAccept}
+                    onReject={handleReject}
+                />
+            )}
+            <div className="flex-1 min-h-0">
                 <CodeEditor
                     ref={editorRef}
                     content={content}
@@ -300,8 +361,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     highlightLines={highlightLines || undefined}
                     onNavigate={handleNavigate}
                 />
-            )}
-
+            </div>
         </div>
     );
 };

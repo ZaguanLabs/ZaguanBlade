@@ -10,6 +10,8 @@ import { DocumentViewer } from './DocumentViewer';
 import { TitleBar } from './TitleBar';
 import { GitBranch, Settings, Clock } from 'lucide-react';
 import { EditorProvider, useEditor } from '../contexts/EditorContext';
+import { GlobalChangeActions } from './editor/GlobalChangeActions';
+import { useUncommittedChanges } from '../hooks/useUncommittedChanges';
 import { useChat } from '../hooks/useChat';
 import { StorageSetupModal } from './StorageSetupModal';
 import { useProjectState, type ProjectState } from '../hooks/useProjectState';
@@ -47,6 +49,7 @@ const AppLayoutInner: React.FC = () => {
     const [activeSidebar, setActiveSidebar] = useState<'explorer' | 'git' | 'history'>('explorer');
 
     const chat = useChat();
+    const { changes: uncommittedChanges, acceptAll: acceptAllChanges, rejectAll: rejectAllChanges } = useUncommittedChanges();
     const {
         status: gitStatus,
         files: gitFiles,
@@ -918,6 +921,13 @@ const AppLayoutInner: React.FC = () => {
                     <span>{t('app.name')}</span>
                 </div>
             </div>
+
+            {/* Global Accept/Reject All Changes */}
+            <GlobalChangeActions
+                changes={uncommittedChanges}
+                onAcceptAll={acceptAllChanges}
+                onRejectAll={rejectAllChanges}
+            />
 
             {/* Dev Tools */}
             <Suspense fallback={null}>
