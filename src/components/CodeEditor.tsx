@@ -12,19 +12,11 @@ import { lintGutter } from "@codemirror/lint";
 import { zaguanTheme } from "./editor/theme/zaguanTheme";
 import { getLanguageExtension } from "./editor/languages";
 import {
-    diffsField,
-    clearDiffs,
     lineHighlightField,
     addLineHighlight,
     clearLineHighlight,
     virtualBufferField,
     setBaseContent,
-    getVirtualContent,
-    inlineDiffField,
-    inlineDiffTheme,
-    setInlineDiff,
-    clearInlineDiff,
-    computeDiffLines,
     indentGuides,
     rainbowBrackets,
     smoothCursor,
@@ -34,7 +26,6 @@ import { zlpLinter } from "./editor/extensions/zlpLinter";
 import { useEditor } from "../contexts/EditorContext";
 import { useContextMenu, type ContextMenuItem } from "./ui/ContextMenu";
 import { Copy, Scissors, Clipboard, Undo2, Redo2, Search, Network } from "lucide-react";
-import type { Change } from "../types/change";
 import { LanguageService } from "../services/language";
 import { ZLPService } from "../services/zlp";
 import { StructureNode } from "../types/zlp";
@@ -63,8 +54,6 @@ interface CodeEditorProps {
     onSave?: (val: string) => void;
     filename?: string;
     highlightLines?: { startLine: number; endLine: number } | null;
-    /** Pending change to highlight inline (Windsurf-style) */
-    pendingChange?: Change | null;
     /** Callback for navigating to symbol definition */
     onNavigate?: (path: string, line: number, character: number) => void;
 }
@@ -72,9 +61,6 @@ interface CodeEditorProps {
 
 export interface CodeEditorHandle {
     getView: () => EditorView | null;
-    clearDiffs: () => void;
-    /** Show inline diff highlighting for a pending change */
-    showInlineDiff: (change: Change | null) => void;
     /** Set cursor position and scroll into view (line is 1-based, col is 0-based) */
     setCursor: (line: number, col: number) => void;
 }
@@ -106,63 +92,6 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     // Expose methods to parent via ref
     useImperativeHandle(ref, () => ({
         getView: () => viewRef.current,
-        clearDiffs: () => {
-            if (viewRef.current) {
-                viewRef.current.dispatch({
-                    effects: clearDiffs.of(null)
-                });
-            }
-        },
-        showInlineDiff: (change: Change | null) => {
-            const view = viewRef.current;
-            if (!view) return;
-
-            if (!change) {
-                // Clear inline diff
-                view.dispatch({ effects: clearInlineDiff.of(null) });
-                return;
-            }
-
-            // Convert Change to PendingInlineDiff
-            const currentContent = view.state.doc.toString();
-            const hunks: { id: string; fromLine: number; toLine: number; oldText: string; newText: string }[] = [];
-
-            if (change.change_type === 'patch') {
-                const diffInfo = computeDiffLines(currentContent, change.old_content, change.new_content);
-                if (diffInfo) {
-                    hunks.push({
-                        id: `${change.id}-0`,
-                        fromLine: diffInfo.removedLines[0] || 1,
-                        toLine: diffInfo.removedLines[diffInfo.removedLines.length - 1] || 1,
-                        oldText: change.old_content,
-                        newText: change.new_content,
-                    });
-                }
-            } else if (change.change_type === 'multi_patch') {
-                change.patches.forEach((patch, idx) => {
-                    const diffInfo = computeDiffLines(currentContent, patch.old_text, patch.new_text);
-                    if (diffInfo) {
-                        hunks.push({
-                            id: `${change.id}-${idx}`,
-                            fromLine: patch.start_line || diffInfo.removedLines[0] || 1,
-                            toLine: patch.end_line || diffInfo.removedLines[diffInfo.removedLines.length - 1] || 1,
-                            oldText: patch.old_text,
-                            newText: patch.new_text,
-                        });
-                    }
-                });
-            }
-
-            if (hunks.length > 0) {
-                view.dispatch({
-                    effects: setInlineDiff.of({
-                        id: change.id,
-                        hunks,
-                        path: change.path,
-                    })
-                });
-            }
-        },
         setCursor: (line: number, col: number) => {
             const view = viewRef.current;
             if (!view) return;
@@ -218,12 +147,9 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 smoothCursor,
                 scrollPastEnd,
 
-                // Diff and virtual buffer extensions
-                diffsField,
+                // Editor state extensions
                 lineHighlightField,
                 virtualBufferField,
-                inlineDiffField,
-                inlineDiffTheme,
 
                 // Layout
                 EditorView.theme({
