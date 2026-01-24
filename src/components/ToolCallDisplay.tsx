@@ -13,6 +13,7 @@ interface ToolCallDisplayProps {
 export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     toolCall,
     status = 'pending',
+    result,
     onUndo
 }) => {
     const [copied, setCopied] = useState(false);
@@ -184,7 +185,9 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                     <span className="text-[9px] text-emerald-500">✓</span>
                 )}
                 {status === 'error' && (
-                    <span className="text-[9px] text-red-400">failed</span>
+                    <span className="text-[9px] text-red-400" title={result || 'Unknown error'}>
+                        failed {result && result.length < 60 ? `- ${result.replace('tool_error: ', '')}` : ''}
+                    </span>
                 )}
                 {/* Undo Button */}
                 {onUndo && status === 'complete' && (

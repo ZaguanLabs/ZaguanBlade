@@ -65,7 +65,7 @@ pub fn get_project_id(workspace_path: String) -> Option<String> {
 // Project Settings
 
 #[tauri::command]
-pub fn load_project_settings(project_path: String) -> project_settings::ProjectSettings {
+pub fn load_project_settings(project_path: String) -> Result<project_settings::ProjectSettings, String> {
     let path = std::path::PathBuf::from(project_path);
     project_settings::load_project_settings(&path)
 }

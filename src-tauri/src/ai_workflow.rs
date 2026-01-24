@@ -838,6 +838,7 @@ pub fn run_command_in_workspace(
 
     let dir = if let Some(cwd) = cwd {
         let p = Path::new(cwd);
+        // Handle relative paths by joining with workspace root
         let candidate = if p.is_absolute() {
             p.to_path_buf()
         } else {
@@ -849,7 +850,11 @@ pub fn run_command_in_workspace(
                 return tools::ToolResult {
                     success: false,
                     content: String::new(),
-                    error: Some(e.to_string()),
+                    error: Some(format!(
+                        "cwd does not exist or is inaccessible: {} ({})",
+                        candidate.display(),
+                        e
+                    )),
                 };
             }
         };
@@ -857,7 +862,11 @@ pub fn run_command_in_workspace(
             return tools::ToolResult {
                 success: false,
                 content: String::new(),
-                error: Some("cwd is outside workspace".to_string()),
+                error: Some(format!(
+                    "cwd is outside workspace (workspace: {}, cwd: {})",
+                    ws.display(),
+                    candidate.display()
+                )),
             };
         }
         candidate

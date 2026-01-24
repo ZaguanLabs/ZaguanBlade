@@ -16,6 +16,12 @@ pub struct ToolResult {
     pub error: Option<String>,
 }
 
+/// RFC: Large Tool Result Handling - Size limits
+const MAX_TOOL_RESULT_BYTES: usize = 50 * 1024; // 50KB
+const MAX_TOOL_RESULT_LINES: usize = 2000;
+const HEAD_LINES: usize = 100;
+const TAIL_LINES: usize = 50;
+
 impl ToolResult {
     pub fn ok(content: impl Into<String>) -> Self {
         Self {
@@ -45,6 +51,47 @@ impl ToolResult {
             )
         }
     }
+
+    /// RFC: Large Tool Result Handling - Truncate content for local storage mode
+    /// In local mode, zblade pre-truncates large results since zcoderd won't save to DB.
+    /// Returns truncated content with head/tail and guidance message.
+    pub fn to_tool_content_truncated(&self) -> String {
+        let content = self.to_tool_content();
+        truncate_large_content(&content)
+    }
+}
+
+/// Truncate large content per RFC-LARGE-TOOL-RESULTS.md
+/// Shows first 100 lines + last 50 lines with truncation message
+pub fn truncate_large_content(content: &str) -> String {
+    let bytes = content.len();
+    let lines: Vec<&str> = content.lines().collect();
+    let line_count = lines.len();
+
+    // Check if truncation is needed (either limit exceeded triggers truncation)
+    if bytes <= MAX_TOOL_RESULT_BYTES && line_count <= MAX_TOOL_RESULT_LINES {
+        return content.to_string();
+    }
+
+    // Handle edge case: if content has fewer lines than HEAD + TAIL, just return as-is
+    // (this shouldn't happen if we exceeded limits, but be defensive)
+    if line_count <= HEAD_LINES + TAIL_LINES {
+        return content.to_string();
+    }
+
+    // Build truncated output with head + tail
+    let head: String = lines[..HEAD_LINES].join("\n");
+    let tail: String = lines[line_count - TAIL_LINES..].join("\n");
+
+    format!(
+        "{}\n\n[TRUNCATED: {} bytes, {} lines - showing first {} and last {} lines]\nResult was too large. Use more specific tool parameters to get targeted results.\n\n{}",
+        head,
+        bytes,
+        line_count,
+        HEAD_LINES,
+        TAIL_LINES,
+        tail
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,7 +113,7 @@ fn get_str_arg(args: &HashMap<String, serde_json::Value>, keys: &[&str]) -> Opti
 /// Load project settings and create a GitignoreFilter if needed
 /// Returns None if gitignore filtering should not be applied
 fn create_gitignore_filter(workspace_root: &Path) -> Option<GitignoreFilter> {
-    let settings = project_settings::load_project_settings(workspace_root);
+    let settings = project_settings::load_project_settings_or_default(workspace_root);
     
     // If allow_gitignored_files is true, don't create a filter (allow all files)
     if settings.allow_gitignored_files {
@@ -170,6 +217,59 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
     }
 }
 
+/// Resolve a path (potentially relative) to an absolute path under the workspace.
+/// This handles edge cases like ".", "./src", "src/utils" by prepending workspace root.
+/// Does NOT require the path to exist (useful for write operations).
+fn resolve_path_in_workspace(workspace_root: &Path, path: &Path) -> Result<PathBuf, String> {
+    let ws = fs::canonicalize(workspace_root).map_err(|e| format!("cannot canonicalize workspace: {}", e))?;
+
+    // Handle relative paths by joining with workspace root
+    let candidate = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        ws.join(path)
+    };
+
+    // Normalize the path by resolving . and .. components without requiring existence
+    let normalized = normalize_path(&candidate);
+
+    // Validate the normalized path is under workspace
+    if !normalized.starts_with(&ws) {
+        return Err(format!(
+            "path is outside workspace (workspace: {}, resolved: {})",
+            ws.display(),
+            normalized.display()
+        ));
+    }
+
+    Ok(normalized)
+}
+
+/// Normalize a path by resolving . and .. components without requiring the path to exist.
+/// This is similar to canonicalize but works for non-existent paths.
+fn normalize_path(path: &Path) -> PathBuf {
+    use std::path::Component;
+    
+    let mut normalized = PathBuf::new();
+    
+    for component in path.components() {
+        match component {
+            Component::Prefix(p) => normalized.push(p.as_os_str()),
+            Component::RootDir => normalized.push("/"),
+            Component::CurDir => {} // Skip "."
+            Component::ParentDir => {
+                // Go up one level if possible
+                normalized.pop();
+            }
+            Component::Normal(c) => normalized.push(c),
+        }
+    }
+    
+    normalized
+}
+
+/// Validate and resolve a path under workspace. Requires the path to exist.
+/// Use resolve_path_in_workspace for paths that may not exist yet.
 fn validate_path_under_workspace(workspace_root: &Path, path: &Path) -> Result<PathBuf, String> {
     let ws = fs::canonicalize(workspace_root).map_err(|e| e.to_string())?;
 
@@ -179,7 +279,10 @@ fn validate_path_under_workspace(workspace_root: &Path, path: &Path) -> Result<P
         ws.join(path)
     };
 
-    let candidate = fs::canonicalize(&candidate).map_err(|e| e.to_string())?;
+    let candidate = fs::canonicalize(&candidate).map_err(|e| {
+        format!("path does not exist or is inaccessible: {} ({})", candidate.display(), e)
+    })?;
+    
     if !candidate.starts_with(&ws) {
         return Err("path is outside workspace".to_string());
     }
@@ -221,43 +324,21 @@ fn write_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) 
         return ToolResult::err("missing required arg: content (or contents/text)");
     };
 
-    let ws = match fs::canonicalize(workspace_root) {
+    // Use resolve_path_in_workspace which handles relative paths and doesn't require existence
+    let abs = match resolve_path_in_workspace(workspace_root, Path::new(&path)) {
         Ok(p) => p,
-        Err(e) => return ToolResult::err(format!("cannot canonicalize workspace: {}", e)),
+        Err(e) => return ToolResult::err(e),
     };
 
-    let requested = Path::new(&path);
-    let target = if requested.is_absolute() {
-        PathBuf::from(&path)
-    } else {
-        ws.join(requested)
-    };
-
-    let Some(parent) = target.parent() else {
-        return ToolResult::err("invalid path: no parent directory".to_string());
-    };
-
-    if let Err(e) = fs::create_dir_all(parent) {
-        return ToolResult::err(format!("cannot create parent directory: {}", e));
+    // Create parent directories if needed
+    if let Some(parent) = abs.parent() {
+        if let Err(e) = fs::create_dir_all(parent) {
+            return ToolResult::err(format!("cannot create parent directory: {}", e));
+        }
     }
-    let parent_canon = match fs::canonicalize(parent) {
-        Ok(p) => p,
-        Err(e) => return ToolResult::err(format!("cannot canonicalize parent: {}", e)),
-    };
-
-    if !parent_canon.starts_with(&ws) {
-        return ToolResult::err(format!(
-            "path is outside workspace (workspace: {:?}, parent: {:?})",
-            ws, parent_canon
-        ));
-    }
-    let Some(fname) = target.file_name() else {
-        return ToolResult::err("invalid path: missing file name".to_string());
-    };
-    let abs = parent_canon.join(fname);
 
     match fs::write(&abs, content.as_bytes()) {
-        Ok(()) => ToolResult::ok(format!("wrote {} bytes to {:?}", content.len(), abs)),
+        Ok(()) => ToolResult::ok(format!("wrote {} bytes to {}", content.len(), abs.display())),
         Err(e) => ToolResult::err(format!("write failed: {}", e)),
     }
 }
@@ -960,132 +1041,169 @@ fn apply_edit_tool(workspace_root: &Path, args: &HashMap<String, serde_json::Val
     }
 }
 
+/// Default limit for directory entries (inspired by Codex's 25, but slightly higher)
+const DEFAULT_LIST_LIMIT: usize = 50;
+/// Maximum limit to prevent abuse
+const MAX_LIST_LIMIT: usize = 200;
+/// Default depth for directory traversal
+const DEFAULT_LIST_DEPTH: usize = 2;
+/// Indentation spaces per depth level (like Codex)
+const INDENT_SPACES: usize = 2;
+
+/// Directories to always ignore regardless of gitignore settings
+/// (inspired by opencode, cline, roo-code)
+const DIRS_TO_ALWAYS_IGNORE: &[&str] = &[
+    "node_modules",
+    "__pycache__",
+    ".git",
+    "target",
+    "dist",
+    "build",
+    ".next",
+    ".nuxt",
+    "vendor",
+    ".venv",
+    "venv",
+    "env",
+    ".cargo",
+    ".rustup",
+    "tmp",
+    "temp",
+    ".cache",
+    "cache",
+    "coverage",
+    ".coverage",
+    "logs",
+    "Pods",
+    ".idea",
+    ".vscode",
+    "obj",
+    "bin",
+    ".zig-cache",
+    "zig-out",
+];
+
 fn get_workspace_structure(
     workspace_root: &Path,
     args: &HashMap<String, serde_json::Value>,
 ) -> ToolResult {
     let path = get_str_arg(args, &["path", "dir", "directory"]).unwrap_or_else(|| ".".to_string());
-    let max_depth = args.get("max_depth").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
-    let include_hidden = args
-        .get("include_hidden")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(DEFAULT_LIST_DEPTH as u64) as usize;
+    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(DEFAULT_LIST_LIMIT as u64) as usize;
+    let limit = limit.min(MAX_LIST_LIMIT); // Cap at maximum
 
     let abs = match validate_path_under_workspace(workspace_root, Path::new(&path)) {
         Ok(p) => p,
         Err(e) => return ToolResult::err(e),
     };
 
-    // Load gitignore filter if needed
+    // Load gitignore filter if enabled in project settings
     let gitignore_filter = create_gitignore_filter(workspace_root);
 
-    let mut output = format!("Directory: {}\n", abs.to_string_lossy());
-    build_tree_structure(
+    // Collect entries with BFS traversal (like Codex)
+    let mut entries: Vec<ListEntry> = Vec::new();
+    collect_dir_entries(
         &abs,
-        &mut output,
-        0,
-        max_depth,
-        include_hidden,
-        "",
+        &abs,
+        depth,
         gitignore_filter.as_ref(),
+        &mut entries,
     );
+
+    // Sort entries by path for consistent output
+    entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+
+    // Apply limit
+    let truncated = entries.len() > limit;
+    let entries: Vec<_> = entries.into_iter().take(limit).collect();
+
+    // Format output (clean indented style like Codex)
+    let mut output = format!("Directory: {}\n", abs.to_string_lossy());
+    for entry in &entries {
+        let indent = " ".repeat(entry.depth * INDENT_SPACES);
+        let suffix = if entry.is_dir { "/" } else { "" };
+        output.push_str(&format!("{}{}{}\n", indent, entry.name, suffix));
+    }
+
+    if truncated {
+        output.push_str(&format!("\n(showing {} of more entries, use a more specific path or increase limit)\n", limit));
+    }
 
     ToolResult::ok(output)
 }
 
-fn build_tree_structure(
-    path: &Path,
-    output: &mut String,
+#[derive(Debug)]
+struct ListEntry {
+    name: String,
+    rel_path: String,
     depth: usize,
+    is_dir: bool,
+}
+
+fn collect_dir_entries(
+    base_path: &Path,
+    current_path: &Path,
     max_depth: usize,
-    include_hidden: bool,
-    prefix: &str,
     gitignore_filter: Option<&GitignoreFilter>,
+    entries: &mut Vec<ListEntry>,
 ) {
-    if depth >= max_depth {
+    let rel_to_base = current_path.strip_prefix(base_path).unwrap_or(Path::new(""));
+    let current_depth = rel_to_base.components().count();
+
+    if current_depth >= max_depth {
         return;
     }
 
-    let Ok(entries) = fs::read_dir(path) else {
+    let Ok(read_dir) = fs::read_dir(current_path) else {
         return;
     };
 
-    let mut items: Vec<_> = entries.filter_map(Result::ok).collect();
-    items.sort_by_key(|e| e.path());
-
-    // Separate directories and files
-    let mut dirs = Vec::new();
-    let mut files = Vec::new();
+    let mut items: Vec<_> = read_dir.filter_map(Result::ok).collect();
+    items.sort_by_key(|e| e.file_name());
 
     for entry in items {
         let name = entry.file_name().to_string_lossy().to_string();
 
-        // Skip hidden files unless requested
-        if !include_hidden && name.starts_with('.') {
+        // Skip hidden files/dirs
+        if name.starts_with('.') {
             continue;
         }
 
+        // Always skip certain directories regardless of gitignore
+        if DIRS_TO_ALWAYS_IGNORE.contains(&name.as_str()) {
+            continue;
+        }
+
+        let entry_path = entry.path();
+
         // Check gitignore filter
         if let Some(filter) = gitignore_filter {
-            if filter.should_ignore(&entry.path()) {
+            if filter.should_ignore(&entry_path) {
                 continue;
             }
         }
 
-        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            dirs.push((name, entry.path()));
-        } else {
-            let size = entry.metadata().ok().map(|m| m.len()).unwrap_or(0);
-            files.push((name, size));
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let rel_path = entry_path
+            .strip_prefix(base_path)
+            .unwrap_or(&entry_path)
+            .to_string_lossy()
+            .to_string();
+
+        entries.push(ListEntry {
+            name: name.clone(),
+            rel_path: rel_path.clone(),
+            depth: current_depth,
+            is_dir,
+        });
+
+        // Recurse into directories
+        if is_dir {
+            collect_dir_entries(base_path, &entry_path, max_depth, gitignore_filter, entries);
         }
     }
-
-    // Output directories first
-    for (idx, (name, dir_path)) in dirs.iter().enumerate() {
-        let is_last = idx == dirs.len() - 1 && files.is_empty();
-        let connector = if is_last { "└── " } else { "├── " };
-        output.push_str(&format!("{}{}{}/\n", prefix, connector, name));
-
-        let new_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
-        build_tree_structure(
-            dir_path,
-            output,
-            depth + 1,
-            max_depth,
-            include_hidden,
-            &new_prefix,
-            gitignore_filter,
-        );
-    }
-
-    // Output files
-    for (idx, (name, size)) in files.iter().enumerate() {
-        let is_last = idx == files.len() - 1;
-        let connector = if is_last { "└── " } else { "├── " };
-        let size_str = format_file_size(*size);
-        output.push_str(&format!(
-            "{}{}{} ({})
-",
-            prefix, connector, name, size_str
-        ));
-    }
 }
 
-fn format_file_size(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-
-    if bytes >= GB {
-        format!("{:.2} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.2} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.2} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{} B", bytes)
-    }
-}
 
 fn find_files(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {
     let Some(pattern) = get_str_arg(args, &["pattern"]) else {

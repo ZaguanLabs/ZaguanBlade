@@ -79,6 +79,15 @@ pub enum ChatEvent {
     ToolActivity(ToolActivityPayload),
     Done,
     Error(String),
+    /// Context length exceeded error with recovery information (RFC: Context Length Recovery)
+    ContextLengthExceeded {
+        message: String,
+        token_count: Option<u64>,
+        max_tokens: Option<u64>,
+        excess: Option<u64>,
+        recoverable: bool,
+        recovery_hint: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

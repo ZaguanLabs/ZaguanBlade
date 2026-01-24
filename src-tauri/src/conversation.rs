@@ -60,6 +60,15 @@ impl ConversationHistory {
         &mut self,
         results: &[(ToolCall, crate::tools::ToolResult)],
     ) -> Option<ChatMessage> {
+        self.update_tool_call_status_with_truncation(results, false)
+    }
+
+    /// RFC: Large Tool Result Handling - Update tool call status with optional truncation
+    pub fn update_tool_call_status_with_truncation(
+        &mut self,
+        results: &[(ToolCall, crate::tools::ToolResult)],
+        truncate: bool,
+    ) -> Option<ChatMessage> {
         // Update tool call status in assistant messages when results arrive
         let mut updated_assistant: Option<ChatMessage> = None;
         for (call, result) in results {
@@ -80,7 +89,12 @@ impl ConversationHistory {
                                 } else {
                                     "error".to_string()
                                 });
-                                tc.result = Some(result.to_tool_content());
+                                // RFC: Large Tool Result Handling - truncate in local mode
+                                tc.result = Some(if truncate {
+                                    result.to_tool_content_truncated()
+                                } else {
+                                    result.to_tool_content()
+                                });
                                 break;
                             }
                         }

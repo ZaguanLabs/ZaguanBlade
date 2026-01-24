@@ -37,6 +37,15 @@ pub enum DrainResult {
     },
     TodoUpdated(Vec<crate::protocol::TodoItem>),
     Error(String),
+    /// RFC: Context Length Recovery - context limit exceeded
+    ContextLengthExceeded {
+        message: String,
+        token_count: Option<u64>,
+        max_tokens: Option<u64>,
+        excess: Option<u64>,
+        recoverable: bool,
+        recovery_hint: Option<String>,
+    },
 }
 
 pub struct ChatManager {
@@ -310,22 +319,67 @@ impl ChatManager {
                                     .collect();
                                 let _ = tx.send(ChatEvent::TodoUpdated(protocol_todos));
                             }
-                            crate::blade_ws_client::BladeWsEvent::ChatDone { finish_reason } => {
-                                eprintln!("[CHAT MGR] Chat done: {}", finish_reason);
+                            crate::blade_ws_client::BladeWsEvent::ChatDone { finish_reason, recoverable } => {
+                                eprintln!("[CHAT MGR] Chat done: {} (recoverable: {:?})", finish_reason, recoverable);
                                 saw_chat_done = true;
+                                
+                                // RFC: Context Length Recovery - check for context_length_exceeded finish reason
+                                if finish_reason == "context_length_exceeded" {
+                                    let _ = tx.send(ChatEvent::ContextLengthExceeded {
+                                        message: "Context limit reached during generation".to_string(),
+                                        token_count: None,
+                                        max_tokens: None,
+                                        excess: None,
+                                        recoverable: recoverable.unwrap_or(true),
+                                        recovery_hint: None,
+                                    });
+                                }
+                                
                                 let _ = tx.send(ChatEvent::Done);
                                 // Don't break - keep connection alive for tool results
                                 // The connection will close when the user sends a new message
                             }
-                            crate::blade_ws_client::BladeWsEvent::Error { code, message } => {
-                                eprintln!("[CHAT MGR] Error: {} - {}", code, message);
-                                if authenticated && (saw_chat_done || saw_content) {
-                                    // Treat read/disconnect-like errors after content as end of stream
-                                    let _ = tx.send(ChatEvent::Done);
-                                } else {
-                                    let _ = tx.send(ChatEvent::Error(message));
+                            crate::blade_ws_client::BladeWsEvent::Error { error_type, code, message, token_count, max_tokens, excess, recoverable, recovery_hint } => {
+                                eprintln!("[CHAT MGR] Error: {} ({}) - {} (tokens: {:?}/{:?})", error_type, code, message, token_count, max_tokens);
+                                
+                                // RFC: Error Handling - use error_type for logic, message for display
+                                match error_type.as_str() {
+                                    "context_length_exceeded" => {
+                                        let _ = tx.send(ChatEvent::ContextLengthExceeded {
+                                            message: message.clone(),
+                                            token_count,
+                                            max_tokens,
+                                            excess,
+                                            recoverable: recoverable.unwrap_or(true),
+                                            recovery_hint,
+                                        });
+                                        // Don't break - session is still valid, user can continue
+                                    }
+                                    "rate_limit_error" | "overloaded_error" => {
+                                        // Retryable errors - don't break, let user retry
+                                        let hint = recovery_hint.unwrap_or_else(|| "Please wait a moment and try again.".to_string());
+                                        let _ = tx.send(ChatEvent::Error(format!("{} - {}", message, hint)));
+                                        // Don't break - these are transient
+                                    }
+                                    "authentication_error" => {
+                                        // Fatal error - break the connection
+                                        let _ = tx.send(ChatEvent::Error(message));
+                                        break;
+                                    }
+                                    _ => {
+                                        // Unknown error type - use recoverable flag
+                                        if authenticated && (saw_chat_done || saw_content) {
+                                            let _ = tx.send(ChatEvent::Done);
+                                            break;
+                                        } else if recoverable.unwrap_or(false) {
+                                            let _ = tx.send(ChatEvent::Error(message));
+                                            // Don't break for recoverable errors
+                                        } else {
+                                            let _ = tx.send(ChatEvent::Error(message));
+                                            break;
+                                        }
+                                    }
                                 }
-                                break;
                             }
                             crate::blade_ws_client::BladeWsEvent::Disconnected => {
                                 eprintln!("[CHAT MGR] Disconnected - session will be restored from database on reconnect");
@@ -464,9 +518,16 @@ impl ChatManager {
         api_config: &ApiConfig,
         _models: &[ModelInfo],
         _selected_model: usize,
-        _workspace: Option<&PathBuf>,
+        workspace: Option<&PathBuf>,
         _http: reqwest::Client,
     ) -> Result<(), String> {
+        // RFC: Large Tool Result Handling - determine if we should truncate locally
+        let is_local_mode = workspace
+            .map(|ws| {
+                let settings = crate::project_settings::load_project_settings_or_default(ws);
+                matches!(settings.storage.mode, crate::project_settings::StorageMode::Local)
+            })
+            .unwrap_or(true); // Default to local mode if no workspace
         // Agentic Loop Check
         if self.agentic_loop.is_active() {
             self.agentic_loop.increment_turn();
@@ -476,14 +537,21 @@ impl ChatManager {
         }
 
         // Store tool results in conversation history
+        // RFC: Large Tool Result Handling - truncate in local mode
         for (_call, result) in batch.file_results.iter() {
-            let mut tool_msg = ChatMessage::new(ChatRole::Tool, result.to_tool_content());
+            let content = if is_local_mode {
+                result.to_tool_content_truncated()
+            } else {
+                result.to_tool_content()
+            };
+            let mut tool_msg = ChatMessage::new(ChatRole::Tool, content);
             tool_msg.tool_call_id = Some(_call.id.clone());
             conversation.push(tool_msg);
         }
 
         // Update tool call status in the assistant message and store for emission
-        let updated_assistant = conversation.update_tool_call_status(&batch.file_results);
+        // RFC: Large Tool Result Handling - truncate in local mode
+        let updated_assistant = conversation.update_tool_call_status_with_truncation(&batch.file_results, is_local_mode);
         self.updated_assistant_message = updated_assistant;
 
         // Send tool results to Blade Protocol via WebSocket
@@ -503,6 +571,7 @@ impl ChatManager {
         // Create the client once
         let ws_client = crate::blade_ws_client::BladeWsClient::new(blade_url, api_key);
         let results = batch.file_results.clone(); // Clone for the task
+        let is_local_mode_clone = is_local_mode; // Clone for async task
 
         // RFC-002: Clone conversation messages for local storage mode context retrieval
         // Convert to BladeMessage format that zcoderd expects
@@ -573,8 +642,13 @@ impl ChatManager {
                                 authenticated = true;
 
                                 // Send ALL results sequentially
+                                // RFC: Large Tool Result Handling - truncate in local mode
                                 for (call, result) in &results {
-                                    let tool_content = result.to_tool_content();
+                                    let tool_content = if is_local_mode_clone {
+                                        result.to_tool_content_truncated()
+                                    } else {
+                                        result.to_tool_content()
+                                    };
                                     eprintln!(
                                         "[TOOL RESULT SEND] call_id={}, success={}",
                                         call.id, result.success
@@ -665,12 +739,24 @@ impl ChatManager {
                                     .collect();
                                 let _ = tx.send(ChatEvent::TodoUpdated(protocol_todos));
                             }
-                            crate::blade_ws_client::BladeWsEvent::ChatDone { finish_reason } => {
-                                eprintln!("[CHAT MGR] Chat done received: {}", finish_reason);
+                            crate::blade_ws_client::BladeWsEvent::ChatDone { finish_reason, recoverable } => {
+                                eprintln!("[CHAT MGR] Chat done received: {} (recoverable: {:?})", finish_reason, recoverable);
                                 // CRITICAL: Only consider the turn done if we have sent all results
                                 // AND if we have received some content (chunks/tools) from the new generation.
                                 // zcoderd/Protocol v2 can send ChatDone immediately as an ACK for tool results,
                                 // which we must ignore to catch the actual response stream.
+
+                                // RFC: Context Length Recovery - check for context_length_exceeded finish reason
+                                if finish_reason == "context_length_exceeded" {
+                                    let _ = tx.send(ChatEvent::ContextLengthExceeded {
+                                        message: "Context limit reached during generation".to_string(),
+                                        token_count: None,
+                                        max_tokens: None,
+                                        excess: None,
+                                        recoverable: recoverable.unwrap_or(true),
+                                        recovery_hint: None,
+                                    });
+                                }
 
                                 if results_sent_count >= total_results && saw_content {
                                     saw_final_chat_done = true;
@@ -680,14 +766,43 @@ impl ChatManager {
                                         results_sent_count, total_results, saw_content);
                                 }
                             }
-                            crate::blade_ws_client::BladeWsEvent::Error { code, message } => {
-                                eprintln!("[CHAT MGR] Error: {} - {}", code, message);
-                                if authenticated && (saw_final_chat_done || saw_content) {
-                                    let _ = tx.send(ChatEvent::Done);
-                                } else {
-                                    let _ = tx.send(ChatEvent::Error(message));
+                            crate::blade_ws_client::BladeWsEvent::Error { error_type, code, message, token_count, max_tokens, excess, recoverable, recovery_hint } => {
+                                eprintln!("[CHAT MGR] Error: {} ({}) - {} (tokens: {:?}/{:?})", error_type, code, message, token_count, max_tokens);
+                                
+                                // RFC: Error Handling - use error_type for logic, message for display
+                                match error_type.as_str() {
+                                    "context_length_exceeded" => {
+                                        let _ = tx.send(ChatEvent::ContextLengthExceeded {
+                                            message: message.clone(),
+                                            token_count,
+                                            max_tokens,
+                                            excess,
+                                            recoverable: recoverable.unwrap_or(true),
+                                            recovery_hint,
+                                        });
+                                        // Don't break - session is still valid
+                                    }
+                                    "rate_limit_error" | "overloaded_error" => {
+                                        let hint = recovery_hint.unwrap_or_else(|| "Please wait a moment and try again.".to_string());
+                                        let _ = tx.send(ChatEvent::Error(format!("{} - {}", message, hint)));
+                                        // Don't break - these are transient
+                                    }
+                                    "authentication_error" => {
+                                        let _ = tx.send(ChatEvent::Error(message));
+                                        break;
+                                    }
+                                    _ => {
+                                        if authenticated && (saw_final_chat_done || saw_content) {
+                                            let _ = tx.send(ChatEvent::Done);
+                                            break;
+                                        } else if recoverable.unwrap_or(false) {
+                                            let _ = tx.send(ChatEvent::Error(message));
+                                        } else {
+                                            let _ = tx.send(ChatEvent::Error(message));
+                                            break;
+                                        }
+                                    }
                                 }
-                                break;
                             }
                             crate::blade_ws_client::BladeWsEvent::Disconnected => {
                                 eprintln!("[CHAT MGR] Disconnected");
@@ -992,6 +1107,20 @@ impl ChatManager {
                             }
                             error_msg = Some(e);
                             done = true;
+                        }
+                        ChatEvent::ContextLengthExceeded { message, token_count, max_tokens, excess, recoverable, recovery_hint } => {
+                            // RFC: Context Length Recovery - emit the event to frontend
+                            eprintln!("[DRAIN] Context length exceeded: {} (tokens: {:?}/{:?}, recoverable: {})", 
+                                message, token_count, max_tokens, recoverable);
+                            self.pending_results.push_back(DrainResult::ContextLengthExceeded {
+                                message,
+                                token_count,
+                                max_tokens,
+                                excess,
+                                recoverable,
+                                recovery_hint,
+                            });
+                            // Don't set done=true - session is still valid, user can continue
                         }
                         _ => {}
                     }

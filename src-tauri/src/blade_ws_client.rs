@@ -59,6 +59,7 @@ pub enum BladeWsEvent {
     },
     ChatDone {
         finish_reason: String,
+        recoverable: Option<bool>,
     },
     Progress {
         message: String,
@@ -73,8 +74,22 @@ pub enum BladeWsEvent {
         session_id: String,
     },
     Error {
+        /// Standardized error type (context_length_exceeded, rate_limit_error, etc.)
+        error_type: String,
+        /// Machine-readable error code
         code: String,
+        /// Full error message (may contain provider-specific details)
         message: String,
+        /// Current token count (0 if unknown)
+        token_count: Option<u64>,
+        /// Model's max tokens (0 if unknown)
+        max_tokens: Option<u64>,
+        /// Excess tokens over limit
+        excess: Option<u64>,
+        /// Can the client retry?
+        recoverable: Option<bool>,
+        /// User-friendly guidance
+        recovery_hint: Option<String>,
     },
     Disconnected,
     ToolActivity {
@@ -353,8 +368,14 @@ impl BladeWsClient {
             if let Err(e) = msg_tx_clone.send(WsMessage::Send(auth_json)) {
                 eprintln!("[BLADE WS] Failed to send auth: {}", e);
                 let _ = event_tx_clone.send(BladeWsEvent::Error {
+                    error_type: "authentication_error".to_string(),
                     code: "auth_failed".to_string(),
                     message: "Failed to send authentication".to_string(),
+                    token_count: None,
+                    max_tokens: None,
+                    excess: None,
+                    recoverable: Some(false),
+                    recovery_hint: Some("Check your API key and try again".to_string()),
                 });
                 return;
             }
@@ -384,8 +405,14 @@ impl BladeWsClient {
                             let _ = event_tx_clone.send(BladeWsEvent::Disconnected);
                         } else {
                             let _ = event_tx_clone.send(BladeWsEvent::Error {
+                                error_type: "unknown_error".to_string(),
                                 code: "read_error".to_string(),
                                 message: format!("Read error: {}", msg),
+                                token_count: None,
+                                max_tokens: None,
+                                excess: None,
+                                recoverable: Some(true),
+                                recovery_hint: Some("Connection error. Try again.".to_string()),
                             });
                         }
                         break;
@@ -682,11 +709,19 @@ impl BladeWsClient {
                     .and_then(|v| v.as_str())
                     .unwrap_or("stop")
                     .to_string();
+                let recoverable = msg.payload.get("recoverable").and_then(|v| v.as_bool());
 
-                eprintln!("[BLADE WS] Chat done: {}", finish_reason);
-                let _ = tx.send(BladeWsEvent::ChatDone { finish_reason });
+                eprintln!("[BLADE WS] Chat done: {} (recoverable: {:?})", finish_reason, recoverable);
+                let _ = tx.send(BladeWsEvent::ChatDone { finish_reason, recoverable });
             }
             "error" => {
+                // Standardized error type (context_length_exceeded, rate_limit_error, etc.)
+                let error_type = msg
+                    .payload
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown_error")
+                    .to_string();
                 let code = msg
                     .payload
                     .get("code")
@@ -699,9 +734,26 @@ impl BladeWsClient {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
+                
+                // Error detail fields (RFC: Error Handling)
+                let token_count = msg.payload.get("token_count").and_then(|v| v.as_u64());
+                let max_tokens = msg.payload.get("max_tokens").and_then(|v| v.as_u64());
+                let excess = msg.payload.get("excess").and_then(|v| v.as_u64());
+                let recoverable = msg.payload.get("recoverable").and_then(|v| v.as_bool());
+                let recovery_hint = msg.payload.get("recovery_hint").and_then(|v| v.as_str()).map(|s| s.to_string());
 
-                eprintln!("[BLADE WS] Error: {} - {}", code, message);
-                let _ = tx.send(BladeWsEvent::Error { code, message });
+                eprintln!("[BLADE WS] Error: {} ({}) - {} (tokens: {:?}/{:?}, recoverable: {:?})", 
+                    error_type, code, message, token_count, max_tokens, recoverable);
+                let _ = tx.send(BladeWsEvent::Error { 
+                    error_type,
+                    code, 
+                    message,
+                    token_count,
+                    max_tokens,
+                    excess,
+                    recoverable,
+                    recovery_hint,
+                });
             }
             "tool_result_ack" => {
                 // Tool result acknowledgment - zcoderd received our result but is waiting for more

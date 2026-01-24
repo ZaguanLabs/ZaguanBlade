@@ -166,7 +166,7 @@ impl LanguageService {
 
     /// Create a GitignoreFilter if gitignore filtering is enabled
     fn create_gitignore_filter(&self) -> Option<GitignoreFilter> {
-        let settings = project_settings::load_project_settings(&self.workspace_root);
+        let settings = project_settings::load_project_settings_or_default(&self.workspace_root);
 
         // If allow_gitignored_files is true, don't create a filter (allow all files)
         if settings.allow_gitignored_files {

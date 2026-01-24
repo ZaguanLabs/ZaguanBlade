@@ -588,6 +588,8 @@ const AppLayoutInner: React.FC = () => {
                 setResearchProgress(null);
             });
 
+            // NOTE: context-length-exceeded is now handled in useChat.ts where it belongs
+
             // Listen for change-applied events to convert ephemeral tabs to file tabs
             unlistenChangeApplied = await listen<{ change_id: string; file_path: string }>('change-applied', (event) => {
                 console.log('[LAYOUT] Change applied:', event.payload);

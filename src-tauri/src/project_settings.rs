@@ -215,23 +215,25 @@ Add project-specific instructions for the AI assistant here.
 }
 
 /// Load project settings from disk
-pub fn load_project_settings(project_path: &Path) -> ProjectSettings {
+/// Returns error if settings file doesn't exist (first-time setup needed)
+pub fn load_project_settings(project_path: &Path) -> Result<ProjectSettings, String> {
     let settings_path = get_settings_path(project_path);
 
     if !settings_path.exists() {
-        return ProjectSettings::default();
+        return Err("Settings file does not exist".to_string());
     }
 
-    match fs::read_to_string(&settings_path) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
-            eprintln!("[SETTINGS] Failed to parse settings: {}", e);
-            ProjectSettings::default()
-        }),
-        Err(e) => {
-            eprintln!("[SETTINGS] Failed to read settings: {}", e);
-            ProjectSettings::default()
-        }
-    }
+    let content = fs::read_to_string(&settings_path)
+        .map_err(|e| format!("Failed to read settings: {}", e))?;
+    
+    serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse settings: {}", e))
+}
+
+/// Load project settings from disk, returning defaults if not found
+/// Use this for internal code that needs settings but doesn't care if they exist
+pub fn load_project_settings_or_default(project_path: &Path) -> ProjectSettings {
+    load_project_settings(project_path).unwrap_or_default()
 }
 
 /// Save project settings to disk
@@ -317,7 +319,7 @@ mod tests {
 
         save_project_settings(project_path, &settings).unwrap();
 
-        let loaded = load_project_settings(project_path);
+        let loaded = load_project_settings(project_path).unwrap();
         assert_eq!(loaded.storage.mode, StorageMode::Server);
         assert_eq!(loaded.context.max_tokens, 16000);
     }

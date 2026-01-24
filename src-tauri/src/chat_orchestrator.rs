@@ -129,7 +129,7 @@ pub async fn handle_send_message<R: Runtime>(
         // RFC-002: Get storage mode from project settings, default to "local"
         let storage_mode = Some(
             ws.map(|p| {
-                let settings = project_settings::load_project_settings(p);
+                let settings = project_settings::load_project_settings_or_default(p);
                 match settings.storage.mode {
                     project_settings::StorageMode::Local => "local".to_string(),
                     project_settings::StorageMode::Server => "server".to_string(),
@@ -220,7 +220,7 @@ pub async fn handle_send_message<R: Runtime>(
                         // RFC-002: Also save to local artifacts if in local storage mode
                         let workspace = state.workspace.lock().unwrap();
                         if let Some(ref ws_path) = workspace.workspace {
-                            let settings = project_settings::load_project_settings(ws_path);
+                            let settings = project_settings::load_project_settings_or_default(ws_path);
                             if settings.storage.mode == project_settings::StorageMode::Local {
                                 // Convert to local artifact format
                                 let project_id = crate::project::get_or_create_project_id(ws_path)
@@ -519,6 +519,20 @@ pub async fn handle_send_message<R: Runtime>(
                     Ok(_) => eprintln!("[LIB] TODO_UPDATED event emitted successfully"),
                     Err(e) => eprintln!("[LIB] Failed to emit TODO_UPDATED: {}", e),
                 }
+            } else if let DrainResult::ContextLengthExceeded { message, token_count, max_tokens, excess, recoverable, recovery_hint } = result {
+                // RFC: Context Length Recovery - emit context-length-exceeded event to frontend
+                eprintln!("[LIB] Context length exceeded: {} (tokens: {:?}/{:?})", message, token_count, max_tokens);
+                let _ = window.emit(
+                    "context-length-exceeded",
+                    serde_json::json!({
+                        "message": message,
+                        "token_count": token_count,
+                        "max_tokens": max_tokens,
+                        "excess": excess,
+                        "recoverable": recoverable,
+                        "recovery_hint": recovery_hint,
+                    }),
+                );
             } else if let DrainResult::ToolCalls(calls, content) = result {
                 println!("Tools requested: {:?}. Executing...", calls.len());
                 let state = app_handle.state::<AppState>();
@@ -742,17 +756,26 @@ pub async fn handle_send_message<R: Runtime>(
                 }
 
                 if let Some(batch) = batch_to_run {
-                    // Auto-open files in editor only when write_file or create_file tools are called
+                    // Auto-open files in editor when file-modifying tools are called
                     // (read_file operations don't auto-open to avoid disruptive UX)
                     for (call, result) in &batch.file_results {
-                        if result.success
-                            && (call.function.name == "write_file"
-                                || call.function.name == "create_file"
-                                || call.function.name == "replace_file_content"
-                                || call.function.name == "apply_edit"
-                                || call.function.name == "edit_file"
-                                || call.function.name == "multi_replace_file_content")
-                        {
+                        // Only auto-open files when the operation was successful
+                        if !result.success {
+                            continue;
+                        }
+
+                        let is_file_modifying_tool = matches!(
+                            call.function.name.as_str(),
+                            "write_file"
+                                | "create_file"
+                                | "replace_file_content"
+                                | "apply_edit"
+                                | "apply_patch"
+                                | "edit_file"
+                                | "multi_replace_file_content"
+                        );
+
+                        if is_file_modifying_tool {
                             // Extract path from tool arguments
                             if let Ok(args) = serde_json::from_str::<
                                 std::collections::HashMap<String, serde_json::Value>,

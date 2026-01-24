@@ -100,6 +100,7 @@ export function useChat() {
         let unlistenUpdate: (() => void) | undefined;
         let unlistenDone: (() => void) | undefined;
         let unlistenError: (() => void) | undefined;
+        let unlistenContextLength: (() => void) | undefined;
         let unlistenPerm: (() => void) | undefined;
         let unlistenChanges: (() => void) | undefined;
         let unlistenCommand: (() => void) | undefined;
@@ -244,8 +245,47 @@ export function useChat() {
             const u3 = await listen<string>('chat-error', (event) => {
                 setLoading(false);
                 setPendingActions(null);
+                setError(event.payload);
             });
             unlistenError = u3;
+
+            // RFC: Context Length Recovery - listen for context limit exceeded events
+            const uContextLength = await listen<{
+                message: string;
+                token_count: number | null;
+                max_tokens: number | null;
+                excess: number | null;
+                recoverable: boolean;
+                recovery_hint: string | null;
+            }>('context-length-exceeded', (event) => {
+                console.log('[useChat] Context length exceeded:', event.payload);
+                const { message, token_count, max_tokens, recoverable, recovery_hint } = event.payload;
+                
+                setLoading(false);
+                setPendingActions(null);
+                
+                // Show a user-friendly notification in the chat
+                const tokenInfo = token_count && max_tokens 
+                    ? ` (${token_count.toLocaleString()} / ${max_tokens.toLocaleString()} tokens)`
+                    : '';
+                
+                // Add a system message to the chat to inform the user
+                const msgId = `system-context-${Date.now()}`;
+                const systemMessage: ChatMessage = {
+                    id: msgId,
+                    role: 'Assistant',
+                    content: `⚠️ **Context Limit Reached**${tokenInfo}\n\n` +
+                        `${message}\n\n` +
+                        (recoverable 
+                            ? (recovery_hint || 'The AI is attempting to recover automatically. You can also try:\n' +
+                              '- Starting a new conversation\n' +
+                              '- Asking the AI to summarize the conversation')
+                            : 'Please start a new conversation to continue.'),
+                    blocks: [{ type: 'text', content: '', id: msgId }],
+                };
+                setMessages(prev => [...prev, systemMessage]);
+            });
+            unlistenContextLength = uContextLength;
 
             // Listen for permission requests
             const u4 = await listen<RequestConfirmationPayload>('request-confirmation', (event) => {
@@ -474,6 +514,7 @@ export function useChat() {
                 if (unlistenUpdate) unlistenUpdate();
                 if (unlistenDone) unlistenDone();
                 if (unlistenError) unlistenError();
+                if (unlistenContextLength) unlistenContextLength();
                 if (unlistenPerm) unlistenPerm();
                 if (unlistenCommand) unlistenCommand();
                 // if (unlistenToolCompleted) unlistenToolCompleted(); // Removed
