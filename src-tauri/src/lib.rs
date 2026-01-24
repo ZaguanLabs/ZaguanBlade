@@ -36,6 +36,7 @@ pub mod semantic_patch;
 pub mod symbol_index;
 pub mod terminal;
 pub mod tool_execution;
+pub mod uncommitted_changes;
 pub mod tools;
 pub mod tree_sitter;
 pub mod utils;
@@ -177,6 +178,17 @@ pub fn run() {
             commands::history::get_file_history,
             commands::history::revert_file_to_snapshot,
             commands::history::undo_batch,
+            // Uncommitted Changes (Accept/Reject)
+            commands::uncommitted::get_uncommitted_changes,
+            commands::uncommitted::get_uncommitted_change,
+            commands::uncommitted::get_uncommitted_change_for_file,
+            commands::uncommitted::accept_change,
+            commands::uncommitted::accept_file_changes,
+            commands::uncommitted::accept_all_changes,
+            commands::uncommitted::reject_change,
+            commands::uncommitted::reject_file_changes,
+            commands::uncommitted::reject_all_changes,
+            commands::uncommitted::get_uncommitted_changes_count,
             // Cache
             commands::cache::warmup_cache,
             commands::cache::should_rewarm_cache,

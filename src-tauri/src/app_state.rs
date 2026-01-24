@@ -4,6 +4,7 @@ use crate::config::{self, ApiConfig};
 use crate::conversation::ConversationHistory;
 use crate::conversation_store;
 use crate::ephemeral_documents;
+use crate::uncommitted_changes::UncommittedChangeTracker;
 use crate::warmup;
 use crate::workspace_manager::WorkspaceManager;
 use dotenvy::dotenv;
@@ -40,6 +41,7 @@ pub struct AppState {
     pub history_service: std::sync::Arc<crate::history::HistoryService>, // File history service
     pub language_service: std::sync::Arc<crate::language_service::LanguageService>, // v1.3: Unified Language Service
     pub language_handler: crate::language_service::LanguageHandler, // v1.3: Language Intent Handler
+    pub uncommitted_changes: UncommittedChangeTracker, // Track AI changes pending accept/reject
 }
 
 impl AppState {
@@ -166,6 +168,7 @@ impl AppState {
             history_service,
             language_service,
             language_handler,
+            uncommitted_changes: UncommittedChangeTracker::new(),
         }
     }
 }

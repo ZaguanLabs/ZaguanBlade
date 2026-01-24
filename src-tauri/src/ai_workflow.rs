@@ -337,7 +337,11 @@ impl AiWorkflow {
 
                         let full_path = workspace_root.join(&change.path);
 
-                        // History Snapshot
+                        // Read original content before any changes (for diff generation)
+                        let original_content = fs::read_to_string(&full_path).unwrap_or_default();
+
+                        // History Snapshot - capture the snapshot ID for uncommitted tracking
+                        let mut snapshot_id: Option<String> = None;
                         if let Some(app) = &context.app_handle {
                             use tauri::Manager;
                             let state = app.state::<crate::app_state::AppState>();
@@ -348,6 +352,7 @@ impl AiWorkflow {
                                 {
                                     Ok(entry) => {
                                         println!("[HISTORY] Snapshot created for {}", change.path);
+                                        snapshot_id = Some(entry.id.clone());
                                         let _ = app.emit(
                                             crate::events::event_names::HISTORY_ENTRY_ADDED,
                                             crate::events::HistoryEntryAddedPayload { entry },
@@ -419,6 +424,32 @@ impl AiWorkflow {
                             Ok(_) => {
                                 println!("[AI WORKFLOW] Auto-applied change to {}", change.path);
                                 if let Some(app) = &context.app_handle {
+                                    use tauri::Manager;
+                                    let state = app.state::<crate::app_state::AppState>();
+
+                                    // Track as uncommitted change if we have a snapshot
+                                    if let Some(snap_id) = &snapshot_id {
+                                        // Read new content for diff
+                                        let new_content = fs::read_to_string(&full_path).unwrap_or_default();
+                                        let diff = diffy::create_patch(&original_content, &new_content).to_string();
+                                        let (added, removed) = crate::uncommitted_changes::count_diff_stats(&diff);
+
+                                        let uncommitted = crate::uncommitted_changes::UncommittedChange {
+                                            id: call.id.clone(),
+                                            file_path: full_path.clone(),
+                                            snapshot_id: snap_id.clone(),
+                                            unified_diff: diff,
+                                            added_lines: added,
+                                            removed_lines: removed,
+                                            timestamp: std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_millis() as u64,
+                                        };
+                                        state.uncommitted_changes.track(uncommitted);
+                                        println!("[UNCOMMITTED] Tracking change {} for {}", call.id, change.path);
+                                    }
+
                                     let _ = app.emit("refresh-explorer", ());
                                     let _ = app.emit(
                                         crate::events::event_names::CHANGE_APPLIED,
