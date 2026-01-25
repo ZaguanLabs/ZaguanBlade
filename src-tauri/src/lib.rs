@@ -21,6 +21,7 @@ pub mod git;
 pub mod gitignore_filter;
 pub mod history;
 pub mod idempotency;
+pub mod indexer;
 pub mod language_service;
 pub mod local_artifacts;
 pub mod local_index;

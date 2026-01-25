@@ -14,6 +14,7 @@ use crate::blade_protocol::{
 use crate::language_service::LanguageService;
 use crate::tree_sitter::SymbolType;
 use tauri::async_runtime::spawn_blocking;
+use tauri::State;
 
 /// Handler for language intents
 pub struct LanguageHandler {
@@ -31,6 +32,7 @@ impl LanguageHandler {
         &self,
         intent: LanguageIntent,
         intent_id: Uuid,
+        app_state: Option<&State<'_, crate::AppState>>,
     ) -> BladeResult<Option<BladeEventEnvelope>> {
         let service = self.service.clone();
         let event_payload = match intent {
@@ -167,6 +169,40 @@ impl LanguageHandler {
                 LanguageEvent::SymbolAt {
                     intent_id,
                     symbol: symbol_data,
+                }
+            }
+            LanguageIntent::GetFullContext {
+                max_files,
+                preview_lines,
+            } => {
+                let state = app_state.ok_or_else(|| BladeError::Internal {
+                    trace_id: intent_id.to_string(),
+                    message: "AppState not available for GetFullContext".to_string(),
+                })?;
+
+                // Clone the indexer manager to avoid holding the lock across await
+                let indexer_manager = {
+                    let guard = state.indexer_manager.lock().unwrap();
+                    guard.as_ref().cloned().ok_or_else(|| BladeError::Internal {
+                        trace_id: intent_id.to_string(),
+                        message: "IndexerManager not initialized".to_string(),
+                    })?
+                };
+
+                let file_path = indexer_manager
+                    .get_full_context(max_files, preview_lines)
+                    .await
+                    .map_err(|e| BladeError::Internal {
+                        trace_id: intent_id.to_string(),
+                        message: format!("Failed to generate full context: {}", e),
+                    })?;
+
+                let file_count = indexer_manager.file_count();
+
+                LanguageEvent::FullContextGenerated {
+                    intent_id,
+                    file_path,
+                    file_count,
                 }
             }
             LanguageIntent::ZlpMessage { .. } => {

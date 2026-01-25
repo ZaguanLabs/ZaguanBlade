@@ -216,6 +216,13 @@ pub enum LanguageIntent {
         line: u32,
         character: u32,
     },
+    // Project context indexing
+    GetFullContext {
+        #[serde(default)]
+        max_files: Option<usize>,
+        #[serde(default)]
+        preview_lines: Option<usize>,
+    },
     // Raw ZLP operations (v1.4)
     ZlpMessage {
         payload: serde_json::Value,
@@ -449,6 +456,12 @@ pub enum LanguageEvent {
     SymbolAt {
         intent_id: Uuid,
         symbol: Option<LanguageSymbol>,
+    },
+    // Project context indexing
+    FullContextGenerated {
+        intent_id: Uuid,
+        file_path: String,
+        file_count: usize,
     },
     // Raw ZLP response (v1.4)
     ZlpResponse {

@@ -764,7 +764,7 @@ pub async fn dispatch(
                     eprintln!("[Language] Intent received: {:?}", other);
                     let maybe_event = state
                         .language_handler
-                        .handle(other, intent_id)
+                        .handle(other, intent_id, Some(&state))
                         .await
                         .map_err(|e| blade_protocol::BladeError::Internal {
                             trace_id: intent_id.to_string(),

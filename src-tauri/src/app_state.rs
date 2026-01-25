@@ -42,6 +42,7 @@ pub struct AppState {
     pub language_service: std::sync::Arc<crate::language_service::LanguageService>, // v1.3: Unified Language Service
     pub language_handler: crate::language_service::LanguageHandler, // v1.3: Language Intent Handler
     pub uncommitted_changes: UncommittedChangeTracker, // Track AI changes pending accept/reject
+    pub indexer_manager: Mutex<Option<crate::indexer::IndexerManager>>, // Project indexer
 }
 
 impl AppState {
@@ -141,6 +142,22 @@ impl AppState {
         let language_handler =
             crate::language_service::LanguageHandler::new(language_service.clone());
 
+        // Initialize IndexerManager if workspace is set
+        let indexer_manager = if let Some(path_str) = &initial_path {
+            match crate::indexer::IndexerManager::new(std::path::Path::new(path_str)) {
+                Ok(manager) => {
+                    eprintln!("[AppState] IndexerManager initialized with {} files", manager.file_count());
+                    Some(manager)
+                }
+                Err(e) => {
+                    eprintln!("[AppState] Failed to initialize IndexerManager: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Self {
             chat_manager: Mutex::new(ChatManager::new(10)),
             conversation: Mutex::new(ConversationHistory::new()),
@@ -169,6 +186,7 @@ impl AppState {
             language_service,
             language_handler,
             uncommitted_changes: UncommittedChangeTracker::new(),
+            indexer_manager: Mutex::new(indexer_manager),
         }
     }
 }
