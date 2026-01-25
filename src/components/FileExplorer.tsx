@@ -127,6 +127,11 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                 payload: { path: fullPath, is_dir: isDir }
             });
             console.log(`[Explorer] Created ${isDir ? 'folder' : 'file'}:`, fullPath);
+            
+            // Auto-open newly created files in the editor (not directories)
+            if (!isDir && onFileSelect) {
+                onFileSelect(fullPath);
+            }
         } catch (err) {
             console.error('[Explorer] Failed to create:', err);
         }

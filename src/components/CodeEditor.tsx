@@ -21,6 +21,10 @@ import {
     rainbowBrackets,
     smoothCursor,
     scrollPastEnd,
+    diffDecorations,
+    diffStateField,
+    setDiffState,
+    parseUnifiedDiff,
 } from "./editor/extensions";
 import { zlpLinter } from "./editor/extensions/zlpLinter";
 import { useEditor } from "../contexts/EditorContext";
@@ -56,6 +60,10 @@ interface CodeEditorProps {
     highlightLines?: { startLine: number; endLine: number } | null;
     /** Callback for navigating to symbol definition */
     onNavigate?: (path: string, line: number, character: number) => void;
+    /** Enable soft line wrapping (default: false, auto-enabled for markdown) */
+    lineWrap?: boolean;
+    /** Unified diff string for showing change decorations */
+    unifiedDiff?: string;
 }
 
 
@@ -66,7 +74,10 @@ export interface CodeEditorHandle {
 }
 
 
-const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onChange, onSave, filename, highlightLines, onNavigate }, ref) => {
+const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onChange, onSave, filename, highlightLines, onNavigate, lineWrap, unifiedDiff }, ref) => {
+    // Auto-enable line wrap for markdown files
+    const isMarkdown = filename?.endsWith('.md') || filename?.endsWith('.markdown');
+    const shouldWrap = lineWrap ?? isMarkdown;
     const editorRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     const languageConf = useRef(new Compartment());
@@ -128,12 +139,13 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 dropCursor(),
                 rectangularSelection(),
                 crosshairCursor(),
-                lintGutter(),
+                // Lint gutter only for code files (not markdown)
+                ...(isMarkdown ? [] : [lintGutter()]),
 
                 // Editing features
                 history(),
-                bracketMatching(),
-                closeBrackets(),
+                // Bracket matching/closing only for code files
+                ...(isMarkdown ? [] : [bracketMatching(), closeBrackets()]),
                 autocompletion(),
                 highlightSelectionMatches(),
                 indentOnInput(),
@@ -142,14 +154,18 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 zaguanTheme,
 
                 // Custom extensions for enhanced UX
-                indentGuides,
-                rainbowBrackets,
+                // Disable heavy extensions for markdown (rainbow brackets, indent guides)
+                ...(isMarkdown ? [] : [indentGuides, rainbowBrackets]),
                 smoothCursor,
                 scrollPastEnd,
 
                 // Editor state extensions
                 lineHighlightField,
                 virtualBufferField,
+                diffDecorations(),
+
+                // Line wrapping (enabled for markdown and when explicitly requested)
+                ...(shouldWrap ? [EditorView.lineWrapping] : []),
 
                 // Layout
                 EditorView.theme({
@@ -160,8 +176,8 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 // Language support (dynamic)
                 languageConf.current.of(getLanguageExtension(filename)),
 
-                // ZLP Linter
-                zlpLinter(filename || ''),
+                // ZLP Linter (disabled for markdown - not applicable)
+                ...(isMarkdown ? [] : [zlpLinter(filename || '')]),
 
                 // Keymaps
                 keymap.of([
@@ -269,6 +285,27 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
         // Reset the user edit flag after processing
         isUserEditRef.current = false;
     }, [filename, content, onNavigate]);
+
+    // Apply diff decorations when unifiedDiff changes
+    useEffect(() => {
+        const view = viewRef.current;
+        if (!view) return;
+
+        if (unifiedDiff) {
+            const diffLines = parseUnifiedDiff(unifiedDiff);
+            view.dispatch({
+                effects: setDiffState.of({
+                    lines: diffLines,
+                    originalContent: '' // We don't need this for decorations
+                })
+            });
+        } else {
+            // Clear diff state when no diff
+            view.dispatch({
+                effects: setDiffState.of(null)
+            });
+        }
+    }, [unifiedDiff]);
 
     // Send didChange to LSP on document changes (debounced)
     // Send didChange to LSP on document changes (debounced)

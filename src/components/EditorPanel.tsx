@@ -360,6 +360,7 @@ const EditorWithChangeBar: React.FC<EditorWithChangeBarProps> = ({
                     filename={activeFile}
                     highlightLines={highlightLines || undefined}
                     onNavigate={handleNavigate}
+                    unifiedDiff={change?.unified_diff}
                 />
             </div>
         </div>

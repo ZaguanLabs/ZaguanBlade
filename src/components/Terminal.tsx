@@ -21,6 +21,7 @@ export default function Terminal({ id = "main-terminal", cwd }: TerminalProps) {
     const xtermRef = useRef<XTerm | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
     const terminalBufferRef = useRef<TerminalBuffer | null>(null);
+    const fitIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const { showMenu } = useContextMenu();
 
     // Context menu handler
@@ -130,13 +131,16 @@ export default function Terminal({ id = "main-terminal", cwd }: TerminalProps) {
         // PTY spawning needs dimensions. We must ensure the terminal has size before fitting.
         // We poll for a short period until we get valid dimensions.
         let fitAttempts = 0;
-        const fitInterval = setInterval(() => {
+        fitIntervalRef.current = setInterval(() => {
             fitAttempts++;
             try {
                 const dims = fitAddon.proposeDimensions();
                 if (dims && dims.cols > 0 && dims.rows > 0) {
                     fitAddon.fit();
-                    clearInterval(fitInterval);
+                    if (fitIntervalRef.current) {
+                        clearInterval(fitIntervalRef.current);
+                        fitIntervalRef.current = null;
+                    }
                     // Force refresh after successful fit
                     term.refresh(0, term.rows - 1);
                 }
@@ -146,7 +150,10 @@ export default function Terminal({ id = "main-terminal", cwd }: TerminalProps) {
 
             // Stop trying after 2 seconds
             if (fitAttempts > 20) {
-                clearInterval(fitInterval);
+                if (fitIntervalRef.current) {
+                    clearInterval(fitIntervalRef.current);
+                    fitIntervalRef.current = null;
+                }
             }
         }, 100);
 
@@ -280,6 +287,12 @@ export default function Terminal({ id = "main-terminal", cwd }: TerminalProps) {
         resizeObserver.observe(terminalRef.current);
 
         return () => {
+            // Clear the fit interval if still running
+            if (fitIntervalRef.current) {
+                clearInterval(fitIntervalRef.current);
+                fitIntervalRef.current = null;
+            }
+
             resizeObserver.disconnect();
             unlistenLegacy.then((unlisten) => unlisten());
             unlistenV11.then((unlisten) => unlisten());

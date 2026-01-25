@@ -24,7 +24,7 @@ export const GlobalChangeActions: React.FC<GlobalChangeActionsProps> = ({
   const fileCount = new Set(changes.map(c => c.file_path)).size;
 
   return (
-    <div className="fixed bottom-12 right-[420px] z-50 flex items-center gap-2 px-3 py-1.5 bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded-md shadow-lg text-xs">
+    <div className="flex items-center justify-center gap-2 px-3 py-1.5 bg-zinc-900/90 border-t border-zinc-700 text-xs">
       <div className="flex items-center gap-1.5 text-[var(--fg-secondary)]">
         <FileCode className="w-3 h-3" />
         <span>{fileCount} file{fileCount !== 1 ? 's' : ''}</span>

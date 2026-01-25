@@ -36,10 +36,15 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
       });
     };
 
+    // Listen for cross-instance refresh events
+    const handleGlobalRefresh = () => refresh();
+    window.addEventListener('uncommitted-changes-updated', handleGlobalRefresh);
+
     setupListener();
 
     return () => {
       if (unlisten) unlisten();
+      window.removeEventListener('uncommitted-changes-updated', handleGlobalRefresh);
     };
   }, [refresh, options?.onFileChanged]);
 
@@ -73,6 +78,8 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
     try {
       await invoke('accept_all_changes');
       await refresh();
+      // Emit event so other hook instances can refresh
+      window.dispatchEvent(new CustomEvent('uncommitted-changes-updated'));
       return true;
     } catch (error) {
       console.error('Failed to accept all changes:', error);
@@ -106,6 +113,8 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
     try {
       await invoke('reject_all_changes');
       await refresh();
+      // Emit event so other hook instances can refresh
+      window.dispatchEvent(new CustomEvent('uncommitted-changes-updated'));
       return true;
     } catch (error) {
       console.error('Failed to reject all changes:', error);

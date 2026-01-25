@@ -10,7 +10,6 @@ import { DocumentViewer } from './DocumentViewer';
 import { TitleBar } from './TitleBar';
 import { GitBranch, Settings, Clock } from 'lucide-react';
 import { EditorProvider, useEditor } from '../contexts/EditorContext';
-import { GlobalChangeActions } from './editor/GlobalChangeActions';
 import { useUncommittedChanges } from '../hooks/useUncommittedChanges';
 import { useChat } from '../hooks/useChat';
 import { StorageSetupModal } from './StorageSetupModal';
@@ -220,6 +219,11 @@ const AppLayoutInner: React.FC = () => {
             setTerminalHeight(state.terminal_height);
         }
 
+        // Restore chat panel width
+        if (state.chat_panel_width) {
+            setChatPanelWidth(state.chat_panel_width);
+        }
+
         // Restore selected model
         if (state.selected_model_id) {
             setSelectedModelId(state.selected_model_id);
@@ -253,6 +257,7 @@ const AppLayoutInner: React.FC = () => {
         terminals: terminalState.terminals,
         activeTerminalId: terminalState.activeId,
         terminalHeight,
+        chatPanelWidth,
         onStateLoaded: handleStateLoaded,
     });
 
@@ -786,6 +791,14 @@ const AppLayoutInner: React.FC = () => {
                                 activeTabId={activeTabId}
                                 onTabClick={setActiveTabId}
                                 onTabClose={handleTabClose}
+                                onReorder={(fromIndex, toIndex) => {
+                                    setTabs(prev => {
+                                        const newTabs = [...prev];
+                                        const [movedTab] = newTabs.splice(fromIndex, 1);
+                                        newTabs.splice(toIndex, 0, movedTab);
+                                        return newTabs;
+                                    });
+                                }}
                             />
                         )}
 
@@ -892,6 +905,9 @@ const AppLayoutInner: React.FC = () => {
                                 researchProgress={researchProgress}
                                 onNewConversation={chat.newConversation}
                                 onUndoTool={chat.undoTool}
+                                uncommittedChanges={uncommittedChanges}
+                                onAcceptAllChanges={acceptAllChanges}
+                                onRejectAllChanges={rejectAllChanges}
                             />
                         </Suspense>
                     </div>
@@ -921,13 +937,6 @@ const AppLayoutInner: React.FC = () => {
                     <span>{t('app.name')}</span>
                 </div>
             </div>
-
-            {/* Global Accept/Reject All Changes */}
-            <GlobalChangeActions
-                changes={uncommittedChanges}
-                onAcceptAll={acceptAllChanges}
-                onRejectAll={rejectAllChanges}
-            />
 
             {/* Dev Tools */}
             <Suspense fallback={null}>

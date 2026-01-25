@@ -152,30 +152,30 @@ Built with Tauri v2 (not Electron):
                             ↕ Tauri IPC
 ┌─────────────────────────────────────────────────────────────┐
 │                   Backend (Rust + Tokio)                    │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │  Blade Protocol Dispatcher                          │   │
-│  │  • Intent routing                                   │   │
-│  │  • Event emission                                   │   │
-│  │  • Causality tracking                               │   │
-│  └─────────────────────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │  Blade Protocol Dispatcher                          │    │
+│  │  • Intent routing                                   │    │
+│  │  • Event emission                                   │    │
+│  │  • Causality tracking                               │    │
+│  └─────────────────────────────────────────────────────┘    │
 │                                                             │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │  AI Workflow Engine                                 │   │
-│  │  • Agentic loop management                          │   │
-│  │  • Tool execution                                   │   │
-│  │  • Loop detection                                   │   │
-│  │  • Context assembly                                 │   │
-│  └─────────────────────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │  AI Workflow Engine                                 │    │
+│  │  • Agentic loop management                          │    │
+│  │  • Tool execution                                   │    │
+│  │  • Loop detection                                   │    │
+│  │  • Context assembly                                 │    │
+│  └─────────────────────────────────────────────────────┘    │
 │                                                             │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │  Core Services                                      │   │
-│  │  • Tree-sitter parser (native)                      │   │
-│  │  • Symbol index (SQLite)                            │   │
-│  │  • History service (snapshots)                      │   │
-│  │  • Uncommitted changes tracker                      │   │
-│  │  • File watcher (notify)                            │   │
-│  │  • Git operations                                   │   │
-│  └─────────────────────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │  Core Services                                      │    │
+│  │  • Tree-sitter parser (native)                      │    │
+│  │  • Symbol index (SQLite)                            │    │
+│  │  • History service (snapshots)                      │    │
+│  │  • Uncommitted changes tracker                      │    │
+│  │  • File watcher (notify)                            │    │
+│  │  • Git operations                                   │    │
+│  └─────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
                             ↕ WebSocket
 ┌─────────────────────────────────────────────────────────────┐
@@ -329,33 +329,6 @@ The AI can:
 | **Self-hostable** | ✅ (editor only) | ❌ | ❌ | ✅ |
 
 **Our advantage:** Rust performance + custom architecture = 10x faster operations, 5x less memory.
-
----
-
-## Roadmap
-
-### Near-term (Alpha → Beta)
-- [ ] Complete diff view rebuild
-- [ ] ZLP v1.0 (AI-first language protocol)
-- [ ] Enhanced symbol navigation
-- [ ] Improved UI/UX polish
-- [ ] More language support (Go, C++, Java)
-- [ ] Plugin system
-
-### Medium-term
-- [ ] Collaborative editing
-- [ ] Cloud sync for settings
-- [ ] Advanced refactoring tools
-- [ ] Custom AI model support
-- [ ] Vim/Emacs keybindings
-- [ ] Theme marketplace
-
-### Long-term
-- [ ] Self-hosted AI backend option
-- [ ] Mobile companion app
-- [ ] Advanced debugging integration
-- [ ] AI-powered code review
-- [ ] Team collaboration features
 
 ---
 

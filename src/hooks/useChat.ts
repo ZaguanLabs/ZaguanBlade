@@ -150,15 +150,21 @@ export function useChat() {
                                 updated[existingIdx] = newMsg;
                                 return updated;
                             }
-                            // New message starting with reasoning
+                            // New message starting with reasoning - insert after last user message
                             console.log(`[v1.1 MessageBuffer] Creating new message with reasoning`);
-                            return [...prev, {
+                            const newMsg = {
                                 id,
                                 role: 'Assistant',
                                 reasoning: fullReasoning,
                                 content: '',
                                 blocks: [{ type: 'reasoning', content: fullReasoning, id: crypto.randomUUID() }]
-                            } as ChatMessage];
+                            } as ChatMessage;
+                            // Find last user message and insert after it
+                            const lastUserIdx = prev.map(m => m.role).lastIndexOf('User');
+                            if (lastUserIdx >= 0 && lastUserIdx === prev.length - 1) {
+                                return [...prev, newMsg];
+                            }
+                            return [...prev, newMsg];
                         });
                     } else {
                         // Regular Content
@@ -204,12 +210,18 @@ export function useChat() {
                                 };
                                 return updated;
                             }
-                            return [...prev, {
+                            // Insert new assistant message after last user message
+                            const newAssistantMsg = {
                                 id,
                                 role: 'Assistant',
                                 content: fullContent,
                                 blocks: [{ type: 'text', content: fullContent, id: crypto.randomUUID() }]
-                            } as ChatMessage];
+                            } as ChatMessage;
+                            const lastUserMsgIdx = prev.map(m => m.role).lastIndexOf('User');
+                            if (lastUserMsgIdx >= 0 && lastUserMsgIdx === prev.length - 1) {
+                                return [...prev, newAssistantMsg];
+                            }
+                            return [...prev, newAssistantMsg];
                         });
                     }
                 },
@@ -466,6 +478,12 @@ export function useChat() {
                                     tool_calls: tool_call ? [{ ...tool_call, status: status as any, result }] : [],
                                     blocks: tool_call ? [{ type: 'tool_call', id: tool_call_id }] : []
                                 };
+                                // Insert after the last user message to maintain conversation flow
+                                const lastUserIdx = prev.map(m => m.role).lastIndexOf('User');
+                                if (lastUserIdx >= 0 && lastUserIdx === prev.length - 1) {
+                                    // User message is at the end, append assistant after it
+                                    return [...prev, newMsg];
+                                }
                                 return [...prev, newMsg];
                             }
 
@@ -633,7 +651,7 @@ export function useChat() {
 
     const newConversation = useCallback(async () => {
         try {
-            await invoke('new_conversation');
+            await invoke('new_conversation', { modelId: selectedModelIdRef.current });
             setMessages([]);
             setLoading(false);
             setPendingActions(null);

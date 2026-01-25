@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Send, Square, BookOpen } from 'lucide-react';
 import { CompactModelSelector } from './CompactModelSelector';
@@ -75,26 +75,6 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const popupRef = useRef<HTMLDivElement>(null);
 
-    // Unified height adjustment to minimize reflows
-    const adjustHeight = useCallback(() => {
-        const textarea = textareaRef.current;
-        if (!textarea) return;
-
-        // Use a temporary scroll preserve
-        const scrollPos = window.scrollY;
-        textarea.style.height = 'auto';
-        const scrollHeight = textarea.scrollHeight;
-        textarea.style.height = `${Math.min(Math.max(42, scrollHeight), 400)}px`;
-
-        // Restore window scroll if it shifted
-        if (scrollPos !== window.scrollY) {
-            window.scrollTo(0, scrollPos);
-        }
-    }, []);
-
-    useEffect(() => {
-        adjustHeight();
-    }, [text, adjustHeight]);
 
     // Handle scroll syncing between textarea and overlay
     const handleScroll = useCallback((e: React.UIEvent<HTMLTextAreaElement>) => {
@@ -115,6 +95,12 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
     // Detect @ and show command popup
     const handleTextChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
         const newText = e.target.value;
+        const textarea = e.target;
+        
+        // Adjust height - do this BEFORE setState to avoid double layout
+        textarea.style.height = '42px';
+        textarea.style.height = `${Math.min(textarea.scrollHeight, 400)}px`;
+        
         setText(newText);
 
         // Find if we're typing a command (@ at start or after space)

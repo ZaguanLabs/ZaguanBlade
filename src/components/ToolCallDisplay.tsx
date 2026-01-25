@@ -80,45 +80,45 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
         if (name === 'apply_patch' && args) {
             const patches = args.patches as Array<unknown> | undefined;
             if (patches && patches.length > 1) {
-                return `📝 Applying ${patches.length} Code Changes`;
+                return `Applying ${patches.length} Code Changes`;
             }
         }
 
         const nameMap: Record<string, string> = {
-            'apply_patch': '📝 Applying Code Changes',
-            'edit_file': '✏️ Editing File',
-            'read_file': '📖 Reading File',
-            'write_file': '💾 Writing File',
-            'list_files': '📂 Listing Files',
-            'grep_search': '🔍 Searching Code',
-            'run_command': '⚙️ Running Command',
-            'create_file': '📄 Creating File',
-            'delete_file': '🗑️ Deleting File',
-            'list_directory': '📁 Listing Directory',
-            'get_workspace_structure': '🗂️ Analyzing Workspace',
-            'codebase_search': '🔎 Searching Codebase',
-            'get_editor_state': '👀 Getting Editor State',
-            'read_file_range': '📖 Reading File Range',
-            'find_files': '🔍 Finding Files',
-            'find_files_glob': '🌐 Finding Files (Glob)',
-            'glob': '🌐 Glob Search',
-            'find_by_name': '🔍 Find Files by Name',
-            'view_file_outline': '📑 Viewing File Outline',
-            'search_web': '🌐 Searching Web',
-            'read_url_content': '🕸️ Reading URL',
-            'browser_subagent': '🤖 Browser Agent',
-            'command_status': '⏱️ Checking Command',
-            'send_command_input': '⌨️ Sending Input',
-            'read_terminal': '🖥️ Reading Terminal',
-            'list_dir': '📂 Listing Directory',
-            'view_file': '📖 Viewing File',
-            'view_code_item': '🧐 Viewing Code Item',
-            'generate_image': '🎨 Generating Image',
-            'multi_replace_file_content': '📝 Multi-Edit File',
-            'replace_file_content': '📝 Replacing Content',
-            'write_to_file': '💾 Writing to File',
-            'list_resources': '📦 Listing Resources',
-            'read_resource': '📖 Reading Resource'
+            'apply_patch': 'Applying Code Changes',
+            'edit_file': 'Editing File',
+            'read_file': 'Reading File',
+            'write_file': 'Writing File',
+            'list_files': 'Listing Files',
+            'grep_search': 'Searching Code',
+            'run_command': 'Running Command',
+            'create_file': 'Creating File',
+            'delete_file': 'Deleting File',
+            'list_directory': 'Listing Directory',
+            'get_workspace_structure': 'Analyzing Workspace',
+            'codebase_search': 'Searching Codebase',
+            'get_editor_state': 'Getting Editor State',
+            'read_file_range': 'Reading File Range',
+            'find_files': 'Finding Files',
+            'find_files_glob': 'Finding Files (Glob)',
+            'glob': 'Glob Search',
+            'find_by_name': 'Find Files by Name',
+            'view_file_outline': 'Viewing File Outline',
+            'search_web': 'Searching Web',
+            'read_url_content': 'Reading URL',
+            'browser_subagent': 'Browser Agent',
+            'command_status': 'Checking Command',
+            'send_command_input': 'Sending Input',
+            'read_terminal': 'Reading Terminal',
+            'list_dir': 'Listing Directory',
+            'view_file': 'Viewing File',
+            'view_code_item': 'Viewing Code Item',
+            'generate_image': 'Generating Image',
+            'multi_replace_file_content': 'Multi-Edit File',
+            'replace_file_content': 'Replacing Content',
+            'write_to_file': 'Writing to File',
+            'list_resources': 'Listing Resources',
+            'read_resource': 'Reading Resource'
         };
         return nameMap[name] || name;
     };
@@ -135,6 +135,9 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     const commandText = isRunCommand ? (parsedArgs.command as string || parsedArgs.CommandLine as string || '') : '';
     const cwdText = isRunCommand ? (parsedArgs.cwd as string || parsedArgs.Cwd as string || '') : '';
     const pathText = (parsedArgs.path as string || parsedArgs.Path as string || '');
+    
+    // For search tools, extract the search query
+    const searchQuery = (parsedArgs.pattern as string || parsedArgs.query as string || parsedArgs.regex as string || parsedArgs.Query as string || '');
     const filenameOnlyTools = new Set([
         'read_file',
         'read_file_range',
@@ -170,6 +173,15 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                 <span className="font-medium text-zinc-400">
                     {getFriendlyToolName(toolCall.function.name, parsedArgs)}
                 </span>
+                {/* Show search query for search tools */}
+                {searchQuery && (
+                    <span
+                        className="text-[10px] text-amber-400/80 truncate max-w-[200px] font-mono"
+                        title={searchQuery}
+                    >
+                        "{searchQuery}"
+                    </span>
+                )}
                 {displayPathText && (
                     <span
                         className="text-[10px] text-zinc-500 truncate max-w-[260px]"

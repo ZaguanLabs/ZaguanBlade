@@ -15,6 +15,8 @@ import { CommandCenter } from './CommandCenter';
 import { HistoryTab } from './HistoryTab';
 import { ChatTerminal } from './ChatTerminal';
 import { ProgressIndicator } from './ProgressIndicator';
+import { GlobalChangeActions } from './editor/GlobalChangeActions';
+import type { UncommittedChange } from '../types/uncommitted';
 
 interface ResearchProgress {
     message: string;
@@ -39,6 +41,9 @@ interface ChatPanelProps {
     researchProgress?: ResearchProgress | null;
     onNewConversation: () => void;
     onUndoTool: (toolCallId: string) => void;
+    uncommittedChanges: UncommittedChange[];
+    onAcceptAllChanges: () => void;
+    onRejectAllChanges: () => void;
 }
 
 export const ChatPanel: React.FC<ChatPanelProps> = ({
@@ -57,12 +62,16 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     researchProgress,
     onNewConversation,
     onUndoTool,
+    uncommittedChanges,
+    onAcceptAllChanges,
+    onRejectAllChanges,
 }) => {
     const { t } = useTranslation();
     const { executions, handleCommandComplete } = useCommandExecution();
     const { loadConversation } = useHistory();
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const isUserAtBottomRef = useRef(true);
+    const prevMessageCountRef = useRef(0);
     const [activeTab, setActiveTab] = useState<'chat' | 'history'>('chat');
     const [hasApiKey, setHasApiKey] = useState<boolean>(true);
 
@@ -84,27 +93,67 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         };
     }, [checkApiKey]);
 
-    // Auto-scroll logic
+    // Auto-scroll logic - optimized to prevent excessive re-renders
+    // Use a ref to track the last scroll time to throttle scroll operations
+    const lastScrollTimeRef = useRef(0);
+    const scrollRafRef = useRef<number | null>(null);
+    
     useEffect(() => {
-        // If we just sent a message (loading became true and it's a new user message), force scroll
-        // Or if we are already at bottom, keep scrolling.
+        const currentCount = messages.length;
+        
+        // Only scroll if message count actually changed
+        if (currentCount === prevMessageCountRef.current) {
+            return;
+        }
+        
+        prevMessageCountRef.current = currentCount;
 
         // Check if the last message is User, implies we just sent it -> Force Scroll
-        const lastMsg = messages[messages.length - 1];
+        const lastMsg = messages[currentCount - 1];
         const justSent = lastMsg?.role === 'User';
 
         if (justSent || isUserAtBottomRef.current) {
-            // When loading (streaming), avoid smooth scroll as it can lag behind rapid updates
-            messagesEndRef.current?.scrollIntoView({
-                behavior: loading ? 'auto' : 'smooth'
+            // Cancel any pending scroll
+            if (scrollRafRef.current) {
+                cancelAnimationFrame(scrollRafRef.current);
+            }
+            
+            // Throttle scrolls to max once per 100ms during streaming
+            const now = Date.now();
+            const timeSinceLastScroll = now - lastScrollTimeRef.current;
+            const delay = loading && timeSinceLastScroll < 100 ? 100 - timeSinceLastScroll : 0;
+            
+            scrollRafRef.current = requestAnimationFrame(() => {
+                setTimeout(() => {
+                    lastScrollTimeRef.current = Date.now();
+                    // Use simple scrollTop instead of scrollIntoView for better performance
+                    const container = messagesEndRef.current?.parentElement?.parentElement;
+                    if (container) {
+                        container.scrollTop = container.scrollHeight;
+                    }
+                }, delay);
             });
         }
-    }, [messages, loading]);
+        
+        return () => {
+            if (scrollRafRef.current) {
+                cancelAnimationFrame(scrollRafRef.current);
+            }
+        };
+    }, [messages.length, loading]);
 
     // Prevent default context menu on empty areas
     const handleContextMenu = useCallback((e: React.MouseEvent) => {
         // Always prevent default to avoid native Tauri menu
         e.preventDefault();
+    }, []);
+
+    // Scroll handler - memoized to prevent recreation on every render
+    const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+        const target = e.target as HTMLDivElement;
+        // Use a larger threshold (100px) to be more resilient to large appends (e.g. code blocks)
+        const isBottom = Math.abs(target.scrollHeight - target.scrollTop - target.clientHeight) < 100;
+        isUserAtBottomRef.current = isBottom;
     }, []);
 
     const handleNewConversation = () => {
@@ -135,12 +184,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             {activeTab === 'chat' ? (
                 <div
                     className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent"
-                    onScroll={(e) => {
-                        const target = e.target as HTMLDivElement;
-                        // Use a larger threshold (100px) to be more resilient to large appends (e.g. code blocks)
-                        const isBottom = Math.abs(target.scrollHeight - target.scrollTop - target.clientHeight) < 100;
-                        isUserAtBottomRef.current = isBottom;
-                    }}
+                    onScroll={handleScroll}
                 >
                     <div className="max-w-4xl mx-auto py-6">
                         {messages.length === 0 && (
@@ -224,7 +268,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 />
             )}
 
-
+            {/* Global Accept/Reject All Changes - show immediately when changes exist */}
+            <GlobalChangeActions
+                changes={uncommittedChanges}
+                onAcceptAll={onAcceptAllChanges}
+                onRejectAll={onRejectAllChanges}
+            />
 
             <CommandCenter
                 onSend={sendMessage}

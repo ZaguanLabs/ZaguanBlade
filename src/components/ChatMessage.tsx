@@ -126,7 +126,7 @@ interface ChatMessageProps {
     onUndoTool?: (toolCallId: string) => void;
 }
 
-export const ChatMessage: React.FC<ChatMessageProps> = ({
+const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     message,
     pendingActions,
     onApproveCommand,
@@ -534,3 +534,5 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
         </div>
     );
 };
+
+export const ChatMessage = React.memo(ChatMessageComponent);

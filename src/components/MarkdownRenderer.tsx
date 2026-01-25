@@ -1,5 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Copy, Check } from 'lucide-react';
@@ -102,10 +104,11 @@ const InlineCode: React.FC<{ children: React.ReactNode }> = ({ children }) => (
     </code>
 );
 
-export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, className = '' }) => {
+const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, className = '' }) => {
     return (
         <div className={`markdown-content select-text ${className}`}>
             <ReactMarkdown
+                remarkPlugins={[remarkGfm, remarkBreaks]}
                 components={{
                     // Code blocks
                     code({ className, children, ...props }) {
@@ -283,4 +286,5 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, cla
     );
 };
 
+export const MarkdownRenderer = React.memo(MarkdownRendererComponent);
 export default MarkdownRenderer;
