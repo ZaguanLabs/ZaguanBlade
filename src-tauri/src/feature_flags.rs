@@ -21,9 +21,10 @@ pub struct FeatureFlags {
 impl Default for FeatureFlags {
     fn default() -> Self {
         Self {
-            // Start with frontend authority (existing behavior)
-            editor_backend_authority: AtomicBool::new(false),
-            tabs_backend_authority: AtomicBool::new(false),
+            // Backend authority enabled for editor state
+            editor_backend_authority: AtomicBool::new(true),
+            // Backend authority enabled for tab state
+            tabs_backend_authority: AtomicBool::new(true),
         }
     }
 }

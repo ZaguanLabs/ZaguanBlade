@@ -259,8 +259,9 @@ pub enum LanguageIntent {
         preview_lines: Option<usize>,
     },
     // Raw ZLP operations (v1.4)
+    // Note: field name avoids collision with serde content="payload"
     ZlpMessage {
-        payload: serde_json::Value,
+        data: serde_json::Value,
     },
 }
 
@@ -534,9 +535,10 @@ pub enum LanguageEvent {
         file_count: usize,
     },
     // Raw ZLP response (v1.4)
+    // Note: field name avoids collision with serde content="payload"
     ZlpResponse {
         original_request_id: String,
-        payload: serde_json::Value,
+        result: serde_json::Value,
     },
 }
 

@@ -1022,9 +1022,7 @@ pub async fn dispatch(
         }
         BladeIntent::Language(language_intent) => {
             match language_intent {
-                blade_protocol::LanguageIntent::ZlpMessage { payload } => {
-                    println!("[Language] Dispatching ZLP Message: {:?}", payload);
-
+                blade_protocol::LanguageIntent::ZlpMessage { data } => {
                     // 1. Get config
                     let (blade_url, api_key) = {
                         let config = state.config.lock().unwrap();
@@ -1037,7 +1035,7 @@ pub async fn dispatch(
                         crate::blade_client::BladeClient::new(blade_url, http_client, api_key);
 
                     // 3. Send request
-                    let mut rx = blade_client.send_zlp_request(payload).await.map_err(|e| {
+                    let mut rx = blade_client.send_zlp_request(data).await.map_err(|e| {
                         blade_protocol::BladeError::Internal {
                             trace_id: intent_id.to_string(),
                             message: format!("ZLP Request Failed: {}", e),
@@ -1066,7 +1064,7 @@ pub async fn dispatch(
                                                 blade_protocol::LanguageEvent::ZlpResponse {
                                                     original_request_id: intent_id_clone
                                                         .to_string(),
-                                                    payload: val,
+                                                    result: val,
                                                 },
                                             ),
                                         },

@@ -258,14 +258,14 @@ export type LanguageIntent =
     | { type: "DidOpen"; payload: { file_path: string; content: string; language_id: string } }
     | { type: "DidChange"; payload: { file_path: string; content: string; version: number } }
     | { type: "DidClose"; payload: { file_path: string } }
-    | { type: "ZlpMessage"; payload: any };
+    | { type: "ZlpMessage"; payload: { data: any } };
 
 export type LanguageEvent =
     | { type: "FileIndexed"; payload: { file_path: string; symbol_count: number } }
     | { type: "WorkspaceIndexed"; payload: { file_count: number; symbol_count: number; duration_ms: number } }
     | { type: "SymbolsFound"; payload: { intent_id: string; symbols: LanguageSymbol[] } }
     | { type: "SymbolAt"; payload: { intent_id: string; symbol: LanguageSymbol | null } }
-    | { type: "ZlpResponse"; payload: { original_request_id: string; payload: any } };
+    | { type: "ZlpResponse"; payload: { original_request_id: string; result: any } };
 
 export type LanguagePosition = {
     line: number;

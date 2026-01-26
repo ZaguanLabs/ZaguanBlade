@@ -39,6 +39,13 @@ export function isBackendAuthoritative(): boolean {
 }
 
 /**
+ * Check if backend has authority over tab state.
+ */
+export function isTabsBackendAuthoritative(): boolean {
+    return featureFlags?.tabs_backend_authority ?? false;
+}
+
+/**
  * Passthrough error - thrown when the facade should not handle the operation
  * and the caller should use its own (legacy) implementation.
  */
@@ -143,5 +150,79 @@ export const EditorFacade = {
             payload: {}
         });
         // State will be returned via blade-event EditorEvent.StateSnapshot
+    },
+
+    // ========== Tab Operations (when tabs_backend_authority is enabled) ==========
+
+    /**
+     * Open a tab. In backend authority mode, this updates Rust state
+     * and emits TabOpened event.
+     */
+    async openTab(id: string, title: string, path?: string, tabType?: string, content?: string, suggestedName?: string): Promise<void> {
+        if (!isTabsBackendAuthoritative()) {
+            throw new PassthroughError();
+        }
+
+        await BladeDispatcher.editor({
+            type: 'OpenTab',
+            payload: { id, title, path, tab_type: tabType, content, suggested_name: suggestedName }
+        });
+    },
+
+    /**
+     * Close a tab. In backend authority mode, this updates Rust state
+     * and emits TabClosed event.
+     */
+    async closeTab(tabId: string): Promise<void> {
+        if (!isTabsBackendAuthoritative()) {
+            throw new PassthroughError();
+        }
+
+        await BladeDispatcher.editor({
+            type: 'CloseTab',
+            payload: { tab_id: tabId }
+        });
+    },
+
+    /**
+     * Set the active tab. In backend authority mode, this updates Rust state
+     * and emits ActiveTabChanged event.
+     */
+    async setActiveTab(tabId: string | null): Promise<void> {
+        if (!isTabsBackendAuthoritative()) {
+            throw new PassthroughError();
+        }
+
+        await BladeDispatcher.editor({
+            type: 'SetActiveTab',
+            payload: { tab_id: tabId }
+        });
+    },
+
+    /**
+     * Reorder tabs. In backend authority mode, this updates Rust state
+     * and emits TabsReordered event.
+     */
+    async reorderTabs(tabIds: string[]): Promise<void> {
+        if (!isTabsBackendAuthoritative()) {
+            throw new PassthroughError();
+        }
+
+        await BladeDispatcher.editor({
+            type: 'ReorderTabs',
+            payload: { tab_ids: tabIds }
+        });
+    },
+
+    /**
+     * Request current tab state snapshot from backend.
+     * Useful for recovery/sync scenarios.
+     */
+    async getTabState(): Promise<void> {
+        await BladeDispatcher.editor({
+            type: 'GetTabState',
+            payload: {}
+        });
+        // State will be returned via blade-event EditorEvent.TabStateSnapshot
     },
 };
