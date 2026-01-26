@@ -11,9 +11,11 @@ pub mod commands;
 pub mod config;
 pub mod context_assembly;
 pub mod conversation;
+pub mod core_state;
 pub mod conversation_store;
 pub mod environment;
 pub mod ephemeral_commands;
+pub mod feature_flags;
 pub mod ephemeral_documents;
 pub mod events;
 pub mod explorer;
@@ -227,6 +229,10 @@ pub fn run() {
             commands::local_context::search_local_moments,
             commands::local_context::get_file_context,
             commands::local_context::delete_local_conversation,
+            // State (Headless Core)
+            commands::state::get_core_state,
+            commands::state::get_feature_flags,
+            commands::state::set_feature_flag,
             // Git commands
             git::git_status_summary,
             git::git_status_files,

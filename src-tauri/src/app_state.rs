@@ -4,6 +4,7 @@ use crate::config::{self, ApiConfig};
 use crate::conversation::ConversationHistory;
 use crate::conversation_store;
 use crate::ephemeral_documents;
+use crate::feature_flags::FeatureFlags;
 use crate::uncommitted_changes::UncommittedChangeTracker;
 use crate::warmup;
 use crate::workspace_manager::WorkspaceManager;
@@ -43,6 +44,7 @@ pub struct AppState {
     pub language_handler: crate::language_service::LanguageHandler, // v1.3: Language Intent Handler
     pub uncommitted_changes: UncommittedChangeTracker, // Track AI changes pending accept/reject
     pub indexer_manager: Mutex<Option<crate::indexer::IndexerManager>>, // Project indexer
+    pub feature_flags: FeatureFlags, // Headless migration feature flags
 }
 
 impl AppState {
@@ -175,6 +177,7 @@ impl AppState {
             language_handler,
             uncommitted_changes: UncommittedChangeTracker::new(),
             indexer_manager: Mutex::new(indexer_manager),
+            feature_flags: FeatureFlags::new(),
         }
     }
 }
