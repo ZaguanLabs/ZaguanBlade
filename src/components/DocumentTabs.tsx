@@ -87,7 +87,7 @@ export const DocumentTabs: React.FC<DocumentTabsProps> = ({
   return (
     <div
       ref={scrollRef}
-      className="flex items-center bg-[#252526] border-b border-[#3c3c3c] overflow-x-auto scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-transparent"
+      className="flex items-center bg-[#252526] border-b border-[#3c3c3c] overflow-x-auto tabs-scrollbar"
     >
       {tabs.map((tab, index) => {
         const isActive = activeTabId === tab.id;

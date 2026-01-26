@@ -1,3 +1,4 @@
+use crate::environment::EnvironmentInfo;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -152,6 +153,8 @@ struct AuthenticatePayload {
     api_key: String,
     client_name: String,
     client_version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    environment: Option<EnvironmentInfo>,
 }
 
 #[derive(Debug, Serialize)]
@@ -347,6 +350,11 @@ impl BladeWsClient {
         let msg_tx_clone = msg_tx.clone();
 
         tokio::spawn(async move {
+            // Collect environment information for the system prompt
+            let environment = EnvironmentInfo::collect();
+            eprintln!("[BLADE WS] Environment: os={}, arch={:?}, shell={:?}", 
+                environment.os, environment.arch, environment.shell);
+            
             // Send authentication message
             let auth_msg = WsBaseMessage {
                 id: "auth-1".to_string(),
@@ -357,6 +365,7 @@ impl BladeWsClient {
                         api_key,
                         client_name: "zblade".to_string(),
                         client_version: env!("CARGO_PKG_VERSION").to_string(),
+                        environment: Some(environment),
                     })
                     .unwrap(),
                 ),

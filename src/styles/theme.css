@@ -7,41 +7,66 @@
 }
 
 :root {
-  /* Surgical Dark Theme - Core Palette */
-  --bg-app: #09090b;
-  --bg-panel: #0c0c0e;
-  --bg-surface: #18181b;
-  --bg-surface-hover: #27272a;
-  --bg-selection: #27272a;
+  /* Tokyo Night-Inspired Soft Dark Theme */
+  
+  /* Background Layers - Clear Luminance Hierarchy */
+  --bg-app: #1a1b26;           /* Main app background */
+  --bg-editor: #1f2335;        /* Editor background (slightly lighter for depth) */
+  --bg-panel: #16161e;         /* Sidebar/panel background (darkest) */
+  --bg-surface: #1f202e;       /* Interactive surfaces (buttons, inputs) */
+  --bg-surface-hover: #292a3a; /* Hover states */
+  --bg-selection: #515c7e4d;   /* Selection background */
+  --bg-active: #202330;        /* Active list items */
 
-  --fg-primary: #e4e4e7;
-  --fg-secondary: #a1a1aa;
-  --fg-tertiary: #52525b;
-  --fg-nav: #71717a;
+  /* Foreground - Soft Blues & Grays */
+  --fg-primary: #a9b1d6;       /* Primary text */
+  --fg-secondary: #787c99;     /* Secondary text / icons */
+  --fg-tertiary: #565f89;      /* Tertiary / disabled */
+  --fg-nav: #787c99;           /* Navigation icons */
+  --fg-bright: #c0caf5;        /* Bright text (cursor, highlights) */
 
-  --border-subtle: #1f1f22;
-  --border-focus: #3f3f46;
-  --border-active: #52525b;
+  /* Borders - Improved Contrast for Visual Separation */
+  --border-subtle: #1a1b2e;    /* Subtle borders (slightly brighter) */
+  --border-default: #2a2b3e;   /* Default borders (more visible) */
+  --border-focus: #3d59a1;     /* Focus state (blue) */
+  --border-active: #7aa2f7;    /* Active state (brighter blue) */
 
-  --accent-primary: #f4f4f5;
-  --accent-secondary: #10b981;
-  --accent-warning: #f59e0b;
-  --accent-error: #ef4444;
+  /* Accents - Tokyo Night Palette */
+  --accent-primary: #7aa2f7;   /* Primary blue */
+  --accent-secondary: #73daca; /* Teal/cyan (success) */
+  --accent-warning: #e0af68;   /* Orange/yellow */
+  --accent-error: #f7768e;     /* Red/pink */
+  --accent-purple: #bb9af7;    /* Purple (variables) */
+  --accent-green: #9ece6a;     /* Green (strings) */
 
+  /* Typography */
   --font-family-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-family-mono: "Fira Code", "Symbols Nerd Font Mono", monospace;
 
-  /* Terminal Specifics */
-  --term-bg: #09090b;
-  --term-fg: #d4d4d8;
-  --term-selection: rgba(255, 255, 255, 0.1);
+  /* Terminal Colors */
+  --term-bg: #16161e;
+  --term-fg: #787c99;
+  --term-selection: #515c7e4d;
+  --term-cursor: #c0caf5;
 
-  /* Utilities */
-  --shadow-premium: 0 4px 20px -2px rgba(0, 0, 0, 0.5);
-  --glass-bg: rgba(9, 9, 11, 0.8);
+  /* Shadows - Multi-tier Z-axis System */
+  --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 10px 30px -5px rgba(0, 0, 0, 0.6);
+  --shadow-xl: 0 20px 50px -10px rgba(0, 0, 0, 0.7);
+
+  /* Transitions - Consistent Timing */
+  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-base: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-elastic: 400ms cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* Glass Effect */
+  --glass-bg: rgba(26, 27, 38, 0.85);
+  --glass-border: rgba(120, 124, 153, 0.1);
 }
 
 .dark {
-  --bg-app: #09090b;
-  --bg-panel: #0c0c0e;
+  --bg-app: #1a1b26;
+  --bg-panel: #16161e;
 }

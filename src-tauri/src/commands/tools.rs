@@ -80,12 +80,12 @@ pub fn approve_tool<R: Runtime>(approved: bool, window: Window<R>, state: State<
                 }
             } else {
                 eprintln!("[APPROVAL] User SKIPPED - NOT executing commands");
-                // Skipped - add explicit error results
+                // Skipped - add explicit error results with clear instruction not to retry
                 for cmd in &batch.commands {
                     if !batch.file_results.iter().any(|(c, _)| c.id == cmd.call.id) {
                         eprintln!("[SKIP] Adding error result for command: {}", cmd.command);
                         let error_msg = format!(
-                            "User skipped: '{}'. This command was not executed.",
+                            "User explicitly rejected this command: '{}'. Do NOT retry this command or similar commands. Ask the user how they would like to proceed instead.",
                             cmd.command
                         );
                         batch
@@ -100,7 +100,7 @@ pub fn approve_tool<R: Runtime>(approved: bool, window: Window<R>, state: State<
                             conf.description
                         );
                         let error_msg = format!(
-                            "User skipped: '{}'. This action was not executed.",
+                            "User explicitly rejected this action: '{}'. Do NOT retry this action. Ask the user how they would like to proceed instead.",
                             conf.description
                         );
                         batch

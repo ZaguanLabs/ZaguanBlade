@@ -12,6 +12,7 @@ pub mod config;
 pub mod context_assembly;
 pub mod conversation;
 pub mod conversation_store;
+pub mod environment;
 pub mod ephemeral_commands;
 pub mod ephemeral_documents;
 pub mod events;
@@ -67,13 +68,20 @@ pub fn run() {
     let resolved_path = cli.path.map(|p| {
         let path = std::path::PathBuf::from(&p);
         if path.is_relative() {
-            // Resolve relative to current working directory
-            std::env::current_dir()
+            // For AppImage: Use OWD (Original Working Directory) if available
+            // AppImages change CWD to their mount point, but preserve the original in OWD
+            let cwd = std::env::var("OWD")
                 .ok()
-                .map(|cwd| cwd.join(&path))
+                .map(std::path::PathBuf::from)
+                .or_else(|| std::env::current_dir().ok());
+            
+            cwd.map(|dir| dir.join(&path))
                 .and_then(|full| std::fs::canonicalize(&full).ok())
                 .map(|abs| abs.to_string_lossy().to_string())
-                .unwrap_or(p)
+                .unwrap_or_else(|| {
+                    eprintln!("[WARN] Failed to resolve relative path: {}", p);
+                    p
+                })
         } else {
             // Already absolute, just canonicalize if possible
             std::fs::canonicalize(&path)
@@ -117,6 +125,26 @@ pub fn run() {
                         }
                         Err(e) => {
                             eprintln!("[LanguageService] Startup indexing failed: {}", e);
+                        }
+                    }
+                }
+            });
+
+            // Background IndexerManager initialization (non-blocking)
+            let app_handle_indexer = app.handle().clone();
+            std::thread::spawn(move || {
+                let state = app_handle_indexer.state::<AppState>();
+                let workspace = state.workspace.lock().unwrap().workspace.clone();
+
+                if let Some(path) = workspace {
+                    eprintln!("[Indexer] Starting background initialization for {:?}", path);
+                    match crate::indexer::IndexerManager::new(&path) {
+                        Ok(manager) => {
+                            eprintln!("[Indexer] Initialized with {} files", manager.file_count());
+                            *state.indexer_manager.lock().unwrap() = Some(manager);
+                        }
+                        Err(e) => {
+                            eprintln!("[Indexer] Failed to initialize: {}", e);
                         }
                     }
                 }

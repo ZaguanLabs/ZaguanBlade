@@ -6,3 +6,4 @@ export { scrollPastEnd } from "./scrollPastEnd";
 export { lineHighlightField, addLineHighlight, clearLineHighlight } from "./lineHighlight";
 export { virtualBufferField, setBaseContent, getVirtualContent, hasVirtualChanges } from "./virtualBuffer";
 export { diffDecorations, diffStateField, setDiffState, clearDiff, parseUnifiedDiff } from "./diffDecorations";
+export { zlpHoverTooltip } from "./zlpTooltip";

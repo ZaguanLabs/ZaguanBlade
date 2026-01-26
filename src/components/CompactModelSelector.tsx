@@ -12,6 +12,7 @@ interface CompactModelSelectorProps {
 const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ models, selectedId, onSelect, disabled }) => {
     const [isOpen, setIsOpen] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
+    const dropdownRef = useRef<HTMLDivElement>(null);
     const selectedModel = models.find(m => m.id === selectedId) || null;
 
     useEffect(() => {
@@ -28,6 +29,19 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
             document.removeEventListener('mousedown', handleClickOutside);
         };
     }, [isOpen]);
+
+    // Scroll to selected model when dropdown opens
+    useEffect(() => {
+        if (isOpen && dropdownRef.current && selectedId) {
+            // Wait for the dropdown to render
+            setTimeout(() => {
+                const selectedButton = dropdownRef.current?.querySelector(`[data-model-id="${selectedId}"]`);
+                if (selectedButton) {
+                    selectedButton.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }
+            }, 50);
+        }
+    }, [isOpen, selectedId]);
 
     const getModelIcon = (id: string) => {
         const lower = id.toLowerCase();
@@ -62,7 +76,7 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
             </button>
 
             {isOpen && (
-                <div className="fixed bottom-[60px] right-3 w-80 py-1 bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded-lg shadow-xl z-[100] max-h-[300px] overflow-y-auto flex flex-col gap-0.5 animate-in fade-in zoom-in-95 duration-100 origin-bottom-right" style={{ boxShadow: '0 8px 30px rgba(0, 0, 0, 0.4), 0 0 1px rgba(255, 255, 255, 0.1)' }}>
+                <div ref={dropdownRef} className="fixed bottom-[60px] right-3 w-80 py-1 bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded-lg shadow-xl z-[100] max-h-[300px] overflow-y-auto flex flex-col gap-0.5 animate-in fade-in zoom-in-95 duration-100 origin-bottom-right" style={{ boxShadow: '0 8px 30px rgba(0, 0, 0, 0.4), 0 0 1px rgba(255, 255, 255, 0.1)' }}>
                     {models.length === 0 && (
                         <div className="px-2 py-1.5 text-[10px] text-[var(--fg-tertiary)] text-center italic">
                             No models available
@@ -73,6 +87,7 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
                         return (
                             <button
                                 key={model.id}
+                                data-model-id={model.id}
                                 onClick={() => {
                                     onSelect(model.id);
                                     setIsOpen(false);

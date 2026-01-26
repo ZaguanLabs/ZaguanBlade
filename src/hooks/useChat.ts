@@ -22,6 +22,86 @@ export function useChat() {
     const accumulatedContentRef = useRef<{ id: string; content: string }>({ id: '', content: '' });
     const accumulatedReasoningRef = useRef<{ id: string; content: string }>({ id: '', content: '' });
 
+    // v1.2: Batched rendering - buffer updates and flush at intervals
+    // This prevents re-rendering on every single streaming chunk
+    const pendingUpdatesRef = useRef<Map<string, { content: string; reasoning: string; blocks: import('../types/chat').MessageBlock[] }>>(new Map());
+    const flushScheduledRef = useRef<number | null>(null);
+    const FLUSH_INTERVAL_MS = 50; // 20fps - smooth enough for human perception
+
+    // Flush pending updates to state
+    const flushPendingUpdates = useCallback(() => {
+        flushScheduledRef.current = null;
+        const pending = pendingUpdatesRef.current;
+        if (pending.size === 0) return;
+
+        setMessages(prev => {
+            let updated = prev;
+            let changed = false;
+
+            pending.forEach((update, id) => {
+                const idx = updated.findIndex(m => m.id === id);
+                if (idx !== -1) {
+                    // Update existing message
+                    const msg = updated[idx];
+                    if (msg.content !== update.content || msg.reasoning !== update.reasoning) {
+                        if (!changed) {
+                            updated = [...prev];
+                            changed = true;
+                        }
+                        updated[idx] = {
+                            ...msg,
+                            content: update.content,
+                            reasoning: update.reasoning,
+                            blocks: update.blocks,
+                        };
+                    }
+                } else {
+                    // Create new message - insert after last user message to maintain flow
+                    if (!changed) {
+                        updated = [...prev];
+                        changed = true;
+                    }
+                    const newMsg = {
+                        id,
+                        role: 'Assistant',
+                        content: update.content,
+                        reasoning: update.reasoning,
+                        blocks: update.blocks,
+                    } as ChatMessage;
+                    
+                    // Find the correct insertion point - after the last user message
+                    const lastUserIdx = updated.map(m => m.role).lastIndexOf('User');
+                    if (lastUserIdx >= 0 && lastUserIdx === updated.length - 1) {
+                        // User message is at the end, append after it
+                        updated.push(newMsg);
+                    } else if (lastUserIdx >= 0) {
+                        // Insert after the last user message
+                        updated.splice(lastUserIdx + 1, 0, newMsg);
+                    } else {
+                        // No user message found, append at end
+                        updated.push(newMsg);
+                    }
+                }
+            });
+
+            pending.clear();
+            return changed ? updated : prev;
+        });
+    }, []);
+
+    // Schedule a flush if not already scheduled
+    const scheduleFlush = useCallback(() => {
+        if (flushScheduledRef.current === null) {
+            flushScheduledRef.current = window.setTimeout(flushPendingUpdates, FLUSH_INTERVAL_MS);
+        }
+    }, [flushPendingUpdates]);
+
+    // Queue an update for batched rendering
+    const queueMessageUpdate = useCallback((id: string, content: string, reasoning: string, blocks: import('../types/chat').MessageBlock[]) => {
+        pendingUpdatesRef.current.set(id, { content, reasoning, blocks });
+        scheduleFlush();
+    }, [scheduleFlush]);
+
     const [models, setModels] = useState<ModelInfo[]>([]);
     const [selectedModelId, setSelectedModelIdState] = useState<string>('anthropic/claude-sonnet-4-5-20250929');
     const selectedModelIdRef = useRef<string>('anthropic/claude-sonnet-4-5-20250929');
@@ -108,125 +188,63 @@ export function useChat() {
         let unlistenV11: (() => void) | undefined;
 
         // Initialize v1.1 message buffer
+        // v1.2: Use batched rendering - accumulate in refs, queue updates at intervals
         if (!messageBufferRef.current) {
+            // Track blocks per message for proper structure
+            const blocksRef: Map<string, import('../types/chat').MessageBlock[]> = new Map();
+            
             messageBufferRef.current = new MessageBuffer(
                 (id, chunk, is_final, type) => {
-                    // console.log(`[v1.1 MessageBuffer] Chunk ${id} len=${chunk.length} type=${type}`);
                     setLoading(true);
 
-                    // Handle reasoning
+                    // Accumulate content/reasoning in refs (no re-render)
                     if (type === 'reasoning') {
-                        console.log(`[v1.1 MessageBuffer] Processing reasoning chunk: id=${id}, chunk_len=${chunk.length}, is_final=${is_final}`);
-
                         if (accumulatedReasoningRef.current.id !== id) {
                             accumulatedReasoningRef.current = { id, content: '' };
                         }
                         accumulatedReasoningRef.current.content += chunk;
-                        const fullReasoning = accumulatedReasoningRef.current.content;
-
-                        console.log(`[v1.1 MessageBuffer] Accumulated reasoning length: ${fullReasoning.length}`);
-
-                        setMessages((prev) => {
-                            const existingIdx = prev.findIndex(m => m.id === id);
-                            if (existingIdx !== -1) {
-                                const updated = [...prev];
-                                const msg = updated[existingIdx];
-
-                                // Update legacy field
-                                const newMsg = { ...msg, reasoning: fullReasoning };
-
-                                // Update blocks: Append to last 'reasoning' block or create new
-                                const blocks = [...(newMsg.blocks || [])];
-                                const lastBlock = blocks[blocks.length - 1];
-                                if (lastBlock && lastBlock.type === 'reasoning') {
-                                    blocks[blocks.length - 1] = { ...lastBlock, content: lastBlock.content + chunk };
-                                } else {
-                                    console.log(`[v1.1 MessageBuffer] Creating new reasoning block`);
-                                    blocks.push({ type: 'reasoning', content: chunk, id: crypto.randomUUID() });
-                                }
-                                newMsg.blocks = blocks;
-
-                                console.log(`[v1.1 MessageBuffer] Updated message blocks count: ${blocks.length}`);
-                                updated[existingIdx] = newMsg;
-                                return updated;
-                            }
-                            // New message starting with reasoning - insert after last user message
-                            console.log(`[v1.1 MessageBuffer] Creating new message with reasoning`);
-                            const newMsg = {
-                                id,
-                                role: 'Assistant',
-                                reasoning: fullReasoning,
-                                content: '',
-                                blocks: [{ type: 'reasoning', content: fullReasoning, id: crypto.randomUUID() }]
-                            } as ChatMessage;
-                            // Find last user message and insert after it
-                            const lastUserIdx = prev.map(m => m.role).lastIndexOf('User');
-                            if (lastUserIdx >= 0 && lastUserIdx === prev.length - 1) {
-                                return [...prev, newMsg];
-                            }
-                            return [...prev, newMsg];
-                        });
                     } else {
-                        // Regular Content
                         if (accumulatedContentRef.current.id !== id) {
                             accumulatedContentRef.current = { id, content: '' };
                         }
                         accumulatedContentRef.current.content += chunk;
-                        const fullContent = accumulatedContentRef.current.content;
-
-                        setMessages((prev) => {
-                            const existingIdx = prev.findIndex(m => m.id === id);
-                            if (existingIdx !== -1) {
-                                const updated = [...prev];
-                                const msg = updated[existingIdx];
-
-                                // Update legacy field
-                                const newMsg = { ...msg, content: fullContent };
-
-                                // Update blocks: Append to last 'text' block or create new
-                                const blocks = [...(newMsg.blocks || [])];
-                                const lastBlock = blocks[blocks.length - 1];
-                                if (lastBlock && lastBlock.type === 'text') {
-                                    blocks[blocks.length - 1] = { ...lastBlock, content: lastBlock.content + chunk };
-                                } else {
-                                    blocks.push({ type: 'text', content: chunk, id: crypto.randomUUID() });
-                                }
-                                newMsg.blocks = blocks;
-
-                                updated[existingIdx] = newMsg;
-                                return updated;
-                            }
-                            // New message starting with text (if reasoning was skipped/missing)
-                            const last = prev[prev.length - 1];
-                            if (last && last.role === 'Assistant' && !last.id) {
-                                // Update placeholder
-                                const updated = [...prev];
-                                const msg = updated[prev.length - 1];
-                                updated[prev.length - 1] = {
-                                    ...msg,
-                                    id,
-                                    content: fullContent,
-                                    blocks: [...(msg.blocks || []), { type: 'text', content: chunk, id: crypto.randomUUID() }]
-                                };
-                                return updated;
-                            }
-                            // Insert new assistant message after last user message
-                            const newAssistantMsg = {
-                                id,
-                                role: 'Assistant',
-                                content: fullContent,
-                                blocks: [{ type: 'text', content: fullContent, id: crypto.randomUUID() }]
-                            } as ChatMessage;
-                            const lastUserMsgIdx = prev.map(m => m.role).lastIndexOf('User');
-                            if (lastUserMsgIdx >= 0 && lastUserMsgIdx === prev.length - 1) {
-                                return [...prev, newAssistantMsg];
-                            }
-                            return [...prev, newAssistantMsg];
-                        });
                     }
+
+                    // Build blocks structure
+                    let blocks = blocksRef.get(id) || [];
+                    const lastBlock = blocks[blocks.length - 1];
+                    
+                    if (type === 'reasoning') {
+                        if (lastBlock && lastBlock.type === 'reasoning') {
+                            // Append to existing reasoning block
+                            blocks[blocks.length - 1] = { ...lastBlock, content: lastBlock.content + chunk };
+                        } else {
+                            // Create new reasoning block
+                            blocks = [...blocks, { type: 'reasoning', content: chunk, id: crypto.randomUUID() }];
+                        }
+                    } else {
+                        if (lastBlock && lastBlock.type === 'text') {
+                            // Append to existing text block
+                            blocks[blocks.length - 1] = { ...lastBlock, content: lastBlock.content + chunk };
+                        } else {
+                            // Create new text block
+                            blocks = [...blocks, { type: 'text', content: chunk, id: crypto.randomUUID() }];
+                        }
+                    }
+                    blocksRef.set(id, blocks);
+
+                    // Queue batched update (will flush at 50ms intervals)
+                    queueMessageUpdate(
+                        id,
+                        accumulatedContentRef.current.id === id ? accumulatedContentRef.current.content : '',
+                        accumulatedReasoningRef.current.id === id ? accumulatedReasoningRef.current.content : '',
+                        blocks
+                    );
                 },
                 (id) => {
-                    console.log(`[v1.1 MessageBuffer] Message ${id} completed`);
+                    // Message completed - flush immediately and cleanup
+                    flushPendingUpdates();
+                    blocksRef.delete(id);
                     setLoading(false);
                 }
             );
@@ -545,8 +563,12 @@ export function useChat() {
 
         return () => {
             cleanupPromise.then(cleanup => cleanup());
+            // Cleanup any pending flush on unmount
+            if (flushScheduledRef.current) {
+                clearTimeout(flushScheduledRef.current);
+            }
         };
-    }, []);
+    }, [queueMessageUpdate, flushPendingUpdates]);
 
     const [messageQueue, setMessageQueue] = useState<string[]>([]);
 
@@ -631,7 +653,7 @@ export function useChat() {
                 type: 'ApproveTool',
                 payload: { approved }
             });
-            setPendingActions(null);
+            // Don't clear pendingActions here - same race condition as approveToolDecision
         } catch (e) {
             console.error('Failed to approve tool:', e);
         }
@@ -639,11 +661,14 @@ export function useChat() {
 
     const approveToolDecision = useCallback(async (decision: string) => {
         try {
+            // Optimistically clear pending actions for immediate UI feedback
+            // New request-confirmation events will set new actions if needed
+            setPendingActions(null);
+            
             await BladeDispatcher.workflow({
                 type: 'ApproveToolDecision',
                 payload: { decision }
             });
-            setPendingActions(null);
         } catch (e) {
             console.error('Failed to approve tool decision:', e);
         }

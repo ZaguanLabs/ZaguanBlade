@@ -279,15 +279,26 @@ fn validate_path_under_workspace(workspace_root: &Path, path: &Path) -> Result<P
         ws.join(path)
     };
 
-    let candidate = fs::canonicalize(&candidate).map_err(|e| {
-        format!("path does not exist or is inaccessible: {} ({})", candidate.display(), e)
-    })?;
-    
-    if !candidate.starts_with(&ws) {
-        return Err("path is outside workspace".to_string());
+    // First check if the path exists (without following symlinks)
+    if !candidate.exists() {
+        return Err(format!("path does not exist: {}", candidate.display()));
     }
 
-    Ok(candidate)
+    // For symlinks, we want to validate the link location, not the target
+    // This allows symlinks inside the workspace even if they point outside
+    let normalized = normalize_path(&candidate);
+    
+    // Validate the normalized path is under workspace
+    if !normalized.starts_with(&ws) {
+        return Err(format!(
+            "path is outside workspace (workspace: {}, path: {})",
+            ws.display(),
+            normalized.display()
+        ));
+    }
+
+    // Return the normalized path (not canonicalized) to preserve symlinks
+    Ok(normalized)
 }
 
 fn read_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {

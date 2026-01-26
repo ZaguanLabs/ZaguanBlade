@@ -745,6 +745,11 @@ impl ChatManager {
                                 // AND if we have received some content (chunks/tools) from the new generation.
                                 // zcoderd/Protocol v2 can send ChatDone immediately as an ACK for tool results,
                                 // which we must ignore to catch the actual response stream.
+                                //
+                                // EXCEPTION: If we've sent all results and received ChatDone but no content,
+                                // this likely means the model encountered an error (e.g., tool failure) and
+                                // chose not to generate a response. We should accept this ChatDone to prevent
+                                // hanging indefinitely.
 
                                 // RFC: Context Length Recovery - check for context_length_exceeded finish reason
                                 if finish_reason == "context_length_exceeded" {
@@ -758,12 +763,16 @@ impl ChatManager {
                                     });
                                 }
 
-                                if results_sent_count >= total_results && saw_content {
+                                // Accept ChatDone if:
+                                // 1. We've sent all results AND received content (normal case), OR
+                                // 2. We've sent all results AND this is a stop/error finish (model chose not to respond)
+                                let is_terminal_finish = matches!(finish_reason.as_str(), "stop" | "error" | "context_length_exceeded");
+                                if results_sent_count >= total_results && (saw_content || is_terminal_finish) {
                                     saw_final_chat_done = true;
                                     let _ = tx.send(ChatEvent::Done);
                                 } else {
-                                    eprintln!("[CHAT MGR] Ignoring premature ChatDone (sent {}/{}, saw_content={})", 
-                                        results_sent_count, total_results, saw_content);
+                                    eprintln!("[CHAT MGR] Ignoring premature ChatDone (sent {}/{}, saw_content={}, finish_reason={})", 
+                                        results_sent_count, total_results, saw_content, finish_reason);
                                 }
                             }
                             crate::blade_ws_client::BladeWsEvent::Error { error_type, code, message, token_count, max_tokens, excess, recoverable, recovery_hint } => {
@@ -850,6 +859,9 @@ impl ChatManager {
         });
 
         self.rx = Some(rx);
+        // Set streaming=true to indicate we have an active connection waiting for events
+        // The event loop will poll at 60 FPS, which is appropriate when waiting for model response
+        // The real CPU spike was caused by the event loop breaking prematurely, not by polling
         self.streaming = true;
         Ok(())
     }
@@ -937,6 +949,10 @@ impl ChatManager {
         for ev in events {
             match ev {
                 ChatEvent::Chunk(s) => {
+                    // Set streaming=true when we receive first content
+                    if !self.streaming {
+                        self.streaming = true;
+                    }
                     if let Some(last) = conversation.last_assistant_mut() {
                         if last.progress.is_some() {
                             // Clear progress state as text generation has started
@@ -960,6 +976,10 @@ impl ChatManager {
                     });
                 }
                 ChatEvent::ReasoningChunk(s) => {
+                    // Set streaming=true when we receive first reasoning content
+                    if !self.streaming {
+                        self.streaming = true;
+                    }
                     if let Some(last) = conversation.last_assistant_mut() {
                         if last.progress.is_some() {
                             last.progress = None;
@@ -1155,8 +1175,12 @@ impl ChatManager {
                 selected_model,
             );
 
+            // Set streaming=false to reduce CPU usage during tool execution
+            // Clear rx so drain_events returns from pending_results, not from stale channel
             self.streaming = false;
             self.rx = None;
+            
+            // Clear reasoning parser since this turn is done
             self.reasoning_parser.reset();
 
             if let Some(msg) = error_msg {

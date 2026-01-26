@@ -713,30 +713,37 @@ impl AiWorkflow {
                 }));
             }
             for handle in handles {
-                if let Ok((call, res)) = handle.join() {
-                    let preview = if res.content.chars().count() > 100 {
-                        res.content.chars().take(100).collect::<String>() + "..."
-                    } else {
-                        res.content.clone()
-                    };
-                    eprintln!(
-                        "[TOOL RESULT] name={} success={} content={:?} (parallel read)",
-                        call.function.name, res.success, preview
-                    );
-                    file_results.push((call.clone(), res.clone()));
-                    if res.success
-                        && matches!(call.function.name.as_str(), "read_file" | "read_file_range")
-                    {
-                        self.recent_file_tool_cache.push((
-                            (
-                                call.function.name.clone(),
-                                normalize_json_string(&call.function.arguments),
-                            ),
-                            res.clone(),
-                        ));
-                        if self.recent_file_tool_cache.len() > 10 {
-                            self.recent_file_tool_cache.remove(0);
+                match handle.join() {
+                    Ok((call, res)) => {
+                        let preview = if res.content.chars().count() > 100 {
+                            res.content.chars().take(100).collect::<String>() + "..."
+                        } else {
+                            res.content.clone()
+                        };
+                        eprintln!(
+                            "[TOOL RESULT] name={} success={} content={:?} (parallel read)",
+                            call.function.name, res.success, preview
+                        );
+                        file_results.push((call.clone(), res.clone()));
+                        if res.success
+                            && matches!(call.function.name.as_str(), "read_file" | "read_file_range")
+                        {
+                            self.recent_file_tool_cache.push((
+                                (
+                                    call.function.name.clone(),
+                                    normalize_json_string(&call.function.arguments),
+                                ),
+                                res.clone(),
+                            ));
+                            if self.recent_file_tool_cache.len() > 10 {
+                                self.recent_file_tool_cache.remove(0);
+                            }
                         }
+                    }
+                    Err(e) => {
+                        eprintln!("[TOOL RESULT] Thread panicked during parallel read: {:?}", e);
+                        // Thread panicked - this shouldn't happen but handle it gracefully
+                        // The tool call will be missing from results, which will cause an error downstream
                     }
                 }
             }

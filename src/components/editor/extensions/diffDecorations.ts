@@ -1,5 +1,5 @@
 import { StateField, StateEffect, RangeSetBuilder } from "@codemirror/state";
-import { EditorView, Decoration, DecorationSet, WidgetType } from "@codemirror/view";
+import { EditorView, Decoration, DecorationSet } from "@codemirror/view";
 
 // Diff line types
 export interface DiffLine {
@@ -19,25 +19,6 @@ export const clearDiff = StateEffect.define<void>();
 
 // Decorations for diff highlighting
 const addedLineDecoration = Decoration.line({ class: "cm-diff-added" });
-const removedLineDecoration = Decoration.line({ class: "cm-diff-removed" });
-
-// Widget for showing removed lines inline
-class RemovedLineWidget extends WidgetType {
-    constructor(readonly content: string) {
-        super();
-    }
-
-    toDOM() {
-        const div = document.createElement("div");
-        div.className = "cm-diff-removed-widget";
-        div.textContent = this.content;
-        return div;
-    }
-
-    eq(other: RemovedLineWidget) {
-        return this.content === other.content;
-    }
-}
 
 // Parse unified diff to extract line information
 export function parseUnifiedDiff(unifiedDiff: string): DiffLine[] {
@@ -45,18 +26,31 @@ export function parseUnifiedDiff(unifiedDiff: string): DiffLine[] {
     const diffLines = unifiedDiff.split('\n');
     
     let currentLineInNew = 0;
+    let inHunk = false;
     
     for (const line of diffLines) {
-        // Skip diff headers
-        if (line.startsWith('---') || line.startsWith('+++') || line.startsWith('@@')) {
-            // Parse hunk header to get starting line
+        // Skip diff metadata headers
+        if (line.startsWith('diff --git') || line.startsWith('index ') || 
+            line.startsWith('---') || line.startsWith('+++')) {
+            continue;
+        }
+        
+        // Parse hunk header to get starting line
+        if (line.startsWith('@@')) {
             const hunkMatch = line.match(/@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
             if (hunkMatch) {
                 currentLineInNew = parseInt(hunkMatch[1], 10);
+                inHunk = true;
             }
             continue;
         }
         
+        // Only process lines if we're inside a hunk
+        if (!inHunk) {
+            continue;
+        }
+        
+        // Handle different line types
         if (line.startsWith('+')) {
             lines.push({
                 lineNumber: currentLineInNew,
@@ -72,11 +66,28 @@ export function parseUnifiedDiff(unifiedDiff: string): DiffLine[] {
                 content: line.slice(1)
             });
         } else if (line.startsWith(' ')) {
-            // Context line
+            // Context line with space prefix
             lines.push({
                 lineNumber: currentLineInNew,
                 type: 'context',
                 content: line.slice(1)
+            });
+            currentLineInNew++;
+        } else if (line.length === 0) {
+            // Empty line - treat as context
+            lines.push({
+                lineNumber: currentLineInNew,
+                type: 'context',
+                content: ''
+            });
+            currentLineInNew++;
+        } else {
+            // Any other line in a hunk without +/- prefix is treated as context
+            // This handles cases where git diff doesn't add space prefix
+            lines.push({
+                lineNumber: currentLineInNew,
+                type: 'context',
+                content: line
             });
             currentLineInNew++;
         }
@@ -103,27 +114,6 @@ export const diffStateField = StateField.define<DiffState | null>({
         return value;
     }
 });
-
-// Decoration builder
-function buildDecorations(view: EditorView): DecorationSet {
-    const diffState = view.state.field(diffStateField);
-    if (!diffState) {
-        return Decoration.none;
-    }
-    
-    const builder = new RangeSetBuilder<Decoration>();
-    const doc = view.state.doc;
-    
-    for (const diffLine of diffState.lines) {
-        if (diffLine.type === 'added' && diffLine.lineNumber <= doc.lines) {
-            const line = doc.line(diffLine.lineNumber);
-            builder.add(line.from, line.from, addedLineDecoration);
-        }
-        // Note: removed lines would need widget decorations which is more complex
-    }
-    
-    return builder.finish();
-}
 
 // ViewPlugin to manage decorations
 const diffDecorationsPlugin = EditorView.decorations.compute(

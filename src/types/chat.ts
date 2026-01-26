@@ -15,6 +15,15 @@ export interface ChatMessage {
     commandExecutions?: CommandExecution[];
     todos?: TodoItem[];
     blocks?: MessageBlock[];
+    researchActivities?: ResearchActivity[];
+}
+
+export interface ResearchActivity {
+    id: string;
+    message: string;
+    stage: string;
+    percent: number;
+    timestamp: number;
 }
 
 export type MessageBlock =
@@ -22,7 +31,8 @@ export type MessageBlock =
     | { type: 'reasoning'; content: string; id: string }
     | { type: 'tool_call'; id: string }
     | { type: 'command_execution'; id: string }  // References commandExecutions by id
-    | { type: 'todo'; id: string };  // References todos by id (or latest snapshot)
+    | { type: 'todo'; id: string }  // References todos by id (or latest snapshot)
+    | { type: 'research_progress'; id: string };  // References research progress activities
 
 export interface ProgressInfo {
     message: string;

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // ==============================================================================
-// 0. Version (v1.3) - Added Language domain for LSP + tree-sitter
+// 0. Version (v1.3) - Added Language domain for ZLP (tree-sitter based)
 // ==============================================================================
 
 /// Semantic version for protocol compatibility checking
@@ -77,7 +77,7 @@ pub enum BladeIntent {
     Terminal(TerminalIntent),
     History(HistoryIntent),
     System(SystemIntent),
-    Language(LanguageIntent), // v1.3: LSP + tree-sitter integration
+    Language(LanguageIntent), // v1.3: ZLP (tree-sitter based language protocol)
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -195,7 +195,7 @@ pub enum SystemIntent {
     SetLogLevel { level: String },
 }
 
-// v1.3: Language domain for LSP + tree-sitter integration
+// v1.3: Language domain for ZLP (tree-sitter based language protocol)
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", content = "payload")]
 pub enum LanguageIntent {
@@ -243,7 +243,7 @@ pub enum BladeEvent {
     Terminal(TerminalEvent),
     History(HistoryEvent),
     System(SystemEvent),
-    Language(LanguageEvent), // v1.3: LSP + tree-sitter integration
+    Language(LanguageEvent), // v1.3: ZLP (tree-sitter based language protocol)
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

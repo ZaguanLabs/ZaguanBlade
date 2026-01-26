@@ -1,7 +1,7 @@
 "use client";
 import React, { useEffect, useRef, forwardRef, useImperativeHandle, useCallback } from "react";
-import { EditorState, Compartment } from "@codemirror/state";
-import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightActiveLine, drawSelection, dropCursor, rectangularSelection, crosshairCursor } from "@codemirror/view";
+import { EditorState, Compartment, Prec } from "@codemirror/state";
+import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightActiveLine, drawSelection, dropCursor, rectangularSelection, crosshairCursor, placeholder, highlightSpecialChars } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { bracketMatching, indentOnInput, foldGutter, foldKeymap } from "@codemirror/language";
 import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
@@ -25,32 +25,16 @@ import {
     diffStateField,
     setDiffState,
     parseUnifiedDiff,
+    zlpHoverTooltip,
 } from "./editor/extensions";
 import { zlpLinter } from "./editor/extensions/zlpLinter";
 import { useEditor } from "../contexts/EditorContext";
 import { useContextMenu, type ContextMenuItem } from "./ui/ContextMenu";
 import { Copy, Scissors, Clipboard, Undo2, Redo2, Search, Network } from "lucide-react";
-import { LanguageService } from "../services/language";
 import { ZLPService } from "../services/zlp";
 import { StructureNode } from "../types/zlp";
 import { GraphInspector } from "./GraphInspector";
 
-// Map file extension to LSP language ID
-function getLanguageId(filename: string): string {
-    const ext = filename.split('.').pop()?.toLowerCase() || '';
-    switch (ext) {
-        case 'ts': case 'tsx': return 'typescript';
-        case 'js': case 'jsx': return 'javascript';
-        case 'rs': return 'rust';
-        case 'py': return 'python';
-        case 'go': return 'go';
-        case 'json': return 'json';
-        case 'html': return 'html';
-        case 'css': return 'css';
-        case 'md': return 'markdown';
-        default: return 'plaintext';
-    }
-}
 
 interface CodeEditorProps {
     content: string;
@@ -87,9 +71,6 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     // Call Graph Inspector State
     const [inspectorData, setInspectorData] = React.useState<{ id: string; name: string } | null>(null);
 
-    // LSP document sync tracking
-    const documentVersion = useRef(0);
-    const didChangeTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Track whether a content change was user-initiated (to avoid update loops)
     const isUserEditRef = useRef(false);
@@ -153,6 +134,15 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 // Custom Zaguan theme (includes syntax highlighting)
                 zaguanTheme,
 
+                // UX enhancements
+                placeholder("Start typing or paste code here..."),
+                highlightSpecialChars(),
+
+                // Error handling
+                EditorView.exceptionSink.of(exception => {
+                    console.error('[CodeMirror Error]', exception);
+                }),
+
                 // Custom extensions for enhanced UX
                 // Disable heavy extensions for markdown (rainbow brackets, indent guides)
                 ...(isMarkdown ? [] : [indentGuides, rainbowBrackets]),
@@ -176,11 +166,14 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 // Language support (dynamic)
                 languageConf.current.of(getLanguageExtension(filename)),
 
-                // ZLP Linter (disabled for markdown - not applicable)
-                ...(isMarkdown ? [] : [zlpLinter(filename || '')]),
+                // ZLP Linter and Hover Tooltip (disabled for markdown - not applicable)
+                ...(isMarkdown ? [] : [
+                    zlpLinter(filename || ''),
+                    zlpHoverTooltip(filename || '')
+                ]),
 
-                // Keymaps
-                keymap.of([
+                // Keymaps (high precedence for custom bindings)
+                Prec.high(keymap.of([
                     indentWithTab,
                     {
                         key: "Mod-s",
@@ -200,28 +193,24 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                     ...historyKeymap,
                     ...foldKeymap,
                     ...completionKeymap,
-                ]),
+                ])),
                 EditorView.updateListener.of((update) => {
                     if (update.docChanged) {
-                        // Mark this as a user-initiated edit to prevent feedback loops
                         isUserEditRef.current = true;
                         onChange(update.state.doc.toString());
                     }
 
-                    // Track cursor position and selection
                     if (update.selectionSet) {
-                        const selection = update.state.selection.main;
-                        const line = update.state.doc.lineAt(selection.head);
-                        const lineNumber = line.number;
-                        const column = selection.head - line.from;
+                        const { main } = update.state.selection;
+                        const line = update.state.doc.lineAt(main.head);
+                        
+                        setCursorPosition(line.number, main.head - line.from);
 
-                        setCursorPosition(lineNumber, column);
-
-                        // Track selection if there is one
-                        if (selection.from !== selection.to) {
-                            const startLine = update.state.doc.lineAt(selection.from).number;
-                            const endLine = update.state.doc.lineAt(selection.to).number;
-                            setSelection(startLine, endLine);
+                        if (main.from !== main.to) {
+                            setSelection(
+                                update.state.doc.lineAt(main.from).number,
+                                update.state.doc.lineAt(main.to).number
+                            );
                         } else {
                             clearSelection();
                         }
@@ -263,14 +252,6 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 ]
             });
 
-            // Notify LSP that file was opened
-            if (filename) {
-                const languageId = getLanguageId(filename);
-                documentVersion.current = 1;
-                LanguageService.didOpen(filename, content, languageId).catch(e =>
-                    console.warn('[LSP] didOpen failed:', e)
-                );
-            }
         } else if (!isUserEditRef.current) {
             // Only sync external content changes (e.g., file loaded, external modification)
             // Skip if this was a user edit to prevent feedback loops
@@ -307,66 +288,28 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
         }
     }, [unifiedDiff]);
 
-    // Send didChange to LSP on document changes (debounced)
-    // Send didChange to LSP on document changes (debounced)
+
+    // Handle line highlighting when highlightLines prop changes
     useEffect(() => {
         const view = viewRef.current;
-        if (!view || !filename) return;
-
-        // Debounce didChange notifications
-        if (didChangeTimeout.current) {
-            clearTimeout(didChangeTimeout.current);
-        }
-
-        didChangeTimeout.current = setTimeout(async () => {
-            documentVersion.current += 1;
-            try {
-                await LanguageService.didChange(filename, content, documentVersion.current);
-            } catch (e) {
-                console.warn('[LSP] didChange failed:', e);
-            }
-        }, 150); // 150ms debounce
-
-        return () => {
-            if (didChangeTimeout.current) {
-                clearTimeout(didChangeTimeout.current);
-            }
-        };
-    }, [content, filename]);
-
-
-
-    // Handle line highlighting when highlightLines prop changes or content loads
-    useEffect(() => {
-        const view = viewRef.current;
-        if (!view) return;
-
-        // Only apply highlighting if we have content loaded
-        if (!content) return;
+        if (!view || !content) return;
 
         if (highlightLines) {
             try {
-                // Small delay to ensure content is fully rendered
-                setTimeout(() => {
-                    if (!viewRef.current) return;
-
-                    // Apply line highlighting and scroll to the range
-                    const startLine = viewRef.current.state.doc.line(highlightLines.startLine);
-                    viewRef.current.dispatch({
+                const { startLine, endLine } = highlightLines;
+                if (startLine <= view.state.doc.lines) {
+                    const line = view.state.doc.line(startLine);
+                    view.dispatch({
                         effects: [
-                            addLineHighlight.of({
-                                startLine: highlightLines.startLine,
-                                endLine: highlightLines.endLine
-                            }),
-                            EditorView.scrollIntoView(startLine.from, { y: "center" })
+                            addLineHighlight.of({ startLine, endLine }),
+                            EditorView.scrollIntoView(line.from, { y: "center" })
                         ]
                     });
-                }, 100);
+                }
             } catch (error) {
                 console.error('Error applying line highlight:', error);
             }
         } else {
-            // Clear highlighting
             view.dispatch({
                 effects: clearLineHighlight.of(null)
             });

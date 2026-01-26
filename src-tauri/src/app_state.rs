@@ -142,21 +142,9 @@ impl AppState {
         let language_handler =
             crate::language_service::LanguageHandler::new(language_service.clone());
 
-        // Initialize IndexerManager if workspace is set
-        let indexer_manager = if let Some(path_str) = &initial_path {
-            match crate::indexer::IndexerManager::new(std::path::Path::new(path_str)) {
-                Ok(manager) => {
-                    eprintln!("[AppState] IndexerManager initialized with {} files", manager.file_count());
-                    Some(manager)
-                }
-                Err(e) => {
-                    eprintln!("[AppState] Failed to initialize IndexerManager: {}", e);
-                    None
-                }
-            }
-        } else {
-            None
-        };
+        // IndexerManager will be initialized asynchronously after AppState is created
+        // This ensures GUI launches immediately without blocking on indexing
+        let indexer_manager = None;
 
         Self {
             chat_manager: Mutex::new(ChatManager::new(10)),

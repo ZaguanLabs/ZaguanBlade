@@ -6,60 +6,61 @@ import { tags as t } from "@lezer/highlight";
 // Zaguan Blade Theme - A premium dark theme with vibrant syntax colors
 // Designed to match the surgical dark aesthetic of the app
 
-// Color Palette
+// Tokyo Night Color Palette
+// Matches the theme.css Tokyo Night colors for consistency
 const colors = {
-    // Base colors - Editor has a slightly warmer, softer dark background
-    bg: "#0f0f12",           // Soft dark - slightly lighter and warmer than app bg
-    bgPanel: "#0c0c0e",
-    bgSurface: "#18181b",
-    bgSurfaceHover: "#27272a",
+    // Base colors - Tokyo Night deep blue-grays
+    bg: "#1f2335",           // Editor background (matches --bg-editor, slightly lighter for depth)
+    bgPanel: "#16161e",      // Panel background (matches --bg-panel)
+    bgSurface: "#1f202e",    // Surface background (matches --bg-surface)
+    bgSurfaceHover: "#292a3a", // Hover state (matches --bg-surface-hover)
     
-    // Foreground
-    fg: "#e4e4e7",
-    fgMuted: "#a1a1aa",
-    fgSubtle: "#71717a",
-    fgDim: "#52525b",
+    // Foreground - Soft blue-tinted text
+    fg: "#a9b1d6",           // Primary text (matches --fg-primary)
+    fgMuted: "#787c99",      // Secondary text (matches --fg-secondary)
+    fgSubtle: "#565f89",     // Tertiary text (matches --fg-tertiary)
+    fgDim: "#3b4261",        // Dim text
     
     // Borders
-    border: "#1f1f22",
-    borderFocus: "#3f3f46",
+    border: "#101014",       // Subtle borders (matches --border-subtle)
+    borderFocus: "#3d59a1",  // Focus border (matches --border-focus)
     
-    // Accent colors - Vibrant and modern
-    accent: "#60a5fa",        // Blue 400 - Primary accent
-    accentBright: "#93c5fd",  // Blue 300 - Bright accent
+    // Accent colors - Tokyo Night palette
+    accent: "#7aa2f7",       // Blue - Primary accent (matches --accent-primary)
+    accentBright: "#89b4fa", // Brighter blue
     
-    // Syntax colors - Carefully chosen for readability and aesthetics
-    keyword: "#c084fc",       // Purple 400 - Keywords, control flow
-    string: "#4ade80",        // Green 400 - Strings
-    number: "#fb923c",        // Orange 400 - Numbers
-    comment: "#6b7280",       // Gray 500 - Comments
-    function: "#60a5fa",      // Blue 400 - Functions
-    variable: "#e4e4e7",      // Zinc 200 - Variables
-    type: "#22d3ee",          // Cyan 400 - Types
-    constant: "#f472b6",      // Pink 400 - Constants
-    operator: "#94a3b8",      // Slate 400 - Operators
-    property: "#a5b4fc",      // Indigo 300 - Properties
-    tag: "#f87171",           // Red 400 - Tags (HTML/JSX)
-    attribute: "#fbbf24",     // Amber 400 - Attributes
-    regexp: "#fb7185",        // Rose 400 - Regex
-    macro: "#e879f9",         // Fuchsia 400 - Macros
+    // Syntax colors - Tokyo Night authentic palette
+    keyword: "#bb9af7",      // Purple - Keywords, control flow
+    string: "#9ece6a",       // Green - Strings
+    number: "#ff9e64",       // Orange - Numbers
+    comment: "#565f89",      // Muted blue-gray - Comments
+    function: "#7aa2f7",     // Blue - Functions
+    variable: "#c0caf5",     // Bright text - Variables
+    type: "#2ac3de",         // Cyan - Types
+    constant: "#ff9e64",     // Orange - Constants
+    operator: "#89ddff",     // Light cyan - Operators
+    property: "#73daca",     // Teal - Properties
+    tag: "#f7768e",          // Red/pink - Tags (HTML/JSX)
+    attribute: "#e0af68",    // Yellow - Attributes
+    regexp: "#bb9af7",       // Purple - Regex
+    macro: "#bb9af7",        // Purple - Macros
     
-    // UI colors
-    selection: "rgba(96, 165, 250, 0.2)",
-    selectionMatch: "rgba(96, 165, 250, 0.15)",
-    activeLine: "rgba(255, 255, 255, 0.03)",
-    activeLineGutter: "rgba(255, 255, 255, 0.05)",
-    cursor: "#60a5fa",
-    matchingBracket: "rgba(96, 165, 250, 0.3)",
+    // UI colors - Tokyo Night selection/highlight
+    selection: "#515c7e4d",  // Selection (matches --bg-selection)
+    selectionMatch: "#515c7e33",
+    activeLine: "#292e42",   // Active line background
+    activeLineGutter: "#1f2335",
+    cursor: "#c0caf5",       // Bright cursor
+    matchingBracket: "#515c7e80",
     
     // Gutter
     gutterBg: "transparent",
-    gutterFg: "#52525b",
-    gutterActiveFg: "#a1a1aa",
+    gutterFg: "#3b4261",
+    gutterActiveFg: "#787c99",
     
     // Line numbers
-    lineNumber: "#52525b",
-    lineNumberActive: "#e4e4e7",
+    lineNumber: "#3b4261",
+    lineNumberActive: "#a9b1d6",
 };
 
 // Editor theme (UI styling)
@@ -285,6 +286,46 @@ export const zaguanEditorTheme = EditorView.theme({
     ".cm-scroller": {
         overflow: "auto",
         fontFamily: '"Fira Code", "Symbols Nerd Font Mono", monospace',
+    },
+    
+    // ZLP Hover Tooltip
+    ".cm-zlp-tooltip": {
+        padding: "8px 12px",
+        maxWidth: "400px",
+        fontSize: "13px",
+        lineHeight: "1.5",
+    },
+    
+    ".cm-zlp-kind": {
+        display: "inline-block",
+        padding: "2px 6px",
+        backgroundColor: colors.accent,
+        color: colors.bg,
+        borderRadius: "3px",
+        fontSize: "11px",
+        fontWeight: "600",
+        textTransform: "uppercase",
+        marginBottom: "6px",
+    },
+    
+    ".cm-zlp-name": {
+        fontWeight: "600",
+        fontSize: "14px",
+        marginBottom: "4px",
+        color: colors.fg,
+    },
+    
+    ".cm-zlp-signature": {
+        fontFamily: '"Fira Code", monospace',
+        fontSize: "12px",
+        color: colors.fgMuted,
+        marginBottom: "4px",
+    },
+    
+    ".cm-zlp-location": {
+        fontSize: "11px",
+        color: colors.fgSubtle,
+        marginTop: "6px",
     },
 }, { dark: true });
 

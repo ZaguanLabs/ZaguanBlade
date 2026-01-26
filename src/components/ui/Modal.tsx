@@ -62,25 +62,25 @@ export const InputModal: React.FC<InputModalProps> = ({
     if (!isOpen) return null;
 
     const confirmButtonClasses = confirmVariant === 'danger'
-        ? 'bg-red-600 hover:bg-red-500 text-white'
-        : 'bg-emerald-600 hover:bg-emerald-500 text-white';
+        ? 'bg-[var(--accent-error)] hover:bg-[#ff869e] text-white'
+        : 'bg-[var(--accent-primary)] hover:bg-[#89b4fa] text-white';
 
     return (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center animate-in fade-in duration-[var(--transition-fast)]">
             {/* Backdrop */}
             <div
-                className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+                className="absolute inset-0 bg-black/70 backdrop-blur-md animate-in fade-in duration-[var(--transition-base)]"
                 onClick={onCancel}
             />
 
             {/* Modal */}
-            <div className="relative bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded-lg shadow-2xl w-full max-w-md mx-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="relative bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded-lg shadow-[var(--shadow-xl)] w-full max-w-md mx-4 animate-in fade-in zoom-in-95 duration-[var(--transition-base)]">
                 {/* Header */}
                 <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-subtle)]">
                     <h2 className="text-sm font-semibold text-[var(--fg-primary)]">{title}</h2>
                     <button
                         onClick={onCancel}
-                        className="p-1 text-[var(--fg-tertiary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] rounded transition-colors"
+                        className="p-1 text-[var(--fg-tertiary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] rounded transition-all duration-[var(--transition-fast)]"
                     >
                         <X className="w-4 h-4" />
                     </button>
@@ -94,7 +94,7 @@ export const InputModal: React.FC<InputModalProps> = ({
                         value={value}
                         onChange={(e) => setValue(e.target.value)}
                         placeholder={placeholder}
-                        className="w-full px-3 py-2 bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded-md text-sm text-[var(--fg-primary)] placeholder-[var(--fg-tertiary)] focus:outline-none focus:border-[var(--border-focus)] focus:ring-1 focus:ring-[var(--border-focus)] transition-colors"
+                        className="w-full px-3 py-2 bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded-md text-sm text-[var(--fg-primary)] placeholder-[var(--fg-tertiary)] focus:outline-none focus:border-[var(--accent-primary)] focus:ring-1 focus:ring-[var(--accent-primary)] transition-all duration-[var(--transition-fast)]"
                     />
                 </div>
 
@@ -102,14 +102,14 @@ export const InputModal: React.FC<InputModalProps> = ({
                 <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-[var(--border-subtle)]">
                     <button
                         onClick={onCancel}
-                        className="px-3 py-1.5 text-xs font-medium text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] rounded transition-colors"
+                        className="px-3 py-1.5 text-xs font-medium text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] rounded transition-all duration-[var(--transition-fast)]"
                     >
                         Cancel
                     </button>
                     <button
                         onClick={() => value.trim() && onConfirm(value.trim())}
                         disabled={!value.trim()}
-                        className={`px-3 py-1.5 text-xs font-medium rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${confirmButtonClasses}`}
+                        className={`px-3 py-1.5 text-xs font-medium rounded transition-all duration-[var(--transition-fast)] disabled:opacity-50 disabled:cursor-not-allowed ${confirmButtonClasses}`}
                     >
                         {confirmLabel}
                     </button>
@@ -165,25 +165,25 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
     if (!isOpen) return null;
 
     const confirmButtonClasses = confirmVariant === 'danger'
-        ? 'bg-red-600 hover:bg-red-500 text-white'
-        : 'bg-emerald-600 hover:bg-emerald-500 text-white';
+        ? 'bg-[var(--accent-error)] hover:bg-[#ff869e] text-white'
+        : 'bg-[var(--accent-primary)] hover:bg-[#89b4fa] text-white';
 
     return (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center animate-in fade-in duration-[var(--transition-fast)]">
             {/* Backdrop */}
             <div
-                className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+                className="absolute inset-0 bg-black/70 backdrop-blur-md animate-in fade-in duration-[var(--transition-base)]"
                 onClick={onCancel}
             />
 
             {/* Modal */}
-            <div className="relative bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded-lg shadow-2xl w-full max-w-md mx-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="relative bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded-lg shadow-[var(--shadow-xl)] w-full max-w-md mx-4 animate-in fade-in zoom-in-95 duration-[var(--transition-base)]">
                 {/* Header */}
                 <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-subtle)]">
                     <h2 className="text-sm font-semibold text-[var(--fg-primary)]">{title}</h2>
                     <button
                         onClick={onCancel}
-                        className="p-1 text-[var(--fg-tertiary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] rounded transition-colors"
+                        className="p-1 text-[var(--fg-tertiary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] rounded transition-all duration-[var(--transition-fast)]"
                     >
                         <X className="w-4 h-4" />
                     </button>
@@ -200,13 +200,13 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
                 <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-[var(--border-subtle)]">
                     <button
                         onClick={onCancel}
-                        className="px-3 py-1.5 text-xs font-medium text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] rounded transition-colors"
+                        className="px-3 py-1.5 text-xs font-medium text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] rounded transition-all duration-[var(--transition-fast)]"
                     >
                         Cancel
                     </button>
                     <button
                         onClick={onConfirm}
-                        className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${confirmButtonClasses}`}
+                        className={`px-3 py-1.5 text-xs font-medium rounded transition-all duration-[var(--transition-fast)] ${confirmButtonClasses}`}
                     >
                         {confirmLabel}
                     </button>

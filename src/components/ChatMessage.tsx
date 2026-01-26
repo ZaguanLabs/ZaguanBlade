@@ -394,6 +394,19 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                         <TodoList todos={message.todos} />
                                     </div>
                                 );
+                            } else if (block.type === 'research_progress') {
+                                // Render research progress activity
+                                const activity = message.researchActivities?.find(a => a.id === block.id);
+                                if (!activity) return null;
+                                return (
+                                    <div key={block.id} className="mb-3">
+                                        <ProgressIndicator progress={{
+                                            message: activity.message,
+                                            stage: activity.stage,
+                                            percent: activity.percent
+                                        }} />
+                                    </div>
+                                );
                             }
                             return null;
                         })}
@@ -535,4 +548,45 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     );
 };
 
-export const ChatMessage = React.memo(ChatMessageComponent);
+// Custom comparison for ChatMessage - only re-render when meaningful props change
+export const ChatMessage = React.memo(ChatMessageComponent, (prevProps, nextProps) => {
+    // Quick bail-out checks for primitive props
+    if (prevProps.isContinued !== nextProps.isContinued) return false;
+    if (prevProps.isActive !== nextProps.isActive) return false;
+    
+    // Message content comparison - the most important check
+    const prevMsg = prevProps.message;
+    const nextMsg = nextProps.message;
+    if (prevMsg.id !== nextMsg.id) return false;
+    if (prevMsg.content !== nextMsg.content) return false;
+    if (prevMsg.reasoning !== nextMsg.reasoning) return false;
+    if (prevMsg.tool_calls?.length !== nextMsg.tool_calls?.length) return false;
+    
+    // Check tool call statuses (important for showing execution state)
+    if (prevMsg.tool_calls && nextMsg.tool_calls) {
+        for (let i = 0; i < prevMsg.tool_calls.length; i++) {
+            if (prevMsg.tool_calls[i].status !== nextMsg.tool_calls[i].status) return false;
+        }
+    }
+    
+    // Pending actions - check both reference AND presence change
+    const prevHasPending = prevProps.pendingActions && prevProps.pendingActions.length > 0;
+    const nextHasPending = nextProps.pendingActions && nextProps.pendingActions.length > 0;
+    if (prevHasPending !== nextHasPending) return false;
+    if (prevProps.pendingActions !== nextProps.pendingActions) return false;
+    
+    // Callbacks - check presence change (undefined vs function)
+    const prevHasApprove = !!prevProps.onApproveCommand;
+    const nextHasApprove = !!nextProps.onApproveCommand;
+    const prevHasSkip = !!prevProps.onSkipCommand;
+    const nextHasSkip = !!nextProps.onSkipCommand;
+    if (prevHasApprove !== nextHasApprove) return false;
+    if (prevHasSkip !== nextHasSkip) return false;
+    
+    // Active terminals - check size and keys
+    const prevTerminals = prevProps.activeTerminals;
+    const nextTerminals = nextProps.activeTerminals;
+    if (prevTerminals?.size !== nextTerminals?.size) return false;
+    
+    return true;
+});

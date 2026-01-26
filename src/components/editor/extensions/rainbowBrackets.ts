@@ -49,61 +49,47 @@ const rainbowBracketsPlugin = ViewPlugin.fromClass(
             const doc = view.state.doc;
             const tree = syntaxTree(view.state);
             
-            // Track bracket depth
-            const stack: { char: string; pos: number; depth: number }[] = [];
-            const brackets: { from: number; to: number; depth: number }[] = [];
-
-            // Iterate through visible ranges
+            // Process each visible range independently with local depth tracking
             for (const { from, to } of view.visibleRanges) {
-                // We need to start from the beginning to get correct depth
-                // But only decorate visible range
-                const text = doc.sliceString(0, to);
+                const lineStart = doc.lineAt(from).from;
+                const lineEnd = doc.lineAt(to).to;
+                
+                // Get text for this range only
+                const text = doc.sliceString(lineStart, lineEnd);
+                const brackets: { from: number; to: number; depth: number }[] = [];
                 let depth = 0;
                 
+                // Simple bracket matching without full document scan
                 for (let i = 0; i < text.length; i++) {
                     const char = text[i];
+                    const pos = lineStart + i;
                     
-                    // Check if we're inside a string or comment using syntax tree
-                    const nodeAt = tree.resolveInner(i, 1);
-                    const nodeType = nodeAt.type.name.toLowerCase();
-                    
-                    // Skip if inside string or comment
-                    if (
-                        nodeType.includes("string") ||
-                        nodeType.includes("comment") ||
-                        nodeType.includes("template")
-                    ) {
-                        continue;
-                    }
-
-                    if (openBrackets.has(char)) {
-                        stack.push({ char, pos: i, depth });
-                        if (i >= from) {
-                            brackets.push({ from: i, to: i + 1, depth });
-                        }
-                        depth++;
-                    } else if (closeBrackets.has(char)) {
-                        depth = Math.max(0, depth - 1);
+                    // Quick syntax check - only resolve if it's a bracket
+                    if (openBrackets.has(char) || closeBrackets.has(char)) {
+                        const nodeAt = tree.resolveInner(pos, 1);
+                        const nodeType = nodeAt.type.name;
                         
-                        // Find matching open bracket
-                        for (let j = stack.length - 1; j >= 0; j--) {
-                            if (bracketPairs[stack[j].char] === char) {
-                                if (i >= from) {
-                                    brackets.push({ from: i, to: i + 1, depth: stack[j].depth });
-                                }
-                                stack.splice(j, 1);
-                                break;
-                            }
+                        // Skip if inside string or comment (case-insensitive check)
+                        const lowerType = nodeType.toLowerCase();
+                        if (lowerType.includes("string") || lowerType.includes("comment")) {
+                            continue;
+                        }
+
+                        if (openBrackets.has(char)) {
+                            brackets.push({ from: pos, to: pos + 1, depth });
+                            depth++;
+                        } else if (closeBrackets.has(char)) {
+                            depth = Math.max(0, depth - 1);
+                            brackets.push({ from: pos, to: pos + 1, depth });
                         }
                     }
                 }
-            }
-
-            // Sort by position and add decorations
-            brackets.sort((a, b) => a.from - b.from);
-            for (const bracket of brackets) {
-                const colorIndex = bracket.depth % bracketColors.length;
-                builder.add(bracket.from, bracket.to, bracketDecorations[colorIndex]);
+                
+                // Add decorations for this range
+                for (const bracket of brackets) {
+                    const colorIndex = bracket.depth % bracketColors.length;
+                    builder.add(bracket.from, bracket.to, bracketDecorations[colorIndex]);
+                }
             }
 
             return builder.finish();

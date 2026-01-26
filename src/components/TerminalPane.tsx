@@ -139,7 +139,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
     return (
         <div className="h-full flex flex-row bg-[#1e1e1e]">
             {/* Terminal Area */}
-            <div className="flex-1 relative overflow-hidden">
+            <div className="flex-1 relative overflow-hidden pl-6">
                 {terminals.map((term) => (
                     <div
                         key={term.id}
@@ -155,10 +155,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
             </div>
 
             {/* Tabs Sidebar (Right side like VSCode default or requested image) */}
-            <div className="w-48 bg-[#252526] border-l border-[#3c3c3c] flex flex-col">
-                <div className="p-2 text-xs font-semibold text-zinc-400 uppercase tracking-wider flex items-center justify-between">
+            <div className="w-48 bg-[var(--bg-app)] border-l border-[var(--border-default)] shadow-[var(--shadow-md)] flex flex-col">
+                <div className="p-2 text-xs font-semibold text-[var(--fg-tertiary)] uppercase tracking-wider flex items-center justify-between">
                     <span>Terminals</span>
-                    <button onClick={addTerminal} className="hover:text-white transition-colors">
+                    <button onClick={addTerminal} className="hover:text-[var(--fg-primary)] transition-colors">
                         <Plus className="w-4 h-4" />
                     </button>
                 </div>

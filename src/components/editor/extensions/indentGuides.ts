@@ -30,47 +30,53 @@ const indentGuidePlugin = ViewPlugin.fromClass(
                     const line = view.state.doc.lineAt(pos);
                     const text = line.text;
                     
-                    // Count leading whitespace
-                    let indent = 0;
-                    let charPos = 0;
+                    // Quick check: skip empty lines
+                    if (text.length === 0) {
+                        pos = line.to + 1;
+                        continue;
+                    }
                     
-                    while (charPos < text.length) {
-                        const char = text[charPos];
+                    // Count leading whitespace using regex for speed
+                    const match = text.match(/^[\t ]*/);
+                    if (!match || match[0].length === 0) {
+                        pos = line.to + 1;
+                        continue;
+                    }
+                    
+                    const whitespace = match[0];
+                    let indent = 0;
+                    
+                    // Calculate total indent
+                    for (const char of whitespace) {
                         if (char === " ") {
                             indent++;
-                            charPos++;
                         } else if (char === "\t") {
                             indent += tabSize - (indent % tabSize);
-                            charPos++;
-                        } else {
-                            break;
                         }
                     }
 
                     // Add guide marks at each indent level
-                    if (indent >= tabSize && charPos > 0) {
-                        let guideIndent = tabSize;
-                        let guideCharPos = 0;
-                        let currentIndent = 0;
-                        
-                        while (guideCharPos < charPos && currentIndent < indent) {
-                            const char = text[guideCharPos];
-                            if (char === " ") {
-                                currentIndent++;
-                            } else if (char === "\t") {
-                                currentIndent += tabSize - (currentIndent % tabSize);
+                    if (indent >= tabSize) {
+                        for (let level = tabSize; level < indent; level += tabSize) {
+                            // Find character position for this indent level
+                            let charIndent = 0;
+                            for (let i = 0; i < whitespace.length; i++) {
+                                const char = whitespace[i];
+                                if (char === " ") {
+                                    charIndent++;
+                                } else if (char === "\t") {
+                                    charIndent += tabSize - (charIndent % tabSize);
+                                }
+                                
+                                if (charIndent === level) {
+                                    builder.add(
+                                        line.from + i,
+                                        line.from + i + 1,
+                                        indentGuide
+                                    );
+                                    break;
+                                }
                             }
-                            
-                            if (currentIndent === guideIndent && guideIndent < indent) {
-                                // Add a decoration at this position
-                                builder.add(
-                                    line.from + guideCharPos,
-                                    line.from + guideCharPos + 1,
-                                    indentGuide
-                                );
-                                guideIndent += tabSize;
-                            }
-                            guideCharPos++;
                         }
                     }
 
