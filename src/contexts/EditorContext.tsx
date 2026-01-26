@@ -1,5 +1,5 @@
-
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import { EditorFacade, initEditorFacade } from '../services/editorFacade';
 
 interface EditorState {
     activeFile: string | null;
@@ -28,6 +28,15 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         selectionEndLine: null,
     });
 
+    // Debounce refs for cursor/selection sync
+    const cursorDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const selectionDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // Initialize EditorFacade on mount
+    useEffect(() => {
+        initEditorFacade().catch(console.error);
+    }, []);
+
     const setActiveFile = useCallback((file: string | null) => {
         setEditorState(prev => ({ ...prev, activeFile: file }));
     }, []);
@@ -38,6 +47,14 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             cursorLine: line,
             cursorColumn: column
         }));
+
+        // Debounced sync to backend (100ms) - always syncs for AI context
+        if (cursorDebounceRef.current) {
+            clearTimeout(cursorDebounceRef.current);
+        }
+        cursorDebounceRef.current = setTimeout(() => {
+            EditorFacade.updateCursor(line, column);
+        }, 100);
     }, []);
 
     const setSelection = useCallback((startLine: number, endLine: number) => {
@@ -46,6 +63,14 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             selectionStartLine: startLine,
             selectionEndLine: endLine
         }));
+
+        // Debounced sync to backend (100ms) - always syncs for AI context
+        if (selectionDebounceRef.current) {
+            clearTimeout(selectionDebounceRef.current);
+        }
+        selectionDebounceRef.current = setTimeout(() => {
+            EditorFacade.updateSelection(startLine, endLine);
+        }, 100);
     }, []);
 
     const clearSelection = useCallback(() => {
