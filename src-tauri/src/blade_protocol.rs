@@ -89,8 +89,8 @@ pub enum ChatIntent {
         #[serde(default)]
         context: Option<EditorContext>,
     },
-    StopGeneration,
-    ClearHistory,
+    StopGeneration {},
+    ClearHistory {},
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -238,7 +238,7 @@ pub enum LanguageIntent {
     IndexFile {
         file_path: String,
     },
-    IndexWorkspace,
+    IndexWorkspace {},
     SearchSymbols {
         query: String,
         #[serde(default)]

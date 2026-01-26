@@ -42,8 +42,8 @@ export type BladeIntent =
 
 export type ChatIntent =
     | { type: "SendMessage"; payload: { content: string; model: string; context?: EditorContext } }
-    | { type: "StopGeneration"; payload?: Record<string, never> }
-    | { type: "ClearHistory"; payload?: Record<string, never> };
+    | { type: "StopGeneration"; payload: Record<string, never> }
+    | { type: "ClearHistory"; payload: Record<string, never> };
 
 export type EditorContext = {
     active_file: string | null;
@@ -252,7 +252,7 @@ export interface ChatMessage {
 
 export type LanguageIntent =
     | { type: "IndexFile"; payload: { file_path: string } }
-    | { type: "IndexWorkspace"; payload?: Record<string, never> }
+    | { type: "IndexWorkspace"; payload: Record<string, never> }
     | { type: "SearchSymbols"; payload: { query: string; file_path?: string | null; symbol_types?: string[] | null } }
     | { type: "GetSymbolAt"; payload: { file_path: string; line: number; character: number } }
     | { type: "DidOpen"; payload: { file_path: string; content: string; language_id: string } }

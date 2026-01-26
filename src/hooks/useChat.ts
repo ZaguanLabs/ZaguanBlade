@@ -636,7 +636,7 @@ export function useChat() {
     }, []);
     const stopGeneration = useCallback(async () => {
         try {
-            await BladeDispatcher.chat({ type: 'StopGeneration' });
+            await BladeDispatcher.chat({ type: 'StopGeneration', payload: {} });
             setLoading(false);
             // Clear any pending command approvals when stopping
             setPendingActions(null);

@@ -146,11 +146,11 @@ pub async fn dispatch(
                         message: e,
                     })
                 }
-                blade_protocol::ChatIntent::StopGeneration => {
+                blade_protocol::ChatIntent::StopGeneration {} => {
                     chat::stop_generation(state.clone(), app_handle.clone());
                     Ok(())
                 }
-                blade_protocol::ChatIntent::ClearHistory => {
+                blade_protocol::ChatIntent::ClearHistory {} => {
                     let mut conversation = state.conversation.lock().unwrap();
                     conversation.clear();
                     let _ = window.emit(
