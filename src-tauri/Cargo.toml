@@ -45,15 +45,14 @@ glob = "0.3"
 rusqlite = { version = "0.32", features = ["bundled"] }
 notify = "6.1.1"
 ignore = "0.4"
+diffy = "0.4"
 
-# Tree-sitter for AST parsing (Rust-first architecture)
+# Tree-sitter for AST parsing (ZLP - Zaguán Language Protocol)
 tree-sitter = "0.24"
 tree-sitter-rust = "0.23"
 tree-sitter-typescript = "0.23"
 tree-sitter-javascript = "0.23"
 tree-sitter-python = "0.23"
-
-# LSP types for language server integration
 
 base64 = "0.22.1"
 

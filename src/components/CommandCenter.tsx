@@ -1,11 +1,22 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Send, Square, BookOpen } from 'lucide-react';
+import { Send, Square, BookOpen, Globe } from 'lucide-react';
 import { CompactModelSelector } from './CompactModelSelector';
 import type { ModelInfo } from '../types/chat';
 
 const COMMANDS = [
-    { name: 'research', description: 'Deep research', icon: BookOpen },
+    { 
+        name: 'web', 
+        description: 'Send link to model',
+        tooltip: 'Fetches content from a URL and uses it as information to help the model make better decisions',
+        icon: Globe 
+    },
+    { 
+        name: 'research', 
+        description: 'Research any topic',
+        tooltip: 'Performs deep research on a topic and displays results in a new tab once complete',
+        icon: BookOpen 
+    },
 ];
 
 interface CommandCenterProps {
@@ -17,46 +28,6 @@ interface CommandCenterProps {
     selectedModelId: string;
     setSelectedModelId: (modelId: string) => void;
 }
-
-// Optimized rendering component for the formatted text overlay
-const FormattedOverlay: React.FC<{ text: string }> = React.memo(({ text }) => {
-    if (!text.includes('@')) return null;
-
-    const parts: React.ReactNode[] = [];
-    const regex = /@(\w+)/g;
-    let lastIndex = 0;
-    let match;
-
-    while ((match = regex.exec(text)) !== null) {
-        if (match.index > lastIndex) {
-            parts.push(
-                <span key={`text-${lastIndex}`} className="font-sans">
-                    {text.slice(lastIndex, match.index)}
-                </span>
-            );
-        }
-        parts.push(
-            <span
-                key={`cmd-${match.index}`}
-                className="text-[var(--accent-primary)] font-semibold"
-            >
-                {match[0]}
-            </span>
-        );
-        lastIndex = regex.lastIndex;
-    }
-
-    if (lastIndex < text.length) {
-        parts.push(
-            <span key={`text-${lastIndex}`} className="font-sans">
-                {text.slice(lastIndex)}
-            </span>
-        );
-    }
-
-    return <>{parts}</>;
-});
-FormattedOverlay.displayName = 'FormattedOverlay';
 
 const CommandCenterComponent: React.FC<CommandCenterProps> = ({
     onSend,
@@ -73,35 +44,13 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
     const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
     const [commandFilter, setCommandFilter] = useState('');
     const textareaRef = useRef<HTMLTextAreaElement>(null);
-    const popupRef = useRef<HTMLDivElement>(null);
 
-    // Unified height adjustment to minimize reflows
-    const adjustHeight = useCallback(() => {
-        const textarea = textareaRef.current;
-        if (!textarea) return;
-
-        // Use a temporary scroll preserve
-        const scrollPos = window.scrollY;
-        textarea.style.height = 'auto';
-        const scrollHeight = textarea.scrollHeight;
-        textarea.style.height = `${Math.min(Math.max(42, scrollHeight), 400)}px`;
-
-        // Restore window scroll if it shifted
-        if (scrollPos !== window.scrollY) {
-            window.scrollTo(0, scrollPos);
-        }
-    }, []);
-
+    // Reset textarea height when text is cleared (after sending)
     useEffect(() => {
-        adjustHeight();
-    }, [text, adjustHeight]);
-
-    // Handle scroll syncing between textarea and overlay
-    const handleScroll = useCallback((e: React.UIEvent<HTMLTextAreaElement>) => {
-        if (popupRef.current) {
-            popupRef.current.scrollTop = e.currentTarget.scrollTop;
+        if (textareaRef.current && text === '') {
+            textareaRef.current.style.height = '42px';
         }
-    }, []);
+    }, [text]);
 
     const hasCommand = text.includes('@');
 
@@ -115,7 +64,14 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
     // Detect @ and show command popup
     const handleTextChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
         const newText = e.target.value;
+        const textarea = e.target;
+        
+        // Update text immediately for responsive typing
         setText(newText);
+
+        // Adjust height immediately for responsive UI (especially for new lines)
+        textarea.style.height = '42px';
+        textarea.style.height = `${Math.min(textarea.scrollHeight, 400)}px`;
 
         // Find if we're typing a command (@ at start or after space)
         const cursorPos = e.target.selectionStart;
@@ -202,8 +158,8 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
 
     return (
         <div className="shrink-0 border-t border-[var(--border-subtle)] bg-[var(--bg-app)]">
-            <div className="p-3 pb-5">
-                <div className="bg-[var(--bg-surface)] rounded-md border border-[var(--border-subtle)]">
+            <div className="px-2 pt-3 pb-2">
+                <div className="bg-[var(--bg-editor)] rounded-md border border-[var(--border-default)] shadow-[var(--shadow-lg)]">
                     {/* Model Selector */}
                     <div className="border-b border-[var(--border-subtle)]/50 px-1 py-0.5">
                         <CompactModelSelector
@@ -216,16 +172,6 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
 
                     {/* Chat Input */}
                     <div className={`relative transition-colors ${loading ? 'bg-[var(--bg-surface)]' : ''}`}>
-                        {/* Formatted text overlay - only rendered when commands are present */}
-                        {hasCommand && (
-                            <div
-                                ref={popupRef}
-                                className="absolute inset-0 p-3 pr-10 pointer-events-none whitespace-pre-wrap break-words text-xs font-sans leading-relaxed overflow-hidden"
-                                style={{ color: 'var(--fg-secondary)' }}
-                            >
-                                <FormattedOverlay text={text} />
-                            </div>
-                        )}
                         {/* Command Autocomplete Popup */}
                         {showCommands && (
                             <div
@@ -237,6 +183,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                         <button
                                             key={cmd.name}
                                             onClick={() => insertCommand(cmd.name)}
+                                            title={cmd.tooltip}
                                             className={`w-full flex items-center gap-3 px-3 py-2 text-left transition-colors ${idx === selectedCommandIndex
                                                 ? 'bg-[var(--accent-primary)]/15 text-[var(--fg-primary)]'
                                                 : 'text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)]'
@@ -245,7 +192,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                             <Icon className="w-4 h-4 text-[var(--accent-primary)]" />
                                             <div className="flex-1">
                                                 <span className="text-xs font-semibold">@{cmd.name}</span>
-                                                <span className="text-xs text-[var(--fg-tertiary)] ml-2">{cmd.description}</span>
+                                                <span className="text-xs text-[var(--fg-tertiary)] ml-2">- {cmd.description}</span>
                                             </div>
                                         </button>
                                     );
@@ -257,10 +204,8 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                             value={text}
                             onChange={handleTextChange}
                             onKeyDown={handleKeyDown}
-                            onScroll={handleScroll}
                             placeholder={t('chat.inputPlaceholder')}
-                            className={`w-full bg-transparent p-3 pr-10 outline-none resize-none min-h-[42px] max-h-[400px] overflow-y-auto text-xs font-sans placeholder-[var(--fg-tertiary)] leading-relaxed relative z-10 ${hasCommand ? 'text-transparent caret-[var(--fg-secondary)]' : 'text-[var(--fg-secondary)]'
-                                }`}
+                            className="w-full bg-transparent p-3 pr-10 outline-none resize-none min-h-[42px] max-h-[400px] overflow-y-auto text-xs font-sans placeholder-[var(--fg-tertiary)] leading-relaxed relative z-10 text-[var(--fg-secondary)]"
                             rows={1}
                             disabled={disabled}
                         />
@@ -293,4 +238,23 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
     );
 };
 
-export const CommandCenter = React.memo(CommandCenterComponent);
+// Custom comparison - only re-render when props that affect CommandCenter actually change
+export const CommandCenter = React.memo(CommandCenterComponent, (prevProps, nextProps) => {
+    // Check primitive props
+    if (prevProps.disabled !== nextProps.disabled) return false;
+    if (prevProps.loading !== nextProps.loading) return false;
+    if (prevProps.selectedModelId !== nextProps.selectedModelId) return false;
+    
+    // Check callback references (should be stable with useCallback in parent)
+    if (prevProps.onSend !== nextProps.onSend) return false;
+    if (prevProps.onStop !== nextProps.onStop) return false;
+    if (prevProps.setSelectedModelId !== nextProps.setSelectedModelId) return false;
+    
+    // Check models array - compare by length and IDs
+    if (prevProps.models.length !== nextProps.models.length) return false;
+    for (let i = 0; i < prevProps.models.length; i++) {
+        if (prevProps.models[i].id !== nextProps.models[i].id) return false;
+    }
+    
+    return true;
+});

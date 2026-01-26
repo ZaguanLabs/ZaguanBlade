@@ -1,7 +1,7 @@
 //! Unified Language Service
 //!
-//! Combines tree-sitter parsing, symbol indexing, and LSP features
-//! into a single coherent API.
+//! Combines tree-sitter parsing and symbol indexing
+//! into a single coherent API for ZLP.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

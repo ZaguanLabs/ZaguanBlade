@@ -53,6 +53,25 @@ body {
     background: transparent;
 }
 
+/* Minimal tabs scrollbar - almost invisible */
+.tabs-scrollbar::-webkit-scrollbar {
+    height: 2px;
+}
+
+.tabs-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.tabs-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(120, 124, 153, 0.2);
+    border-radius: 0;
+    border: none;
+}
+
+.tabs-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(120, 124, 153, 0.3);
+}
+
 /* Enable text selection in chat messages and code blocks */
 .select-text,
 .select-text * {

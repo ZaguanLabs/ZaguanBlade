@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback, useState } from 'react';
+import React, { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useTranslation } from 'react-i18next';
@@ -15,6 +15,8 @@ import { CommandCenter } from './CommandCenter';
 import { HistoryTab } from './HistoryTab';
 import { ChatTerminal } from './ChatTerminal';
 import { ProgressIndicator } from './ProgressIndicator';
+import { GlobalChangeActions } from './editor/GlobalChangeActions';
+import type { UncommittedChange } from '../types/uncommitted';
 
 interface ResearchProgress {
     message: string;
@@ -39,9 +41,12 @@ interface ChatPanelProps {
     researchProgress?: ResearchProgress | null;
     onNewConversation: () => void;
     onUndoTool: (toolCallId: string) => void;
+    uncommittedChanges: UncommittedChange[];
+    onAcceptAllChanges: () => void;
+    onRejectAllChanges: () => void;
 }
 
-export const ChatPanel: React.FC<ChatPanelProps> = ({
+const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     messages,
     loading,
     error,
@@ -57,12 +62,16 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     researchProgress,
     onNewConversation,
     onUndoTool,
+    uncommittedChanges,
+    onAcceptAllChanges,
+    onRejectAllChanges,
 }) => {
     const { t } = useTranslation();
     const { executions, handleCommandComplete } = useCommandExecution();
     const { loadConversation } = useHistory();
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const isUserAtBottomRef = useRef(true);
+    const prevMessageCountRef = useRef(0);
     const [activeTab, setActiveTab] = useState<'chat' | 'history'>('chat');
     const [hasApiKey, setHasApiKey] = useState<boolean>(true);
 
@@ -84,28 +93,117 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         };
     }, [checkApiKey]);
 
-    // Auto-scroll logic
+    // Auto-scroll logic - optimized to prevent excessive re-renders
+    // Use a ref to track the last scroll time to throttle scroll operations
+    const lastScrollTimeRef = useRef(0);
+    const scrollRafRef = useRef<number | null>(null);
+    
     useEffect(() => {
-        // If we just sent a message (loading became true and it's a new user message), force scroll
-        // Or if we are already at bottom, keep scrolling.
+        const currentCount = messages.length;
+        
+        // Only scroll if message count actually changed
+        if (currentCount === prevMessageCountRef.current) {
+            return;
+        }
+        
+        prevMessageCountRef.current = currentCount;
 
         // Check if the last message is User, implies we just sent it -> Force Scroll
-        const lastMsg = messages[messages.length - 1];
+        const lastMsg = messages[currentCount - 1];
         const justSent = lastMsg?.role === 'User';
 
         if (justSent || isUserAtBottomRef.current) {
-            // When loading (streaming), avoid smooth scroll as it can lag behind rapid updates
-            messagesEndRef.current?.scrollIntoView({
-                behavior: loading ? 'auto' : 'smooth'
+            // Cancel any pending scroll
+            if (scrollRafRef.current) {
+                cancelAnimationFrame(scrollRafRef.current);
+            }
+            
+            // Throttle scrolls to max once per 100ms during streaming
+            const now = Date.now();
+            const timeSinceLastScroll = now - lastScrollTimeRef.current;
+            const delay = loading && timeSinceLastScroll < 100 ? 100 - timeSinceLastScroll : 0;
+            
+            scrollRafRef.current = requestAnimationFrame(() => {
+                setTimeout(() => {
+                    lastScrollTimeRef.current = Date.now();
+                    // Use simple scrollTop instead of scrollIntoView for better performance
+                    const container = messagesEndRef.current?.parentElement?.parentElement;
+                    if (container) {
+                        container.scrollTop = container.scrollHeight;
+                    }
+                }, delay);
             });
         }
-    }, [messages, loading]);
+        
+        return () => {
+            if (scrollRafRef.current) {
+                cancelAnimationFrame(scrollRafRef.current);
+            }
+        };
+    }, [messages.length, loading]);
 
     // Prevent default context menu on empty areas
     const handleContextMenu = useCallback((e: React.MouseEvent) => {
         // Always prevent default to avoid native Tauri menu
         e.preventDefault();
     }, []);
+
+    // Track visible range for virtualization
+    const [visibleRange, setVisibleRange] = useState({ start: 0, end: 50 });
+    const scrollContainerRef = useRef<HTMLDivElement>(null);
+    
+    // Scroll handler - memoized to prevent recreation on every render
+    const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+        const target = e.target as HTMLDivElement;
+        // Use a larger threshold (100px) to be more resilient to large appends (e.g. code blocks)
+        const isBottom = Math.abs(target.scrollHeight - target.scrollTop - target.clientHeight) < 100;
+        isUserAtBottomRef.current = isBottom;
+        
+        // Update visible range for virtualization (throttled)
+        // Estimate ~150px per message on average
+        const estimatedMessageHeight = 150;
+        const scrollTop = target.scrollTop;
+        const viewportHeight = target.clientHeight;
+        const buffer = 5; // Render 5 extra messages above/below viewport
+        
+        const startIdx = Math.max(0, Math.floor(scrollTop / estimatedMessageHeight) - buffer);
+        const endIdx = Math.ceil((scrollTop + viewportHeight) / estimatedMessageHeight) + buffer;
+        
+        setVisibleRange(prev => {
+            // Only update if significantly different to avoid excessive re-renders
+            if (Math.abs(prev.start - startIdx) > 2 || Math.abs(prev.end - endIdx) > 2) {
+                return { start: startIdx, end: endIdx };
+            }
+            return prev;
+        });
+    }, []);
+    
+    // Compute which messages to render (virtualization)
+    // Always render last 10 messages + messages in visible range
+    const messagesToRender = useMemo(() => {
+        const totalMessages = messages.length;
+        if (totalMessages <= 20) {
+            // Small conversation - render all
+            return messages.map((msg, idx) => ({ msg, idx, isPlaceholder: false }));
+        }
+        
+        const result: { msg: ChatMessageType | null; idx: number; isPlaceholder: boolean }[] = [];
+        const lastMessagesStart = Math.max(0, totalMessages - 10);
+        
+        for (let i = 0; i < totalMessages; i++) {
+            const inVisibleRange = i >= visibleRange.start && i <= visibleRange.end;
+            const inLastMessages = i >= lastMessagesStart;
+            
+            if (inVisibleRange || inLastMessages) {
+                result.push({ msg: messages[i], idx: i, isPlaceholder: false });
+            } else {
+                // Placeholder for virtualized message
+                result.push({ msg: null, idx: i, isPlaceholder: true });
+            }
+        }
+        
+        return result;
+    }, [messages, visibleRange]);
 
     const handleNewConversation = () => {
         onNewConversation();
@@ -122,6 +220,15 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         }
     }, [loadConversation, onLoadConversation]);
 
+    // Stable callback references for ChatMessage - prevents re-renders
+    const handleApproveCommand = useCallback(() => {
+        approveToolDecision('approve_once');
+    }, [approveToolDecision]);
+
+    const handleSkipCommand = useCallback(() => {
+        approveToolDecision('reject');
+    }, [approveToolDecision]);
+
     return (
         <div className="flex flex-col h-full bg-[var(--bg-app)] text-[var(--fg-primary)] font-sans tracking-tight" onContextMenu={handleContextMenu}>
             {/* Tab Bar */}
@@ -135,12 +242,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             {activeTab === 'chat' ? (
                 <div
                     className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent"
-                    onScroll={(e) => {
-                        const target = e.target as HTMLDivElement;
-                        // Use a larger threshold (100px) to be more resilient to large appends (e.g. code blocks)
-                        const isBottom = Math.abs(target.scrollHeight - target.scrollTop - target.clientHeight) < 100;
-                        isUserAtBottomRef.current = isBottom;
-                    }}
+                    onScroll={handleScroll}
                 >
                     <div className="max-w-4xl mx-auto py-6">
                         {messages.length === 0 && (
@@ -155,7 +257,18 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                             </div>
                         )}
 
-                        {messages.map((msg, idx) => {
+                        {messagesToRender.map(({ msg, idx, isPlaceholder }) => {
+                            // Render placeholder for virtualized messages
+                            if (isPlaceholder || !msg) {
+                                return (
+                                    <div 
+                                        key={`placeholder-${idx}`} 
+                                        className="h-[100px]"
+                                        aria-hidden="true"
+                                    />
+                                );
+                            }
+                            
                             // Show pending actions on the last assistant message
                             const isLast = idx === messages.length - 1;
                             const isLastAssistant = isLast && msg.role === 'Assistant';
@@ -177,24 +290,19 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                             // We assume the last message is active if global loading state is true
                             const isActive = isLast && loading;
 
-
-
                             return (
-                                <React.Fragment key={idx}>
-                                    <ChatMessage
-                                        message={msg}
-                                        pendingActions={showPendingActions ? pendingActions : undefined}
-                                        onApproveCommand={showPendingActions ? () => approveToolDecision('approve_once') : undefined}
-                                        onSkipCommand={showPendingActions ? () => approveToolDecision('reject') : undefined}
-                                        isContinued={isContinued}
-                                        isActive={isActive}
-                                        activeTerminals={executions}
-                                        onTerminalComplete={handleCommandComplete}
-                                        onUndoTool={onUndoTool}
-                                    />
-
-
-                                </React.Fragment>
+                                <ChatMessage
+                                    key={msg.id || idx}
+                                    message={msg}
+                                    pendingActions={showPendingActions ? pendingActions : undefined}
+                                    onApproveCommand={showPendingActions ? handleApproveCommand : undefined}
+                                    onSkipCommand={showPendingActions ? handleSkipCommand : undefined}
+                                    isContinued={isContinued}
+                                    isActive={isActive}
+                                    activeTerminals={executions}
+                                    onTerminalComplete={handleCommandComplete}
+                                    onUndoTool={onUndoTool}
+                                />
                             );
                         })}
 
@@ -224,7 +332,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 />
             )}
 
-
+            {/* Global Accept/Reject All Changes - show immediately when changes exist */}
+            <GlobalChangeActions
+                changes={uncommittedChanges}
+                onAcceptAll={onAcceptAllChanges}
+                onRejectAll={onRejectAllChanges}
+            />
 
             <CommandCenter
                 onSend={sendMessage}
@@ -268,3 +381,5 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         </div>
     );
 };
+
+export const ChatPanel = React.memo(ChatPanelComponent);

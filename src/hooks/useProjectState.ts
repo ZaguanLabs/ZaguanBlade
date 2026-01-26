@@ -35,6 +35,7 @@ interface UseProjectStateOptions {
     terminals: TerminalState[];
     activeTerminalId: string;
     terminalHeight: number;
+    chatPanelWidth: number;
     onStateLoaded?: (state: ProjectState) => void;
 }
 
@@ -53,6 +54,7 @@ export function useProjectState({
     terminals,
     activeTerminalId,
     terminalHeight,
+    chatPanelWidth,
     onStateLoaded,
 }: UseProjectStateOptions): UseProjectStateReturn {
     const [loaded, setLoaded] = useState(false);
@@ -88,12 +90,10 @@ export function useProjectState({
             })),
             active_terminal_id: activeTerminalId,
             terminal_height: terminalHeight,
-            // These UI dimensions are currently not tracked in React state in a way we can easily retrieve here
-            // They would need to be passed in props if we want to persist them accurately
-            chat_panel_width: null,
+            chat_panel_width: chatPanelWidth,
             explorer_width: null,
         };
-    }, [projectPath, tabs, activeTabId, selectedModelId, terminals, activeTerminalId, terminalHeight]);
+    }, [projectPath, tabs, activeTabId, selectedModelId, terminals, activeTerminalId, terminalHeight, chatPanelWidth]);
 
     const saveState = useCallback(async () => {
         if (!projectPath) return;
@@ -179,7 +179,7 @@ export function useProjectState({
                 clearTimeout(saveTimeoutRef.current);
             }
         };
-    }, [projectPath, tabs, activeTabId, selectedModelId, terminals, activeTerminalId, terminalHeight, loaded, saveState]);
+    }, [projectPath, tabs, activeTabId, selectedModelId, terminals, activeTerminalId, terminalHeight, chatPanelWidth, loaded, saveState]);
 
     // Exit Handler - The "Deep Fix"
     // We delegate the exit-save-sequence entirely to the backend

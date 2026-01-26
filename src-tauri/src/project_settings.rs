@@ -211,6 +211,31 @@ Add project-specific instructions for the AI assistant here.
             .map_err(|e| format!("Failed to create instructions.md: {}", e))?;
     }
 
+    // Add .zblade/ to project's .gitignore if it exists and doesn't already contain it
+    let project_gitignore = project_path.join(".gitignore");
+    if project_gitignore.exists() {
+        if let Ok(content) = fs::read_to_string(&project_gitignore) {
+            // Check if .zblade is already ignored (various formats)
+            let already_ignored = content.lines().any(|line| {
+                let trimmed = line.trim();
+                trimmed == ".zblade" || trimmed == ".zblade/" || trimmed == "/.zblade" || trimmed == "/.zblade/"
+            });
+            
+            if !already_ignored {
+                // Append .zblade/ to the gitignore
+                let mut new_content = content;
+                if !new_content.ends_with('\n') {
+                    new_content.push('\n');
+                }
+                new_content.push_str("\n# ZaguanBlade local data\n.zblade/\n");
+                
+                if let Err(e) = fs::write(&project_gitignore, new_content) {
+                    eprintln!("[zblade] Warning: Failed to update .gitignore: {}", e);
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 

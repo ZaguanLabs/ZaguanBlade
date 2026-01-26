@@ -21,6 +21,7 @@ export default function Terminal({ id = "main-terminal", cwd }: TerminalProps) {
     const xtermRef = useRef<XTerm | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
     const terminalBufferRef = useRef<TerminalBuffer | null>(null);
+    const fitIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const { showMenu } = useContextMenu();
 
     // Context menu handler
@@ -100,17 +101,34 @@ export default function Terminal({ id = "main-terminal", cwd }: TerminalProps) {
         if (!terminalRef.current) return;
         if (xtermRef.current) return;
 
-        // 1. Initialize xterm with Design System tokens
+        // 1. Initialize xterm with Tokyo Night theme
         const term = new XTerm({
             cursorBlink: true,
             fontFamily: "\"Fira Code\", \"Symbols Nerd Font Mono\", monospace",
             fontSize: 12,
             lineHeight: 1.2,
             theme: {
-                background: "#09090b",
-                foreground: "#d4d4d8",
-                cursor: "#e4e4e7",
-                selectionBackground: "rgba(255, 255, 255, 0.2)",
+                background: "#16161e",        // Tokyo Night panel background
+                foreground: "#a9b1d6",        // Tokyo Night primary text
+                cursor: "#c0caf5",            // Tokyo Night bright cursor
+                cursorAccent: "#1a1b26",      // Cursor text color
+                selectionBackground: "#515c7e4d", // Tokyo Night selection
+                black: "#1a1b26",
+                red: "#f7768e",
+                green: "#9ece6a",
+                yellow: "#e0af68",
+                blue: "#7aa2f7",
+                magenta: "#bb9af7",
+                cyan: "#73daca",
+                white: "#a9b1d6",
+                brightBlack: "#565f89",
+                brightRed: "#ff869e",
+                brightGreen: "#b9f27c",
+                brightYellow: "#e0c068",
+                brightBlue: "#89b4fa",
+                brightMagenta: "#c4a7e7",
+                brightCyan: "#89dceb",
+                brightWhite: "#c0caf5",
             },
             allowTransparency: true,
             fontWeight: "normal",
@@ -130,13 +148,16 @@ export default function Terminal({ id = "main-terminal", cwd }: TerminalProps) {
         // PTY spawning needs dimensions. We must ensure the terminal has size before fitting.
         // We poll for a short period until we get valid dimensions.
         let fitAttempts = 0;
-        const fitInterval = setInterval(() => {
+        fitIntervalRef.current = setInterval(() => {
             fitAttempts++;
             try {
                 const dims = fitAddon.proposeDimensions();
                 if (dims && dims.cols > 0 && dims.rows > 0) {
                     fitAddon.fit();
-                    clearInterval(fitInterval);
+                    if (fitIntervalRef.current) {
+                        clearInterval(fitIntervalRef.current);
+                        fitIntervalRef.current = null;
+                    }
                     // Force refresh after successful fit
                     term.refresh(0, term.rows - 1);
                 }
@@ -146,7 +167,10 @@ export default function Terminal({ id = "main-terminal", cwd }: TerminalProps) {
 
             // Stop trying after 2 seconds
             if (fitAttempts > 20) {
-                clearInterval(fitInterval);
+                if (fitIntervalRef.current) {
+                    clearInterval(fitIntervalRef.current);
+                    fitIntervalRef.current = null;
+                }
             }
         }, 100);
 
@@ -280,6 +304,12 @@ export default function Terminal({ id = "main-terminal", cwd }: TerminalProps) {
         resizeObserver.observe(terminalRef.current);
 
         return () => {
+            // Clear the fit interval if still running
+            if (fitIntervalRef.current) {
+                clearInterval(fitIntervalRef.current);
+                fitIntervalRef.current = null;
+            }
+
             resizeObserver.disconnect();
             unlistenLegacy.then((unlisten) => unlisten());
             unlistenV11.then((unlisten) => unlisten());

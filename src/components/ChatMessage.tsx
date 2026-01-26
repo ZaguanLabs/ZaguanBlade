@@ -69,22 +69,22 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
 
     return (
         <div className={`my-2 rounded-md border overflow-hidden transition-all duration-200 ${isStreaming
-            ? 'border-purple-500/30 bg-purple-950/10'
-            : 'border-zinc-800/50 bg-zinc-900/20'
+            ? 'border-purple-500/30 bg-purple-950/20'
+            : 'border-zinc-700/40 bg-zinc-800/30'
             }`}>
             {/* Header - clickable to toggle */}
             <button
                 onClick={handleToggle}
-                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-zinc-800/30 transition-colors text-left"
+                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-zinc-700/30 transition-colors text-left"
             >
                 <div className="flex items-center gap-2 flex-1 min-w-0">
-                    <Brain className={`w-3 h-3 flex-shrink-0 ${isStreaming ? 'text-purple-400 animate-pulse' : 'text-zinc-600'}`} />
-                    <span className={`font-mono text-[9px] uppercase tracking-wider flex-shrink-0 ${isStreaming ? 'text-purple-400' : 'text-zinc-600'
+                    <Brain className={`w-3 h-3 flex-shrink-0 ${isStreaming ? 'text-purple-400 animate-pulse' : 'text-zinc-500'}`} />
+                    <span className={`font-mono text-[9px] uppercase tracking-wider flex-shrink-0 ${isStreaming ? 'text-purple-400' : 'text-zinc-500'
                         }`}>
                         {isStreaming ? 'Reasoning' : 'Thought Process'}
                     </span>
                     {!isExpanded && cleanContent && (
-                        <span className="text-[10px] text-zinc-600 truncate font-mono ml-2">
+                        <span className="text-[10px] text-zinc-500 truncate font-mono ml-2">
                             {cleanContent.slice(0, 80)}...
                         </span>
                     )}
@@ -93,9 +93,9 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
                     <Loader2 className="w-2.5 h-2.5 text-purple-400/60 animate-spin mr-1 flex-shrink-0" />
                 )}
                 {isExpanded ? (
-                    <ChevronDown className="w-3 h-3 text-zinc-600 flex-shrink-0" />
+                    <ChevronDown className="w-3 h-3 text-zinc-500 flex-shrink-0" />
                 ) : (
-                    <ChevronRight className="w-3 h-3 text-zinc-600 flex-shrink-0" />
+                    <ChevronRight className="w-3 h-3 text-zinc-500 flex-shrink-0" />
                 )}
             </button>
 
@@ -103,9 +103,9 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
             {isExpanded && (
                 <div
                     ref={contentRef}
-                    className="px-3 py-2 border-t border-zinc-800/30 bg-zinc-950/20 max-h-48 overflow-y-auto"
+                    className="px-3 py-2 border-t border-zinc-700/30 bg-zinc-800/40 max-h-48 overflow-y-auto"
                 >
-                    <div className="text-zinc-500 text-[10px] leading-relaxed select-text whitespace-pre-wrap font-mono">
+                    <div className="text-zinc-400 text-[10px] leading-relaxed select-text whitespace-pre-wrap font-mono">
                         {cleanContent}
                     </div>
                 </div>
@@ -126,7 +126,7 @@ interface ChatMessageProps {
     onUndoTool?: (toolCallId: string) => void;
 }
 
-export const ChatMessage: React.FC<ChatMessageProps> = ({
+const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     message,
     pendingActions,
     onApproveCommand,
@@ -394,6 +394,19 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                                         <TodoList todos={message.todos} />
                                     </div>
                                 );
+                            } else if (block.type === 'research_progress') {
+                                // Render research progress activity
+                                const activity = message.researchActivities?.find(a => a.id === block.id);
+                                if (!activity) return null;
+                                return (
+                                    <div key={block.id} className="mb-3">
+                                        <ProgressIndicator progress={{
+                                            message: activity.message,
+                                            stage: activity.stage,
+                                            percent: activity.percent
+                                        }} />
+                                    </div>
+                                );
                             }
                             return null;
                         })}
@@ -534,3 +547,46 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
         </div>
     );
 };
+
+// Custom comparison for ChatMessage - only re-render when meaningful props change
+export const ChatMessage = React.memo(ChatMessageComponent, (prevProps, nextProps) => {
+    // Quick bail-out checks for primitive props
+    if (prevProps.isContinued !== nextProps.isContinued) return false;
+    if (prevProps.isActive !== nextProps.isActive) return false;
+    
+    // Message content comparison - the most important check
+    const prevMsg = prevProps.message;
+    const nextMsg = nextProps.message;
+    if (prevMsg.id !== nextMsg.id) return false;
+    if (prevMsg.content !== nextMsg.content) return false;
+    if (prevMsg.reasoning !== nextMsg.reasoning) return false;
+    if (prevMsg.tool_calls?.length !== nextMsg.tool_calls?.length) return false;
+    
+    // Check tool call statuses (important for showing execution state)
+    if (prevMsg.tool_calls && nextMsg.tool_calls) {
+        for (let i = 0; i < prevMsg.tool_calls.length; i++) {
+            if (prevMsg.tool_calls[i].status !== nextMsg.tool_calls[i].status) return false;
+        }
+    }
+    
+    // Pending actions - check both reference AND presence change
+    const prevHasPending = prevProps.pendingActions && prevProps.pendingActions.length > 0;
+    const nextHasPending = nextProps.pendingActions && nextProps.pendingActions.length > 0;
+    if (prevHasPending !== nextHasPending) return false;
+    if (prevProps.pendingActions !== nextProps.pendingActions) return false;
+    
+    // Callbacks - check presence change (undefined vs function)
+    const prevHasApprove = !!prevProps.onApproveCommand;
+    const nextHasApprove = !!nextProps.onApproveCommand;
+    const prevHasSkip = !!prevProps.onSkipCommand;
+    const nextHasSkip = !!nextProps.onSkipCommand;
+    if (prevHasApprove !== nextHasApprove) return false;
+    if (prevHasSkip !== nextHasSkip) return false;
+    
+    // Active terminals - check size and keys
+    const prevTerminals = prevProps.activeTerminals;
+    const nextTerminals = nextProps.activeTerminals;
+    if (prevTerminals?.size !== nextTerminals?.size) return false;
+    
+    return true;
+});

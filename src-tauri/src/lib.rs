@@ -12,6 +12,7 @@ pub mod config;
 pub mod context_assembly;
 pub mod conversation;
 pub mod conversation_store;
+pub mod environment;
 pub mod ephemeral_commands;
 pub mod ephemeral_documents;
 pub mod events;
@@ -21,6 +22,7 @@ pub mod git;
 pub mod gitignore_filter;
 pub mod history;
 pub mod idempotency;
+pub mod indexer;
 pub mod language_service;
 pub mod local_artifacts;
 pub mod local_index;
@@ -36,6 +38,7 @@ pub mod semantic_patch;
 pub mod symbol_index;
 pub mod terminal;
 pub mod tool_execution;
+pub mod uncommitted_changes;
 pub mod tools;
 pub mod tree_sitter;
 pub mod utils;
@@ -65,13 +68,20 @@ pub fn run() {
     let resolved_path = cli.path.map(|p| {
         let path = std::path::PathBuf::from(&p);
         if path.is_relative() {
-            // Resolve relative to current working directory
-            std::env::current_dir()
+            // For AppImage: Use OWD (Original Working Directory) if available
+            // AppImages change CWD to their mount point, but preserve the original in OWD
+            let cwd = std::env::var("OWD")
                 .ok()
-                .map(|cwd| cwd.join(&path))
+                .map(std::path::PathBuf::from)
+                .or_else(|| std::env::current_dir().ok());
+            
+            cwd.map(|dir| dir.join(&path))
                 .and_then(|full| std::fs::canonicalize(&full).ok())
                 .map(|abs| abs.to_string_lossy().to_string())
-                .unwrap_or(p)
+                .unwrap_or_else(|| {
+                    eprintln!("[WARN] Failed to resolve relative path: {}", p);
+                    p
+                })
         } else {
             // Already absolute, just canonicalize if possible
             std::fs::canonicalize(&path)
@@ -115,6 +125,26 @@ pub fn run() {
                         }
                         Err(e) => {
                             eprintln!("[LanguageService] Startup indexing failed: {}", e);
+                        }
+                    }
+                }
+            });
+
+            // Background IndexerManager initialization (non-blocking)
+            let app_handle_indexer = app.handle().clone();
+            std::thread::spawn(move || {
+                let state = app_handle_indexer.state::<AppState>();
+                let workspace = state.workspace.lock().unwrap().workspace.clone();
+
+                if let Some(path) = workspace {
+                    eprintln!("[Indexer] Starting background initialization for {:?}", path);
+                    match crate::indexer::IndexerManager::new(&path) {
+                        Ok(manager) => {
+                            eprintln!("[Indexer] Initialized with {} files", manager.file_count());
+                            *state.indexer_manager.lock().unwrap() = Some(manager);
+                        }
+                        Err(e) => {
+                            eprintln!("[Indexer] Failed to initialize: {}", e);
                         }
                     }
                 }
@@ -177,6 +207,17 @@ pub fn run() {
             commands::history::get_file_history,
             commands::history::revert_file_to_snapshot,
             commands::history::undo_batch,
+            // Uncommitted Changes (Accept/Reject)
+            commands::uncommitted::get_uncommitted_changes,
+            commands::uncommitted::get_uncommitted_change,
+            commands::uncommitted::get_uncommitted_change_for_file,
+            commands::uncommitted::accept_change,
+            commands::uncommitted::accept_file_changes,
+            commands::uncommitted::accept_all_changes,
+            commands::uncommitted::reject_change,
+            commands::uncommitted::reject_file_changes,
+            commands::uncommitted::reject_all_changes,
+            commands::uncommitted::get_uncommitted_changes_count,
             // Cache
             commands::cache::warmup_cache,
             commands::cache::should_rewarm_cache,

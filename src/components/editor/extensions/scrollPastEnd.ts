@@ -1,10 +1,5 @@
-import { EditorView } from "@codemirror/view";
-import { Extension } from "@codemirror/state";
+import { scrollPastEnd as cmScrollPastEnd } from "@codemirror/view";
 
-// Allow scrolling past the end of the document
-// This gives a cleaner look and makes it easier to edit the last lines
-export const scrollPastEnd: Extension = EditorView.theme({
-    ".cm-content": {
-        paddingBottom: "50vh",
-    },
-});
+// Re-export the official CodeMirror scrollPastEnd extension
+// Allows scrolling past the end of the document for better editing experience
+export const scrollPastEnd = cmScrollPastEnd();

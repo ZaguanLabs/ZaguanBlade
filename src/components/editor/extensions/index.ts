@@ -4,14 +4,6 @@ export { rainbowBrackets } from "./rainbowBrackets";
 export { smoothCursor } from "./smoothCursor";
 export { scrollPastEnd } from "./scrollPastEnd";
 export { lineHighlightField, addLineHighlight, clearLineHighlight } from "./lineHighlight";
-export { diffsField, addDiff, removeDiff, clearDiffs, acceptDiff, rejectDiff } from "./diffView";
 export { virtualBufferField, setBaseContent, getVirtualContent, hasVirtualChanges } from "./virtualBuffer";
-export {
-    inlineDiffField,
-    inlineDiffTheme,
-    setInlineDiff,
-    clearInlineDiff,
-    computeDiffLines,
-    type PendingInlineDiff
-} from "./inlineDiff";
-
+export { diffDecorations, diffStateField, setDiffState, clearDiff, parseUnifiedDiff } from "./diffDecorations";
+export { zlpHoverTooltip } from "./zlpTooltip";

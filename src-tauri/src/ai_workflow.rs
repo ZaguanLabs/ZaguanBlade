@@ -337,7 +337,11 @@ impl AiWorkflow {
 
                         let full_path = workspace_root.join(&change.path);
 
-                        // History Snapshot
+                        // Read original content before any changes (for diff generation)
+                        let original_content = fs::read_to_string(&full_path).unwrap_or_default();
+
+                        // History Snapshot - capture the snapshot ID for uncommitted tracking
+                        let mut snapshot_id: Option<String> = None;
                         if let Some(app) = &context.app_handle {
                             use tauri::Manager;
                             let state = app.state::<crate::app_state::AppState>();
@@ -348,6 +352,7 @@ impl AiWorkflow {
                                 {
                                     Ok(entry) => {
                                         println!("[HISTORY] Snapshot created for {}", change.path);
+                                        snapshot_id = Some(entry.id.clone());
                                         let _ = app.emit(
                                             crate::events::event_names::HISTORY_ENTRY_ADDED,
                                             crate::events::HistoryEntryAddedPayload { entry },
@@ -419,12 +424,41 @@ impl AiWorkflow {
                             Ok(_) => {
                                 println!("[AI WORKFLOW] Auto-applied change to {}", change.path);
                                 if let Some(app) = &context.app_handle {
+                                    use tauri::Manager;
+                                    let state = app.state::<crate::app_state::AppState>();
+
+                                    // Track as uncommitted change if we have a snapshot
+                                    if let Some(snap_id) = &snapshot_id {
+                                        // Read new content for diff
+                                        let new_content = fs::read_to_string(&full_path).unwrap_or_default();
+                                        let diff = diffy::create_patch(&original_content, &new_content).to_string();
+                                        let (added, removed) = crate::uncommitted_changes::count_diff_stats(&diff);
+
+                                        let uncommitted = crate::uncommitted_changes::UncommittedChange {
+                                            id: call.id.clone(),
+                                            file_path: full_path.clone(),
+                                            snapshot_id: snap_id.clone(),
+                                            unified_diff: diff,
+                                            added_lines: added,
+                                            removed_lines: removed,
+                                            timestamp: std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_millis() as u64,
+                                        };
+                                        state.uncommitted_changes.track(uncommitted);
+                                        println!("[UNCOMMITTED] Tracking change {} for {}", call.id, change.path);
+                                    }
+
+                                    let abs_path_str = full_path.to_string_lossy().to_string();
                                     let _ = app.emit("refresh-explorer", ());
+                                    // Emit open-file to open the file in editor
+                                    let _ = app.emit("open-file", &abs_path_str);
                                     let _ = app.emit(
                                         crate::events::event_names::CHANGE_APPLIED,
                                         crate::events::ChangeAppliedPayload {
                                             change_id: call.id.clone(),
-                                            file_path: change.path.clone(),
+                                            file_path: abs_path_str.clone(),
                                         },
                                     );
                                 }
@@ -679,30 +713,37 @@ impl AiWorkflow {
                 }));
             }
             for handle in handles {
-                if let Ok((call, res)) = handle.join() {
-                    let preview = if res.content.chars().count() > 100 {
-                        res.content.chars().take(100).collect::<String>() + "..."
-                    } else {
-                        res.content.clone()
-                    };
-                    eprintln!(
-                        "[TOOL RESULT] name={} success={} content={:?} (parallel read)",
-                        call.function.name, res.success, preview
-                    );
-                    file_results.push((call.clone(), res.clone()));
-                    if res.success
-                        && matches!(call.function.name.as_str(), "read_file" | "read_file_range")
-                    {
-                        self.recent_file_tool_cache.push((
-                            (
-                                call.function.name.clone(),
-                                normalize_json_string(&call.function.arguments),
-                            ),
-                            res.clone(),
-                        ));
-                        if self.recent_file_tool_cache.len() > 10 {
-                            self.recent_file_tool_cache.remove(0);
+                match handle.join() {
+                    Ok((call, res)) => {
+                        let preview = if res.content.chars().count() > 100 {
+                            res.content.chars().take(100).collect::<String>() + "..."
+                        } else {
+                            res.content.clone()
+                        };
+                        eprintln!(
+                            "[TOOL RESULT] name={} success={} content={:?} (parallel read)",
+                            call.function.name, res.success, preview
+                        );
+                        file_results.push((call.clone(), res.clone()));
+                        if res.success
+                            && matches!(call.function.name.as_str(), "read_file" | "read_file_range")
+                        {
+                            self.recent_file_tool_cache.push((
+                                (
+                                    call.function.name.clone(),
+                                    normalize_json_string(&call.function.arguments),
+                                ),
+                                res.clone(),
+                            ));
+                            if self.recent_file_tool_cache.len() > 10 {
+                                self.recent_file_tool_cache.remove(0);
+                            }
                         }
+                    }
+                    Err(e) => {
+                        eprintln!("[TOOL RESULT] Thread panicked during parallel read: {:?}", e);
+                        // Thread panicked - this shouldn't happen but handle it gracefully
+                        // The tool call will be missing from results, which will cause an error downstream
                     }
                 }
             }

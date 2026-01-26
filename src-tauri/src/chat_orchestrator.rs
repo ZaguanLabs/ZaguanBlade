@@ -155,22 +155,47 @@ pub async fn handle_send_message<R: Runtime>(
         .map_err(|e| e.to_string())?;
     }
 
-    // 3. Poll for Events (Background Task)
+    // 3. Event-Driven Processing (Background Task)
+    // Only processes events when there's actual streaming activity
     let app_handle = app.clone();
 
     tauri::async_runtime::spawn(async move {
         let mut last_session_id: Option<String> = None;
+        
+        // Fetch models once at the start instead of every iteration
+        let state = app_handle.state::<AppState>();
+        let (blade_url, api_key) = {
+            let config = state.config.lock().unwrap();
+            (config.blade_url.clone(), config.api_key.clone())
+        };
+        let models = get_models(&blade_url, &api_key).await;
+
         loop {
-            tokio::time::sleep(std::time::Duration::from_millis(32)).await; // 30 FPS
+            // Check if we're actually streaming before processing
+            let (is_streaming, has_rx, has_pending) = {
+                let state = app_handle.state::<AppState>();
+                let mgr = state.chat_manager.lock().unwrap();
+                (mgr.streaming, mgr.rx.is_some(), !mgr.pending_results.is_empty())
+            };
+
+            // If not streaming and no receiver AND no pending results, sleep longer to reduce CPU usage
+            // IMPORTANT: We must check pending_results because drain_events may have queued results
+            // (e.g., ToolCalls) that need to be processed even after rx is cleared
+            if !is_streaming && !has_rx && !has_pending {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
+            }
+
+            // If we have a receiver but not actively streaming (e.g., waiting for tool results),
+            // check less frequently to avoid CPU spike
+            if !is_streaming && has_rx && !has_pending {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await; // 20 FPS when waiting
+            } else if is_streaming && !has_pending {
+                tokio::time::sleep(std::time::Duration::from_millis(16)).await; // ~60 FPS when active
+            }
+            // If has_pending, process immediately without sleeping
 
             let state = app_handle.state::<AppState>();
-
-            // Fetch models asynchronously before acquiring locks
-            let (blade_url, api_key) = {
-                let config = state.config.lock().unwrap();
-                (config.blade_url.clone(), config.api_key.clone())
-            };
-            let models = get_models(&blade_url, &api_key).await;
 
             let (result, is_streaming, session_id) = {
                 let mut mgr = state.chat_manager.lock().unwrap();
@@ -203,7 +228,17 @@ pub async fn handle_send_message<R: Runtime>(
             }
 
             if let DrainResult::None = result {
-                if !is_streaming {
+                // Only consider conversation done if:
+                // 1. Not streaming (no active content being received)
+                // 2. No active receiver channel (no WebSocket connection waiting for events)
+                // This fixes the bug where the loop would break after continue_tool_batch
+                // because streaming=false but rx=Some(channel) - we're still waiting for events!
+                let has_rx = {
+                    let mgr = state.chat_manager.lock().unwrap();
+                    mgr.rx.is_some()
+                };
+                
+                if !is_streaming && !has_rx {
                     // Auto-save conversation before emitting done
                     {
                         let conversation = state.conversation.lock().unwrap();
@@ -721,6 +756,10 @@ pub async fn handle_send_message<R: Runtime>(
                                 });
                             }
                             if !actions.is_empty() {
+                                eprintln!("[ORCHESTRATOR] Emitting request-confirmation with {} actions", actions.len());
+                                for action in &actions {
+                                    eprintln!("[ORCHESTRATOR]   - action: {} (id={})", action.command, action.id);
+                                }
                                 window
                                     .emit(
                                         crate::events::event_names::REQUEST_CONFIRMATION,
@@ -790,8 +829,19 @@ pub async fn handle_send_message<R: Runtime>(
                                     .or_else(|| args.get("target_file"))
                                 {
                                     if let Some(path) = path_value.as_str() {
-                                        eprintln!("[AUTO OPEN] Opening file in editor: {}", path);
-                                        window.emit("open-file", path).unwrap_or_default();
+                                        // Convert to absolute path if relative
+                                        let abs_path = if std::path::Path::new(path).is_absolute() {
+                                            path.to_string()
+                                        } else {
+                                            let ws = state.workspace.lock().unwrap();
+                                            if let Some(workspace) = &ws.workspace {
+                                                workspace.join(path).to_string_lossy().to_string()
+                                            } else {
+                                                path.to_string()
+                                            }
+                                        };
+                                        eprintln!("[AUTO OPEN] Opening file in editor: {}", abs_path);
+                                        window.emit("open-file", &abs_path).unwrap_or_default();
                                     }
                                 }
                             }

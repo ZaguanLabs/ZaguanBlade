@@ -10,6 +10,7 @@ import { DocumentViewer } from './DocumentViewer';
 import { TitleBar } from './TitleBar';
 import { GitBranch, Settings, Clock } from 'lucide-react';
 import { EditorProvider, useEditor } from '../contexts/EditorContext';
+import { useUncommittedChanges } from '../hooks/useUncommittedChanges';
 import { useChat } from '../hooks/useChat';
 import { StorageSetupModal } from './StorageSetupModal';
 import { useProjectState, type ProjectState } from '../hooks/useProjectState';
@@ -47,6 +48,7 @@ const AppLayoutInner: React.FC = () => {
     const [activeSidebar, setActiveSidebar] = useState<'explorer' | 'git' | 'history'>('explorer');
 
     const chat = useChat();
+    const { changes: uncommittedChanges, acceptAll: acceptAllChanges, rejectAll: rejectAllChanges } = useUncommittedChanges();
     const {
         status: gitStatus,
         files: gitFiles,
@@ -112,8 +114,6 @@ const AppLayoutInner: React.FC = () => {
                 const settings = await invoke<BackendSettings>('load_project_settings', {
                     projectPath: workspacePath,
                 });
-                // setEnableLsp(settings.editor.enable_lsp);
-                // console.log('[Layout] Synced enableLsp:', settings.editor.enable_lsp);
             } catch (e) {
                 console.error('[Layout] Failed to load project settings:', e);
             }
@@ -217,6 +217,11 @@ const AppLayoutInner: React.FC = () => {
             setTerminalHeight(state.terminal_height);
         }
 
+        // Restore chat panel width
+        if (state.chat_panel_width) {
+            setChatPanelWidth(state.chat_panel_width);
+        }
+
         // Restore selected model
         if (state.selected_model_id) {
             setSelectedModelId(state.selected_model_id);
@@ -250,6 +255,7 @@ const AppLayoutInner: React.FC = () => {
         terminals: terminalState.terminals,
         activeTerminalId: terminalState.activeId,
         terminalHeight,
+        chatPanelWidth,
         onStateLoaded: handleStateLoaded,
     });
 
@@ -570,17 +576,49 @@ const AppLayoutInner: React.FC = () => {
             // Listen for research progress events
             unlistenResearchProgress = await listen<{ message: string; stage: string; percent: number }>('research-progress', (event) => {
                 console.log('[LAYOUT] Research progress:', event.payload);
+                
+                // Set temporary state for active indicator
                 setResearchProgress({
                     ...event.payload,
                     isActive: true
                 });
 
-                // Auto-hide after delay if complete
-                if (event.payload.percent >= 100) {
-                    setTimeout(() => {
-                        setResearchProgress(prev => (prev && prev.percent >= 100 ? null : prev));
-                    }, 2500);
-                }
+                // Persist research activity in message history
+                chat.setConversation(prev => {
+                    const updated = [...prev];
+                    // Find the last assistant message to attach research activity
+                    for (let i = updated.length - 1; i >= 0; i--) {
+                        if (updated[i].role === 'Assistant') {
+                            const msg = updated[i];
+                            const activityId = crypto.randomUUID();
+                            const newActivity = {
+                                id: activityId,
+                                message: event.payload.message,
+                                stage: event.payload.stage,
+                                percent: event.payload.percent,
+                                timestamp: Date.now(),
+                            };
+
+                            // Add or update research activity
+                            const existingActivities = msg.researchActivities || [];
+                            const newActivities = [...existingActivities, newActivity];
+                            
+                            // Update blocks to include research_progress block
+                            const newBlocks = [...(msg.blocks || [])];
+                            if (!newBlocks.some(b => b.type === 'research_progress' && b.id === activityId)) {
+                                newBlocks.push({ type: 'research_progress', id: activityId });
+                            }
+
+                            updated[i] = {
+                                ...msg,
+                                researchActivities: newActivities,
+                                blocks: newBlocks
+                            };
+                            break;
+                        }
+                    }
+                    return updated;
+                });
             });
 
             // Listen for chat errors to clear progress
@@ -657,10 +695,10 @@ const AppLayoutInner: React.FC = () => {
         };
     }, [tabs]);
 
-    // Clear progress when chat stops loading (turn complete)
+    // Clear active indicator when chat stops loading (but keep in message history)
     useEffect(() => {
         if (!chat.loading) {
-            setResearchProgress(null);
+            setResearchProgress(prev => prev ? { ...prev, isActive: false } : null);
         }
     }, [chat.loading]);
 
@@ -681,49 +719,58 @@ const AppLayoutInner: React.FC = () => {
 
             <div className="flex-1 flex overflow-hidden">
                 {/* Activity Bar (Vertical) */}
-                <div className="w-[50px] bg-[var(--bg-app)] border-r border-[var(--border-subtle)] flex flex-col items-center py-4 gap-6 z-50 shrink-0 relative">
+                <div className="w-[50px] bg-[var(--bg-panel)] border-r border-[var(--border-subtle)] flex flex-col items-center py-4 gap-6 z-50 shrink-0 relative">
                     <div
                         onClick={() => toggleSidebar('explorer')}
-                        className={`p-2 rounded-md shadow-sm border transition-colors cursor-pointer ${isSidebarOpen && activeSidebar === 'explorer'
-                            ? 'bg-[var(--bg-surface)] text-[var(--fg-primary)] border-[var(--border-focus)]'
-                            : 'border-transparent text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]'}
+                        className={`relative p-2 rounded-md cursor-pointer transition-all duration-[var(--transition-fast)] ${isSidebarOpen && activeSidebar === 'explorer'
+                            ? 'text-[var(--fg-bright)] bg-[var(--bg-surface)]'
+                            : 'text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]'}
                         `}
                     >
-                        <svg className="w-5 h-5 opacity-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        {isSidebarOpen && activeSidebar === 'explorer' && (
+                            <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-[var(--accent-primary)] rounded-r" />
+                        )}
+                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
                         </svg>
                     </div>
                     <div
                         onClick={() => toggleSidebar('git')}
-                        className={`relative p-2 rounded-md shadow-sm border transition-colors cursor-pointer ${isSidebarOpen && activeSidebar === 'git'
-                            ? 'bg-[var(--bg-surface)] text-[var(--fg-primary)] border-[var(--border-focus)]'
-                            : 'border-transparent text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]'}
+                        className={`relative p-2 rounded-md cursor-pointer transition-all duration-[var(--transition-fast)] ${isSidebarOpen && activeSidebar === 'git'
+                            ? 'text-[var(--fg-bright)] bg-[var(--bg-surface)]'
+                            : 'text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]'}
                         `}
                     >
+                        {isSidebarOpen && activeSidebar === 'git' && (
+                            <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-[var(--accent-primary)] rounded-r" />
+                        )}
                         <GitBranch className="w-5 h-5" />
                         {gitStatus?.isRepo && gitChangedCount > 0 && (
-                            <span className="absolute bottom-0 right-0 min-w-[14px] h-3 px-1 rounded-full bg-sky-500 text-[9px] leading-3 text-white text-center">
+                            <span className="absolute -bottom-1 -right-1 min-w-[14px] h-3 px-1 rounded-full bg-[var(--accent-primary)] text-[9px] leading-3 text-white text-center shadow-sm">
                                 {Math.min(gitChangedCount, 99)}
                             </span>
                         )}
                     </div>
                     <div
                         onClick={() => toggleSidebar('history')}
-                        className={`p-2 rounded-md transition-colors cursor-pointer ${isSidebarOpen && activeSidebar === 'history'
-                            ? 'bg-[var(--bg-surface)] text-[var(--fg-primary)] border-[var(--border-focus)] border shadow-sm'
-                            : 'border border-transparent text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]'}
+                        className={`relative p-2 rounded-md cursor-pointer transition-all duration-[var(--transition-fast)] ${isSidebarOpen && activeSidebar === 'history'
+                            ? 'text-[var(--fg-bright)] bg-[var(--bg-surface)]'
+                            : 'text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]'}
                         `}
                     >
+                        {isSidebarOpen && activeSidebar === 'history' && (
+                            <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-[var(--accent-primary)] rounded-r" />
+                        )}
                         <Clock className="w-5 h-5" />
                     </div>
-                    <div className="p-2 rounded-md text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)] transition-all cursor-pointer">
+                    <div className="relative p-2 rounded-md text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)] transition-all duration-[var(--transition-fast)] cursor-pointer">
                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                         </svg>
                     </div>
                     <div
                         onClick={() => setIsSettingsOpen(true)}
-                        className="mt-auto p-2 rounded-md text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)] transition-all cursor-pointer"
+                        className="relative mt-auto p-2 rounded-md text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)] transition-all duration-[var(--transition-fast)] cursor-pointer"
                     >
                         <Settings className="w-5 h-5" />
                     </div>
@@ -735,7 +782,8 @@ const AppLayoutInner: React.FC = () => {
                     {/* Explorer / Sidebar (Floating) */}
                     <div className={`
                         absolute top-0 bottom-0 left-0 w-80 bg-[var(--bg-panel)] border-r border-[var(--border-subtle)] 
-                        shadow-2xl z-30 transition-transform duration-300 ease-in-out flex flex-col
+                        shadow-[var(--shadow-lg)] z-30 flex flex-col
+                        transition-transform duration-[var(--transition-base)] ease-out
                         ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}
                     `}>
                         {activeSidebar === 'explorer' && (
@@ -783,6 +831,14 @@ const AppLayoutInner: React.FC = () => {
                                 activeTabId={activeTabId}
                                 onTabClick={setActiveTabId}
                                 onTabClose={handleTabClose}
+                                onReorder={(fromIndex, toIndex) => {
+                                    setTabs(prev => {
+                                        const newTabs = [...prev];
+                                        const [movedTab] = newTabs.splice(fromIndex, 1);
+                                        newTabs.splice(toIndex, 0, movedTab);
+                                        return newTabs;
+                                    });
+                                }}
                             />
                         )}
 
@@ -850,7 +906,8 @@ const AppLayoutInner: React.FC = () => {
 
                         {/* Terminal Resizer */}
                         <div
-                            className={`h-[1px] cursor-row-resize bg-[var(--border-subtle)] hover:bg-[var(--accent-secondary)] hover:h-[2px] transition-all z-20 ${isDragging ? 'bg-[var(--accent-secondary)] h-[2px]' : ''}`}
+                            className={`h-[1px] bg-[var(--border-subtle)] hover:bg-[var(--accent-primary)] hover:h-[2px] transition-all duration-[var(--transition-fast)] z-20 ${isDragging ? 'bg-[var(--accent-primary)] h-[2px]' : ''}`}
+                            style={{ cursor: 'row-resize' }}
                             onMouseDown={handleMouseDown}
                         />
 
@@ -862,7 +919,8 @@ const AppLayoutInner: React.FC = () => {
 
                     {/* Chat Panel Resizer */}
                     <div
-                        className={`w-[3px] cursor-col-resize bg-transparent hover:bg-[var(--accent-secondary)] transition-colors z-40 ${isChatDragging ? 'bg-[var(--accent-secondary)]' : ''}`}
+                        className={`w-[3px] bg-transparent hover:bg-[var(--accent-primary)] transition-colors duration-[var(--transition-fast)] z-40 ${isChatDragging ? 'bg-[var(--accent-primary)]' : ''}`}
+                        style={{ cursor: 'col-resize' }}
                         onMouseDown={handleChatMouseDown}
                     />
 
@@ -889,6 +947,9 @@ const AppLayoutInner: React.FC = () => {
                                 researchProgress={researchProgress}
                                 onNewConversation={chat.newConversation}
                                 onUndoTool={chat.undoTool}
+                                uncommittedChanges={uncommittedChanges}
+                                onAcceptAllChanges={acceptAllChanges}
+                                onRejectAllChanges={rejectAllChanges}
                             />
                         </Suspense>
                     </div>
@@ -897,9 +958,9 @@ const AppLayoutInner: React.FC = () => {
             </div>
 
             {/* Status Bar */}
-            <div className="h-6 bg-[var(--bg-app)] border-t border-[var(--border-subtle)] text-[var(--fg-tertiary)] flex items-center px-3 text-[10px] font-mono justify-between select-none z-40">
+            <div className="h-6 bg-[var(--bg-panel)] border-t border-[var(--border-subtle)] text-[var(--fg-tertiary)] flex items-center px-3 text-[10px] font-mono justify-between select-none z-40">
                 <div className="relative flex-1 flex flex-col">
-                    <span className="flex items-center gap-1.5 hover:text-[var(--fg-secondary)] cursor-pointer transition-colors">
+                    <span className="flex items-center gap-1.5 hover:text-[var(--fg-secondary)] cursor-pointer transition-colors duration-[var(--transition-fast)]">
                         <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></svg>
                         main*
                     </span>

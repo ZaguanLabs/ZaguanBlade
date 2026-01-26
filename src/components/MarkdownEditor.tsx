@@ -19,18 +19,13 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
     const [mode, setMode] = useState<'edit' | 'view'>('edit');
     const editorRef = React.useRef<CodeEditorHandle>(null);
 
-    // Keyboard shortcuts for mode switching
+    // Keyboard shortcut for mode toggle
     React.useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            // Ctrl+E for Edit mode
+            // Ctrl+E to toggle between Edit and View mode
             if (e.ctrlKey && e.key === 'e' && !e.shiftKey) {
                 e.preventDefault();
-                setMode('edit');
-            }
-            // Ctrl+Shift+V for View mode
-            if (e.ctrlKey && e.shiftKey && e.key === 'V') {
-                e.preventDefault();
-                setMode('view');
+                setMode(prev => prev === 'edit' ? 'view' : 'edit');
             }
         };
 
@@ -55,7 +50,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
                                 ? 'bg-zinc-700 text-zinc-100 shadow-sm border border-zinc-600'
                                 : 'bg-emerald-900/40 text-emerald-200 shadow-sm border border-emerald-800/50'
                             }`}
-                        title={mode === 'edit' ? "Switch to View Mode (Ctrl+Shift+V)" : "Switch to Edit Mode (Ctrl+E)"}
+                        title="Toggle Edit/View Mode (Ctrl+E)"
                     >
                         {mode === 'edit' ? (
                             <>
@@ -71,7 +66,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
                     </button>
                     {/* Helper hint */}
                     <span className="text-[10px] text-zinc-500 px-1 font-mono hidden sm:inline-block">
-                        {mode === 'edit' ? 'Ctrl+Shift+V' : 'Ctrl+E'}
+                        Ctrl+E
                     </span>
                 </div>
             </div>
