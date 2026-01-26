@@ -56,6 +56,12 @@ export type EditorContext = {
 
 export type EditorIntent =
     | { type: "OpenFile"; payload: { path: string } }
+    | { type: "CloseFile"; payload: { path: string } }
+    | { type: "SetActiveFile"; payload: { path: string | null } }
+    | { type: "UpdateCursor"; payload: { line: number; column: number } }
+    | { type: "UpdateSelection"; payload: { start: number; end: number } }
+    | { type: "GetState"; payload?: Record<string, never> }
+    // Legacy
     | { type: "SaveFile"; payload: { path: string } }
     | { type: "BufferUpdate"; payload: { path: string; content: string } };
 
@@ -127,6 +133,13 @@ export type ChatEvent =
     | { type: "GenerationSignal"; payload: { is_generating: boolean } };
 
 export type EditorEvent =
+    | { type: "StateSnapshot"; payload: { active_file: string | null; open_files: string[]; cursor_line: number | null; cursor_column: number | null; selection_start: number | null; selection_end: number | null } }
+    | { type: "FileOpened"; payload: { path: string } }
+    | { type: "FileClosed"; payload: { path: string } }
+    | { type: "ActiveFileChanged"; payload: { path: string | null } }
+    | { type: "CursorMoved"; payload: { line: number; column: number } }
+    | { type: "SelectionChanged"; payload: { start: number; end: number } }
+    // Legacy
     | { type: "EditorState"; payload: { active_file: string | null } }
     | { type: "ContentDelta"; payload: { file: string; patch: string } };
 

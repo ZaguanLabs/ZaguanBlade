@@ -106,9 +106,22 @@ pub struct EditorContext {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", content = "payload")]
 pub enum EditorIntent {
+    /// Open a file (adds to open files, sets as active)
     OpenFile { path: String },
+    /// Close a file (removes from open files)
+    CloseFile { path: String },
+    /// Set the active file (must already be in open files, or None to clear)
+    SetActiveFile { path: Option<String> },
+    /// Update cursor position (for AI context)
+    UpdateCursor { line: u32, column: u32 },
+    /// Update selection (for AI context)
+    UpdateSelection { start: u32, end: u32 },
+    /// Request current editor state snapshot
+    GetState,
+    /// Legacy: save file
     SaveFile { path: String },
-    BufferUpdate { path: String, content: String }, // Virtual Buffer
+    /// Legacy: virtual buffer update
+    BufferUpdate { path: String, content: String },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -295,7 +308,28 @@ pub struct ToolActivityPayload {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", content = "payload")]
 pub enum EditorEvent {
-    EditorState { active_file: Option<String> }, // Minimal state for now
+    /// Full editor state snapshot (for recovery/sync)
+    StateSnapshot {
+        active_file: Option<String>,
+        open_files: Vec<String>,
+        cursor_line: Option<u32>,
+        cursor_column: Option<u32>,
+        selection_start: Option<u32>,
+        selection_end: Option<u32>,
+    },
+    /// File was opened and is now in the open files list
+    FileOpened { path: String },
+    /// File was closed and removed from open files list
+    FileClosed { path: String },
+    /// Active file changed
+    ActiveFileChanged { path: Option<String> },
+    /// Cursor position changed (debounced, not every keystroke)
+    CursorMoved { line: u32, column: u32 },
+    /// Selection changed
+    SelectionChanged { start: u32, end: u32 },
+    /// Legacy: minimal state
+    EditorState { active_file: Option<String> },
+    /// Legacy: content delta
     ContentDelta { file: String, patch: String },
 }
 

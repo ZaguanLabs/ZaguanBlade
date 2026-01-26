@@ -350,8 +350,164 @@ pub async fn dispatch(
             }
         },
         BladeIntent::Editor(editor_intent) => {
-            println!("Editor Intent: {:?}", editor_intent);
-            Ok(())
+            // Check if backend authority is enabled
+            let backend_authority = state.feature_flags.editor_backend_authority();
+            
+            match editor_intent {
+                blade_protocol::EditorIntent::OpenFile { path } => {
+                    if backend_authority {
+                        // Update backend state
+                        {
+                            let mut active = state.active_file.lock().unwrap();
+                            *active = Some(path.clone());
+                        }
+                        {
+                            let mut open = state.open_files.lock().unwrap();
+                            if !open.contains(&path) {
+                                open.push(path.clone());
+                            }
+                        }
+                        
+                        // Emit FileOpened event
+                        let _ = window.emit(
+                            "blade-event",
+                            blade_protocol::BladeEventEnvelope {
+                                id: uuid::Uuid::new_v4(),
+                                timestamp: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as u64,
+                                causality_id: Some(intent_id.to_string()),
+                                event: blade_protocol::BladeEvent::Editor(
+                                    blade_protocol::EditorEvent::FileOpened { path },
+                                ),
+                            },
+                        );
+                    } else {
+                        // Legacy: just log, frontend handles state
+                        println!("[Editor] OpenFile (frontend authority): {}", path);
+                    }
+                    Ok(())
+                }
+                blade_protocol::EditorIntent::CloseFile { path } => {
+                    if backend_authority {
+                        {
+                            let mut open = state.open_files.lock().unwrap();
+                            open.retain(|p| p != &path);
+                        }
+                        // If closing the active file, clear it
+                        {
+                            let mut active = state.active_file.lock().unwrap();
+                            if active.as_ref() == Some(&path) {
+                                *active = None;
+                            }
+                        }
+                        
+                        let _ = window.emit(
+                            "blade-event",
+                            blade_protocol::BladeEventEnvelope {
+                                id: uuid::Uuid::new_v4(),
+                                timestamp: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as u64,
+                                causality_id: Some(intent_id.to_string()),
+                                event: blade_protocol::BladeEvent::Editor(
+                                    blade_protocol::EditorEvent::FileClosed { path },
+                                ),
+                            },
+                        );
+                    }
+                    Ok(())
+                }
+                blade_protocol::EditorIntent::SetActiveFile { path } => {
+                    if backend_authority {
+                        {
+                            let mut active = state.active_file.lock().unwrap();
+                            *active = path.clone();
+                        }
+                        
+                        let _ = window.emit(
+                            "blade-event",
+                            blade_protocol::BladeEventEnvelope {
+                                id: uuid::Uuid::new_v4(),
+                                timestamp: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as u64,
+                                causality_id: Some(intent_id.to_string()),
+                                event: blade_protocol::BladeEvent::Editor(
+                                    blade_protocol::EditorEvent::ActiveFileChanged { path },
+                                ),
+                            },
+                        );
+                    }
+                    Ok(())
+                }
+                blade_protocol::EditorIntent::UpdateCursor { line, column } => {
+                    // Always update backend state for AI context (regardless of authority mode)
+                    {
+                        let mut cursor_line = state.cursor_line.lock().unwrap();
+                        let mut cursor_col = state.cursor_column.lock().unwrap();
+                        *cursor_line = Some(line as usize);
+                        *cursor_col = Some(column as usize);
+                    }
+                    // No event emission for cursor - too frequent, would cause noise
+                    Ok(())
+                }
+                blade_protocol::EditorIntent::UpdateSelection { start, end } => {
+                    // Always update backend state for AI context
+                    {
+                        let mut sel_start = state.selection_start_line.lock().unwrap();
+                        let mut sel_end = state.selection_end_line.lock().unwrap();
+                        *sel_start = Some(start as usize);
+                        *sel_end = Some(end as usize);
+                    }
+                    Ok(())
+                }
+                blade_protocol::EditorIntent::GetState => {
+                    // Return current editor state snapshot
+                    let snapshot = {
+                        let active = state.active_file.lock().unwrap();
+                        let open = state.open_files.lock().unwrap();
+                        let cursor_line = state.cursor_line.lock().unwrap();
+                        let cursor_col = state.cursor_column.lock().unwrap();
+                        let sel_start = state.selection_start_line.lock().unwrap();
+                        let sel_end = state.selection_end_line.lock().unwrap();
+                        
+                        blade_protocol::EditorEvent::StateSnapshot {
+                            active_file: active.clone(),
+                            open_files: open.clone(),
+                            cursor_line: cursor_line.map(|l| l as u32),
+                            cursor_column: cursor_col.map(|c| c as u32),
+                            selection_start: sel_start.map(|l| l as u32),
+                            selection_end: sel_end.map(|l| l as u32),
+                        }
+                    };
+                    
+                    let _ = window.emit(
+                        "blade-event",
+                        blade_protocol::BladeEventEnvelope {
+                            id: uuid::Uuid::new_v4(),
+                            timestamp: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64,
+                            causality_id: Some(intent_id.to_string()),
+                            event: blade_protocol::BladeEvent::Editor(snapshot),
+                        },
+                    );
+                    Ok(())
+                }
+                blade_protocol::EditorIntent::SaveFile { path } => {
+                    println!("[Editor] SaveFile: {} (delegating to File.Write)", path);
+                    Ok(())
+                }
+                blade_protocol::EditorIntent::BufferUpdate { path, content: _ } => {
+                    println!("[Editor] BufferUpdate: {} (legacy, no-op)", path);
+                    Ok(())
+                }
+            }
         }
         BladeIntent::Workflow(workflow_intent) => match workflow_intent {
             blade_protocol::WorkflowIntent::ApproveAction { action_id } => {
