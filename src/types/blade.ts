@@ -60,13 +60,13 @@ export type EditorIntent =
     | { type: "SetActiveFile"; payload: { path: string | null } }
     | { type: "UpdateCursor"; payload: { line: number; column: number } }
     | { type: "UpdateSelection"; payload: { start: number; end: number } }
-    | { type: "GetState"; payload?: Record<string, never> }
+    | { type: "GetState"; payload: Record<string, never> }
     // Tab management (headless)
     | { type: "OpenTab"; payload: { id: string; title: string; path?: string; tab_type?: string; content?: string; suggested_name?: string } }
     | { type: "CloseTab"; payload: { tab_id: string } }
     | { type: "SetActiveTab"; payload: { tab_id: string | null } }
     | { type: "ReorderTabs"; payload: { tab_ids: string[] } }
-    | { type: "GetTabState"; payload?: Record<string, never> }
+    | { type: "GetTabState"; payload: Record<string, never> }
     // Legacy
     | { type: "SaveFile"; payload: { path: string } }
     | { type: "BufferUpdate"; payload: { path: string; content: string } };

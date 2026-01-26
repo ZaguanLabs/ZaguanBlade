@@ -465,7 +465,7 @@ pub async fn dispatch(
                     }
                     Ok(())
                 }
-                blade_protocol::EditorIntent::GetState => {
+                blade_protocol::EditorIntent::GetState {} => {
                     // Return current editor state snapshot
                     let snapshot = {
                         let active = state.active_file.lock().unwrap();
@@ -672,7 +672,7 @@ pub async fn dispatch(
                     }
                     Ok(())
                 }
-                blade_protocol::EditorIntent::GetTabState => {
+                blade_protocol::EditorIntent::GetTabState {} => {
                     let snapshot = {
                         let tabs = state.tabs.lock().unwrap();
                         let active = state.active_tab_id.lock().unwrap();

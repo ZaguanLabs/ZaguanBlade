@@ -117,7 +117,7 @@ pub enum EditorIntent {
     /// Update selection (for AI context)
     UpdateSelection { start: u32, end: u32 },
     /// Request current editor state snapshot
-    GetState,
+    GetState {},
     // Tab management (headless)
     /// Open a tab (file or ephemeral)
     OpenTab {
@@ -139,7 +139,7 @@ pub enum EditorIntent {
     /// Reorder tabs
     ReorderTabs { tab_ids: Vec<String> },
     /// Request tab state snapshot
-    GetTabState,
+    GetTabState {},
     /// Legacy: save file
     SaveFile { path: String },
     /// Legacy: virtual buffer update

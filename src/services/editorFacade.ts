@@ -140,6 +140,7 @@ export const EditorFacade = {
     async getState(): Promise<void> {
         await BladeDispatcher.editor({
             type: 'GetState',
+            payload: {}
         });
         // State will be returned via blade-event EditorEvent.StateSnapshot
     },
