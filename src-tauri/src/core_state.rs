@@ -74,6 +74,36 @@ pub struct PendingApproval {
     pub description: String,
 }
 
+/// Tab information for backend-authoritative tab management
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TabInfo {
+    pub id: String,
+    pub title: String,
+    pub tab_type: TabType,
+    pub path: Option<String>,
+    pub is_dirty: bool,
+}
+
+/// Type of tab content
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "type", content = "data")]
+pub enum TabType {
+    /// Regular file tab
+    File,
+    /// Ephemeral document (unsaved, AI-generated content)
+    Ephemeral {
+        content: String,
+        suggested_name: String,
+    },
+}
+
+/// Tab state snapshot for UI sync
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TabStateSnapshot {
+    pub tabs: Vec<TabInfo>,
+    pub active_tab_id: Option<String>,
+}
+
 impl CoreStateSnapshot {
     /// Returns the list of capabilities this core supports
     pub fn default_capabilities() -> Vec<String> {

@@ -118,6 +118,28 @@ pub enum EditorIntent {
     UpdateSelection { start: u32, end: u32 },
     /// Request current editor state snapshot
     GetState,
+    // Tab management (headless)
+    /// Open a tab (file or ephemeral)
+    OpenTab {
+        id: String,
+        title: String,
+        #[serde(default)]
+        path: Option<String>,
+        #[serde(default)]
+        tab_type: Option<String>, // "file" or "ephemeral"
+        #[serde(default)]
+        content: Option<String>, // For ephemeral tabs
+        #[serde(default)]
+        suggested_name: Option<String>, // For ephemeral tabs
+    },
+    /// Close a tab by ID
+    CloseTab { tab_id: String },
+    /// Set the active tab
+    SetActiveTab { tab_id: Option<String> },
+    /// Reorder tabs
+    ReorderTabs { tab_ids: Vec<String> },
+    /// Request tab state snapshot
+    GetTabState,
     /// Legacy: save file
     SaveFile { path: String },
     /// Legacy: virtual buffer update
@@ -327,6 +349,20 @@ pub enum EditorEvent {
     CursorMoved { line: u32, column: u32 },
     /// Selection changed
     SelectionChanged { start: u32, end: u32 },
+    // Tab events (headless)
+    /// Tab was opened
+    TabOpened { tab: crate::core_state::TabInfo },
+    /// Tab was closed
+    TabClosed { tab_id: String },
+    /// Active tab changed
+    ActiveTabChanged { tab_id: Option<String> },
+    /// Tabs were reordered
+    TabsReordered { tab_ids: Vec<String> },
+    /// Full tab state snapshot
+    TabStateSnapshot {
+        tabs: Vec<crate::core_state::TabInfo>,
+        active_tab_id: Option<String>,
+    },
     /// Legacy: minimal state
     EditorState { active_file: Option<String> },
     /// Legacy: content delta

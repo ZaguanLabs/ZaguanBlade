@@ -507,6 +507,196 @@ pub async fn dispatch(
                     println!("[Editor] BufferUpdate: {} (legacy, no-op)", path);
                     Ok(())
                 }
+                // Tab management (headless)
+                blade_protocol::EditorIntent::OpenTab {
+                    id,
+                    title,
+                    path,
+                    tab_type,
+                    content,
+                    suggested_name,
+                } => {
+                    let tabs_authority = state.feature_flags.tabs_backend_authority();
+                    
+                    if tabs_authority {
+                        let tab_info = crate::core_state::TabInfo {
+                            id: id.clone(),
+                            title,
+                            path: path.clone(),
+                            is_dirty: false,
+                            tab_type: match tab_type.as_deref() {
+                                Some("ephemeral") => crate::core_state::TabType::Ephemeral {
+                                    content: content.unwrap_or_default(),
+                                    suggested_name: suggested_name.unwrap_or_default(),
+                                },
+                                _ => crate::core_state::TabType::File,
+                            },
+                        };
+                        
+                        {
+                            let mut tabs = state.tabs.lock().unwrap();
+                            // Remove existing tab with same ID if present
+                            tabs.retain(|t| t.id != id);
+                            tabs.push(tab_info.clone());
+                        }
+                        {
+                            let mut active = state.active_tab_id.lock().unwrap();
+                            *active = Some(id.clone());
+                        }
+                        // Also update active_file if it's a file tab
+                        if let Some(ref p) = path {
+                            let mut active_file = state.active_file.lock().unwrap();
+                            *active_file = Some(p.clone());
+                        }
+                        
+                        let _ = window.emit(
+                            "blade-event",
+                            blade_protocol::BladeEventEnvelope {
+                                id: uuid::Uuid::new_v4(),
+                                timestamp: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as u64,
+                                causality_id: Some(intent_id.to_string()),
+                                event: blade_protocol::BladeEvent::Editor(
+                                    blade_protocol::EditorEvent::TabOpened { tab: tab_info },
+                                ),
+                            },
+                        );
+                    } else {
+                        println!("[Editor] OpenTab (frontend authority): {}", id);
+                    }
+                    Ok(())
+                }
+                blade_protocol::EditorIntent::CloseTab { tab_id } => {
+                    let tabs_authority = state.feature_flags.tabs_backend_authority();
+                    
+                    if tabs_authority {
+                        {
+                            let mut tabs = state.tabs.lock().unwrap();
+                            tabs.retain(|t| t.id != tab_id);
+                        }
+                        {
+                            let mut active = state.active_tab_id.lock().unwrap();
+                            if active.as_ref() == Some(&tab_id) {
+                                *active = None;
+                            }
+                        }
+                        
+                        let _ = window.emit(
+                            "blade-event",
+                            blade_protocol::BladeEventEnvelope {
+                                id: uuid::Uuid::new_v4(),
+                                timestamp: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as u64,
+                                causality_id: Some(intent_id.to_string()),
+                                event: blade_protocol::BladeEvent::Editor(
+                                    blade_protocol::EditorEvent::TabClosed { tab_id },
+                                ),
+                            },
+                        );
+                    }
+                    Ok(())
+                }
+                blade_protocol::EditorIntent::SetActiveTab { tab_id } => {
+                    let tabs_authority = state.feature_flags.tabs_backend_authority();
+                    
+                    if tabs_authority {
+                        // Get the path of the tab being activated (if it's a file tab)
+                        let tab_path = {
+                            let tabs = state.tabs.lock().unwrap();
+                            tab_id.as_ref().and_then(|id| {
+                                tabs.iter().find(|t| &t.id == id).and_then(|t| t.path.clone())
+                            })
+                        };
+                        
+                        {
+                            let mut active = state.active_tab_id.lock().unwrap();
+                            *active = tab_id.clone();
+                        }
+                        // Also update active_file
+                        {
+                            let mut active_file = state.active_file.lock().unwrap();
+                            *active_file = tab_path;
+                        }
+                        
+                        let _ = window.emit(
+                            "blade-event",
+                            blade_protocol::BladeEventEnvelope {
+                                id: uuid::Uuid::new_v4(),
+                                timestamp: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as u64,
+                                causality_id: Some(intent_id.to_string()),
+                                event: blade_protocol::BladeEvent::Editor(
+                                    blade_protocol::EditorEvent::ActiveTabChanged { tab_id },
+                                ),
+                            },
+                        );
+                    }
+                    Ok(())
+                }
+                blade_protocol::EditorIntent::ReorderTabs { tab_ids } => {
+                    let tabs_authority = state.feature_flags.tabs_backend_authority();
+                    
+                    if tabs_authority {
+                        {
+                            let mut tabs = state.tabs.lock().unwrap();
+                            // Reorder tabs according to the provided order
+                            let mut reordered = Vec::with_capacity(tab_ids.len());
+                            for id in &tab_ids {
+                                if let Some(tab) = tabs.iter().find(|t| &t.id == id).cloned() {
+                                    reordered.push(tab);
+                                }
+                            }
+                            *tabs = reordered;
+                        }
+                        
+                        let _ = window.emit(
+                            "blade-event",
+                            blade_protocol::BladeEventEnvelope {
+                                id: uuid::Uuid::new_v4(),
+                                timestamp: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as u64,
+                                causality_id: Some(intent_id.to_string()),
+                                event: blade_protocol::BladeEvent::Editor(
+                                    blade_protocol::EditorEvent::TabsReordered { tab_ids },
+                                ),
+                            },
+                        );
+                    }
+                    Ok(())
+                }
+                blade_protocol::EditorIntent::GetTabState => {
+                    let snapshot = {
+                        let tabs = state.tabs.lock().unwrap();
+                        let active = state.active_tab_id.lock().unwrap();
+                        
+                        blade_protocol::EditorEvent::TabStateSnapshot {
+                            tabs: tabs.clone(),
+                            active_tab_id: active.clone(),
+                        }
+                    };
+                    
+                    let _ = window.emit(
+                        "blade-event",
+                        blade_protocol::BladeEventEnvelope {
+                            id: uuid::Uuid::new_v4(),
+                            timestamp: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64,
+                            causality_id: Some(intent_id.to_string()),
+                            event: blade_protocol::BladeEvent::Editor(snapshot),
+                        },
+                    );
+                    Ok(())
+                }
             }
         }
         BladeIntent::Workflow(workflow_intent) => match workflow_intent {

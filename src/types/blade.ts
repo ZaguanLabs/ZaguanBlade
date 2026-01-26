@@ -61,6 +61,12 @@ export type EditorIntent =
     | { type: "UpdateCursor"; payload: { line: number; column: number } }
     | { type: "UpdateSelection"; payload: { start: number; end: number } }
     | { type: "GetState"; payload?: Record<string, never> }
+    // Tab management (headless)
+    | { type: "OpenTab"; payload: { id: string; title: string; path?: string; tab_type?: string; content?: string; suggested_name?: string } }
+    | { type: "CloseTab"; payload: { tab_id: string } }
+    | { type: "SetActiveTab"; payload: { tab_id: string | null } }
+    | { type: "ReorderTabs"; payload: { tab_ids: string[] } }
+    | { type: "GetTabState"; payload?: Record<string, never> }
     // Legacy
     | { type: "SaveFile"; payload: { path: string } }
     | { type: "BufferUpdate"; payload: { path: string; content: string } };
@@ -139,9 +145,27 @@ export type EditorEvent =
     | { type: "ActiveFileChanged"; payload: { path: string | null } }
     | { type: "CursorMoved"; payload: { line: number; column: number } }
     | { type: "SelectionChanged"; payload: { start: number; end: number } }
+    // Tab events (headless)
+    | { type: "TabOpened"; payload: { tab: TabInfo } }
+    | { type: "TabClosed"; payload: { tab_id: string } }
+    | { type: "ActiveTabChanged"; payload: { tab_id: string | null } }
+    | { type: "TabsReordered"; payload: { tab_ids: string[] } }
+    | { type: "TabStateSnapshot"; payload: { tabs: TabInfo[]; active_tab_id: string | null } }
     // Legacy
     | { type: "EditorState"; payload: { active_file: string | null } }
     | { type: "ContentDelta"; payload: { file: string; patch: string } };
+
+export type TabInfo = {
+    id: string;
+    title: string;
+    tab_type: TabType;
+    path: string | null;
+    is_dirty: boolean;
+};
+
+export type TabType =
+    | { type: "File" }
+    | { type: "Ephemeral"; data: { content: string; suggested_name: string } };
 
 export type FileEvent =
     | { type: "Content"; payload: { path: string; data: string } }

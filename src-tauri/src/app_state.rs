@@ -45,6 +45,8 @@ pub struct AppState {
     pub uncommitted_changes: UncommittedChangeTracker, // Track AI changes pending accept/reject
     pub indexer_manager: Mutex<Option<crate::indexer::IndexerManager>>, // Project indexer
     pub feature_flags: FeatureFlags, // Headless migration feature flags
+    pub tabs: Mutex<Vec<crate::core_state::TabInfo>>, // Headless: tab state
+    pub active_tab_id: Mutex<Option<String>>, // Headless: active tab ID
 }
 
 impl AppState {
@@ -178,6 +180,8 @@ impl AppState {
             uncommitted_changes: UncommittedChangeTracker::new(),
             indexer_manager: Mutex::new(indexer_manager),
             feature_flags: FeatureFlags::new(),
+            tabs: Mutex::new(Vec::new()),
+            active_tab_id: Mutex::new(None),
         }
     }
 }
