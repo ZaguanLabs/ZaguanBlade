@@ -8,9 +8,10 @@ use crate::feature_flags::FeatureFlags;
 use crate::uncommitted_changes::UncommittedChangeTracker;
 use crate::warmup;
 use crate::workspace_manager::WorkspaceManager;
+use crate::ws_connection_manager::WsConnectionManager;
 use dotenvy::dotenv;
 use notify::RecommendedWatcher;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 pub struct AppState {
     pub chat_manager: Mutex<ChatManager>,
@@ -47,6 +48,7 @@ pub struct AppState {
     pub feature_flags: FeatureFlags, // Headless migration feature flags
     pub tabs: Mutex<Vec<crate::core_state::TabInfo>>, // Headless: tab state
     pub active_tab_id: Mutex<Option<String>>, // Headless: active tab ID
+    pub ws_connection: Arc<WsConnectionManager>, // Persistent WebSocket connection to zcoderd
 }
 
 impl AppState {
@@ -150,6 +152,12 @@ impl AppState {
         // This ensures GUI launches immediately without blocking on indexing
         let indexer_manager = None;
 
+        // Initialize WebSocket connection manager before config is moved
+        let ws_connection = Arc::new(WsConnectionManager::new(
+            config.blade_url.clone(),
+            config.api_key.clone(),
+        ));
+
         Self {
             chat_manager: Mutex::new(ChatManager::new(10)),
             conversation: Mutex::new(ConversationHistory::new()),
@@ -182,6 +190,7 @@ impl AppState {
             feature_flags: FeatureFlags::new(),
             tabs: Mutex::new(Vec::new()),
             active_tab_id: Mutex::new(None),
+            ws_connection,
         }
     }
 }

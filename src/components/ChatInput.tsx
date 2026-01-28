@@ -24,9 +24,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSend, onStop, disabled, 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
+            console.log('[TRIPWIRE] Enter pressed - disabled:', disabled, 'loading:', loading, 'hasText:', !!text.trim());
             if (text.trim() && !disabled && !loading) {
+                console.log('[TRIPWIRE] Calling onSend from Enter key');
                 onSend(text);
                 setText('');
+            } else {
+                console.log('[TRIPWIRE] Enter blocked - conditions not met');
             }
         }
     };
@@ -46,12 +50,17 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSend, onStop, disabled, 
                 />
                 <button
                     onClick={() => {
+                        console.log('[TRIPWIRE] Send button clicked - disabled:', disabled, 'loading:', loading, 'hasText:', !!text.trim());
                         const showStop = loading && !text.trim();
                         if (showStop && onStop) {
+                            console.log('[TRIPWIRE] Calling onStop');
                             onStop();
                         } else if (text.trim() && !disabled) {
+                            console.log('[TRIPWIRE] Calling onSend from button click');
                             onSend(text);
                             setText('');
+                        } else {
+                            console.log('[TRIPWIRE] Button click blocked - conditions not met');
                         }
                     }}
                     disabled={(!text.trim() && !loading) || disabled}

@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import App from './App';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { ContextMenuProvider } from './components/ui/ContextMenu';
 import './index.css';
 import './i18n'; // Initialize i18n
@@ -62,9 +63,11 @@ const AppWrapper = () => {
 };
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
-    <BrowserRouter>
-        <ContextMenuProvider>
-            <AppWrapper />
-        </ContextMenuProvider>
-    </BrowserRouter>
+    <ErrorBoundary>
+        <BrowserRouter>
+            <ContextMenuProvider>
+                <AppWrapper />
+            </ContextMenuProvider>
+        </BrowserRouter>
+    </ErrorBoundary>
 );

@@ -53,10 +53,13 @@ export function getLanguageExtension(filename?: string): Extension[] {
         case "less":
             return [css()];
         
-        // HTML
+        // HTML (including Astro, Vue, Svelte templates)
         case "html":
         case "htm":
         case "xhtml":
+        case "astro":
+        case "vue":
+        case "svelte":
             return [html()];
         
         // Markdown
@@ -141,6 +144,12 @@ export function getLanguageName(filename?: string): string {
         case "htm":
         case "xhtml":
             return "HTML";
+        case "astro":
+            return "Astro";
+        case "vue":
+            return "Vue";
+        case "svelte":
+            return "Svelte";
         case "md":
         case "markdown":
             return "Markdown";

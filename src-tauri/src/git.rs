@@ -1,9 +1,7 @@
 use serde::Serialize;
-use std::collections::HashMap;
 use std::process::Command;
 use tauri::State;
 
-use crate::blade_client::{BladeClient, WorkspaceInfo};
 use crate::AppState;
 
 #[derive(Debug, Clone, Serialize)]
@@ -628,15 +626,7 @@ Respond with ONLY the commit message, nothing else."#,
         diff = ctx.diff
     );
 
-    let (blade_url, api_key) = {
-        let config = state.config.lock().unwrap();
-        (config.blade_url.clone(), config.api_key.clone())
-    };
-
-    let http_client = reqwest::Client::new();
-    let blade_client = BladeClient::new(blade_url, http_client, api_key);
-
-    let workspace = WorkspaceInfo {
+    let workspace_info = crate::blade_ws_client::WorkspaceInfo {
         root: root.clone(),
         project_id: None,
         active_file: None,
@@ -644,22 +634,47 @@ Respond with ONLY the commit message, nothing else."#,
         open_files: Vec::new(),
     };
 
-    let mut events = blade_client
-        .send_message(None, model_id, prompt, workspace, HashMap::new())
-        .await?;
+    // Use shared WebSocket connection manager from AppState
+    let ws_manager = state.ws_connection.clone();
+    
+    // Connect (or reuse existing connection)
+    let mut ws_rx = ws_manager.ensure_connected().await
+        .map_err(|e| format!("WebSocket connection failed: {}", e))?;
+    
+    // Wait for authentication
+    let mut authenticated = false;
+    while let Some(event) = ws_rx.recv().await {
+        if let crate::blade_ws_client::BladeWsEvent::Connected { .. } = event {
+            authenticated = true;
+            break;
+        }
+        if let crate::blade_ws_client::BladeWsEvent::Error { message, .. } = event {
+            return Err(format!("Authentication failed: {}", message));
+        }
+    }
+    
+    if !authenticated {
+        return Err("WebSocket authentication timeout".to_string());
+    }
 
+    // Send the commit message generation request
+    ws_manager
+        .send_message(None, model_id, prompt, Some(workspace_info))
+        .await
+        .map_err(|e| format!("Failed to send message: {}", e))?;
+
+    // Collect response
     let mut content = String::new();
-    while let Some(event) = events.recv().await {
+    while let Some(event) = ws_rx.recv().await {
         match event {
-            crate::blade_client::BladeEvent::Text(chunk) => {
+            crate::blade_ws_client::BladeWsEvent::TextChunk(chunk) => {
                 content.push_str(&chunk);
             }
-            crate::blade_client::BladeEvent::Done { .. } => break,
-            crate::blade_client::BladeEvent::Error {
-                message, details, ..
-            } => {
-                return Err(format!("AI generation failed: {} {}", message, details));
+            crate::blade_ws_client::BladeWsEvent::ChatDone { .. } => break,
+            crate::blade_ws_client::BladeWsEvent::Error { message, .. } => {
+                return Err(format!("AI generation failed: {}", message));
             }
+            crate::blade_ws_client::BladeWsEvent::Disconnected => break,
             _ => {}
         }
     }

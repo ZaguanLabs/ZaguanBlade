@@ -47,6 +47,7 @@ pub mod utils;
 pub mod warmup;
 pub mod workflow_controller;
 pub mod workspace_manager;
+pub mod ws_connection_manager;
 pub mod xml_parser;
 
 pub use app_state::AppState;

@@ -29,10 +29,18 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
     const hadContentRef = useRef(hasContent);
 
     // Strip [THINKING] and [/THINKING] tags from content
+    // DEBUG: Log raw reasoning content to see what's being received
+    console.log(`[ReasoningBlock] Raw content (len=${content.length}): "${content.slice(0, 100)}..."`);
+    
     const cleanContent = content
         .replace(/\[THINKING\]/gi, '')
         .replace(/\[\/THINKING\]/gi, '')
         .trim();
+    
+    console.log(`[ReasoningBlock] Clean content (len=${cleanContent.length}): "${cleanContent.slice(0, 100)}..."`);
+    
+    // DEBUG: Use raw content if clean content is empty to see what's being suppressed
+    const displayContent = cleanContent || content;
 
     // Auto-expand when streaming starts, auto-collapse when content arrives
     useEffect(() => {
@@ -56,9 +64,10 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
         if (isExpanded && isActive && contentRef.current) {
             contentRef.current.scrollTop = contentRef.current.scrollHeight;
         }
-    }, [cleanContent, isExpanded, isActive]);
+    }, [displayContent, isExpanded, isActive]);
 
-    if (!cleanContent) return null;
+    // DEBUG: Show raw content even if empty after cleaning, to see what's being suppressed
+    if (!displayContent) return null;
 
     const handleToggle = () => {
         setIsExpanded(!isExpanded);
@@ -68,9 +77,10 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
     const isStreaming = isActive && !hasContent;
 
     return (
-        <div className={`my-2 rounded-md border overflow-hidden transition-all duration-200 ${isStreaming
-            ? 'border-purple-500/30 bg-purple-950/20'
-            : 'border-zinc-700/40 bg-zinc-800/30'
+        <div className={`my-2 rounded-md border overflow-hidden transition-all duration-200 ${
+            isStreaming
+                ? 'border-purple-500/40 bg-purple-950/30 shadow-lg shadow-purple-500/10'
+                : 'border-zinc-700/30 bg-zinc-800/20 opacity-70'
             }`}>
             {/* Header - clickable to toggle */}
             <button
@@ -78,14 +88,14 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
                 className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-zinc-700/30 transition-colors text-left"
             >
                 <div className="flex items-center gap-2 flex-1 min-w-0">
-                    <Brain className={`w-3 h-3 flex-shrink-0 ${isStreaming ? 'text-purple-400 animate-pulse' : 'text-zinc-500'}`} />
-                    <span className={`font-mono text-[9px] uppercase tracking-wider flex-shrink-0 ${isStreaming ? 'text-purple-400' : 'text-zinc-500'
+                    <Brain className={`w-3 h-3 flex-shrink-0 ${isStreaming ? 'text-purple-400 animate-pulse' : 'text-zinc-600'}`} />
+                    <span className={`font-mono text-[9px] uppercase tracking-wider flex-shrink-0 ${isStreaming ? 'text-purple-400' : 'text-zinc-600'
                         }`}>
                         {isStreaming ? 'Reasoning' : 'Thought Process'}
                     </span>
-                    {!isExpanded && cleanContent && (
+                    {!isExpanded && displayContent && (
                         <span className="text-[10px] text-zinc-500 truncate font-mono ml-2">
-                            {cleanContent.slice(0, 80)}...
+                            {displayContent.slice(0, 80)}...
                         </span>
                     )}
                 </div>
@@ -103,10 +113,10 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
             {isExpanded && (
                 <div
                     ref={contentRef}
-                    className="px-3 py-2 border-t border-zinc-700/30 bg-zinc-800/40 max-h-48 overflow-y-auto"
+                    className="px-3 py-2 border-t border-zinc-700/30 bg-zinc-800/40 max-h-48 overflow-y-auto overflow-x-hidden"
                 >
-                    <div className="text-zinc-400 text-[10px] leading-relaxed select-text whitespace-pre-wrap font-mono">
-                        {cleanContent}
+                    <div className="text-zinc-400 text-[10px] leading-relaxed select-text whitespace-pre-wrap font-mono break-words overflow-wrap-anywhere">
+                        {displayContent}
                     </div>
                 </div>
             )}
@@ -150,7 +160,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
         return null;
     }
 
-    const hasReasoning = !!message.reasoning;
+    const hasReasoning = !!message.reasoning || message.blocks?.some(b => b.type === 'reasoning');
 
     // Determine content split for rendering tool calls in the middle
     const toolCalls = (message.tool_calls || []).filter(
@@ -288,27 +298,48 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                 )}
 
                 {/* Thinking indicator for slow models - show when active but no content yet */}
+                {/* DISABLED: Investigating raw reasoning output
                 {isActive && isAssistant && !hasContent && !hasReasoning && !message.progress && (
                     <div className="flex items-center gap-2 py-2 text-zinc-500">
                         <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-500/70" />
                         <span className="text-[11px] font-mono">Thinking...</span>
                     </div>
                 )}
+                */}
 
                 {/* Render Interleaved Blocks if available, else Legacy Fallback */}
+                {(() => {
+                    // DEBUG: Log block structure
+                    if (message.blocks && message.blocks.length > 0) {
+                        const reasoningBlocks = message.blocks.filter(b => b.type === 'reasoning');
+                        if (reasoningBlocks.length > 1) {
+                            console.log(`[ChatMessage] Multiple reasoning blocks detected: ${reasoningBlocks.length} blocks`, 
+                                reasoningBlocks.map((b, i) => `Block ${i}: ${b.content.slice(0, 50)}...`));
+                        }
+                    }
+                    return null;
+                })()}
                 {message.blocks && message.blocks.length > 0 ? (
                     <>
-                        {message.blocks.map((block, idx) => {
-                            if (block.type === 'reasoning') {
-                                return (
-                                    <ReasoningBlock
-                                        key={block.id || `reasoning-${idx}`}
-                                        content={block.content}
-                                        isActive={isActive && idx === message.blocks!.length - 1}
-                                        hasContent={false} // Interleaved reasoning acts somewhat independent
-                                    />
-                                );
-                            } else if (block.type === 'text') {
+                        {(() => {
+                            // Find the index of the last reasoning block
+                            const lastReasoningIdx = message.blocks!.reduce((lastIdx, block, idx) => {
+                                return block.type === 'reasoning' ? idx : lastIdx;
+                            }, -1);
+                            
+                            return message.blocks!.map((block, idx) => {
+                                if (block.type === 'reasoning') {
+                                    // Only the last reasoning block is active
+                                    const isReasoningActive = isActive && idx === lastReasoningIdx;
+                                    return (
+                                        <ReasoningBlock
+                                            key={block.id || `reasoning-${idx}`}
+                                            content={block.content}
+                                            isActive={isReasoningActive}
+                                            hasContent={false} // Interleaved reasoning acts somewhat independent
+                                        />
+                                    );
+                                } else if (block.type === 'text') {
                                 return (
                                     <div key={block.id || `text-${idx}`} className="mb-2 select-text">
                                         <MarkdownRenderer content={block.content} />
@@ -409,7 +440,8 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 );
                             }
                             return null;
-                        })}
+                            });
+                        })()}
 
                         {/* Pending Actions (Command Approval) */}
                         {pendingActions && pendingActions.length > 0 && onApproveCommand && onSkipCommand && (
