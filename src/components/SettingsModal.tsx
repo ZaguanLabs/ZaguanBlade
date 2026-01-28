@@ -4,7 +4,6 @@ import { invoke } from '@tauri-apps/api/core';
 import { emit } from '@tauri-apps/api/event';
 import { X, Database, Cloud, Shield, Zap, HardDrive, Server, ChevronRight, Info, Loader2, Code, Key, CheckCircle2 } from 'lucide-react';
 import type { ApiConfig, BackendSettings } from '../types/settings';
-import { ZLPService } from '../services/zlp';
 
 type StorageMode = 'local' | 'server';
 
@@ -743,21 +742,6 @@ interface AccountSettingsProps {
 
 const AccountSettings: React.FC<AccountSettingsProps> = ({ settings, onChange }) => {
     const [showKey, setShowKey] = useState(false);
-    const [testStatus, setTestStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
-    const [testMessage, setTestMessage] = useState<string | null>(null);
-
-    const runCapaTest = async () => {
-        setTestStatus('loading');
-        setTestMessage(null);
-        try {
-            const result = await ZLPService.capabilities();
-            setTestStatus('success');
-            setTestMessage(`Connected to zcoderd! Ver: ${result.server_version}, Features: [${result.features.join(', ')}]`);
-        } catch (e: any) {
-            setTestStatus('error');
-            setTestMessage(`Connection failed: ${e.message || e}`);
-        }
-    };
 
     return (
         <div className="space-y-6">
@@ -824,37 +808,7 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ settings, onChange })
                         </button>
                     </div>
                 </div>
-
             </div>
-
-            <div className="border-t border-[var(--border-subtle)] pt-6">
-                <h4 className="text-base font-semibold text-[var(--fg-primary)] mb-2">Diagnostic Tools</h4>
-                <div className="p-4 bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded-lg">
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <div className="text-sm font-medium text-[var(--fg-primary)]">Test ZLP Connection</div>
-                            <div className="text-xs text-[var(--fg-tertiary)]">
-                                Verify connection to the ZLP Language Server
-                            </div>
-                        </div>
-                        <button
-                            onClick={runCapaTest}
-                            disabled={testStatus === 'loading'}
-                            className="px-3 py-1.5 text-xs font-medium border border-[var(--border-subtle)] hover:bg-[var(--bg-surface-hover)] rounded transition-colors flex items-center gap-2"
-                        >
-                            {testStatus === 'loading' && <Loader2 className="w-3 h-3 animate-spin" />}
-                            Test Connection
-                        </button>
-                    </div>
-                    {testMessage && (
-                        <div className={`mt-3 text-xs p-2 rounded ${testStatus === 'success' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
-                            {testMessage}
-                        </div>
-                    )}
-                </div>
-            </div>
-
-
         </div>
     );
 };

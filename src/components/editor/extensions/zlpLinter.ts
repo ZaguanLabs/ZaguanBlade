@@ -37,12 +37,18 @@ export function zlpLinter(filename: string) {
 
             // Convert ZLP errors to CodeMirror Diagnostics
             return errors.map((err: ZLPValidationError) => {
-                // Determine CodeMirror 0-indexed range
-                const startLine = view.state.doc.line(err.range.start.line);
-                const endLine = view.state.doc.line(err.range.end.line);
+                // ZLP ranges are 0-based; CodeMirror expects 1-based line numbers
+                const maxLine = view.state.doc.lines;
+                const startLineNumber = Math.min(maxLine, Math.max(1, err.range.start.line + 1));
+                const endLineNumber = Math.min(maxLine, Math.max(1, err.range.end.line + 1));
 
-                const from = Math.min(startLine.from + err.range.start.column, startLine.to);
-                const to = Math.min(endLine.from + err.range.end.column, endLine.to);
+                const startLine = view.state.doc.line(startLineNumber);
+                const endLine = view.state.doc.line(endLineNumber);
+
+                const rawFrom = Math.min(startLine.from + err.range.start.column, startLine.to);
+                const rawTo = Math.min(endLine.from + err.range.end.column, endLine.to);
+                const from = Math.min(rawFrom, rawTo);
+                const to = Math.max(rawFrom, rawTo);
 
                 return {
                     from,

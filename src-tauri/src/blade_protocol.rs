@@ -89,8 +89,8 @@ pub enum ChatIntent {
         #[serde(default)]
         context: Option<EditorContext>,
     },
-    StopGeneration,
-    ClearHistory,
+    StopGeneration {},
+    ClearHistory {},
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -106,9 +106,44 @@ pub struct EditorContext {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", content = "payload")]
 pub enum EditorIntent {
+    /// Open a file (adds to open files, sets as active)
     OpenFile { path: String },
+    /// Close a file (removes from open files)
+    CloseFile { path: String },
+    /// Set the active file (must already be in open files, or None to clear)
+    SetActiveFile { path: Option<String> },
+    /// Update cursor position (for AI context)
+    UpdateCursor { line: u32, column: u32 },
+    /// Update selection (for AI context)
+    UpdateSelection { start: u32, end: u32 },
+    /// Request current editor state snapshot
+    GetState {},
+    // Tab management (headless)
+    /// Open a tab (file or ephemeral)
+    OpenTab {
+        id: String,
+        title: String,
+        #[serde(default)]
+        path: Option<String>,
+        #[serde(default)]
+        tab_type: Option<String>, // "file" or "ephemeral"
+        #[serde(default)]
+        content: Option<String>, // For ephemeral tabs
+        #[serde(default)]
+        suggested_name: Option<String>, // For ephemeral tabs
+    },
+    /// Close a tab by ID
+    CloseTab { tab_id: String },
+    /// Set the active tab
+    SetActiveTab { tab_id: Option<String> },
+    /// Reorder tabs
+    ReorderTabs { tab_ids: Vec<String> },
+    /// Request tab state snapshot
+    GetTabState {},
+    /// Legacy: save file
     SaveFile { path: String },
-    BufferUpdate { path: String, content: String }, // Virtual Buffer
+    /// Legacy: virtual buffer update
+    BufferUpdate { path: String, content: String },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -203,7 +238,7 @@ pub enum LanguageIntent {
     IndexFile {
         file_path: String,
     },
-    IndexWorkspace,
+    IndexWorkspace {},
     SearchSymbols {
         query: String,
         #[serde(default)]
@@ -224,8 +259,9 @@ pub enum LanguageIntent {
         preview_lines: Option<usize>,
     },
     // Raw ZLP operations (v1.4)
+    // Note: field name avoids collision with serde content="payload"
     ZlpMessage {
-        payload: serde_json::Value,
+        data: serde_json::Value,
     },
 }
 
@@ -295,7 +331,42 @@ pub struct ToolActivityPayload {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", content = "payload")]
 pub enum EditorEvent {
-    EditorState { active_file: Option<String> }, // Minimal state for now
+    /// Full editor state snapshot (for recovery/sync)
+    StateSnapshot {
+        active_file: Option<String>,
+        open_files: Vec<String>,
+        cursor_line: Option<u32>,
+        cursor_column: Option<u32>,
+        selection_start: Option<u32>,
+        selection_end: Option<u32>,
+    },
+    /// File was opened and is now in the open files list
+    FileOpened { path: String },
+    /// File was closed and removed from open files list
+    FileClosed { path: String },
+    /// Active file changed
+    ActiveFileChanged { path: Option<String> },
+    /// Cursor position changed (debounced, not every keystroke)
+    CursorMoved { line: u32, column: u32 },
+    /// Selection changed
+    SelectionChanged { start: u32, end: u32 },
+    // Tab events (headless)
+    /// Tab was opened
+    TabOpened { tab: crate::core_state::TabInfo },
+    /// Tab was closed
+    TabClosed { tab_id: String },
+    /// Active tab changed
+    ActiveTabChanged { tab_id: Option<String> },
+    /// Tabs were reordered
+    TabsReordered { tab_ids: Vec<String> },
+    /// Full tab state snapshot
+    TabStateSnapshot {
+        tabs: Vec<crate::core_state::TabInfo>,
+        active_tab_id: Option<String>,
+    },
+    /// Legacy: minimal state
+    EditorState { active_file: Option<String> },
+    /// Legacy: content delta
     ContentDelta { file: String, patch: String },
 }
 
@@ -464,9 +535,10 @@ pub enum LanguageEvent {
         file_count: usize,
     },
     // Raw ZLP response (v1.4)
+    // Note: field name avoids collision with serde content="payload"
     ZlpResponse {
         original_request_id: String,
-        payload: serde_json::Value,
+        result: serde_json::Value,
     },
 }
 

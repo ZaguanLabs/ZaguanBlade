@@ -2,7 +2,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { v4 as uuidv4 } from 'uuid';
 import { BladeDispatcher } from './blade';
 import type { BladeEventEnvelope } from '../types/blade';
-import type { ZLPCapabilitiesResult, ZLPStructureResponse, ZLPValidationError, ZLPValidationResponse, ZLPGraphResponse } from '../types/zlp';
+import type { ZLPCapabilitiesResult, ZLPStructureResponse, ZLPValidationError, ZLPValidationResponse, ZLPGraphResponse, StructureNode } from '../types/zlp';
 
 export class ZLPService {
     private static TIMEOUT_MS = 15000;
@@ -21,7 +21,30 @@ export class ZLPService {
      * Get structural outline of the file
      */
     static async getStructure(file: string, content: string): Promise<ZLPStructureResponse> {
-        return this.send<ZLPStructureResponse>("zlp.structure", { file, content });
+        const response = await this.send<any>("zlp.structure", { file, content });
+
+        const payload = response?.result ?? response?.data ?? response;
+
+        if (Array.isArray(payload)) return payload;
+        if (Array.isArray(payload?.nodes)) return payload.nodes;
+
+        if (payload && typeof payload === 'object') {
+            const buckets = ['functions', 'imports', 'types', 'variables', 'classes', 'methods', 'symbols'];
+            const hasBucket = buckets.some((key) =>
+                Object.prototype.hasOwnProperty.call(payload, key)
+            );
+            if (hasBucket) {
+                const flattened = buckets.flatMap((key) =>
+                    Array.isArray((payload as Record<string, unknown>)[key])
+                        ? ((payload as Record<string, unknown>)[key] as StructureNode[])
+                        : []
+                );
+                return flattened;
+            }
+        }
+
+        console.warn('[ZLP] Unexpected structure response shape:', payload);
+        return [];
     }
 
     /**
@@ -29,13 +52,21 @@ export class ZLPService {
      */
     static async getDiagnostics(file: string, content: string, language: string): Promise<ZLPValidationError[]> {
         // ZLP validation returns { errors: [], ... }
-        const result = await this.send<ZLPValidationResponse>("zlp.validate", {
+        const result = await this.send<any>("zlp.validate", {
             path: file,
             content,
             language,
             mode: "fast"
         });
-        return result.errors || [];
+        if (Array.isArray(result)) return result;
+
+        const errors = result?.errors ?? result?.result?.errors ?? [];
+        if (!Array.isArray(errors)) {
+            console.warn('[ZLP] Unexpected validation response shape:', result);
+            return [];
+        }
+
+        return errors;
     }
 
     /**
@@ -75,8 +106,15 @@ export class ZLPService {
                         clearTimeout(timeoutId);
                         if (unlisten) unlisten();
 
-                        // Resolve with the inner payload (the ZLP result)
-                        resolve(langEvent.payload.payload as T);
+                        const zlpResult = langEvent.payload.result as any;
+                        if (zlpResult?.error) {
+                            reject(new Error(zlpResult.error.message || 'ZLP error'));
+                            return;
+                        }
+
+                        const normalized = zlpResult?.result ?? zlpResult;
+                        // Resolve with the normalized result
+                        resolve(normalized as T);
                     }
                 }
             }).then((u) => {
@@ -91,7 +129,7 @@ export class ZLPService {
         try {
             await BladeDispatcher.language({
                 type: "ZlpMessage",
-                payload: { method, params }
+                payload: { data: { method, params } }
             }, id);
         } catch (e) {
             // If dispatch fails, cleanup and throw

@@ -554,6 +554,23 @@ pub async fn handle_send_message<R: Runtime>(
                     Ok(_) => eprintln!("[LIB] TODO_UPDATED event emitted successfully"),
                     Err(e) => eprintln!("[LIB] Failed to emit TODO_UPDATED: {}", e),
                 }
+            } else if let DrainResult::MessageCompleted(id) = result {
+                // Emit MessageCompleted immediately to reset loading state
+                eprintln!("[ORCHESTRATOR] Emitting MessageCompleted: {}", id);
+                let _ = window.emit(
+                    "blade-event",
+                    blade_protocol::BladeEventEnvelope {
+                        id: uuid::Uuid::new_v4(),
+                        timestamp: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64,
+                        causality_id: None,
+                        event: blade_protocol::BladeEvent::Chat(
+                            blade_protocol::ChatEvent::MessageCompleted { id },
+                        ),
+                    },
+                );
             } else if let DrainResult::ContextLengthExceeded { message, token_count, max_tokens, excess, recoverable, recovery_hint } = result {
                 // RFC: Context Length Recovery - emit context-length-exceeded event to frontend
                 eprintln!("[LIB] Context length exceeded: {} (tokens: {:?}/{:?})", message, token_count, max_tokens);

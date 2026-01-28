@@ -42,8 +42,8 @@ export type BladeIntent =
 
 export type ChatIntent =
     | { type: "SendMessage"; payload: { content: string; model: string; context?: EditorContext } }
-    | { type: "StopGeneration"; payload?: Record<string, never> }
-    | { type: "ClearHistory"; payload?: Record<string, never> };
+    | { type: "StopGeneration"; payload: Record<string, never> }
+    | { type: "ClearHistory"; payload: Record<string, never> };
 
 export type EditorContext = {
     active_file: string | null;
@@ -56,6 +56,18 @@ export type EditorContext = {
 
 export type EditorIntent =
     | { type: "OpenFile"; payload: { path: string } }
+    | { type: "CloseFile"; payload: { path: string } }
+    | { type: "SetActiveFile"; payload: { path: string | null } }
+    | { type: "UpdateCursor"; payload: { line: number; column: number } }
+    | { type: "UpdateSelection"; payload: { start: number; end: number } }
+    | { type: "GetState"; payload: Record<string, never> }
+    // Tab management (headless)
+    | { type: "OpenTab"; payload: { id: string; title: string; path?: string; tab_type?: string; content?: string; suggested_name?: string } }
+    | { type: "CloseTab"; payload: { tab_id: string } }
+    | { type: "SetActiveTab"; payload: { tab_id: string | null } }
+    | { type: "ReorderTabs"; payload: { tab_ids: string[] } }
+    | { type: "GetTabState"; payload: Record<string, never> }
+    // Legacy
     | { type: "SaveFile"; payload: { path: string } }
     | { type: "BufferUpdate"; payload: { path: string; content: string } };
 
@@ -127,8 +139,33 @@ export type ChatEvent =
     | { type: "GenerationSignal"; payload: { is_generating: boolean } };
 
 export type EditorEvent =
+    | { type: "StateSnapshot"; payload: { active_file: string | null; open_files: string[]; cursor_line: number | null; cursor_column: number | null; selection_start: number | null; selection_end: number | null } }
+    | { type: "FileOpened"; payload: { path: string } }
+    | { type: "FileClosed"; payload: { path: string } }
+    | { type: "ActiveFileChanged"; payload: { path: string | null } }
+    | { type: "CursorMoved"; payload: { line: number; column: number } }
+    | { type: "SelectionChanged"; payload: { start: number; end: number } }
+    // Tab events (headless)
+    | { type: "TabOpened"; payload: { tab: TabInfo } }
+    | { type: "TabClosed"; payload: { tab_id: string } }
+    | { type: "ActiveTabChanged"; payload: { tab_id: string | null } }
+    | { type: "TabsReordered"; payload: { tab_ids: string[] } }
+    | { type: "TabStateSnapshot"; payload: { tabs: TabInfo[]; active_tab_id: string | null } }
+    // Legacy
     | { type: "EditorState"; payload: { active_file: string | null } }
     | { type: "ContentDelta"; payload: { file: string; patch: string } };
+
+export type TabInfo = {
+    id: string;
+    title: string;
+    tab_type: TabType;
+    path: string | null;
+    is_dirty: boolean;
+};
+
+export type TabType =
+    | { type: "File" }
+    | { type: "Ephemeral"; data: { content: string; suggested_name: string } };
 
 export type FileEvent =
     | { type: "Content"; payload: { path: string; data: string } }
@@ -215,20 +252,20 @@ export interface ChatMessage {
 
 export type LanguageIntent =
     | { type: "IndexFile"; payload: { file_path: string } }
-    | { type: "IndexWorkspace"; payload?: Record<string, never> }
+    | { type: "IndexWorkspace"; payload: Record<string, never> }
     | { type: "SearchSymbols"; payload: { query: string; file_path?: string | null; symbol_types?: string[] | null } }
     | { type: "GetSymbolAt"; payload: { file_path: string; line: number; character: number } }
     | { type: "DidOpen"; payload: { file_path: string; content: string; language_id: string } }
     | { type: "DidChange"; payload: { file_path: string; content: string; version: number } }
     | { type: "DidClose"; payload: { file_path: string } }
-    | { type: "ZlpMessage"; payload: any };
+    | { type: "ZlpMessage"; payload: { data: any } };
 
 export type LanguageEvent =
     | { type: "FileIndexed"; payload: { file_path: string; symbol_count: number } }
     | { type: "WorkspaceIndexed"; payload: { file_count: number; symbol_count: number; duration_ms: number } }
     | { type: "SymbolsFound"; payload: { intent_id: string; symbols: LanguageSymbol[] } }
     | { type: "SymbolAt"; payload: { intent_id: string; symbol: LanguageSymbol | null } }
-    | { type: "ZlpResponse"; payload: { original_request_id: string; payload: any } };
+    | { type: "ZlpResponse"; payload: { original_request_id: string; result: any } };
 
 export type LanguagePosition = {
     line: number;

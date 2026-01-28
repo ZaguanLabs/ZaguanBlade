@@ -146,11 +146,11 @@ pub async fn dispatch(
                         message: e,
                     })
                 }
-                blade_protocol::ChatIntent::StopGeneration => {
+                blade_protocol::ChatIntent::StopGeneration {} => {
                     chat::stop_generation(state.clone(), app_handle.clone());
                     Ok(())
                 }
-                blade_protocol::ChatIntent::ClearHistory => {
+                blade_protocol::ChatIntent::ClearHistory {} => {
                     let mut conversation = state.conversation.lock().unwrap();
                     conversation.clear();
                     let _ = window.emit(
@@ -350,8 +350,354 @@ pub async fn dispatch(
             }
         },
         BladeIntent::Editor(editor_intent) => {
-            println!("Editor Intent: {:?}", editor_intent);
-            Ok(())
+            // Check if backend authority is enabled
+            let backend_authority = state.feature_flags.editor_backend_authority();
+            
+            match editor_intent {
+                blade_protocol::EditorIntent::OpenFile { path } => {
+                    if backend_authority {
+                        // Update backend state
+                        {
+                            let mut active = state.active_file.lock().unwrap();
+                            *active = Some(path.clone());
+                        }
+                        {
+                            let mut open = state.open_files.lock().unwrap();
+                            if !open.contains(&path) {
+                                open.push(path.clone());
+                            }
+                        }
+                        
+                        // Emit FileOpened event
+                        let _ = window.emit(
+                            "blade-event",
+                            blade_protocol::BladeEventEnvelope {
+                                id: uuid::Uuid::new_v4(),
+                                timestamp: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as u64,
+                                causality_id: Some(intent_id.to_string()),
+                                event: blade_protocol::BladeEvent::Editor(
+                                    blade_protocol::EditorEvent::FileOpened { path },
+                                ),
+                            },
+                        );
+                    } else {
+                        // Legacy: just log, frontend handles state
+                        println!("[Editor] OpenFile (frontend authority): {}", path);
+                    }
+                    Ok(())
+                }
+                blade_protocol::EditorIntent::CloseFile { path } => {
+                    if backend_authority {
+                        {
+                            let mut open = state.open_files.lock().unwrap();
+                            open.retain(|p| p != &path);
+                        }
+                        // If closing the active file, clear it
+                        {
+                            let mut active = state.active_file.lock().unwrap();
+                            if active.as_ref() == Some(&path) {
+                                *active = None;
+                            }
+                        }
+                        
+                        let _ = window.emit(
+                            "blade-event",
+                            blade_protocol::BladeEventEnvelope {
+                                id: uuid::Uuid::new_v4(),
+                                timestamp: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as u64,
+                                causality_id: Some(intent_id.to_string()),
+                                event: blade_protocol::BladeEvent::Editor(
+                                    blade_protocol::EditorEvent::FileClosed { path },
+                                ),
+                            },
+                        );
+                    }
+                    Ok(())
+                }
+                blade_protocol::EditorIntent::SetActiveFile { path } => {
+                    if backend_authority {
+                        {
+                            let mut active = state.active_file.lock().unwrap();
+                            *active = path.clone();
+                        }
+                        
+                        let _ = window.emit(
+                            "blade-event",
+                            blade_protocol::BladeEventEnvelope {
+                                id: uuid::Uuid::new_v4(),
+                                timestamp: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as u64,
+                                causality_id: Some(intent_id.to_string()),
+                                event: blade_protocol::BladeEvent::Editor(
+                                    blade_protocol::EditorEvent::ActiveFileChanged { path },
+                                ),
+                            },
+                        );
+                    }
+                    Ok(())
+                }
+                blade_protocol::EditorIntent::UpdateCursor { line, column } => {
+                    // Always update backend state for AI context (regardless of authority mode)
+                    {
+                        let mut cursor_line = state.cursor_line.lock().unwrap();
+                        let mut cursor_col = state.cursor_column.lock().unwrap();
+                        *cursor_line = Some(line as usize);
+                        *cursor_col = Some(column as usize);
+                    }
+                    // No event emission for cursor - too frequent, would cause noise
+                    Ok(())
+                }
+                blade_protocol::EditorIntent::UpdateSelection { start, end } => {
+                    // Always update backend state for AI context
+                    {
+                        let mut sel_start = state.selection_start_line.lock().unwrap();
+                        let mut sel_end = state.selection_end_line.lock().unwrap();
+                        *sel_start = Some(start as usize);
+                        *sel_end = Some(end as usize);
+                    }
+                    Ok(())
+                }
+                blade_protocol::EditorIntent::GetState {} => {
+                    // Return current editor state snapshot
+                    let snapshot = {
+                        let active = state.active_file.lock().unwrap();
+                        let open = state.open_files.lock().unwrap();
+                        let cursor_line = state.cursor_line.lock().unwrap();
+                        let cursor_col = state.cursor_column.lock().unwrap();
+                        let sel_start = state.selection_start_line.lock().unwrap();
+                        let sel_end = state.selection_end_line.lock().unwrap();
+                        
+                        blade_protocol::EditorEvent::StateSnapshot {
+                            active_file: active.clone(),
+                            open_files: open.clone(),
+                            cursor_line: cursor_line.map(|l| l as u32),
+                            cursor_column: cursor_col.map(|c| c as u32),
+                            selection_start: sel_start.map(|l| l as u32),
+                            selection_end: sel_end.map(|l| l as u32),
+                        }
+                    };
+                    
+                    let _ = window.emit(
+                        "blade-event",
+                        blade_protocol::BladeEventEnvelope {
+                            id: uuid::Uuid::new_v4(),
+                            timestamp: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64,
+                            causality_id: Some(intent_id.to_string()),
+                            event: blade_protocol::BladeEvent::Editor(snapshot),
+                        },
+                    );
+                    Ok(())
+                }
+                blade_protocol::EditorIntent::SaveFile { path } => {
+                    println!("[Editor] SaveFile: {} (delegating to File.Write)", path);
+                    Ok(())
+                }
+                blade_protocol::EditorIntent::BufferUpdate { path, content: _ } => {
+                    println!("[Editor] BufferUpdate: {} (legacy, no-op)", path);
+                    Ok(())
+                }
+                // Tab management (headless)
+                blade_protocol::EditorIntent::OpenTab {
+                    id,
+                    title,
+                    path,
+                    tab_type,
+                    content,
+                    suggested_name,
+                } => {
+                    let tabs_authority = state.feature_flags.tabs_backend_authority();
+                    
+                    if tabs_authority {
+                        let tab_info = crate::core_state::TabInfo {
+                            id: id.clone(),
+                            title,
+                            path: path.clone(),
+                            is_dirty: false,
+                            tab_type: match tab_type.as_deref() {
+                                Some("ephemeral") => crate::core_state::TabType::Ephemeral {
+                                    content: content.unwrap_or_default(),
+                                    suggested_name: suggested_name.unwrap_or_default(),
+                                },
+                                _ => crate::core_state::TabType::File,
+                            },
+                        };
+                        
+                        {
+                            let mut tabs = state.tabs.lock().unwrap();
+                            // Remove existing tab with same ID if present
+                            tabs.retain(|t| t.id != id);
+                            tabs.push(tab_info.clone());
+                        }
+                        {
+                            let mut active = state.active_tab_id.lock().unwrap();
+                            *active = Some(id.clone());
+                        }
+                        // Also update active_file if it's a file tab
+                        if let Some(ref p) = path {
+                            let mut active_file = state.active_file.lock().unwrap();
+                            *active_file = Some(p.clone());
+                        }
+                        
+                        let _ = window.emit(
+                            "blade-event",
+                            blade_protocol::BladeEventEnvelope {
+                                id: uuid::Uuid::new_v4(),
+                                timestamp: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as u64,
+                                causality_id: Some(intent_id.to_string()),
+                                event: blade_protocol::BladeEvent::Editor(
+                                    blade_protocol::EditorEvent::TabOpened { tab: tab_info },
+                                ),
+                            },
+                        );
+                    } else {
+                        println!("[Editor] OpenTab (frontend authority): {}", id);
+                    }
+                    Ok(())
+                }
+                blade_protocol::EditorIntent::CloseTab { tab_id } => {
+                    let tabs_authority = state.feature_flags.tabs_backend_authority();
+                    
+                    if tabs_authority {
+                        {
+                            let mut tabs = state.tabs.lock().unwrap();
+                            tabs.retain(|t| t.id != tab_id);
+                        }
+                        {
+                            let mut active = state.active_tab_id.lock().unwrap();
+                            if active.as_ref() == Some(&tab_id) {
+                                *active = None;
+                            }
+                        }
+                        
+                        let _ = window.emit(
+                            "blade-event",
+                            blade_protocol::BladeEventEnvelope {
+                                id: uuid::Uuid::new_v4(),
+                                timestamp: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as u64,
+                                causality_id: Some(intent_id.to_string()),
+                                event: blade_protocol::BladeEvent::Editor(
+                                    blade_protocol::EditorEvent::TabClosed { tab_id },
+                                ),
+                            },
+                        );
+                    }
+                    Ok(())
+                }
+                blade_protocol::EditorIntent::SetActiveTab { tab_id } => {
+                    let tabs_authority = state.feature_flags.tabs_backend_authority();
+                    
+                    if tabs_authority {
+                        // Get the path of the tab being activated (if it's a file tab)
+                        let tab_path = {
+                            let tabs = state.tabs.lock().unwrap();
+                            tab_id.as_ref().and_then(|id| {
+                                tabs.iter().find(|t| &t.id == id).and_then(|t| t.path.clone())
+                            })
+                        };
+                        
+                        {
+                            let mut active = state.active_tab_id.lock().unwrap();
+                            *active = tab_id.clone();
+                        }
+                        // Also update active_file
+                        {
+                            let mut active_file = state.active_file.lock().unwrap();
+                            *active_file = tab_path;
+                        }
+                        
+                        let _ = window.emit(
+                            "blade-event",
+                            blade_protocol::BladeEventEnvelope {
+                                id: uuid::Uuid::new_v4(),
+                                timestamp: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as u64,
+                                causality_id: Some(intent_id.to_string()),
+                                event: blade_protocol::BladeEvent::Editor(
+                                    blade_protocol::EditorEvent::ActiveTabChanged { tab_id },
+                                ),
+                            },
+                        );
+                    }
+                    Ok(())
+                }
+                blade_protocol::EditorIntent::ReorderTabs { tab_ids } => {
+                    let tabs_authority = state.feature_flags.tabs_backend_authority();
+                    
+                    if tabs_authority {
+                        {
+                            let mut tabs = state.tabs.lock().unwrap();
+                            // Reorder tabs according to the provided order
+                            let mut reordered = Vec::with_capacity(tab_ids.len());
+                            for id in &tab_ids {
+                                if let Some(tab) = tabs.iter().find(|t| &t.id == id).cloned() {
+                                    reordered.push(tab);
+                                }
+                            }
+                            *tabs = reordered;
+                        }
+                        
+                        let _ = window.emit(
+                            "blade-event",
+                            blade_protocol::BladeEventEnvelope {
+                                id: uuid::Uuid::new_v4(),
+                                timestamp: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as u64,
+                                causality_id: Some(intent_id.to_string()),
+                                event: blade_protocol::BladeEvent::Editor(
+                                    blade_protocol::EditorEvent::TabsReordered { tab_ids },
+                                ),
+                            },
+                        );
+                    }
+                    Ok(())
+                }
+                blade_protocol::EditorIntent::GetTabState {} => {
+                    let snapshot = {
+                        let tabs = state.tabs.lock().unwrap();
+                        let active = state.active_tab_id.lock().unwrap();
+                        
+                        blade_protocol::EditorEvent::TabStateSnapshot {
+                            tabs: tabs.clone(),
+                            active_tab_id: active.clone(),
+                        }
+                    };
+                    
+                    let _ = window.emit(
+                        "blade-event",
+                        blade_protocol::BladeEventEnvelope {
+                            id: uuid::Uuid::new_v4(),
+                            timestamp: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64,
+                            causality_id: Some(intent_id.to_string()),
+                            event: blade_protocol::BladeEvent::Editor(snapshot),
+                        },
+                    );
+                    Ok(())
+                }
+            }
         }
         BladeIntent::Workflow(workflow_intent) => match workflow_intent {
             blade_protocol::WorkflowIntent::ApproveAction { action_id } => {
@@ -676,9 +1022,7 @@ pub async fn dispatch(
         }
         BladeIntent::Language(language_intent) => {
             match language_intent {
-                blade_protocol::LanguageIntent::ZlpMessage { payload } => {
-                    println!("[Language] Dispatching ZLP Message: {:?}", payload);
-
+                blade_protocol::LanguageIntent::ZlpMessage { data } => {
                     // 1. Get config
                     let (blade_url, api_key) = {
                         let config = state.config.lock().unwrap();
@@ -691,7 +1035,7 @@ pub async fn dispatch(
                         crate::blade_client::BladeClient::new(blade_url, http_client, api_key);
 
                     // 3. Send request
-                    let mut rx = blade_client.send_zlp_request(payload).await.map_err(|e| {
+                    let mut rx = blade_client.send_zlp_request(data).await.map_err(|e| {
                         blade_protocol::BladeError::Internal {
                             trace_id: intent_id.to_string(),
                             message: format!("ZLP Request Failed: {}", e),
@@ -720,7 +1064,7 @@ pub async fn dispatch(
                                                 blade_protocol::LanguageEvent::ZlpResponse {
                                                     original_request_id: intent_id_clone
                                                         .to_string(),
-                                                    payload: val,
+                                                    result: val,
                                                 },
                                             ),
                                         },

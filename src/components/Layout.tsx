@@ -16,12 +16,27 @@ import { StorageSetupModal } from './StorageSetupModal';
 import { useProjectState, type ProjectState } from '../hooks/useProjectState';
 import { useWarmup } from '../hooks/useWarmup';
 import { useGitStatus } from '../hooks/useGitStatus';
+import { EditorFacade, isTabsBackendAuthoritative } from '../services/editorFacade';
+import type { BladeEventEnvelope, EditorEvent, TabInfo } from '../types/blade';
 const ChatPanel = React.lazy(() => import('./ChatPanel').then(module => ({ default: module.ChatPanel })));
 const GitPanel = React.lazy(() => import('./GitPanel').then(module => ({ default: module.GitPanel })));
 const FileHistoryPanel = React.lazy(() => import('./FileHistoryPanel').then(module => ({ default: module.FileHistoryPanel })));
 const SettingsModal = React.lazy(() => import('./SettingsModal').then(module => ({ default: module.SettingsModal })));
 const ProtocolExplorer = React.lazy(() => import('./dev/ProtocolExplorer').then(module => ({ default: module.ProtocolExplorer })));
 import type { BackendSettings } from '../types/settings';
+
+// Helper to convert backend TabInfo to frontend Tab
+function tabInfoToTab(info: TabInfo): Tab {
+    const isEphemeral = typeof info.tab_type === 'object' && info.tab_type.type === 'Ephemeral';
+    return {
+        id: info.id,
+        title: info.title,
+        type: isEphemeral ? 'ephemeral' : 'file',
+        path: info.path ?? undefined,
+        content: isEphemeral && 'data' in info.tab_type ? (info.tab_type as any).data.content : undefined,
+        suggestedName: isEphemeral && 'data' in info.tab_type ? (info.tab_type as any).data.suggested_name : undefined,
+    };
+}
 
 interface Tab {
     id: string;
@@ -77,7 +92,49 @@ const AppLayoutInner: React.FC = () => {
         setActiveFile(activeTab?.path || null);
     }, [activeTabId, tabs, setActiveFile]);
 
+    // Listen for backend tab events when tabs_backend_authority is enabled
+    useEffect(() => {
+        let unlisten: (() => void) | undefined;
 
+        const setup = async () => {
+            unlisten = await listen<BladeEventEnvelope>('blade-event', (event) => {
+                const bladeEvent = event.payload.event;
+                if (bladeEvent.type !== 'Editor') return;
+
+                const editorEvent = bladeEvent.payload as EditorEvent;
+
+                if (editorEvent.type === 'TabOpened') {
+                    const newTab = tabInfoToTab(editorEvent.payload.tab);
+                    setTabs(prev => {
+                        if (prev.find(t => t.id === newTab.id)) return prev;
+                        return [...prev, newTab];
+                    });
+                } else if (editorEvent.type === 'TabClosed') {
+                    const closedId = editorEvent.payload.tab_id;
+                    setTabs(prev => prev.filter(t => t.id !== closedId));
+                    setActiveTabId(prev => prev === closedId ? null : prev);
+                } else if (editorEvent.type === 'ActiveTabChanged') {
+                    setActiveTabId(editorEvent.payload.tab_id);
+                } else if (editorEvent.type === 'TabsReordered') {
+                    const orderedIds = editorEvent.payload.tab_ids;
+                    setTabs(prev => {
+                        const tabMap = new Map(prev.map(t => [t.id, t]));
+                        return orderedIds.map(id => tabMap.get(id)).filter((t): t is Tab => !!t);
+                    });
+                } else if (editorEvent.type === 'TabStateSnapshot') {
+                    const { tabs: backendTabs, active_tab_id } = editorEvent.payload;
+                    setTabs(backendTabs.map(tabInfoToTab));
+                    setActiveTabId(active_tab_id);
+                }
+            });
+        };
+
+        setup().catch(console.error);
+
+        return () => {
+            if (unlisten) unlisten();
+        };
+    }, []);
 
     // Research progress state
     const [researchProgress, setResearchProgress] = useState<{
@@ -307,23 +364,41 @@ const AppLayoutInner: React.FC = () => {
         const existingTab = tabs.find(t => t.type === 'file' && t.path === path);
         if (!existingTab) {
             const filename = path.split('/').pop() || path;
-            const newTab: Tab = {
-                id: `file-${path}`,
-                title: filename,
-                type: 'file',
-                path,
-            };
-            setTabs(prev => [...prev, newTab]);
-            setActiveTabId(newTab.id);
+            const tabId = `file-${path}`;
+
+            // If backend authority, dispatch to backend (it will emit TabOpened event)
+            if (isTabsBackendAuthoritative()) {
+                EditorFacade.openTab(tabId, filename, path, 'file').catch(console.error);
+                EditorFacade.setActiveTab(tabId).catch(console.error);
+            } else {
+                // Legacy: update local state directly
+                const newTab: Tab = {
+                    id: tabId,
+                    title: filename,
+                    type: 'file',
+                    path,
+                };
+                setTabs(prev => [...prev, newTab]);
+                setActiveTabId(tabId);
+            }
         } else {
-            setActiveTabId(existingTab.id);
+            // Tab exists, just activate it
+            if (isTabsBackendAuthoritative()) {
+                EditorFacade.setActiveTab(existingTab.id).catch(console.error);
+            } else {
+                setActiveTabId(existingTab.id);
+            }
         }
     };
 
     const handleTabClose = (tabId: string) => {
-        setTabs(prev => prev.filter(t => t.id !== tabId));
-        if (activeTabId === tabId) {
-            setActiveTabId(tabs.length > 1 ? tabs[0].id : null);
+        if (isTabsBackendAuthoritative()) {
+            EditorFacade.closeTab(tabId).catch(console.error);
+        } else {
+            setTabs(prev => prev.filter(t => t.id !== tabId));
+            if (activeTabId === tabId) {
+                setActiveTabId(tabs.length > 1 ? tabs[0].id : null);
+            }
         }
     };
 

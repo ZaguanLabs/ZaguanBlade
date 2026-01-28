@@ -25,6 +25,14 @@ impl WorkspaceManager {
             if let Ok(content) = fs::read_to_string(&state_path) {
                 if let Ok(state) = serde_json::from_str::<WorkspaceState>(&content) {
                     state.last_workspace.and_then(|p| {
+                        // Guard against AppImage mount directories
+                        if p.contains("/.mount_") || p.contains("/tmp/.mount_") {
+                            eprintln!(
+                                "[WORKSPACE] Ignoring saved AppImage mount directory: {}",
+                                p
+                            );
+                            return None;
+                        }
                         let path = PathBuf::from(p);
                         if path.exists() && path.is_dir() {
                             Some(path)
@@ -54,10 +62,23 @@ impl WorkspaceManager {
             Err(_) => path,
         };
 
+        // Guard against AppImage mount directories being set as workspace
+        // These are temporary directories that shouldn't be used as project roots
+        let path_str = path.to_string_lossy();
+        if path_str.contains("/.mount_") || path_str.contains("/tmp/.mount_") {
+            eprintln!(
+                "[WORKSPACE] Rejecting AppImage mount directory as workspace: {}",
+                path_str
+            );
+            return;
+        }
+
         if path.is_dir() {
+            eprintln!("[WORKSPACE] Setting workspace to: {}", path.display());
             self.workspace = Some(path.clone());
             self.save_state();
         } else if let Some(parent) = path.parent() {
+            eprintln!("[WORKSPACE] Setting workspace to parent: {}", parent.display());
             self.workspace = Some(parent.to_path_buf());
             self.save_state();
         }

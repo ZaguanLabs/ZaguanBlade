@@ -48,11 +48,23 @@ export function useChat() {
                             updated = [...prev];
                             changed = true;
                         }
+                        // Merge blocks: keep tool_call/command_execution/todo/research blocks from existing message,
+                        // replace text/reasoning blocks with new ones from the buffer
+                        const existingNonTextBlocks = (msg.blocks || []).filter(
+                            b => b.type !== 'text' && b.type !== 'reasoning'
+                        );
+                        const newTextBlocks = update.blocks.filter(
+                            b => b.type === 'text' || b.type === 'reasoning'
+                        );
+                        // Natural conversation flow: tool calls first, then response text after
+                        // This matches how the model actually works - it calls tools, gets results, then responds
+                        const mergedBlocks = [...existingNonTextBlocks, ...newTextBlocks];
+                        
                         updated[idx] = {
                             ...msg,
                             content: update.content,
                             reasoning: update.reasoning,
-                            blocks: update.blocks,
+                            blocks: mergedBlocks,
                         };
                     }
                 } else {
@@ -211,15 +223,35 @@ export function useChat() {
                     }
 
                     // Build blocks structure
+                    // Get existing message to check for tool_call blocks that were added via ToolUpdate
+                    const existingMsg = messages.find(m => m.id === id);
+                    const existingNonTextBlocks = (existingMsg?.blocks || []).filter(
+                        b => b.type !== 'text' && b.type !== 'reasoning'
+                    );
+                    
                     let blocks = blocksRef.get(id) || [];
-                    const lastBlock = blocks[blocks.length - 1];
+                    
+                    // Merge with existing non-text blocks (tool_call, command_execution, etc.)
+                    // to ensure we know about tool calls when deciding whether to create new reasoning blocks
+                    const allBlocks = [...blocks];
+                    for (const nonTextBlock of existingNonTextBlocks) {
+                        if (!allBlocks.some(b => b.id === nonTextBlock.id)) {
+                            allBlocks.push(nonTextBlock);
+                        }
+                    }
+                    
+                    const lastBlock = allBlocks[allBlocks.length - 1];
                     
                     if (type === 'reasoning') {
+                        // Create new reasoning block if:
+                        // 1. No blocks exist yet
+                        // 2. Last block is not reasoning (text or tool_call)
+                        // This ensures reasoning after tool calls gets its own block
                         if (lastBlock && lastBlock.type === 'reasoning') {
-                            // Append to existing reasoning block
+                            // Append to existing reasoning block (continuous reasoning)
                             blocks[blocks.length - 1] = { ...lastBlock, content: lastBlock.content + chunk };
                         } else {
-                            // Create new reasoning block
+                            // Create new reasoning block (after text, tool_call, or first block)
                             blocks = [...blocks, { type: 'reasoning', content: chunk, id: crypto.randomUUID() }];
                         }
                     } else {
@@ -615,14 +647,17 @@ export function useChat() {
 
     // Queue processing effect
     useEffect(() => {
+        console.log('[TRIPWIRE] Queue effect - loading:', loading, 'queueLength:', messageQueue.length);
         if (!loading && messageQueue.length > 0) {
             const nextMessage = messageQueue[0];
+            console.log('[TRIPWIRE] Processing queued message:', nextMessage.substring(0, 50));
             setMessageQueue(prev => prev.slice(1));
             dispatchToBackend(nextMessage);
         }
     }, [loading, messageQueue, dispatchToBackend]);
 
     const sendMessage = useCallback((text: string) => {
+        console.log('[TRIPWIRE] sendMessage called - loading:', loading, 'text:', text.substring(0, 50));
         // Optimistically add user message
         const userMsg: ChatMessage = {
             id: crypto.randomUUID(),
@@ -632,11 +667,12 @@ export function useChat() {
         setMessages(prev => [...prev, userMsg]);
 
         // Add to queue for processing
+        console.log('[TRIPWIRE] Adding message to queue');
         setMessageQueue(prev => [...prev, text]);
-    }, []);
+    }, [loading]);
     const stopGeneration = useCallback(async () => {
         try {
-            await BladeDispatcher.chat({ type: 'StopGeneration' });
+            await BladeDispatcher.chat({ type: 'StopGeneration', payload: {} });
             setLoading(false);
             // Clear any pending command approvals when stopping
             setPendingActions(null);

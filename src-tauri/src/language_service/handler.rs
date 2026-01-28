@@ -55,7 +55,7 @@ impl LanguageHandler {
                     symbol_count: symbols.len(),
                 }
             }
-            LanguageIntent::IndexWorkspace => {
+            LanguageIntent::IndexWorkspace {} => {
                 let s = service.clone();
                 let stats = spawn_blocking(move || s.index_directory("."))
                     .await

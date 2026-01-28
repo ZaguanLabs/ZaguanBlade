@@ -1,16 +1,15 @@
 // use eframe::egui; // Removed
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 
 use crate::agentic_loop::AgenticLoop;
 use crate::ai_workflow::{AiWorkflow, PendingToolBatch};
+use crate::blade_ws_client::BladeWsClient;
 use crate::config::ApiConfig;
 use crate::conversation::ConversationHistory;
 use crate::models::registry::ModelInfo;
 use crate::protocol::ToolFunction;
 use crate::protocol::{ChatEvent, ChatMessage, ChatRole, ToolCall};
-// use crate::protocol::{ChatEvent, ChatMessage, ChatRole, ToolCall}; // Duplicates removed
-// use crate::xml_parser; // Duplicate removed
 use crate::reasoning_parser::ReasoningParser;
 use crate::xml_parser;
 
@@ -36,6 +35,7 @@ pub enum DrainResult {
         action: String,
     },
     TodoUpdated(Vec<crate::protocol::TodoItem>),
+    MessageCompleted(String), // Message ID for completed message
     Error(String),
     /// RFC: Context Length Recovery - context limit exceeded
     ContextLengthExceeded {
@@ -60,6 +60,7 @@ pub struct ChatManager {
     pub updated_assistant_message: Option<ChatMessage>,
     pub message_seq: u64, // v1.1: sequence number for MessageDelta events
     pub pending_results: std::collections::VecDeque<DrainResult>,
+    ws_client: Option<Arc<BladeWsClient>>, // Persistent connection for the conversation
 }
 
 impl ChatManager {
@@ -76,6 +77,7 @@ impl ChatManager {
             updated_assistant_message: None,
             message_seq: 0,
             pending_results: std::collections::VecDeque::new(),
+            ws_client: None,
         }
     }
     pub fn start_stream(
@@ -155,15 +157,27 @@ impl ChatManager {
             .map(|m| m.content.clone())
             .unwrap_or_default();
 
-        // Create WebSocket Blade client
+        // Close any existing WebSocket connection before starting a new one
+        if let Some(old_client) = self.ws_client.take() {
+            eprintln!("[CHAT MGR] Closing previous WebSocket connection");
+            let old_client_clone = old_client.clone();
+            tokio::spawn(async move {
+                old_client_clone.close().await;
+            });
+        }
+
+        // Create new WebSocket client for this conversation
         let blade_url = api_config.blade_url.clone();
         let api_key = api_config.api_key.clone();
         eprintln!("[BLADE WS] Connecting to: {}", blade_url);
         eprintln!("[BLADE WS] Sending message: {}", user_message);
         eprintln!("[BLADE WS] API key present: {}", !api_key.is_empty());
 
-        let ws_client = crate::blade_ws_client::BladeWsClient::new(blade_url, api_key);
+        let ws_client = Arc::new(BladeWsClient::new(blade_url.clone(), api_key.clone()));
+        self.ws_client = Some(ws_client.clone());
         let session_id = self.session_id.clone();
+        
+        eprintln!("[CHAT MGR] Starting stream with session_id: {:?}", session_id);
 
         // RFC-002: Clone conversation messages for local storage mode context retrieval
         // Convert to BladeMessage format that zcoderd expects
@@ -232,7 +246,7 @@ impl ChatManager {
                         );
                         match event {
                             crate::blade_ws_client::BladeWsEvent::Connected { .. } => {
-                                eprintln!("[CHAT MGR] Authenticated, sending chat message");
+                                eprintln!("[CHAT MGR] Authenticated, sending chat message with session_id: {:?}", session_id);
                                 authenticated = true;
 
                                 // Send chat message with storage mode (RFC-002)
@@ -250,6 +264,7 @@ impl ChatManager {
                                     let _ = tx.send(ChatEvent::Error(e));
                                     break;
                                 }
+                                eprintln!("[CHAT MGR] Message sent successfully");
                             }
                             crate::blade_ws_client::BladeWsEvent::Session {
                                 session_id,
@@ -490,6 +505,10 @@ impl ChatManager {
                     let _ = tx.send(ChatEvent::Error(e));
                 }
             }
+            
+            eprintln!("[CHAT MGR] Async task completed, keeping WebSocket open for tool results");
+            // Don't close the connection here - it will be reused for tool results
+            // Connection will be closed when a new message starts or conversation ends
         });
 
         // Try to receive session_id (non-blocking)
@@ -515,7 +534,7 @@ impl ChatManager {
         &mut self,
         batch: PendingToolBatch,
         conversation: &mut ConversationHistory,
-        api_config: &ApiConfig,
+        _api_config: &ApiConfig,
         _models: &[ModelInfo],
         _selected_model: usize,
         workspace: Option<&PathBuf>,
@@ -556,26 +575,29 @@ impl ChatManager {
 
         // Send tool results to Blade Protocol via WebSocket
         // We need to send ALL tool results, not just the first one
-        let blade_url = api_config.blade_url.clone();
-        let api_key = api_config.api_key.clone();
         let session_id = self
             .session_id
             .clone()
             .ok_or_else(|| "No session ID available".to_string())?;
 
         eprintln!(
-            "[CHAT MGR] Sending {} tool results via WebSocket (Sequential/Single-Connection)",
+            "[CHAT MGR] Sending {} tool results via WebSocket",
             batch.file_results.len()
         );
 
-        // Create the client once
-        let ws_client = crate::blade_ws_client::BladeWsClient::new(blade_url, api_key);
+        // Reuse existing WebSocket client from start_stream
+        let ws_client = self
+            .ws_client
+            .as_ref()
+            .ok_or_else(|| "No WebSocket client available".to_string())?
+            .clone();
         let results = batch.file_results.clone(); // Clone for the task
         let is_local_mode_clone = is_local_mode; // Clone for async task
 
         // RFC-002: Clone conversation messages for local storage mode context retrieval
         // Convert to BladeMessage format that zcoderd expects
-        let conversation_messages: Vec<serde_json::Value> = conversation
+        // Note: No longer needed since we're not creating a new connection
+        let _conversation_messages: Vec<serde_json::Value> = conversation
             .get_messages()
             .iter()
             .map(|msg| {
@@ -615,254 +637,53 @@ impl ChatManager {
             })
             .collect();
 
-        // Channel for the main thread
-        let (tx, rx) = mpsc::channel();
-
-        // Spawn a SINGLE task to handle the entire batch interaction
+        // Send tool results through the existing WebSocket connection
+        // No need to create a new connection - reuse the one from start_stream
+        eprintln!("[CHAT MGR] Sending {} tool results through existing connection", results.len());
+        
         tokio::spawn(async move {
-            eprintln!("[CHAT MGR] Connecting to WebSocket for batch tool submission");
+            // Send ALL results sequentially
+            // RFC: Large Tool Result Handling - truncate in local mode
+            for (call, result) in &results {
+                let tool_content = if is_local_mode_clone {
+                    result.to_tool_content_truncated()
+                } else {
+                    result.to_tool_content()
+                };
+                eprintln!(
+                    "[TOOL RESULT SEND] call_id={}, success={}",
+                    call.id, result.success
+                );
 
-            match ws_client.connect().await {
-                Ok(mut ws_rx) => {
-                    let mut authenticated = false;
-                    let mut results_sent_count = 0;
-                    let total_results = results.len();
-                    let mut saw_final_chat_done = false;
-                    let mut saw_content = false;
+                let tool_result = crate::blade_ws_client::ToolResult {
+                    success: result.success,
+                    content: tool_content,
+                    error: if result.success {
+                        None
+                    } else {
+                        Some("Tool execution failed".to_string())
+                    },
+                };
 
-                    // Event loop
-                    while let Some(event) = ws_rx.recv().await {
-                        eprintln!(
-                            "[CHAT MGR BATCH] Received event: {:?}",
-                            std::mem::discriminant(&event)
-                        );
-                        match event {
-                            crate::blade_ws_client::BladeWsEvent::Connected { .. } => {
-                                eprintln!("[CHAT MGR] Authenticated, starting batch submission");
-                                authenticated = true;
-
-                                // Send ALL results sequentially
-                                // RFC: Large Tool Result Handling - truncate in local mode
-                                for (call, result) in &results {
-                                    let tool_content = if is_local_mode_clone {
-                                        result.to_tool_content_truncated()
-                                    } else {
-                                        result.to_tool_content()
-                                    };
-                                    eprintln!(
-                                        "[TOOL RESULT SEND] call_id={}, success={}",
-                                        call.id, result.success
-                                    );
-
-                                    let tool_result = crate::blade_ws_client::ToolResult {
-                                        success: result.success,
-                                        content: tool_content,
-                                        error: if result.success {
-                                            None
-                                        } else {
-                                            Some("Tool execution failed".to_string())
-                                        },
-                                    };
-
-                                    if let Err(e) = ws_client
-                                        .send_tool_result(
-                                            session_id.clone(),
-                                            call.id.clone(),
-                                            tool_result,
-                                        )
-                                        .await
-                                    {
-                                        eprintln!(
-                                            "[CHAT MGR] Failed to send tool result {}: {}",
-                                            call.id, e
-                                        );
-                                        // We continue trying to send others? Or break?
-                                        // Creating an error here might be fatal for the turn.
-                                        let _ = tx.send(ChatEvent::Error(format!(
-                                            "Failed to send tool result: {}",
-                                            e
-                                        )));
-                                        break;
-                                    }
-                                    results_sent_count += 1;
-                                }
-                                eprintln!(
-                                    "[CHAT MGR] All {} results sent. Listening for response...",
-                                    results_sent_count
-                                );
-                            }
-                            crate::blade_ws_client::BladeWsEvent::TextChunk(text) => {
-                                saw_content = true;
-                                let _ = tx.send(ChatEvent::Chunk(text));
-                            }
-                            crate::blade_ws_client::BladeWsEvent::ReasoningChunk(text) => {
-                                saw_content = true;
-                                let _ = tx.send(ChatEvent::ReasoningChunk(text));
-                            }
-                            crate::blade_ws_client::BladeWsEvent::ToolCall {
-                                id,
-                                name,
-                                arguments,
-                            } => {
-                                saw_content = true;
-                                let tool_call = ToolCall {
-                                    id,
-                                    typ: "function".to_string(),
-                                    function: ToolFunction {
-                                        name,
-                                        arguments: arguments.to_string(),
-                                    },
-                                    status: Some("executing".to_string()),
-                                    result: None,
-                                };
-                                let _ = tx.send(ChatEvent::ToolCalls(vec![tool_call]));
-                            }
-                            crate::blade_ws_client::BladeWsEvent::ToolResultAck {
-                                pending_count,
-                            } => {
-                                // zcoderd acknowledged our tool result but is waiting for more
-                                eprintln!(
-                                    "[CHAT MGR] Tool result acknowledged, {} more pending",
-                                    pending_count
-                                );
-                                // Continue listening - don't close connection or emit Done
-                            }
-                            crate::blade_ws_client::BladeWsEvent::TodoUpdated { todos } => {
-                                eprintln!("[CHAT MGR] Todo updated: {} items", todos.len());
-                                let protocol_todos: Vec<crate::protocol::TodoItem> = todos
-                                    .into_iter()
-                                    .map(|t| crate::protocol::TodoItem {
-                                        content: t.content.clone(),
-                                        active_form: t.active_form,
-                                        status: t.status,
-                                    })
-                                    .collect();
-                                let _ = tx.send(ChatEvent::TodoUpdated(protocol_todos));
-                            }
-                            crate::blade_ws_client::BladeWsEvent::ChatDone { finish_reason, recoverable } => {
-                                eprintln!("[CHAT MGR] Chat done received: {} (recoverable: {:?})", finish_reason, recoverable);
-                                // CRITICAL: Only consider the turn done if we have sent all results
-                                // AND if we have received some content (chunks/tools) from the new generation.
-                                // zcoderd/Protocol v2 can send ChatDone immediately as an ACK for tool results,
-                                // which we must ignore to catch the actual response stream.
-                                //
-                                // EXCEPTION: If we've sent all results and received ChatDone but no content,
-                                // this likely means the model encountered an error (e.g., tool failure) and
-                                // chose not to generate a response. We should accept this ChatDone to prevent
-                                // hanging indefinitely.
-
-                                // RFC: Context Length Recovery - check for context_length_exceeded finish reason
-                                if finish_reason == "context_length_exceeded" {
-                                    let _ = tx.send(ChatEvent::ContextLengthExceeded {
-                                        message: "Context limit reached during generation".to_string(),
-                                        token_count: None,
-                                        max_tokens: None,
-                                        excess: None,
-                                        recoverable: recoverable.unwrap_or(true),
-                                        recovery_hint: None,
-                                    });
-                                }
-
-                                // Accept ChatDone if:
-                                // 1. We've sent all results AND received content (normal case), OR
-                                // 2. We've sent all results AND this is a stop/error finish (model chose not to respond)
-                                let is_terminal_finish = matches!(finish_reason.as_str(), "stop" | "error" | "context_length_exceeded");
-                                if results_sent_count >= total_results && (saw_content || is_terminal_finish) {
-                                    saw_final_chat_done = true;
-                                    let _ = tx.send(ChatEvent::Done);
-                                } else {
-                                    eprintln!("[CHAT MGR] Ignoring premature ChatDone (sent {}/{}, saw_content={}, finish_reason={})", 
-                                        results_sent_count, total_results, saw_content, finish_reason);
-                                }
-                            }
-                            crate::blade_ws_client::BladeWsEvent::Error { error_type, code, message, token_count, max_tokens, excess, recoverable, recovery_hint } => {
-                                eprintln!("[CHAT MGR] Error: {} ({}) - {} (tokens: {:?}/{:?})", error_type, code, message, token_count, max_tokens);
-                                
-                                // RFC: Error Handling - use error_type for logic, message for display
-                                match error_type.as_str() {
-                                    "context_length_exceeded" => {
-                                        let _ = tx.send(ChatEvent::ContextLengthExceeded {
-                                            message: message.clone(),
-                                            token_count,
-                                            max_tokens,
-                                            excess,
-                                            recoverable: recoverable.unwrap_or(true),
-                                            recovery_hint,
-                                        });
-                                        // Don't break - session is still valid
-                                    }
-                                    "rate_limit_error" | "overloaded_error" => {
-                                        let hint = recovery_hint.unwrap_or_else(|| "Please wait a moment and try again.".to_string());
-                                        let _ = tx.send(ChatEvent::Error(format!("{} - {}", message, hint)));
-                                        // Don't break - these are transient
-                                    }
-                                    "authentication_error" => {
-                                        let _ = tx.send(ChatEvent::Error(message));
-                                        break;
-                                    }
-                                    _ => {
-                                        if authenticated && (saw_final_chat_done || saw_content) {
-                                            let _ = tx.send(ChatEvent::Done);
-                                            break;
-                                        } else if recoverable.unwrap_or(false) {
-                                            let _ = tx.send(ChatEvent::Error(message));
-                                        } else {
-                                            let _ = tx.send(ChatEvent::Error(message));
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                            crate::blade_ws_client::BladeWsEvent::Disconnected => {
-                                eprintln!("[CHAT MGR] Disconnected");
-                                if authenticated && (saw_final_chat_done || saw_content) {
-                                    let _ = tx.send(ChatEvent::Done);
-                                }
-                                break;
-                            }
-                            crate::blade_ws_client::BladeWsEvent::GetConversationContext {
-                                request_id,
-                                session_id: req_session_id,
-                            } => {
-                                // RFC-002: Send conversation context back to server
-                                eprintln!(
-                                    "[CHAT MGR BATCH] GetConversationContext received, sending {} messages",
-                                    conversation_messages.len()
-                                );
-                                let result = ws_client
-                                    .send_conversation_context(
-                                        request_id.clone(),
-                                        req_session_id.clone(),
-                                        conversation_messages.clone(),
-                                    )
-                                    .await;
-                                if let Err(e) = result {
-                                    eprintln!(
-                                        "[CHAT MGR BATCH] Failed to send conversation context: {}",
-                                        e
-                                    );
-                                }
-                            }
-                            _ => {}
-                        }
-
-                        if !authenticated {
-                            continue;
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("[CHAT MGR] WebSocket connection failed: {}", e);
-                    let _ = tx.send(ChatEvent::Error(e));
+                if let Err(e) = ws_client
+                    .send_tool_result(
+                        session_id.clone(),
+                        call.id.clone(),
+                        tool_result,
+                    )
+                    .await
+                {
+                    eprintln!(
+                        "[CHAT MGR] Failed to send tool result {}: {}",
+                        call.id, e
+                    );
                 }
             }
+            eprintln!("[CHAT MGR] All {} tool results sent", results.len());
         });
 
-        self.rx = Some(rx);
-        // Set streaming=true to indicate we have an active connection waiting for events
-        // The event loop will poll at 60 FPS, which is appropriate when waiting for model response
-        // The real CPU spike was caused by the event loop breaking prematurely, not by polling
-        self.streaming = true;
+        // The existing rx from start_stream will continue to receive events
+        // No need to create a new rx or set streaming again
         Ok(())
     }
 
@@ -883,8 +704,22 @@ impl ChatManager {
 
         // Aggressively drain all available events from the channel
         let mut events = Vec::new();
-        while let Ok(ev) = rx.try_recv() {
-            events.push(ev);
+        let mut channel_closed = false;
+        loop {
+            match rx.try_recv() {
+                Ok(ev) => events.push(ev),
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    channel_closed = true;
+                    break;
+                }
+            }
+        }
+
+        // If channel is closed, clear rx so orchestrator knows we're done
+        if channel_closed {
+            eprintln!("[DRAIN] Channel closed, clearing rx");
+            self.rx = None;
         }
 
         if events.is_empty() {
@@ -1067,6 +902,14 @@ impl ChatManager {
                                 .push_back(DrainResult::TodoUpdated(todos));
                         }
                         ChatEvent::Done => {
+                            // NOTE: Do NOT clear rx here.
+                            // ChatEvent::Done can mean either:
+                            // - true end-of-turn (final assistant response)
+                            // - boundary where the model is yielding to tools and will send more ToolCall events
+                            // We decide whether to clear rx / emit MessageCompleted later, once we know if
+                            // there are accumulated tool calls.
+                            eprintln!("[DRAIN] ChatEvent::Done received");
+                            
                             // Ensure progress is cleared on done
                             if let Some(last) = conversation.last_assistant_mut() {
                                 if last.progress.is_some() {
@@ -1163,9 +1006,33 @@ impl ChatManager {
             };
             self.accumulated_tool_calls.clear();
 
+            // If there are no tool calls, this is a true end-of-turn.
+            // Only then should we clear rx and emit MessageCompleted (frontend uses this to reset loading).
+            let should_complete_turn = tool_calls.is_none() && error_msg.is_none();
+            if should_complete_turn {
+                eprintln!("[DRAIN] Turn complete: clearing rx + emitting MessageCompleted");
+                self.rx = None;
+
+                let msg_id = conversation.last().and_then(|msg| {
+                    if msg.role == ChatRole::Assistant {
+                        msg.id
+                            .clone()
+                            .or_else(|| Some(uuid::Uuid::new_v4().to_string()))
+                    } else {
+                        None
+                    }
+                });
+                if let Some(id) = msg_id {
+                    self.pending_results
+                        .push_back(DrainResult::MessageCompleted(id));
+                }
+            } else {
+                eprintln!("[DRAIN] Done received but tool calls pending: keeping rx open");
+            }
+
             eprintln!(
                 "[DRAIN] Calling finalize_turn with tool_calls: {:?}",
-                tool_calls.as_ref().map(|t| t.len())
+                tool_calls.as_ref().map(|c| c.len())
             );
             self.finalize_turn(
                 conversation,
@@ -1175,10 +1042,9 @@ impl ChatManager {
                 selected_model,
             );
 
-            // Set streaming=false to reduce CPU usage during tool execution
-            // Clear rx so drain_events returns from pending_results, not from stale channel
+            // Set streaming=false to reduce CPU usage during tool execution.
+            // IMPORTANT: Do NOT clear rx if we expect more events (e.g., additional tool calls).
             self.streaming = false;
-            self.rx = None;
             
             // Clear reasoning parser since this turn is done
             self.reasoning_parser.reset();
