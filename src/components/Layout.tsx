@@ -81,7 +81,7 @@ const AppLayoutInner: React.FC = () => {
         generateCommitMessage: generateGitCommitMessage,
     } = useGitStatus();
     const gitChangedCount = gitStatus?.changedCount ?? 0;
-    const { selectedModelId, setSelectedModelId, messages } = chat;
+    const { selectedModelId, setSelectedModelId, messages, refreshModels } = chat;
     const processingFilesRef = useRef<Set<string>>(new Set());
     const terminalPaneRef = useRef<TerminalPaneHandle>(null);
 
@@ -402,12 +402,18 @@ const AppLayoutInner: React.FC = () => {
         }
     };
 
-    const handleEphemeralSave = (ephemeralTabId: string, savedPath: string) => {
+    const handleEphemeralSave = async (ephemeralTabId: string, savedPath: string) => {
+        console.log('[Layout] handleEphemeralSave called:', { ephemeralTabId, savedPath });
+        
         // Convert ephemeral tab to regular file tab
         setTabs(prev => {
             const ephemeralTab = prev.find(t => t.id === ephemeralTabId);
-            if (!ephemeralTab) return prev;
+            if (!ephemeralTab) {
+                console.log('[Layout] Ephemeral tab not found:', ephemeralTabId);
+                return prev;
+            }
 
+            console.log('[Layout] Found ephemeral tab:', ephemeralTab);
             const filename = savedPath.split('/').pop() || savedPath;
             const newTab: Tab = {
                 id: `file-${savedPath}`,
@@ -416,14 +422,24 @@ const AppLayoutInner: React.FC = () => {
                 path: savedPath,
             };
 
+            console.log('[Layout] Creating new file tab:', newTab);
             // Remove ephemeral tab and add file tab
             return [...prev.filter(t => t.id !== ephemeralTabId), newTab];
         });
 
         // Switch to the new file tab
-        setActiveTabId(`file-${savedPath}`);
+        const newTabId = `file-${savedPath}`;
+        console.log('[Layout] Switching to new tab:', newTabId);
+        setActiveTabId(newTabId);
 
-        // No-op here; approval handled by caller
+        // Trigger backend to open the file so it loads in the editor
+        try {
+            console.log('[Layout] Calling open_file_in_editor:', savedPath);
+            await invoke('open_file_in_editor', { path: savedPath });
+            console.log('[Layout] open_file_in_editor completed successfully');
+        } catch (error) {
+            console.error('[Layout] Failed to open saved file:', error);
+        }
     };
 
     const handleMouseDown = (e: React.MouseEvent) => {
@@ -1063,7 +1079,12 @@ const AppLayoutInner: React.FC = () => {
             {/* Settings Modal */}
             <Suspense fallback={null}>
                 {isSettingsOpen && (
-                    <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} workspacePath={workspacePath} />
+                    <SettingsModal
+                        isOpen={isSettingsOpen}
+                        onClose={() => setIsSettingsOpen(false)}
+                        workspacePath={workspacePath}
+                        onRefreshModels={refreshModels}
+                    />
                 )}
             </Suspense>
 

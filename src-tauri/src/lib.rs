@@ -175,6 +175,7 @@ pub fn run() {
             commands::files::list_files,
             commands::files::read_file_content,
             commands::files::write_file_content,
+            commands::files::open_file_in_editor,
             // Project
             commands::project::read_binary_file,
             commands::project::get_recent_workspaces,
@@ -192,6 +193,8 @@ pub fn run() {
             // Settings
             commands::settings::get_global_settings,
             commands::settings::save_global_settings,
+            commands::settings::test_ollama_connection,
+            commands::settings::refresh_ollama_models,
             // Chat
             commands::chat::send_message,
             commands::chat::list_models,
@@ -253,6 +256,7 @@ pub fn run() {
             ephemeral_commands::close_ephemeral_document,
             ephemeral_commands::list_ephemeral_documents,
             ephemeral_commands::save_ephemeral_document,
+            ephemeral_commands::save_ephemeral_document_to_workspace,
             // Protocol Dispatcher
             protocol_dispatcher::dispatch,
         ])

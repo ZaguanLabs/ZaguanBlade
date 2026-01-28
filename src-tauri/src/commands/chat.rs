@@ -39,11 +39,23 @@ pub async fn send_message<R: Runtime>(
 pub async fn list_models(
     state: State<'_, AppState>,
 ) -> Result<Vec<crate::models::registry::ModelInfo>, String> {
-    let (blade_url, api_key) = {
+    let (blade_url, api_key, ollama_enabled, ollama_url) = {
         let config = state.config.lock().unwrap();
-        (config.blade_url.clone(), config.api_key.clone())
+        (
+            config.blade_url.clone(),
+            config.api_key.clone(),
+            config.ollama_enabled,
+            config.ollama_url.clone(),
+        )
     };
-    Ok(crate::models::registry::get_models(&blade_url, &api_key).await)
+
+    let mut models = crate::models::registry::get_models(&blade_url, &api_key).await;
+    if ollama_enabled {
+        let mut ollama_models = crate::models::ollama::get_models(&ollama_url).await;
+        models.append(&mut ollama_models);
+    }
+
+    Ok(models)
 }
 
 #[tauri::command]

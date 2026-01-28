@@ -149,3 +149,13 @@ pub async fn write_file_content(
     let _ = app_handle.emit(crate::events::event_names::REFRESH_EXPLORER, ());
     Ok(())
 }
+
+#[tauri::command]
+pub async fn open_file_in_editor(
+    path: String,
+    window: tauri::Window,
+) -> Result<(), String> {
+    // Emit the open-file event to trigger the frontend to open the file
+    window.emit("open-file", &path).map_err(|e| e.to_string())?;
+    Ok(())
+}

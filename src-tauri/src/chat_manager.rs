@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
 
 use crate::agentic_loop::AgenticLoop;
+use crate::ai_workflow::get_tool_definitions;
 use crate::ai_workflow::{AiWorkflow, PendingToolBatch};
 use crate::blade_ws_client::BladeWsClient;
 use crate::config::ApiConfig;
@@ -12,6 +13,10 @@ use crate::protocol::ToolFunction;
 use crate::protocol::{ChatEvent, ChatMessage, ChatRole, ToolCall};
 use crate::reasoning_parser::ReasoningParser;
 use crate::xml_parser;
+use futures_util::StreamExt;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::HashMap;
 
 pub enum DrainResult {
     None,
@@ -46,6 +51,55 @@ pub enum DrainResult {
         recoverable: bool,
         recovery_hint: Option<String>,
     },
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct OllamaMessage {
+    role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<OllamaToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct OllamaToolCall {
+    #[serde(default)]
+    id: String,
+    #[serde(rename = "type", default)]
+    typ: String,
+    function: OllamaToolFunction,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct OllamaToolFunction {
+    name: String,
+    arguments: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    index: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct OllamaChatRequest {
+    model: String,
+    messages: Vec<OllamaMessage>,
+    stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<Value>>,
+}
+
+#[derive(Deserialize)]
+struct OllamaChatChunk {
+    #[serde(default)]
+    message: Option<OllamaMessage>,
+    #[serde(default)]
+    done: Option<bool>,
+    #[serde(default)]
+    error: Option<String>,
 }
 
 pub struct ChatManager {
@@ -92,7 +146,7 @@ impl ChatManager {
         open_files: Option<Vec<String>>,
         cursor_line: Option<usize>,
         cursor_column: Option<usize>,
-        _http: reqwest::Client,
+        http: reqwest::Client,
         storage_mode: Option<String>,
     ) -> Result<(), String> {
         self.reasoning_parser.reset();
@@ -113,6 +167,22 @@ impl ChatManager {
                 id
             })
             .unwrap_or_else(|| "anthropic/claude-sonnet-4-5-20250929".to_string());
+
+        // Short-circuit for Ollama models
+        if selected_info
+            .and_then(|m| m.provider.as_deref())
+            .map(|provider| provider == "ollama")
+            .unwrap_or(false)
+        {
+            return self.start_ollama_stream(
+                conversation,
+                api_config,
+                &model_id,
+                http,
+                workspace,
+                active_file,
+            );
+        }
 
         // Build workspace info for Blade Protocol
         let open_file_infos = open_files
@@ -426,9 +496,13 @@ impl ChatManager {
                                     content.len()
                                 );
                                 saw_content = true;
+                                
+                                // Simple base name - timestamp will be added automatically when saving
+                                let suggested_name = "research.md".to_string();
+                                
                                 let _ = tx.send(ChatEvent::Research {
                                     content,
-                                    suggested_name: String::new(),
+                                    suggested_name,
                                 });
                             }
                             crate::blade_ws_client::BladeWsEvent::ToolActivity {
@@ -530,15 +604,303 @@ impl ChatManager {
         Ok(())
     }
 
+    fn start_ollama_stream(
+        &mut self,
+        conversation: &mut ConversationHistory,
+        api_config: &ApiConfig,
+        model_id: &str,
+        http: reqwest::Client,
+        workspace: Option<&PathBuf>,
+        active_file: Option<String>,
+    ) -> Result<(), String> {
+        let model_name = model_id
+            .strip_prefix("ollama/")
+            .unwrap_or(model_id)
+            .to_string();
+
+        let workspace_root = workspace
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let active_file_value = active_file.unwrap_or_default();
+        let os_value = std::env::consts::OS.to_string();
+        let shell_value = std::env::var("SHELL").unwrap_or_default();
+
+        let mut messages: Vec<OllamaMessage> = Vec::new();
+        if let Ok(Some(prompt)) = crate::config::read_prompt_for_model(&model_name) {
+            let rendered_prompt = prompt
+                .replace("{{WORKSPACE_ROOT}}", &workspace_root)
+                .replace("{{ACTIVE_FILE}}", &active_file_value)
+                .replace("{{OS}}", &os_value)
+                .replace("{{SHELL}}", &shell_value);
+            if !rendered_prompt.trim().is_empty() {
+                messages.push(OllamaMessage {
+                    role: "system".to_string(),
+                    content: Some(rendered_prompt),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    tool_name: None,
+                });
+            }
+        }
+
+        let mut tool_name_by_id: HashMap<String, String> = HashMap::new();
+        for msg in conversation.get_messages() {
+            if let Some(tool_calls) = msg.tool_calls.as_ref() {
+                for call in tool_calls {
+                    tool_name_by_id.insert(call.id.clone(), call.function.name.clone());
+                }
+            }
+        }
+
+        for msg in conversation.get_messages() {
+            let (role, content, tool_call_id) = match msg.role {
+                ChatRole::User => ("user", Some(msg.content.clone()), None),
+                ChatRole::Assistant => {
+                    let content = if msg.content.trim().is_empty() {
+                        None
+                    } else {
+                        Some(msg.content.clone())
+                    };
+                    ("assistant", content, None)
+                }
+                ChatRole::System => ("system", Some(msg.content.clone()), None),
+                ChatRole::Tool => ("tool", Some(msg.content.clone()), msg.tool_call_id.clone()),
+            };
+            if content.as_deref().unwrap_or("").trim().is_empty()
+                && msg.role != ChatRole::Assistant
+                && msg.role != ChatRole::Tool
+            {
+                continue;
+            }
+
+            let tool_calls = if msg.role == ChatRole::Assistant {
+                msg.tool_calls.as_ref().map(|calls| {
+                    calls
+                        .iter()
+                        .enumerate()
+                        .map(|(index, call)| {
+                            let args = serde_json::from_str(&call.function.arguments)
+                                .unwrap_or(Value::String(call.function.arguments.clone()));
+                            OllamaToolCall {
+                                id: if call.id.is_empty() {
+                                    uuid::Uuid::new_v4().to_string()
+                                } else {
+                                    call.id.clone()
+                                },
+                                typ: if call.typ.is_empty() {
+                                    "function".to_string()
+                                } else {
+                                    call.typ.clone()
+                                },
+                                function: OllamaToolFunction {
+                                    name: call.function.name.clone(),
+                                    arguments: args,
+                                    index: Some(index),
+                                },
+                            }
+                        })
+                        .collect()
+                })
+            } else {
+                None
+            };
+
+            let tool_name = if msg.role == ChatRole::Tool {
+                tool_call_id
+                    .as_ref()
+                    .and_then(|id| tool_name_by_id.get(id).cloned())
+            } else {
+                None
+            };
+
+            messages.push(OllamaMessage {
+                role: role.to_string(),
+                content,
+                tool_calls,
+                tool_call_id,
+                tool_name,
+            });
+        }
+
+        let request = OllamaChatRequest {
+            model: model_name.clone(),
+            messages,
+            stream: true,
+            tools: Some(get_tool_definitions()),
+        };
+
+        let (tx, rx) = mpsc::channel();
+        let url = format!(
+            "{}/api/chat",
+            api_config.ollama_url.trim_end_matches('/')
+        );
+
+        let task = tokio::spawn(async move {
+            // CRITICAL FIX: Only use reasoning parser for models that actually support reasoning tags.
+            // The reasoning parser looks for <think> and <thinking> tags in the response.
+            // If we run ALL text through it, regular content with angle brackets (HTML, XML, code)
+            // gets misinterpreted as reasoning tags, causing garbled output.
+            // Only models like DeepSeek R1, Qwen QwQ, MiniMax, and Kimi use these tags.
+            let model_lower = model_name.to_lowercase();
+            let supports_reasoning = model_lower.contains("deepseek")
+                || model_lower.contains("qwq")
+                || model_lower.contains("minimax")
+                || model_lower.contains("kimi")
+                || model_lower.contains("r1");
+            
+            let mut reasoning_parser = if supports_reasoning {
+                Some(ReasoningParser::new())
+            } else {
+                None
+            };
+            
+            let response = match http.post(&url).json(&request).send().await {
+                Ok(res) => res,
+                Err(e) => {
+                    let _ = tx.send(ChatEvent::Error(format!(
+                        "Ollama request failed: {}",
+                        e
+                    )));
+                    return;
+                }
+            };
+
+            let mut stream = response.bytes_stream();
+            let mut buffer = String::new();
+            let mut saw_done = false;
+
+            while let Some(chunk) = stream.next().await {
+                let bytes = match chunk {
+                    Ok(data) => data,
+                    Err(e) => {
+                        let _ = tx.send(ChatEvent::Error(format!(
+                            "Ollama stream error: {}",
+                            e
+                        )));
+                        return;
+                    }
+                };
+
+                let text = match std::str::from_utf8(&bytes) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        let _ = tx.send(ChatEvent::Error(format!(
+                            "Ollama response decode error: {}",
+                            e
+                        )));
+                        return;
+                    }
+                };
+
+                buffer.push_str(text);
+                while let Some(idx) = buffer.find('\n') {
+                    let line = buffer[..idx].trim().to_string();
+                    buffer = buffer[idx + 1..].to_string();
+
+                    if line.is_empty() {
+                        continue;
+                    }
+
+                    let parsed: OllamaChatChunk = match serde_json::from_str(&line) {
+                        Ok(chunk) => chunk,
+                        Err(e) => {
+                            eprintln!("[OLLAMA CHAT] Failed to parse chunk: {}", e);
+                            continue;
+                        }
+                    };
+
+                    if let Some(err) = parsed.error {
+                        let _ = tx.send(ChatEvent::Error(format!(
+                            "Ollama error: {}",
+                            err
+                        )));
+                        return;
+                    }
+
+                    if let Some(msg) = parsed.message {
+                        if let Some(content) = msg.content {
+                            if !content.is_empty() {
+                                // Only parse reasoning tags if the model supports them
+                                if let Some(ref mut parser) = reasoning_parser {
+                                    for segment in parser.process_segments(&content) {
+                                        match segment {
+                                            crate::reasoning_parser::ReasoningSegment::Text(text) => {
+                                                if !text.is_empty() {
+                                                    let _ = tx.send(ChatEvent::Chunk(text));
+                                                }
+                                            }
+                                            crate::reasoning_parser::ReasoningSegment::Reasoning(reasoning) => {
+                                                if !reasoning.is_empty() {
+                                                    let _ = tx.send(ChatEvent::ReasoningChunk(reasoning));
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    // No reasoning parser - send content directly
+                                    let _ = tx.send(ChatEvent::Chunk(content));
+                                }
+                            }
+                        }
+
+                        if let Some(tool_calls) = msg.tool_calls {
+                            let calls: Vec<ToolCall> = tool_calls
+                                .into_iter()
+                                .map(|call| ToolCall {
+                                    id: if call.id.is_empty() {
+                                        uuid::Uuid::new_v4().to_string()
+                                    } else {
+                                        call.id
+                                    },
+                                    typ: if call.typ.is_empty() {
+                                        "function".to_string()
+                                    } else {
+                                        call.typ
+                                    },
+                                    function: ToolFunction {
+                                        name: call.function.name,
+                                        arguments: serde_json::to_string(&call.function.arguments)
+                                            .unwrap_or_default(),
+                                    },
+                                    status: Some("executing".to_string()),
+                                    result: None,
+                                })
+                                .collect();
+                            if !calls.is_empty() {
+                                let _ = tx.send(ChatEvent::ToolCalls(calls));
+                            }
+                        }
+                    }
+
+                    if parsed.done.unwrap_or(false) {
+                        let _ = tx.send(ChatEvent::Done);
+                        saw_done = true;
+                        return;
+                    }
+                }
+            }
+
+            if !saw_done {
+                let _ = tx.send(ChatEvent::Done);
+            }
+        });
+
+        conversation.push(ChatMessage::new(ChatRole::Assistant, String::new()));
+        self.rx = Some(rx);
+        self.streaming = true;
+        self.abort_handle = Some(task.abort_handle());
+        Ok(())
+    }
+
     pub fn continue_tool_batch(
         &mut self,
         batch: PendingToolBatch,
         conversation: &mut ConversationHistory,
-        _api_config: &ApiConfig,
-        _models: &[ModelInfo],
-        _selected_model: usize,
+        api_config: &ApiConfig,
+        models: &[ModelInfo],
+        selected_model: usize,
         workspace: Option<&PathBuf>,
-        _http: reqwest::Client,
+        http: reqwest::Client,
     ) -> Result<(), String> {
         // RFC: Large Tool Result Handling - determine if we should truncate locally
         let is_local_mode = workspace
@@ -572,6 +934,27 @@ impl ChatManager {
         // RFC: Large Tool Result Handling - truncate in local mode
         let updated_assistant = conversation.update_tool_call_status_with_truncation(&batch.file_results, is_local_mode);
         self.updated_assistant_message = updated_assistant;
+
+        let is_ollama = models
+            .get(selected_model)
+            .and_then(|m| m.provider.as_deref())
+            .map(|provider| provider == "ollama")
+            .unwrap_or(false);
+
+        if is_ollama {
+            let model_id = models
+                .get(selected_model)
+                .map(|m| m.api_id.as_ref().unwrap_or(&m.id).clone())
+                .unwrap_or_else(|| "ollama/unknown".to_string());
+            return self.start_ollama_stream(
+                conversation,
+                api_config,
+                &model_id,
+                http,
+                workspace,
+                None,
+            );
+        }
 
         // Send tool results to Blade Protocol via WebSocket
         // We need to send ALL tool results, not just the first one

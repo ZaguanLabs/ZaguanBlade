@@ -34,6 +34,10 @@ interface SettingsState {
         theme: string;
         markdownView: string;
     };
+    localAi: {
+        ollamaEnabled: boolean;
+        ollamaUrl: string;
+    };
     allowGitIgnoredFiles?: boolean;  // Per-project setting
 }
 
@@ -64,6 +68,10 @@ const defaultSettings: SettingsState = {
         theme: 'system',
         markdownView: 'split',
     },
+    localAi: {
+        ollamaEnabled: false,
+        ollamaUrl: 'http://localhost:11434',
+    },
     allowGitIgnoredFiles: false,  // Default: respect .gitignore
 };
 
@@ -73,27 +81,35 @@ const defaultSettings: SettingsState = {
 
 
 
-function backendAccountToFrontend(backend: ApiConfig): SettingsState['account'] {
+function backendGlobalToFrontend(backend: ApiConfig): Pick<SettingsState, 'account' | 'localAi'> {
     return {
-        bladeUrl: '', // Always empty, internal only
-        apiKey: backend.api_key,
-        userId: backend.user_id,
-        theme: backend.theme,
-        markdownView: backend.markdown_view,
+        account: {
+            bladeUrl: '', // Always empty, internal only
+            apiKey: backend.api_key,
+            userId: backend.user_id,
+            theme: backend.theme,
+            markdownView: backend.markdown_view,
+        },
+        localAi: {
+            ollamaEnabled: backend.ollama_enabled,
+            ollamaUrl: backend.ollama_url,
+        },
     };
 }
 
-function frontendAccountToBackend(frontend: SettingsState['account']): ApiConfig {
+function frontendGlobalToBackend(frontend: SettingsState): ApiConfig {
     return {
         blade_url: '', // Frontend does not set this
-        api_key: frontend.apiKey,
-        user_id: frontend.userId,
-        theme: frontend.theme,
-        markdown_view: frontend.markdownView,
+        api_key: frontend.account.apiKey,
+        user_id: frontend.account.userId,
+        ollama_enabled: frontend.localAi.ollamaEnabled,
+        ollama_url: frontend.localAi.ollamaUrl,
+        theme: frontend.account.theme,
+        markdown_view: frontend.account.markdownView,
     };
 }
 
-function backendToFrontend(backend: BackendSettings): Omit<SettingsState, 'account'> {
+function backendToFrontend(backend: BackendSettings): Omit<SettingsState, 'account' | 'localAi'> {
     return {
         storage: {
             mode: backend.storage.mode,
@@ -147,11 +163,12 @@ interface SettingsModalProps {
     isOpen: boolean;
     onClose: () => void;
     workspacePath?: string | null;
+    onRefreshModels?: () => Promise<import('../types/chat').ModelInfo[]>;
 }
 
-type SettingsSection = 'account' | 'storage' | 'context' | 'privacy' | 'editor';
+type SettingsSection = 'account' | 'localai' | 'storage' | 'context' | 'privacy' | 'editor';
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, workspacePath }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, workspacePath, onRefreshModels }) => {
     const [settings, setSettings] = useState<SettingsState>(defaultSettings);
     const [activeSection, setActiveSection] = useState<SettingsSection>('account');
     const [hasChanges, setHasChanges] = useState(false);
@@ -181,9 +198,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
             try {
                 // Load Global Settings (Account)
                 const globalSettings = await invoke<ApiConfig>('get_global_settings');
-                const accountSettings = backendAccountToFrontend(globalSettings);
+                const globalFrontend = backendGlobalToFrontend(globalSettings);
 
-                let mergedSettings = { ...defaultSettings, account: accountSettings };
+                let mergedSettings = { ...defaultSettings, ...globalFrontend };
 
                 // Load Project Settings (if workspace open)
                 if (workspacePath) {
@@ -217,7 +234,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
         loadSettings();
     }, [isOpen, workspacePath]);
 
-    const updateSettings = <K extends 'storage' | 'context' | 'privacy' | 'editor' | 'account'>(
+    const updateSettings = <K extends 'storage' | 'context' | 'privacy' | 'editor' | 'account' | 'localAi'>(
         section: K,
         updates: Partial<SettingsState[K]>
     ) => {
@@ -233,7 +250,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
         setError(null);
         try {
             // Save Global Settings
-            const globalSettings = frontendAccountToBackend(settings.account);
+            const globalSettings = frontendGlobalToBackend(settings);
             await invoke('save_global_settings', {
                 settings: globalSettings,
             });
@@ -263,6 +280,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
 
     const sections: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
         { id: 'account', label: 'Account', icon: <Key className="w-4 h-4" /> },
+        { id: 'localai', label: 'Local AI', icon: <Server className="w-4 h-4" /> },
         { id: 'storage', label: 'Storage', icon: <Database className="w-4 h-4" /> },
         ...(workspacePath ? [
             { id: 'context', label: 'Context', icon: <Zap className="w-4 h-4" /> },
@@ -329,6 +347,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
                                         onChange={(updates) => updateSettings('storage', updates)}
                                     />
                                 )}
+                                {activeSection === 'localai' && (
+                                    <LocalAiSettings
+                                        settings={settings.localAi}
+                                        onChange={(updates) => updateSettings('localAi', updates)}
+                                        onRefreshModels={onRefreshModels}
+                                    />
+                                )}
                                 {activeSection === 'context' && (
                                     <ContextSettings
                                         settings={settings.context}
@@ -379,6 +404,115 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
                         {isSaving && <Loader2 className="w-4 h-4 animate-spin" />}
                         {isSaving ? 'Saving...' : 'Save Changes'}
                     </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+interface LocalAiSettingsProps {
+    settings: SettingsState['localAi'];
+    onChange: (updates: Partial<SettingsState['localAi']>) => void;
+    onRefreshModels?: () => Promise<import('../types/chat').ModelInfo[]>;
+}
+
+const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, onRefreshModels }) => {
+    const [isTesting, setIsTesting] = useState(false);
+    const [testResult, setTestResult] = useState<'idle' | 'success' | 'error'>('idle');
+    const [testMessage, setTestMessage] = useState<string | null>(null);
+    const [isRefreshing, setIsRefreshing] = useState(false);
+
+    const handleTestConnection = async () => {
+        setIsTesting(true);
+        setTestResult('idle');
+        setTestMessage(null);
+        try {
+            await invoke('test_ollama_connection', { ollamaUrl: settings.ollamaUrl });
+            setTestResult('success');
+            setTestMessage('Connection successful.');
+        } catch (e) {
+            setTestResult('error');
+            setTestMessage(String(e));
+        } finally {
+            setIsTesting(false);
+        }
+    };
+
+    const handleRefreshModels = async () => {
+        setIsRefreshing(true);
+        try {
+            await invoke('refresh_ollama_models');
+            if (onRefreshModels) {
+                await onRefreshModels();
+            }
+        } catch (e) {
+            console.error('[Settings] Failed to refresh models:', e);
+        } finally {
+            setIsRefreshing(false);
+        }
+    };
+    return (
+        <div className="space-y-6">
+            <div>
+                <h3 className="text-base font-semibold text-[var(--fg-primary)] mb-1">Local AI</h3>
+                <p className="text-sm text-[var(--fg-tertiary)] mb-4">
+                    Configure local AI providers running on your machine or network.
+                </p>
+            </div>
+
+            <div className="border border-[var(--border-subtle)] rounded-lg p-4 space-y-4">
+                <div className="flex items-center justify-between">
+                    <div>
+                        <div className="text-sm font-medium text-[var(--fg-primary)]">Ollama</div>
+                        <div className="text-xs text-[var(--fg-tertiary)]">
+                            Enable and connect to an Ollama server.
+                        </div>
+                    </div>
+                    <Toggle
+                        checked={settings.ollamaEnabled}
+                        onChange={(checked) => onChange({ ollamaEnabled: checked })}
+                    />
+                </div>
+
+                <div className="space-y-2">
+                    <label className="text-xs text-[var(--fg-secondary)] block">Server URL</label>
+                    <input
+                        type="text"
+                        value={settings.ollamaUrl}
+                        onChange={(e) => onChange({ ollamaUrl: e.target.value })}
+                        placeholder="http://localhost:11434"
+                        disabled={!settings.ollamaEnabled}
+                        className="w-full bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded-lg py-2 px-3 text-sm text-[var(--fg-primary)] focus:outline-none focus:border-[var(--accent-primary)] placeholder-[var(--fg-tertiary)] disabled:opacity-60"
+                    />
+                </div>
+
+                <div className="flex items-center gap-3">
+                    <button
+                        type="button"
+                        onClick={handleTestConnection}
+                        disabled={!settings.ollamaEnabled || isTesting}
+                        className="px-3 py-1.5 text-xs font-medium rounded-md border border-[var(--border-subtle)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        {isTesting ? 'Testing...' : 'Test Connection'}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={handleRefreshModels}
+                        disabled={!settings.ollamaEnabled || isRefreshing}
+                        className="px-3 py-1.5 text-xs font-medium rounded-md border border-[var(--border-subtle)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        {isRefreshing ? 'Refreshing...' : 'Refresh Models'}
+                    </button>
+                    {testMessage && (
+                        <span
+                            className={`text-xs ${testResult === 'success'
+                                ? 'text-emerald-400'
+                                : 'text-red-400'
+                                }`}
+                        >
+                            {testMessage}
+                        </span>
+                    )}
                 </div>
             </div>
         </div>

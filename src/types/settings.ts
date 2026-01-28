@@ -2,6 +2,8 @@ export interface ApiConfig {
     blade_url: string;
     api_key: string;
     user_id: string;
+    ollama_enabled: boolean;
+    ollama_url: string;
     theme: string;
     markdown_view: string;
 }

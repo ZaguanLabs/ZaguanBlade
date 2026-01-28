@@ -6,6 +6,26 @@ use crate::utils::{extract_root_command, is_cwd_outside_workspace, parse_command
 use crate::{blade_protocol, local_artifacts};
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
+async fn load_available_models(state: &State<'_, AppState>) -> Vec<crate::models::registry::ModelInfo> {
+    let (blade_url, api_key, ollama_enabled, ollama_url) = {
+        let config = state.config.lock().unwrap();
+        (
+            config.blade_url.clone(),
+            config.api_key.clone(),
+            config.ollama_enabled,
+            config.ollama_url.clone(),
+        )
+    };
+
+    let mut models = get_models(&blade_url, &api_key).await;
+    if ollama_enabled {
+        let mut ollama_models = crate::models::ollama::get_models(&ollama_url).await;
+        models.append(&mut ollama_models);
+    }
+
+    models
+}
+
 pub async fn handle_send_message<R: Runtime>(
     message: String,
     model_id: Option<String>,
@@ -58,11 +78,7 @@ pub async fn handle_send_message<R: Runtime>(
     }
 
     // 2. Start Stream
-    let (blade_url, api_key) = {
-        let config = state.config.lock().unwrap();
-        (config.blade_url.clone(), config.api_key.clone())
-    };
-    let models = get_models(&blade_url, &api_key).await;
+    let models = load_available_models(&state).await;
     {
         let mut mgr = state.chat_manager.lock().unwrap();
         let mut conversation = state.conversation.lock().unwrap();
@@ -164,11 +180,7 @@ pub async fn handle_send_message<R: Runtime>(
         
         // Fetch models once at the start instead of every iteration
         let state = app_handle.state::<AppState>();
-        let (blade_url, api_key) = {
-            let config = state.config.lock().unwrap();
-            (config.blade_url.clone(), config.api_key.clone())
-        };
-        let models = get_models(&blade_url, &api_key).await;
+        let models = load_available_models(&state).await;
 
         loop {
             // Check if we're actually streaming before processing
@@ -571,6 +583,8 @@ pub async fn handle_send_message<R: Runtime>(
                         ),
                     },
                 );
+                // Also emit chat-done so legacy listeners reset loading/Stop state
+                window.emit("chat-done", ()).unwrap_or_default();
             } else if let DrainResult::ContextLengthExceeded { message, token_count, max_tokens, excess, recoverable, recovery_hint } = result {
                 // RFC: Context Length Recovery - emit context-length-exceeded event to frontend
                 eprintln!("[LIB] Context length exceeded: {} (tokens: {:?}/{:?})", message, token_count, max_tokens);
@@ -869,12 +883,7 @@ pub async fn handle_send_message<R: Runtime>(
                     if batch.loop_detected {
                         eprintln!("[AGENTIC LOOP] Stopping due to loop detection");
 
-                        // Fetch models before acquiring locks
-                        let (blade_url, api_key) = {
-                            let config = state.config.lock().unwrap();
-                            (config.blade_url.clone(), config.api_key.clone())
-                        };
-                        let models = get_models(&blade_url, &api_key).await;
+                        let models = load_available_models(&state).await;
 
                         {
                             let mut mgr = state.chat_manager.lock().unwrap();
@@ -906,12 +915,7 @@ pub async fn handle_send_message<R: Runtime>(
 
                         // Don't continue the loop - let it finish naturally
                     } else {
-                        // Fetch models before acquiring locks
-                        let (blade_url, api_key) = {
-                            let config = state.config.lock().unwrap();
-                            (config.blade_url.clone(), config.api_key.clone())
-                        };
-                        let models = get_models(&blade_url, &api_key).await;
+                        let models = load_available_models(&state).await;
 
                         {
                             let mut mgr = state.chat_manager.lock().unwrap();

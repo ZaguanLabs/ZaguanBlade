@@ -35,31 +35,25 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
   const handleSave = async () => {
     if (!isEphemeral) return;
 
+    console.log('[DocumentViewer] Starting save process for:', documentId);
 
-
-    // Otherwise, use the save dialog for generic ephemeral documents
     setIsSaving(true);
     try {
-      const filePath = await save({
-        defaultPath: suggestedName || 'document.md',
-        filters: [{
-          name: 'Markdown',
-          extensions: ['md']
-        }]
+      // Save directly to project root without dialog
+      const filename = suggestedName || 'document.md';
+      console.log('[DocumentViewer] Saving document to project root:', filename);
+      
+      const savedPath = await invoke<string>('save_ephemeral_document_to_workspace', {
+        id: documentId,
+        filename: filename
       });
 
-      if (filePath) {
-        await invoke('save_ephemeral_document', {
-          id: documentId,
-          path: filePath
-        });
-
-        if (onSave) {
-          onSave(filePath);
-        }
+      console.log('[DocumentViewer] Document saved successfully to:', savedPath);
+      if (onSave) {
+        onSave(savedPath);
       }
     } catch (error) {
-      console.error('Failed to save document:', error);
+      console.error('[DocumentViewer] Failed to save document:', error);
     } finally {
       setIsSaving(false);
     }

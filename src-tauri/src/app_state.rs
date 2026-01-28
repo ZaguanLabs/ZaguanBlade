@@ -60,6 +60,10 @@ impl AppState {
         let config_path = config::default_api_config_path();
         let mut config = config::load_api_config(&config_path);
 
+        if let Err(e) = config::ensure_global_prompts_dir() {
+            eprintln!("[CONFIG] Failed to ensure global prompts directory: {}", e);
+        }
+
         // Fallback or override logic:
         // If config.blade_url is empty, use default or check environment variable.
         if config.blade_url.trim().is_empty() {

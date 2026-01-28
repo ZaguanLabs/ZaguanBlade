@@ -12,6 +12,10 @@ pub struct ApiConfig {
     pub api_key: String,
     #[serde(default)]
     pub user_id: String,
+    #[serde(default)]
+    pub ollama_enabled: bool,
+    #[serde(default = "default_ollama_url")]
+    pub ollama_url: String,
     pub theme: String,
     pub markdown_view: String,
 }
@@ -21,11 +25,39 @@ fn default_blade_url() -> String {
     std::env::var("BLADE_URL").unwrap_or_else(|_| "https://coder.zaguanai.com".to_string())
 }
 
-pub fn default_api_config_path() -> PathBuf {
+fn default_ollama_url() -> String {
+    "http://localhost:11434".to_string()
+}
+
+pub fn default_global_config_dir() -> PathBuf {
     let Some(dirs) = ProjectDirs::from("com", "zaguan", "zblade") else {
-        return Path::new("ideai-api.json").to_path_buf();
+        return Path::new(".").to_path_buf();
     };
-    dirs.config_dir().join("api.json")
+    dirs.config_dir().to_path_buf()
+}
+
+pub fn default_api_config_path() -> PathBuf {
+    default_global_config_dir().join("api.json")
+}
+
+pub fn global_prompts_dir() -> PathBuf {
+    default_global_config_dir().join("prompts")
+}
+
+pub fn ensure_global_prompts_dir() -> Result<(), String> {
+    let dir = global_prompts_dir();
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())
+}
+
+pub fn read_prompt_for_model(model_name: &str) -> Result<Option<String>, String> {
+    let filename = format!("{}.md", model_name);
+    let path = global_prompts_dir().join(filename);
+    if !path.exists() {
+        return Ok(None);
+    }
+    fs::read_to_string(&path)
+        .map(Some)
+        .map_err(|e| format!("Failed to read prompt file {}: {}", path.display(), e))
 }
 
 pub fn load_api_config(path: &Path) -> ApiConfig {
