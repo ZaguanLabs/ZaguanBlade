@@ -195,6 +195,8 @@ pub fn run() {
             commands::settings::save_global_settings,
             commands::settings::test_ollama_connection,
             commands::settings::refresh_ollama_models,
+            commands::settings::test_openai_compat_connection,
+            commands::settings::refresh_openai_compat_models,
             // Chat
             commands::chat::send_message,
             commands::chat::list_models,

@@ -14,8 +14,9 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
     const containerRef = useRef<HTMLDivElement>(null);
     const dropdownRef = useRef<HTMLDivElement>(null);
     const selectedModel = models.find(m => m.id === selectedId) || null;
-    const cloudModels = models.filter(model => model.provider !== 'ollama');
+    const cloudModels = models.filter(model => model.provider !== 'ollama' && model.provider !== 'openai-compat');
     const ollamaModels = models.filter(model => model.provider === 'ollama');
+    const openaiCompatModels = models.filter(model => model.provider === 'openai-compat');
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
@@ -126,6 +127,47 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
                         </div>
                     )}
                     {ollamaModels.map(model => {
+                        const isSelected = model.id === selectedId;
+                        return (
+                            <button
+                                key={model.id}
+                                data-model-id={model.id}
+                                onClick={() => {
+                                    onSelect(model.id);
+                                    setIsOpen(false);
+                                }}
+                                className={`
+                                    flex items-center gap-1.5 px-2 py-0.5 mx-1 rounded-sm text-left
+                                    transition-colors duration-150
+                                    ${isSelected
+                                        ? 'bg-[var(--accent-primary)]/10 text-[var(--fg-primary)]'
+                                        : 'text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--fg-primary)]'
+                                    }
+                                `}
+                            >
+                                <div className="shrink-0">
+                                    {getModelIcon(model.id)}
+                                </div>
+                                <div className="flex flex-col min-w-0 flex-1">
+                                    <span className="text-xs font-medium truncate">
+                                        {model.name}
+                                    </span>
+                                    {model.description && (
+                                        <span className="text-[10px] text-[var(--fg-tertiary)] truncate opacity-80">
+                                            {model.description}
+                                        </span>
+                                    )}
+                                </div>
+                                {isSelected && <Check className="w-2.5 h-2.5 text-[var(--accent-primary)] shrink-0" />}
+                            </button>
+                        );
+                    })}
+                    {openaiCompatModels.length > 0 && (
+                        <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--fg-tertiary)] border-t border-[var(--border-subtle)]">
+                            Local Server
+                        </div>
+                    )}
+                    {openaiCompatModels.map(model => {
                         const isSelected = model.id === selectedId;
                         return (
                             <button

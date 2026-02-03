@@ -117,6 +117,15 @@ pub struct ChatManager {
     ws_client: Option<Arc<BladeWsClient>>, // Persistent connection for the conversation
 }
 
+fn supports_reasoning_tags(model_id: &str) -> bool {
+    let model_lower = model_id.to_lowercase();
+    model_lower.contains("deepseek")
+        || model_lower.contains("qwq")
+        || model_lower.contains("minimax")
+        || model_lower.contains("kimi")
+        || model_lower.contains("r1")
+}
+
 impl ChatManager {
     pub fn new(max_turns: usize) -> Self {
         Self {
@@ -157,12 +166,22 @@ impl ChatManager {
 
         // Get model ID
         let selected_info = models.get(selected_model);
+        
+        // For local models (Ollama, OpenAI-compatible), use the full ID with prefix
+        // For cloud models, use api_id if available (for reasoning effort variants)
         let model_id = selected_info
             .map(|m| {
-                let id = m.api_id.as_ref().unwrap_or(&m.id).clone();
+                let provider = m.provider.as_deref().unwrap_or("");
+                let id = if provider == "ollama" || provider == "openai-compat" {
+                    // Local models: use full ID with prefix
+                    m.id.clone()
+                } else {
+                    // Cloud models: use api_id if available
+                    m.api_id.as_ref().unwrap_or(&m.id).clone()
+                };
                 eprintln!(
-                    "[CHAT MGR] Model selection: display_id={}, api_id={:?}, sending={}",
-                    m.id, m.api_id, id
+                    "[CHAT MGR] Model selection: display_id={}, provider={}, api_id={:?}, sending={}",
+                    m.id, provider, m.api_id, id
                 );
                 id
             })
@@ -175,6 +194,22 @@ impl ChatManager {
             .unwrap_or(false)
         {
             return self.start_ollama_stream(
+                conversation,
+                api_config,
+                &model_id,
+                http,
+                workspace,
+                active_file,
+            );
+        }
+
+        // Short-circuit for OpenAI-compatible models
+        if selected_info
+            .and_then(|m| m.provider.as_deref())
+            .map(|provider| provider == "openai-compat")
+            .unwrap_or(false)
+        {
+            return self.start_openai_compat_stream(
                 conversation,
                 api_config,
                 &model_id,
@@ -741,13 +776,8 @@ impl ChatManager {
             // If we run ALL text through it, regular content with angle brackets (HTML, XML, code)
             // gets misinterpreted as reasoning tags, causing garbled output.
             // Only models like DeepSeek R1, Qwen QwQ, MiniMax, and Kimi use these tags.
-            let model_lower = model_name.to_lowercase();
-            let supports_reasoning = model_lower.contains("deepseek")
-                || model_lower.contains("qwq")
-                || model_lower.contains("minimax")
-                || model_lower.contains("kimi")
-                || model_lower.contains("r1");
-            
+            let supports_reasoning = supports_reasoning_tags(&model_name);
+
             let mut reasoning_parser = if supports_reasoning {
                 Some(ReasoningParser::new())
             } else {
@@ -767,7 +797,7 @@ impl ChatManager {
 
             let mut stream = response.bytes_stream();
             let mut buffer = String::new();
-            let mut saw_done = false;
+            let saw_done = false;
 
             while let Some(chunk) = stream.next().await {
                 let bytes = match chunk {
@@ -820,7 +850,14 @@ impl ChatManager {
                     if let Some(msg) = parsed.message {
                         if let Some(content) = msg.content {
                             if !content.is_empty() {
-                                // Only parse reasoning tags if the model supports them
+                                // Dynamically enable reasoning parsing if <think>/<thinking> tags appear
+                                if reasoning_parser.is_none()
+                                    && (content.contains("<think>")
+                                        || content.to_lowercase().contains("<thinking>"))
+                                {
+                                    reasoning_parser = Some(ReasoningParser::new());
+                                }
+
                                 if let Some(ref mut parser) = reasoning_parser {
                                     for segment in parser.process_segments(&content) {
                                         match segment {
@@ -874,7 +911,6 @@ impl ChatManager {
 
                     if parsed.done.unwrap_or(false) {
                         let _ = tx.send(ChatEvent::Done);
-                        saw_done = true;
                         return;
                     }
                 }
@@ -883,6 +919,285 @@ impl ChatManager {
             if !saw_done {
                 let _ = tx.send(ChatEvent::Done);
             }
+        });
+
+        conversation.push(ChatMessage::new(ChatRole::Assistant, String::new()));
+        self.rx = Some(rx);
+        self.streaming = true;
+        self.abort_handle = Some(task.abort_handle());
+        Ok(())
+    }
+
+    fn start_openai_compat_stream(
+        &mut self,
+        conversation: &mut ConversationHistory,
+        api_config: &ApiConfig,
+        model_id: &str,
+        http: reqwest::Client,
+        workspace: Option<&PathBuf>,
+        active_file: Option<String>,
+    ) -> Result<(), String> {
+        let model_name = model_id
+            .strip_prefix("openai-compat/")
+            .unwrap_or(model_id)
+            .to_string();
+
+        let workspace_root = workspace
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let active_file_value = active_file.unwrap_or_default();
+        let os_value = std::env::consts::OS.to_string();
+        let shell_value = std::env::var("SHELL").unwrap_or_default();
+
+        #[derive(Serialize, Clone)]
+        struct OpenAIMessage {
+            role: String,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            content: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            tool_calls: Option<Vec<crate::protocol::ToolCall>>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            tool_call_id: Option<String>,
+        }
+
+        #[derive(Serialize)]
+        struct OpenAIRequest {
+            model: String,
+            messages: Vec<OpenAIMessage>,
+            stream: bool,
+        }
+
+        let mut messages: Vec<OpenAIMessage> = Vec::new();
+        
+        // Load and apply per-model system prompt
+        if let Ok(Some(prompt)) = crate::config::read_prompt_for_model(&model_name) {
+            let rendered_prompt = prompt
+                .replace("{{WORKSPACE_ROOT}}", &workspace_root)
+                .replace("{{ACTIVE_FILE}}", &active_file_value)
+                .replace("{{OS}}", &os_value)
+                .replace("{{SHELL}}", &shell_value);
+            if !rendered_prompt.trim().is_empty() {
+                messages.push(OpenAIMessage {
+                    role: "system".to_string(),
+                    content: Some(rendered_prompt),
+                    tool_calls: None,
+                    tool_call_id: None,
+                });
+            }
+        }
+
+        // Convert conversation history to OpenAI format
+        for msg in conversation.get_messages() {
+            match msg.role {
+                ChatRole::User => messages.push(OpenAIMessage {
+                    role: "user".to_string(),
+                    content: Some(msg.content.clone()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                }),
+                ChatRole::Assistant => {
+                    let content = if msg.content.trim().is_empty() {
+                        None
+                    } else {
+                        Some(msg.content.clone())
+                    };
+                    messages.push(OpenAIMessage {
+                        role: "assistant".to_string(),
+                        content,
+                        tool_calls: msg.tool_calls.clone(),
+                        tool_call_id: None,
+                    });
+                }
+                ChatRole::System => messages.push(OpenAIMessage {
+                    role: "system".to_string(),
+                    content: Some(msg.content.clone()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                }),
+                ChatRole::Tool => messages.push(OpenAIMessage {
+                    role: "tool".to_string(),
+                    content: Some(msg.content.clone()),
+                    tool_calls: None,
+                    tool_call_id: msg.tool_call_id.clone(),
+                }),
+            }
+        }
+
+        let request_body = OpenAIRequest {
+            model: model_name.clone(),
+            messages,
+            stream: true,
+        };
+
+        // OpenAI-compatible servers follow the /v1/chat/completions path; base URL should be versionless
+        let url = format!(
+            "{}/v1/chat/completions",
+            api_config.openai_compat_url.trim_end_matches('/')
+        );
+        let (tx, rx) = mpsc::channel();
+
+        let task = tokio::spawn(async move {
+            #[derive(Deserialize)]
+            struct StreamChunk {
+                choices: Vec<StreamChoice>,
+            }
+
+            #[derive(Deserialize)]
+            struct StreamChoice {
+                delta: StreamDelta,
+                #[serde(default)]
+                finish_reason: Option<String>,
+            }
+
+            #[derive(Deserialize)]
+            struct StreamDelta {
+                #[serde(default)]
+                content: Option<String>,
+                #[serde(default)]
+                tool_calls: Vec<crate::protocol::ToolCallDelta>,
+            }
+
+            // Reasoning parser is optional and enabled only for models that support it or emit <think>/<thinking> tags.
+            let supports_reasoning = supports_reasoning_tags(&model_name);
+            let mut reasoning_parser: Option<ReasoningParser> = if supports_reasoning {
+                Some(ReasoningParser::new())
+            } else {
+                None
+            };
+
+            let response = match http
+                .post(&url)
+                .json(&request_body)
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = tx.send(ChatEvent::Error(format!(
+                        "Failed to connect to OpenAI-compatible server: {}",
+                        e
+                    )));
+                    let _ = tx.send(ChatEvent::Done);
+                    return;
+                }
+            };
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let text = response.text().await.unwrap_or_default();
+                let _ = tx.send(ChatEvent::Error(format!(
+                    "OpenAI-compatible server returned {}: {}",
+                    status, text
+                )));
+                let _ = tx.send(ChatEvent::Done);
+                return;
+            }
+
+            let mut stream = response.bytes_stream();
+            let mut buffer = String::new();
+
+            while let Some(chunk_result) = stream.next().await {
+                let chunk = match chunk_result {
+                    Ok(c) => c,
+                    Err(e) => {
+                        let _ = tx.send(ChatEvent::Error(format!("Stream error: {}", e)));
+                        break;
+                    }
+                };
+
+                buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+                while let Some(line_end) = buffer.find('\n') {
+                    let line = buffer[..line_end].trim().to_string();
+                    buffer = buffer[line_end + 1..].to_string();
+
+                    if line.is_empty() || line == "data: [DONE]" {
+                        continue;
+                    }
+
+                    if let Some(json_str) = line.strip_prefix("data: ") {
+                        if let Ok(parsed) = serde_json::from_str::<StreamChunk>(json_str) {
+                            if let Some(choice) = parsed.choices.first() {
+                                // Handle text / reasoning deltas
+                                if let Some(content) = &choice.delta.content {
+                                    if !content.is_empty() {
+                                        // Dynamically enable reasoning parsing if tags appear mid-stream
+                                        if reasoning_parser.is_none()
+                                            && (content.contains("<think>")
+                                                || content.to_lowercase().contains("<thinking>"))
+                                        {
+                                            reasoning_parser = Some(ReasoningParser::new());
+                                        }
+
+                                        if let Some(ref mut parser) = reasoning_parser {
+                                            for segment in parser.process_segments(content) {
+                                                match segment {
+                                                    crate::reasoning_parser::ReasoningSegment::Text(text) => {
+                                                        if !text.is_empty() {
+                                                            let _ = tx.send(ChatEvent::Chunk(text));
+                                                        }
+                                                    }
+                                                    crate::reasoning_parser::ReasoningSegment::Reasoning(reasoning) => {
+                                                        if !reasoning.is_empty() {
+                                                            let _ = tx.send(ChatEvent::ReasoningChunk(reasoning));
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            let _ = tx.send(ChatEvent::Chunk(content.clone()));
+                                        }
+                                    }
+                                }
+
+                                // Handle tool call deltas (OpenAI-compatible)
+                                if !choice.delta.tool_calls.is_empty() {
+                                    let calls: Vec<ToolCall> = choice
+                                        .delta
+                                        .tool_calls
+                                        .iter()
+                                        .map(|delta| ToolCall {
+                                            id: delta
+                                                .id
+                                                .clone()
+                                                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                                            typ: delta
+                                                .typ
+                                                .clone()
+                                                .unwrap_or_else(|| "function".to_string()),
+                                            function: ToolFunction {
+                                                name: delta
+                                                    .function
+                                                    .as_ref()
+                                                    .and_then(|f| f.name.clone())
+                                                    .unwrap_or_else(|| "unknown".to_string()),
+                                                arguments: delta
+                                                    .function
+                                                    .as_ref()
+                                                    .and_then(|f| f.arguments.clone())
+                                                    .unwrap_or_else(|| "{}".to_string()),
+                                            },
+                                            status: Some("executing".to_string()),
+                                            result: None,
+                                        })
+                                        .collect();
+
+                                    if !calls.is_empty() {
+                                        let _ = tx.send(ChatEvent::ToolCalls(calls));
+                                    }
+                                }
+
+                                if choice.finish_reason.is_some() {
+                                    let _ = tx.send(ChatEvent::Done);
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let _ = tx.send(ChatEvent::Done);
         });
 
         conversation.push(ChatMessage::new(ChatRole::Assistant, String::new()));
@@ -947,6 +1262,28 @@ impl ChatManager {
                 .map(|m| m.api_id.as_ref().unwrap_or(&m.id).clone())
                 .unwrap_or_else(|| "ollama/unknown".to_string());
             return self.start_ollama_stream(
+                conversation,
+                api_config,
+                &model_id,
+                http,
+                workspace,
+                None,
+            );
+        }
+
+        // Short-circuit for OpenAI-compatible: no Blade session, just restart streaming request
+        let is_openai_compat = models
+            .get(selected_model)
+            .and_then(|m| m.provider.as_deref())
+            .map(|provider| provider == "openai-compat")
+            .unwrap_or(false);
+        if is_openai_compat {
+            let model_id = models
+                .get(selected_model)
+                .map(|m| m.id.clone())
+                .unwrap_or_else(|| "openai-compat/unknown".to_string());
+            // Keep rx open; start a fresh openai-compat stream to continue after tools
+            return self.start_openai_compat_stream(
                 conversation,
                 api_config,
                 &model_id,
@@ -1099,10 +1436,10 @@ impl ChatManager {
             }
         }
 
-        // If channel is closed, clear rx so orchestrator knows we're done
+        // If the stream sender dropped unexpectedly, synthesize a Done event so we finalize the turn
         if channel_closed {
-            eprintln!("[DRAIN] Channel closed, clearing rx");
-            self.rx = None;
+            eprintln!("[DRAIN] Channel closed unexpectedly - injecting Done");
+            events.push(ChatEvent::Done);
         }
 
         if events.is_empty() {
@@ -1116,6 +1453,7 @@ impl ChatManager {
         let is_openai_text = model_id.contains("openai")
             || model_id.contains("gpt-5.2")
             || model_id.contains("codex");
+        let use_reasoning_parser = supports_reasoning_tags(&model_id);
 
         let mut batched_chunk = String::new();
         let mut done = false;
@@ -1130,33 +1468,80 @@ impl ChatManager {
                     if let Some(assistant_msg) = conversation.last_assistant_mut() {
                         if is_openai_text {
                             assistant_msg.content.push_str(&s);
+                            self.pending_results
+                                .push_back(DrainResult::Update(assistant_msg.clone(), s));
                         } else {
-                            if assistant_msg.tool_calls.is_some()
-                                && assistant_msg.content_before_tools.is_some()
-                            {
-                                let after = assistant_msg
-                                    .content_after_tools
-                                    .get_or_insert_with(String::new);
-                                if !xml_parser::is_xml_tool_output(&s) {
-                                    after.push_str(&s);
+                            let segments =
+                                self.process_incoming_chunk(&s, assistant_msg, use_reasoning_parser);
+                            for segment in segments {
+                                match segment {
+                                    crate::reasoning_parser::ReasoningSegment::Text(text) => {
+                                        if text.is_empty() {
+                                            continue;
+                                        }
+                                        if assistant_msg.tool_calls.is_some()
+                                            && assistant_msg.content_before_tools.is_some()
+                                            && !xml_parser::is_xml_tool_output(&text)
+                                        {
+                                            let after = assistant_msg
+                                                .content_after_tools
+                                                .get_or_insert_with(String::new);
+                                            after.push_str(&text);
+                                        }
+                                        self.pending_results.push_back(DrainResult::Update(
+                                            assistant_msg.clone(),
+                                            text,
+                                        ));
+                                    }
+                                    crate::reasoning_parser::ReasoningSegment::Reasoning(
+                                        reasoning,
+                                    ) => {
+                                        if reasoning.is_empty() {
+                                            continue;
+                                        }
+                                        self.pending_results.push_back(DrainResult::Reasoning(
+                                            assistant_msg.clone(),
+                                            reasoning,
+                                        ));
+                                    }
                                 }
-                                self.process_incoming_chunk(&s, assistant_msg);
-                            } else {
-                                self.process_incoming_chunk(&s, assistant_msg);
                             }
                         }
-                        self.pending_results
-                            .push_back(DrainResult::Update(assistant_msg.clone(), s));
                     } else {
                         conversation.push(ChatMessage::new(ChatRole::Assistant, String::new()));
                         if let Some(new_last) = conversation.last_mut() {
                             if is_openai_text {
                                 new_last.content.push_str(&s);
+                                self.pending_results
+                                    .push_back(DrainResult::Update(new_last.clone(), s));
                             } else {
-                                self.process_incoming_chunk(&s, new_last);
+                                let segments =
+                                    self.process_incoming_chunk(&s, new_last, use_reasoning_parser);
+                                for segment in segments {
+                                    match segment {
+                                        crate::reasoning_parser::ReasoningSegment::Text(text) => {
+                                            if text.is_empty() {
+                                                continue;
+                                            }
+                                            self.pending_results.push_back(DrainResult::Update(
+                                                new_last.clone(),
+                                                text,
+                                            ));
+                                        }
+                                        crate::reasoning_parser::ReasoningSegment::Reasoning(
+                                            reasoning,
+                                        ) => {
+                                            if reasoning.is_empty() {
+                                                continue;
+                                            }
+                                            self.pending_results.push_back(DrainResult::Reasoning(
+                                                new_last.clone(),
+                                                reasoning,
+                                            ));
+                                        }
+                                    }
+                                }
                             }
-                            self.pending_results
-                                .push_back(DrainResult::Update(new_last.clone(), s));
                         }
                     }
                     batched_chunk.clear();
@@ -1392,6 +1777,7 @@ impl ChatManager {
             // If there are no tool calls, this is a true end-of-turn.
             // Only then should we clear rx and emit MessageCompleted (frontend uses this to reset loading).
             let should_complete_turn = tool_calls.is_none() && error_msg.is_none();
+            // If channel was closed but tool calls are pending, we keep rx until follow-up streams/tools resolve.
             if should_complete_turn {
                 eprintln!("[DRAIN] Turn complete: clearing rx + emitting MessageCompleted");
                 self.rx = None;
@@ -1457,20 +1843,39 @@ impl ChatManager {
         result
     }
 
-    fn process_incoming_chunk(&mut self, chunk: &str, last_msg: &mut ChatMessage) {
+    fn process_incoming_chunk(
+        &mut self,
+        chunk: &str,
+        last_msg: &mut ChatMessage,
+        parse_reasoning: bool,
+    ) -> Vec<crate::reasoning_parser::ReasoningSegment> {
+        if !parse_reasoning {
+            self.append_content(chunk, last_msg);
+            return vec![crate::reasoning_parser::ReasoningSegment::Text(
+                chunk.to_string(),
+            )];
+        }
+
         // v1.2: Use ReasoningParser for multi-format reasoning extraction
-        let result = self.reasoning_parser.process(chunk);
+        let segments = self.reasoning_parser.process_segments(chunk);
 
-        // Append text content (non-reasoning)
-        if !result.text.is_empty() {
-            self.append_content(&result.text, last_msg);
+        for segment in &segments {
+            match segment {
+                crate::reasoning_parser::ReasoningSegment::Text(text) => {
+                    if !text.is_empty() {
+                        self.append_content(text, last_msg);
+                    }
+                }
+                crate::reasoning_parser::ReasoningSegment::Reasoning(reasoning) => {
+                    if !reasoning.is_empty() {
+                        let r = last_msg.reasoning.get_or_insert_with(String::new);
+                        r.push_str(reasoning);
+                    }
+                }
+            }
         }
 
-        // Append reasoning content
-        if !result.reasoning.is_empty() {
-            let r = last_msg.reasoning.get_or_insert_with(String::new);
-            r.push_str(&result.reasoning);
-        }
+        segments
     }
 
     fn append_content(&mut self, text: &str, last_msg: &mut ChatMessage) {

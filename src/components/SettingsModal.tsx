@@ -37,6 +37,8 @@ interface SettingsState {
     localAi: {
         ollamaEnabled: boolean;
         ollamaUrl: string;
+        openaiCompatEnabled: boolean;
+        openaiCompatUrl: string;
     };
     allowGitIgnoredFiles?: boolean;  // Per-project setting
 }
@@ -71,6 +73,8 @@ const defaultSettings: SettingsState = {
     localAi: {
         ollamaEnabled: false,
         ollamaUrl: 'http://localhost:11434',
+        openaiCompatEnabled: false,
+        openaiCompatUrl: 'http://localhost:8080/v1',
     },
     allowGitIgnoredFiles: false,  // Default: respect .gitignore
 };
@@ -93,6 +97,8 @@ function backendGlobalToFrontend(backend: ApiConfig): Pick<SettingsState, 'accou
         localAi: {
             ollamaEnabled: backend.ollama_enabled,
             ollamaUrl: backend.ollama_url,
+            openaiCompatEnabled: backend.openai_compat_enabled,
+            openaiCompatUrl: backend.openai_compat_url,
         },
     };
 }
@@ -104,6 +110,8 @@ function frontendGlobalToBackend(frontend: SettingsState): ApiConfig {
         user_id: frontend.account.userId,
         ollama_enabled: frontend.localAi.ollamaEnabled,
         ollama_url: frontend.localAi.ollamaUrl,
+        openai_compat_enabled: frontend.localAi.openaiCompatEnabled,
+        openai_compat_url: frontend.localAi.openaiCompatUrl,
         theme: frontend.account.theme,
         markdown_view: frontend.account.markdownView,
     };
@@ -265,6 +273,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
                 });
             }
 
+            // Refresh models if local AI settings changed
+            if (onRefreshModels) {
+                await onRefreshModels();
+            }
+
             console.log('[Settings] Saved settings');
             setHasChanges(false);
             onClose();
@@ -417,40 +430,76 @@ interface LocalAiSettingsProps {
 }
 
 const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, onRefreshModels }) => {
-    const [isTesting, setIsTesting] = useState(false);
-    const [testResult, setTestResult] = useState<'idle' | 'success' | 'error'>('idle');
-    const [testMessage, setTestMessage] = useState<string | null>(null);
-    const [isRefreshing, setIsRefreshing] = useState(false);
+    const [isTestingOllama, setIsTestingOllama] = useState(false);
+    const [ollamaTestResult, setOllamaTestResult] = useState<'idle' | 'success' | 'error'>('idle');
+    const [ollamaTestMessage, setOllamaTestMessage] = useState<string | null>(null);
+    const [isRefreshingOllama, setIsRefreshingOllama] = useState(false);
 
-    const handleTestConnection = async () => {
-        setIsTesting(true);
-        setTestResult('idle');
-        setTestMessage(null);
+    const [isTestingOpenAI, setIsTestingOpenAI] = useState(false);
+    const [openaiTestResult, setOpenaiTestResult] = useState<'idle' | 'success' | 'error'>('idle');
+    const [openaiTestMessage, setOpenaiTestMessage] = useState<string | null>(null);
+    const [isRefreshingOpenAI, setIsRefreshingOpenAI] = useState(false);
+
+    const handleTestOllamaConnection = async () => {
+        setIsTestingOllama(true);
+        setOllamaTestResult('idle');
+        setOllamaTestMessage(null);
         try {
             await invoke('test_ollama_connection', { ollamaUrl: settings.ollamaUrl });
-            setTestResult('success');
-            setTestMessage('Connection successful.');
+            setOllamaTestResult('success');
+            setOllamaTestMessage('Connection successful.');
         } catch (e) {
-            setTestResult('error');
-            setTestMessage(String(e));
+            setOllamaTestResult('error');
+            setOllamaTestMessage(String(e));
         } finally {
-            setIsTesting(false);
+            setIsTestingOllama(false);
         }
     };
 
-    const handleRefreshModels = async () => {
-        setIsRefreshing(true);
+    const handleRefreshOllamaModels = async () => {
+        setIsRefreshingOllama(true);
         try {
             await invoke('refresh_ollama_models');
             if (onRefreshModels) {
                 await onRefreshModels();
             }
         } catch (e) {
-            console.error('[Settings] Failed to refresh models:', e);
+            console.error('[Settings] Failed to refresh Ollama models:', e);
         } finally {
-            setIsRefreshing(false);
+            setIsRefreshingOllama(false);
         }
     };
+
+    const handleTestOpenAIConnection = async () => {
+        setIsTestingOpenAI(true);
+        setOpenaiTestResult('idle');
+        setOpenaiTestMessage(null);
+        try {
+            await invoke('test_openai_compat_connection', { serverUrl: settings.openaiCompatUrl });
+            setOpenaiTestResult('success');
+            setOpenaiTestMessage('Connection successful.');
+        } catch (e) {
+            setOpenaiTestResult('error');
+            setOpenaiTestMessage(String(e));
+        } finally {
+            setIsTestingOpenAI(false);
+        }
+    };
+
+    const handleRefreshOpenAIModels = async () => {
+        setIsRefreshingOpenAI(true);
+        try {
+            await invoke('refresh_openai_compat_models');
+            if (onRefreshModels) {
+                await onRefreshModels();
+            }
+        } catch (e) {
+            console.error('[Settings] Failed to refresh OpenAI-compatible models:', e);
+        } finally {
+            setIsRefreshingOpenAI(false);
+        }
+    };
+
     return (
         <div className="space-y-6">
             <div>
@@ -460,6 +509,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                 </p>
             </div>
 
+            {/* Ollama Section */}
             <div className="border border-[var(--border-subtle)] rounded-lg p-4 space-y-4">
                 <div className="flex items-center justify-between">
                     <div>
@@ -489,28 +539,88 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                 <div className="flex items-center gap-3">
                     <button
                         type="button"
-                        onClick={handleTestConnection}
-                        disabled={!settings.ollamaEnabled || isTesting}
+                        onClick={handleTestOllamaConnection}
+                        disabled={!settings.ollamaEnabled || isTestingOllama}
                         className="px-3 py-1.5 text-xs font-medium rounded-md border border-[var(--border-subtle)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                        {isTesting ? 'Testing...' : 'Test Connection'}
+                        {isTestingOllama ? 'Testing...' : 'Test Connection'}
                     </button>
                     <button
                         type="button"
-                        onClick={handleRefreshModels}
-                        disabled={!settings.ollamaEnabled || isRefreshing}
+                        onClick={handleRefreshOllamaModels}
+                        disabled={!settings.ollamaEnabled || isRefreshingOllama}
                         className="px-3 py-1.5 text-xs font-medium rounded-md border border-[var(--border-subtle)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                        {isRefreshing ? 'Refreshing...' : 'Refresh Models'}
+                        {isRefreshingOllama ? 'Refreshing...' : 'Refresh Models'}
                     </button>
-                    {testMessage && (
+                    {ollamaTestMessage && (
                         <span
-                            className={`text-xs ${testResult === 'success'
+                            className={`text-xs ${ollamaTestResult === 'success'
                                 ? 'text-emerald-400'
                                 : 'text-red-400'
                                 }`}
                         >
-                            {testMessage}
+                            {ollamaTestMessage}
+                        </span>
+                    )}
+                </div>
+            </div>
+
+            {/* OpenAI-compatible Section */}
+            <div className="border border-[var(--border-subtle)] rounded-lg p-4 space-y-4">
+                <div className="flex items-center justify-between">
+                    <div>
+                        <div className="text-sm font-medium text-[var(--fg-primary)]">OpenAI-compatible Server</div>
+                        <div className="text-xs text-[var(--fg-tertiary)]">
+                            Connect to OpenAI-compatible servers (llama.cpp, LocalAI, vLLM, etc.)
+                        </div>
+                    </div>
+                    <Toggle
+                        checked={settings.openaiCompatEnabled}
+                        onChange={(checked) => onChange({ openaiCompatEnabled: checked })}
+                    />
+                </div>
+
+                <div className="space-y-2">
+                    <label className="text-xs text-[var(--fg-secondary)] block">Server URL</label>
+                    <input
+                        type="text"
+                        value={settings.openaiCompatUrl}
+                        onChange={(e) => onChange({ openaiCompatUrl: e.target.value })}
+                        placeholder="http://localhost:8080/v1"
+                        disabled={!settings.openaiCompatEnabled}
+                        className="w-full bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded-lg py-2 px-3 text-sm text-[var(--fg-primary)] focus:outline-none focus:border-[var(--accent-primary)] placeholder-[var(--fg-tertiary)] disabled:opacity-60"
+                    />
+                    <p className="text-xs text-[var(--fg-tertiary)] mt-1">
+                        No API key required - these are keyless local servers.
+                    </p>
+                </div>
+
+                <div className="flex items-center gap-3">
+                    <button
+                        type="button"
+                        onClick={handleTestOpenAIConnection}
+                        disabled={!settings.openaiCompatEnabled || isTestingOpenAI}
+                        className="px-3 py-1.5 text-xs font-medium rounded-md border border-[var(--border-subtle)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        {isTestingOpenAI ? 'Testing...' : 'Test Connection'}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={handleRefreshOpenAIModels}
+                        disabled={!settings.openaiCompatEnabled || isRefreshingOpenAI}
+                        className="px-3 py-1.5 text-xs font-medium rounded-md border border-[var(--border-subtle)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        {isRefreshingOpenAI ? 'Refreshing...' : 'Refresh Models'}
+                    </button>
+                    {openaiTestMessage && (
+                        <span
+                            className={`text-xs ${openaiTestResult === 'success'
+                                ? 'text-emerald-400'
+                                : 'text-red-400'
+                                }`}
+                        >
+                            {openaiTestMessage}
                         </span>
                     )}
                 </div>

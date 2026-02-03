@@ -16,6 +16,10 @@ pub struct ApiConfig {
     pub ollama_enabled: bool,
     #[serde(default = "default_ollama_url")]
     pub ollama_url: String,
+    #[serde(default)]
+    pub openai_compat_enabled: bool,
+    #[serde(default = "default_openai_compat_url")]
+    pub openai_compat_url: String,
     pub theme: String,
     pub markdown_view: String,
 }
@@ -27,6 +31,11 @@ fn default_blade_url() -> String {
 
 fn default_ollama_url() -> String {
     "http://localhost:11434".to_string()
+}
+
+fn default_openai_compat_url() -> String {
+    // Use base URL (no version); callers append /v1 paths
+    "http://localhost:8080".to_string()
 }
 
 pub fn default_global_config_dir() -> PathBuf {

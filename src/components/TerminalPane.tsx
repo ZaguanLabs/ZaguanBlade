@@ -1,10 +1,12 @@
 "use client";
 
-import React, { useState, useEffect, forwardRef, useImperativeHandle } from "react";
+import React, { useState, useEffect, forwardRef, useImperativeHandle, useCallback } from "react";
 import Terminal from "./Terminal";
 import { Plus, X, Terminal as TerminalIcon } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { BLADE_TERMINAL_ID, BLADE_TERMINAL_TITLE } from "../constants/terminal";
+import { BladeDispatcher } from "../services/blade";
 
 interface TerminalTab {
     id: string;
@@ -18,10 +20,14 @@ export interface TerminalPaneHandle {
 }
 
 export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
-    const [terminals, setTerminals] = useState<TerminalTab[]>([
-        { id: "term-1", title: "Terminal 1" },
-    ]);
-    const [activeId, setActiveId] = useState<string>("term-1");
+    const createBladeTab = useCallback((cwd?: string): TerminalTab => ({
+        id: BLADE_TERMINAL_ID,
+        title: BLADE_TERMINAL_TITLE,
+        cwd,
+    }), []);
+
+    const [terminals, setTerminals] = useState<TerminalTab[]>([createBladeTab()]);
+    const [activeId, setActiveId] = useState<string>(BLADE_TERMINAL_ID);
 
     const getTitleFromCwd = (path?: string, fallback = "Terminal") => {
         if (!path) return fallback;
@@ -31,18 +37,44 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
         return parts[parts.length - 1] || fallback;
     };
 
+    const ensureBladeTerminal = useCallback((cwd?: string, focus = false) => {
+        setTerminals(prev => {
+            const hasBlade = prev.some(term => term.id === BLADE_TERMINAL_ID);
+            if (hasBlade) {
+                return prev.map(term =>
+                    term.id === BLADE_TERMINAL_ID
+                        ? { ...term, cwd: term.cwd ?? cwd, title: BLADE_TERMINAL_TITLE }
+                        : term
+                );
+            }
+            return [createBladeTab(cwd), ...prev];
+        });
+
+        if (focus) {
+            setActiveId(BLADE_TERMINAL_ID);
+        }
+    }, [createBladeTab]);
+
     useImperativeHandle(ref, () => ({
         getTerminalState: () => ({ terminals, activeId }),
         restoreTerminals: (restoredTerminals: TerminalTab[], restoredActiveId?: string) => {
             if (restoredTerminals.length > 0) {
-                const normalized = restoredTerminals.map((term) =>
-                    term.cwd ? { ...term, title: getTitleFromCwd(term.cwd, term.title) } : term
-                );
-                setTerminals(normalized);
-                setActiveId(restoredActiveId || normalized[0].id);
+                const normalized = restoredTerminals.map((term) => {
+                    if (term.id === BLADE_TERMINAL_ID) {
+                        return { ...term, title: BLADE_TERMINAL_TITLE };
+                    }
+                    return term.cwd ? { ...term, title: getTitleFromCwd(term.cwd, term.title) } : term;
+                });
+                const hasBlade = normalized.some(term => term.id === BLADE_TERMINAL_ID);
+                const withBlade = hasBlade ? normalized : [createBladeTab(), ...normalized];
+                const nextActive = restoredActiveId && withBlade.some(term => term.id === restoredActiveId)
+                    ? restoredActiveId
+                    : withBlade[0].id;
+                setTerminals(withBlade);
+                setActiveId(nextActive);
             }
         },
-    }), [terminals, activeId]);
+    }), [terminals, activeId, createBladeTab, ensureBladeTerminal]);
 
     // Set initial terminal cwd/title to workspace root if available
     useEffect(() => {
@@ -52,11 +84,14 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
                 const workspaceRoot = await invoke<string | null>("get_current_workspace");
                 if (!isMounted || !workspaceRoot) return;
                 setTerminals(prev =>
-                    prev.map(term =>
-                        term.cwd
+                    prev.map(term => {
+                        if (term.id === BLADE_TERMINAL_ID) {
+                            return { ...term, cwd: term.cwd ?? workspaceRoot, title: BLADE_TERMINAL_TITLE };
+                        }
+                        return term.cwd
                             ? { ...term, title: getTitleFromCwd(term.cwd, term.title) }
-                            : { ...term, cwd: workspaceRoot, title: getTitleFromCwd(workspaceRoot, term.title) }
-                    )
+                            : { ...term, cwd: workspaceRoot, title: getTitleFromCwd(workspaceRoot, term.title) };
+                    })
                 );
             } catch {
                 // ignore
@@ -68,6 +103,18 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
             isMounted = false;
         };
     }, []);
+
+    // Allow external consumers (like run_command) to open the Blade terminal if needed
+    useEffect(() => {
+        const unlisten = listen<{ cwd?: string; focus?: boolean }>('open-blade-terminal', (event) => {
+            const { cwd, focus } = event.payload || {};
+            ensureBladeTerminal(cwd, focus ?? true);
+        });
+
+        return () => {
+            unlisten.then(fn => fn());
+        };
+    }, [ensureBladeTerminal]);
 
     // Listen for open-terminal events from other components (e.g., File Explorer)
     useEffect(() => {
@@ -91,11 +138,13 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
         const unlisten = listen<{ id: string; cwd: string }>('terminal-cwd-changed', (event) => {
             const { id, cwd } = event.payload;
             setTerminals(prev =>
-                prev.map(term =>
-                    term.id === id
-                        ? { ...term, cwd, title: getTitleFromCwd(cwd, term.title) }
-                        : term
-                )
+                prev.map(term => {
+                    if (term.id !== id) return term;
+                    if (term.id === BLADE_TERMINAL_ID) {
+                        return { ...term, cwd, title: BLADE_TERMINAL_TITLE };
+                    }
+                    return { ...term, cwd, title: getTitleFromCwd(cwd, term.title) };
+                })
             );
         });
 
@@ -124,16 +173,17 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
 
     const closeTerminal = (e: React.MouseEvent, id: string) => {
         e.stopPropagation();
-        if (terminals.length === 1) return; // Prevent closing last terminal for now?
-
         const newTerminals = terminals.filter((t) => t.id !== id);
         setTerminals(newTerminals);
 
         if (activeId === id) {
-            setActiveId(newTerminals[newTerminals.length - 1].id);
+            setActiveId(newTerminals[newTerminals.length - 1]?.id || "");
         }
 
-        // TODO: Send kill command to backend for this ID
+        BladeDispatcher.terminal({
+            type: "Kill",
+            payload: { id }
+        }).catch(console.error);
     };
 
     return (

@@ -39,13 +39,15 @@ pub async fn send_message<R: Runtime>(
 pub async fn list_models(
     state: State<'_, AppState>,
 ) -> Result<Vec<crate::models::registry::ModelInfo>, String> {
-    let (blade_url, api_key, ollama_enabled, ollama_url) = {
+    let (blade_url, api_key, ollama_enabled, ollama_url, openai_compat_enabled, openai_compat_url) = {
         let config = state.config.lock().unwrap();
         (
             config.blade_url.clone(),
             config.api_key.clone(),
             config.ollama_enabled,
             config.ollama_url.clone(),
+            config.openai_compat_enabled,
+            config.openai_compat_url.clone(),
         )
     };
 
@@ -53,6 +55,10 @@ pub async fn list_models(
     if ollama_enabled {
         let mut ollama_models = crate::models::ollama::get_models(&ollama_url).await;
         models.append(&mut ollama_models);
+    }
+    if openai_compat_enabled {
+        let mut openai_compat_models = crate::models::openai_compat::get_models(&openai_compat_url).await;
+        models.append(&mut openai_compat_models);
     }
 
     Ok(models)

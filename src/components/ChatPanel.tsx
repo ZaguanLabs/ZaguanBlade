@@ -13,7 +13,6 @@ import { ChatMessage } from './ChatMessage';
 import { ChatTabBar } from './ChatTabBar';
 import { CommandCenter } from './CommandCenter';
 import { HistoryTab } from './HistoryTab';
-import { ChatTerminal } from './ChatTerminal';
 import { ProgressIndicator } from './ProgressIndicator';
 import { GlobalChangeActions } from './editor/GlobalChangeActions';
 import type { UncommittedChange } from '../types/uncommitted';
@@ -67,7 +66,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     onRejectAllChanges,
 }) => {
     const { t } = useTranslation();
-    const { executions, handleCommandComplete } = useCommandExecution();
+    useCommandExecution();
     const { loadConversation } = useHistory();
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const isUserAtBottomRef = useRef(true);
@@ -299,8 +298,6 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                                     onSkipCommand={showPendingActions ? handleSkipCommand : undefined}
                                     isContinued={isContinued}
                                     isActive={isActive}
-                                    activeTerminals={executions}
-                                    onTerminalComplete={handleCommandComplete}
                                     onUndoTool={onUndoTool}
                                 />
                             );
