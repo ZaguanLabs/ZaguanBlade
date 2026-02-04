@@ -328,7 +328,7 @@ mod tests {
         // The service resolve_path joins workspace root.
         // So use relative path in patch.
 
-        let patch = SemanticPatch::replace_symbol(
+        let _patch = SemanticPatch::replace_symbol(
             "replace_test.ts", // relative path
             "test",
             None,
@@ -343,7 +343,6 @@ mod tests {
         // Let's modify PatchApplier to take absolute paths or handle resolution.
         // For this test, we can pass absolute path to patch.
 
-        let abs_path = file_path.to_str().unwrap();
         // However, the symbol index stores "replace_test.ts" (relative) because index_file was called with relative.
         // get_file_symbols expects the path stored in DB.
 

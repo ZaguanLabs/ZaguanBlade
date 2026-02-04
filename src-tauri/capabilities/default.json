@@ -10,6 +10,9 @@
     "opener:default",
     "shell:default",
     "fs:default",
+    "dialog:default",
+    "dialog:allow-save",
+    "dialog:allow-open",
     "notification:allow-notify",
     "notification:allow-is-permission-granted",
     {

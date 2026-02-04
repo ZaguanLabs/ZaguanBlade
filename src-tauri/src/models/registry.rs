@@ -10,6 +10,8 @@ pub struct ModelInfo {
     pub name: String,
     pub description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_id: Option<String>,
@@ -99,6 +101,7 @@ async fn fetch_models_from_server(
                 id,
                 name: m.name,
                 description: m.description,
+                provider: Some("zaguan".to_string()),
                 reasoning_effort: m.reasoning_effort,
                 api_id,
             }

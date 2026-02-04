@@ -61,6 +61,7 @@ export interface ModelInfo {
     id: string;
     name: string;
     description: string;
+    provider?: string;
     reasoning_effort?: string;
     api_id?: string;
 }

@@ -807,7 +807,14 @@ pub async fn dispatch(
                     },
                 )
             }
-            blade_protocol::TerminalIntent::Kill { id: _ } => Ok(()),
+            blade_protocol::TerminalIntent::Kill { id } => {
+                crate::terminal::kill_terminal(id, terminal_manager.clone()).map_err(|e| {
+                    blade_protocol::BladeError::Internal {
+                        trace_id: intent_id.to_string(),
+                        message: e,
+                    }
+                })
+            }
         },
         BladeIntent::History(history_intent) => {
             match history_intent {

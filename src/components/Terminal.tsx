@@ -10,6 +10,7 @@ import { TerminalBuffer } from "../utils/eventBuffer";
 import type { BladeEventEnvelope } from "../types/blade";
 import { useContextMenu, ContextMenuItem } from "./ui/ContextMenu";
 import { Copy, ClipboardPaste, Trash2, MessageSquare } from "lucide-react";
+import { BLADE_TERMINAL_ID } from "../constants/terminal";
 
 interface TerminalProps {
     id?: string;
@@ -195,6 +196,10 @@ export default function Terminal({ id = "main-terminal", cwd }: TerminalProps) {
                         interactive: true,
                     }
                 });
+
+                if (id === BLADE_TERMINAL_ID) {
+                    emit('blade-terminal-ready', { id }).catch(console.error);
+                }
 
                 // Initial resize after backend spawn
                 setTimeout(() => {

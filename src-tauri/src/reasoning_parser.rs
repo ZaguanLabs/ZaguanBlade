@@ -57,6 +57,12 @@ pub struct ParseResult {
     pub reasoning: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReasoningSegment {
+    Text(String),
+    Reasoning(String),
+}
+
 impl ParseResult {
     pub fn new() -> Self {
         Self::default()
@@ -148,14 +154,27 @@ impl ReasoningParser {
     ///
     /// Returns separated text and reasoning content
     pub fn process(&mut self, chunk: &str) -> ParseResult {
+        let segments = self.process_segments(chunk);
         let mut result = ParseResult::new();
+        for segment in segments {
+            match segment {
+                ReasoningSegment::Text(text) => result.text.push_str(&text),
+                ReasoningSegment::Reasoning(reasoning) => result.reasoning.push_str(&reasoning),
+            }
+        }
+        result
+    }
+
+    /// Process a text chunk, returning ordered segments of text/reasoning
+    pub fn process_segments(&mut self, chunk: &str) -> Vec<ReasoningSegment> {
+        let mut segments = Vec::new();
         let mut remaining = chunk;
 
         // If we have buffered content from a previous chunk, prepend it
         if !self.tag_buffer.is_empty() {
             let combined = format!("{}{}", self.tag_buffer, chunk);
             self.tag_buffer.clear();
-            return self.process(&combined);
+            return self.process_segments(&combined);
         }
 
         loop {
@@ -166,9 +185,10 @@ impl ReasoningParser {
             if !self.in_reasoning {
                 // Look for opening tags
                 if let Some((format, idx)) = self.find_opening_tag(remaining) {
-                    // Emit text before the tag
                     let before = &remaining[..idx];
-                    result.text.push_str(before);
+                    if !before.is_empty() {
+                        segments.push(ReasoningSegment::Text(before.to_string()));
+                    }
 
                     // Enter reasoning mode
                     self.in_reasoning = true;
@@ -176,28 +196,27 @@ impl ReasoningParser {
 
                     // Skip past the opening tag
                     remaining = &remaining[idx + format.open_len()..];
-                } else {
-                    // Check for potential partial tag at end
-                    if let Some(partial_idx) = self.find_partial_opening(remaining) {
-                        // Emit text before the potential partial tag
-                        result.text.push_str(&remaining[..partial_idx]);
-                        // Buffer the rest for next chunk
-                        self.tag_buffer = remaining[partial_idx..].to_string();
-                        break;
-                    } else {
-                        // No tags found, emit all as text
-                        result.text.push_str(remaining);
-                        break;
+                } else if let Some(partial_idx) = self.find_partial_opening(remaining) {
+                    let before = &remaining[..partial_idx];
+                    if !before.is_empty() {
+                        segments.push(ReasoningSegment::Text(before.to_string()));
                     }
+                    self.tag_buffer = remaining[partial_idx..].to_string();
+                    break;
+                } else {
+                    segments.push(ReasoningSegment::Text(remaining.to_string()));
+                    break;
                 }
             } else {
-                // Inside reasoning block - look for closing tag
                 let format = self.current_format.expect("in_reasoning but no format");
 
                 if let Some(idx) = remaining.find(format.close_tag()) {
-                    // Found closing tag
                     let reasoning_content = &remaining[..idx];
-                    result.reasoning.push_str(reasoning_content);
+                    if !reasoning_content.is_empty() {
+                        segments.push(ReasoningSegment::Reasoning(
+                            reasoning_content.to_string(),
+                        ));
+                    }
 
                     // Exit reasoning mode
                     self.in_reasoning = false;
@@ -205,30 +224,30 @@ impl ReasoningParser {
 
                     // Skip past the closing tag
                     remaining = &remaining[idx + format.close_len()..];
-                } else {
-                    // Check for partial closing tag at end
-                    if let Some(partial_idx) = self.find_partial_closing(remaining, format) {
-                        // Emit reasoning before the potential partial tag
-                        result.reasoning.push_str(&remaining[..partial_idx]);
-                        // Buffer the rest for next chunk
-                        self.tag_buffer = remaining[partial_idx..].to_string();
-                        break;
-                    } else {
-                        // No closing tag found, all is reasoning
-                        result.reasoning.push_str(remaining);
-                        break;
+                } else if let Some(partial_idx) = self.find_partial_closing(remaining, format) {
+                    let reasoning_before = &remaining[..partial_idx];
+                    if !reasoning_before.is_empty() {
+                        segments.push(ReasoningSegment::Reasoning(
+                            reasoning_before.to_string(),
+                        ));
                     }
+                    self.tag_buffer = remaining[partial_idx..].to_string();
+                    break;
+                } else {
+                    segments.push(ReasoningSegment::Reasoning(remaining.to_string()));
+                    break;
                 }
             }
         }
 
-        // Store reasoning for potential tool interruption
-        if !result.reasoning.is_empty() {
-            let existing = self.interrupted_reasoning.get_or_insert_with(String::new);
-            existing.push_str(&result.reasoning);
+        for segment in &segments {
+            if let ReasoningSegment::Reasoning(reasoning) = segment {
+                let existing = self.interrupted_reasoning.get_or_insert_with(String::new);
+                existing.push_str(reasoning);
+            }
         }
 
-        result
+        segments
     }
 
     /// Find the first opening tag in the text

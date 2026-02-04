@@ -232,6 +232,17 @@ pub fn create_terminal<R: Runtime>(
     Ok(())
 }
 
+pub fn kill_terminal(
+    id: String,
+    state: tauri::State<'_, TerminalManager>,
+) -> Result<(), String> {
+    let mut ptys = state.ptys.lock().unwrap();
+    if let Some(mut pty) = ptys.remove(&id) {
+        let _ = pty.child.kill();
+    }
+    Ok(())
+}
+
 // #[tauri::command]
 pub fn write_to_terminal(
     id: String,

@@ -8,7 +8,6 @@ import { CommandApprovalCard } from './CommandApprovalCard';
 import { TodoList } from './TodoList';
 import { useContextMenu, ContextMenuItem } from './ui/ContextMenu';
 import { MarkdownRenderer } from './MarkdownRenderer';
-import { ChatTerminal } from './ChatTerminal';
 
 const REVERTIBLE_TOOLS = new Set([
     'apply_patch',
@@ -131,8 +130,6 @@ interface ChatMessageProps {
     onSkipCommand?: () => void;
     isContinued?: boolean; // For visual grouping
     isActive?: boolean; // Is this the currently streaming message?
-    activeTerminals?: Map<string, { callId: string, commandId: string, command: string, cwd?: string }>;
-    onTerminalComplete?: (callId: string, output: string, exitCode: number) => void;
     onUndoTool?: (toolCallId: string) => void;
 }
 
@@ -143,8 +140,6 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     onSkipCommand,
     isContinued = false,
     isActive = false,
-    activeTerminals,
-    onTerminalComplete,
     onUndoTool,
 }) => {
     const isUser = message.role === 'User';
@@ -364,25 +359,6 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                     return null;
                                 }
 
-                                // Check if this is an active terminal
-                                const activeTerminal = activeTerminals?.get(block.id);
-                                if (activeTerminal && onTerminalComplete) {
-                                    return (
-                                        <div key={block.id} className="mb-3 space-y-2">
-                                            {/* Show the tool call header (optional, if we want to show args) */}
-                                            {/* <ToolCallDisplay toolCall={toolCall} status="executing" /> */}
-
-                                            {/* Show the interactive terminal */}
-                                            <ChatTerminal
-                                                commandId={activeTerminal.commandId}
-                                                command={activeTerminal.command}
-                                                cwd={activeTerminal.cwd}
-                                                onComplete={(output, exitCode) => onTerminalComplete(activeTerminal.callId, output, exitCode)}
-                                            />
-                                        </div>
-                                    );
-                                }
-
                                 return (
                                     <div key={block.id} className="mb-3 space-y-2">
                                         <ToolCallDisplay
@@ -401,10 +377,6 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 // Find the command execution by ID
                                 const cmdExec = message.commandExecutions?.find(c => c.id === block.id);
                                 if (!cmdExec) return null;
-
-                                // Prevent duplicate rendering if terminal is still active
-                                // The ChatTerminal is rendered by the tool_call block
-                                if (activeTerminals?.has(block.id)) return null;
 
                                 return (
                                     <div key={block.id} className="mb-3">
@@ -614,11 +586,6 @@ export const ChatMessage = React.memo(ChatMessageComponent, (prevProps, nextProp
     const nextHasSkip = !!nextProps.onSkipCommand;
     if (prevHasApprove !== nextHasApprove) return false;
     if (prevHasSkip !== nextHasSkip) return false;
-    
-    // Active terminals - check size and keys
-    const prevTerminals = prevProps.activeTerminals;
-    const nextTerminals = nextProps.activeTerminals;
-    if (prevTerminals?.size !== nextTerminals?.size) return false;
     
     return true;
 });

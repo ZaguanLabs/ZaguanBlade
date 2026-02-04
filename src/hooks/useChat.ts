@@ -14,6 +14,8 @@ import { ensureMessagesHaveBlocks } from '../utils/messageBlocks';
 export function useChat() {
     const { editorState } = useEditor();
     const [messages, setMessages] = useState<ChatMessage[]>([]);
+    const messagesRef = useRef<ChatMessage[]>([]);
+    const blocksRef = useRef<Map<string, import('../types/chat').MessageBlock[]>>(new Map());
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -119,6 +121,17 @@ export function useChat() {
     const selectedModelIdRef = useRef<string>('anthropic/claude-sonnet-4-5-20250929');
     const hasExplicitModelRef = useRef(false);
 
+    const refreshModels = useCallback(async () => {
+        try {
+            const modelList = await invoke<ModelInfo[]>('list_models');
+            setModels(modelList);
+            return modelList;
+        } catch (e) {
+            console.error('[useChat] Failed to refresh models:', e);
+            throw e;
+        }
+    }, []);
+
     // Wrapper that syncs with backend when model changes
     const setSelectedModelId = useCallback(async (modelId: string) => {
         hasExplicitModelRef.current = true;
@@ -185,6 +198,10 @@ export function useChat() {
         selectedModelIdRef.current = selectedModelId;
     }, [selectedModelId]);
 
+    useEffect(() => {
+        messagesRef.current = messages;
+    }, [messages]);
+
     // Listen for updates
     useEffect(() => {
         if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
@@ -202,9 +219,6 @@ export function useChat() {
         // Initialize v1.1 message buffer
         // v1.2: Use batched rendering - accumulate in refs, queue updates at intervals
         if (!messageBufferRef.current) {
-            // Track blocks per message for proper structure
-            const blocksRef: Map<string, import('../types/chat').MessageBlock[]> = new Map();
-            
             messageBufferRef.current = new MessageBuffer(
                 (id, chunk, is_final, type) => {
                     setLoading(true);
@@ -222,25 +236,21 @@ export function useChat() {
                         accumulatedContentRef.current.content += chunk;
                     }
 
-                    // Build blocks structure
-                    // Get existing message to check for tool_call blocks that were added via ToolUpdate
-                    const existingMsg = messages.find(m => m.id === id);
-                    const existingNonTextBlocks = (existingMsg?.blocks || []).filter(
-                        b => b.type !== 'text' && b.type !== 'reasoning'
-                    );
+                    // Build blocks structure using existing message order (includes tool_call blocks)
+                    // CRITICAL: Prioritize blocksRef (synchronous) over existingMsg.blocks (async/stale)
+                    // to prevent race conditions where stale data overwrites fresh accumulated blocks
+                    const existingMsg = messagesRef.current.find(m => m.id === id);
+                    let blocks = blocksRef.current.get(id) || [];
                     
-                    let blocks = blocksRef.get(id) || [];
-                    
-                    // Merge with existing non-text blocks (tool_call, command_execution, etc.)
-                    // to ensure we know about tool calls when deciding whether to create new reasoning blocks
-                    const allBlocks = [...blocks];
-                    for (const nonTextBlock of existingNonTextBlocks) {
-                        if (!allBlocks.some(b => b.id === nonTextBlock.id)) {
-                            allBlocks.push(nonTextBlock);
-                        }
+                    // Only use existingMsg.blocks if blocksRef is empty AND existingMsg has non-text blocks
+                    // This preserves tool_call blocks from the message state while keeping fresh text blocks
+                    if (blocks.length === 0 && existingMsg?.blocks && existingMsg.blocks.length > 0) {
+                        // Only copy non-text/non-reasoning blocks (tool_call, command_execution, etc.)
+                        // Text/reasoning blocks should come from the fresh stream, not stale state
+                        blocks = existingMsg.blocks.filter(b => b.type !== 'text' && b.type !== 'reasoning');
                     }
-                    
-                    const lastBlock = allBlocks[allBlocks.length - 1];
+
+                    const lastBlock = blocks[blocks.length - 1];
                     
                     if (type === 'reasoning') {
                         // Create new reasoning block if:
@@ -263,7 +273,7 @@ export function useChat() {
                             blocks = [...blocks, { type: 'text', content: chunk, id: crypto.randomUUID() }];
                         }
                     }
-                    blocksRef.set(id, blocks);
+                    blocksRef.current.set(id, blocks);
 
                     // Queue batched update (will flush at 50ms intervals)
                     queueMessageUpdate(
@@ -276,7 +286,7 @@ export function useChat() {
                 (id) => {
                     // Message completed - flush immediately and cleanup
                     flushPendingUpdates();
-                    blocksRef.delete(id);
+                    blocksRef.current.delete(id);
                     setLoading(false);
                 }
             );
@@ -558,6 +568,7 @@ export function useChat() {
                                                 newBlocks.push({ type: 'tool_call', id: tool_call_id });
                                             }
 
+                                            blocksRef.current.set(message_id, newBlocks);
                                             return {
                                                 ...msg,
                                                 content_before_tools: contentBefore,
@@ -568,6 +579,7 @@ export function useChat() {
                                             console.warn('[v1.1 Chat] Received ToolUpdate for unknown tool but no tool_call data provided:', tool_call_id);
                                         }
                                     }
+                                    blocksRef.current.set(message_id, newBlocks);
                                     return { ...msg, tool_calls: newTools, blocks: newBlocks }; // Return updated msg
                                 }
                                 return msg;
@@ -740,6 +752,7 @@ export function useChat() {
         sendMessage,
         stopGeneration,
         models,
+        refreshModels,
         selectedModelId,
         setSelectedModelId,
         pendingActions,

@@ -78,3 +78,23 @@ body {
     user-select: text !important;
     -webkit-user-select: text !important;
 }
+
+/* Ensure proper word spacing in markdown content */
+.markdown-content {
+    word-spacing: normal !important;
+    white-space: normal !important;
+}
+
+.markdown-content p,
+.markdown-content li,
+.markdown-content span,
+.markdown-content div {
+    word-spacing: normal !important;
+    white-space: normal !important;
+}
+
+/* Ensure text nodes render with proper spacing */
+.markdown-content * {
+    word-break: normal;
+    overflow-wrap: normal;
+}
