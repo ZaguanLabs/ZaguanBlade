@@ -1449,7 +1449,7 @@ impl ChatManager {
         let is_blade_protocol = models
             .get(selected_model)
             .and_then(|m| m.provider.as_deref())
-            .map(|p| p == "blade")
+            .map(|p| p == "zaguan")
             .unwrap_or(false);
         let is_openai_text = model_id.contains("openai")
             || model_id.contains("gpt-5.2")

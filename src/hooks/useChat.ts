@@ -237,10 +237,17 @@ export function useChat() {
                     }
 
                     // Build blocks structure using existing message order (includes tool_call blocks)
+                    // CRITICAL: Prioritize blocksRef (synchronous) over existingMsg.blocks (async/stale)
+                    // to prevent race conditions where stale data overwrites fresh accumulated blocks
                     const existingMsg = messagesRef.current.find(m => m.id === id);
                     let blocks = blocksRef.current.get(id) || [];
-                    if (existingMsg?.blocks && existingMsg.blocks.length > 0) {
-                        blocks = [...existingMsg.blocks];
+                    
+                    // Only use existingMsg.blocks if blocksRef is empty AND existingMsg has non-text blocks
+                    // This preserves tool_call blocks from the message state while keeping fresh text blocks
+                    if (blocks.length === 0 && existingMsg?.blocks && existingMsg.blocks.length > 0) {
+                        // Only copy non-text/non-reasoning blocks (tool_call, command_execution, etc.)
+                        // Text/reasoning blocks should come from the fresh stream, not stale state
+                        blocks = existingMsg.blocks.filter(b => b.type !== 'text' && b.type !== 'reasoning');
                     }
 
                     const lastBlock = blocks[blocks.length - 1];
