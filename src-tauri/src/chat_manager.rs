@@ -965,6 +965,8 @@ impl ChatManager {
             model: String,
             messages: Vec<OpenAIMessage>,
             stream: bool,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            tools: Option<Vec<serde_json::Value>>,
         }
 
         let mut messages: Vec<OpenAIMessage> = Vec::new();
@@ -1027,6 +1029,7 @@ impl ChatManager {
             model: model_name.clone(),
             messages,
             stream: true,
+            tools: Some(get_tool_definitions()),
         };
 
         // OpenAI-compatible servers follow the /v1/chat/completions path; base URL should be versionless
@@ -1189,7 +1192,7 @@ impl ChatManager {
 
                                 if choice.finish_reason.is_some() {
                                     let _ = tx.send(ChatEvent::Done);
-                                    return;
+                                    break;
                                 }
                             }
                         }
@@ -1424,22 +1427,12 @@ impl ChatManager {
 
         // Aggressively drain all available events from the channel
         let mut events = Vec::new();
-        let mut channel_closed = false;
         loop {
             match rx.try_recv() {
                 Ok(ev) => events.push(ev),
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    channel_closed = true;
-                    break;
-                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
             }
-        }
-
-        // If the stream sender dropped unexpectedly, synthesize a Done event so we finalize the turn
-        if channel_closed {
-            eprintln!("[DRAIN] Channel closed unexpectedly - injecting Done");
-            events.push(ChatEvent::Done);
         }
 
         if events.is_empty() {
@@ -1450,10 +1443,19 @@ impl ChatManager {
             .get(selected_model)
             .map(|m| m.id.to_lowercase())
             .unwrap_or_default();
+        // Blade Protocol models send pre-parsed reasoning via ReasoningChunk events
+        // OpenAI models also send clean text without tags
+        // Both should bypass the reasoning parser to avoid garbled output
+        let is_blade_protocol = models
+            .get(selected_model)
+            .and_then(|m| m.provider.as_deref())
+            .map(|p| p == "blade")
+            .unwrap_or(false);
         let is_openai_text = model_id.contains("openai")
             || model_id.contains("gpt-5.2")
-            || model_id.contains("codex");
-        let use_reasoning_parser = supports_reasoning_tags(&model_id);
+            || model_id.contains("codex")
+            || is_blade_protocol;
+        let use_reasoning_parser = supports_reasoning_tags(&model_id) && !is_blade_protocol;
 
         let mut batched_chunk = String::new();
         let mut done = false;
@@ -1499,6 +1501,8 @@ impl ChatManager {
                                         if reasoning.is_empty() {
                                             continue;
                                         }
+                                        let r = assistant_msg.reasoning.get_or_insert_with(String::new);
+                                        r.push_str(&reasoning);
                                         self.pending_results.push_back(DrainResult::Reasoning(
                                             assistant_msg.clone(),
                                             reasoning,
@@ -1534,6 +1538,8 @@ impl ChatManager {
                                             if reasoning.is_empty() {
                                                 continue;
                                             }
+                                            let r = new_last.reasoning.get_or_insert_with(String::new);
+                                            r.push_str(&reasoning);
                                             self.pending_results.push_back(DrainResult::Reasoning(
                                                 new_last.clone(),
                                                 reasoning,
@@ -1593,7 +1599,9 @@ impl ChatManager {
                             });
                         }
                     }
+                    // Flush any pending text batch before emitting reasoning
                     flush_batch!();
+                    // Emit reasoning immediately for incremental display and proper separation from text
                     if let Some(assistant_msg) = conversation.last_assistant_mut() {
                         let r = assistant_msg.reasoning.get_or_insert_with(String::new);
                         r.push_str(&s);
@@ -1781,6 +1789,7 @@ impl ChatManager {
             if should_complete_turn {
                 eprintln!("[DRAIN] Turn complete: clearing rx + emitting MessageCompleted");
                 self.rx = None;
+                self.streaming = false; // Disable streaming to deactivate Stop button
 
                 let msg_id = conversation.last().and_then(|msg| {
                     if msg.role == ChatRole::Assistant {
