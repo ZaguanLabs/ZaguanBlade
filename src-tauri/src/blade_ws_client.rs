@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use tokio_tungstenite::{connect_async_with_config, tungstenite::protocol::{Message, WebSocketConfig}};
 
 /// WebSocket-based Blade Protocol v2 client
 pub struct BladeWsClient {
@@ -97,6 +97,12 @@ pub enum BladeWsEvent {
         tool_name: String,
         file_path: String,
         action: String,
+    },
+    /// Tool progress - streaming partial arguments as tool call is being generated
+    ToolProgress {
+        tool_call_id: String,
+        tool_name: String,
+        file_path: Option<String>,
     },
 }
 
@@ -231,7 +237,15 @@ impl BladeWsClient {
                 max_retries + 1
             );
 
-            match connect_async(&url).await {
+            // Configure WebSocket with larger message size limit (64MB instead of default 16MB)
+            // This prevents "Space limit exceeded" errors for large tool results
+            let ws_config = WebSocketConfig {
+                max_message_size: Some(64 * 1024 * 1024), // 64MB
+                max_frame_size: Some(16 * 1024 * 1024),   // 16MB per frame
+                ..Default::default()
+            };
+
+            match connect_async_with_config(&url, Some(ws_config), false).await {
                 Ok((stream, _)) => {
                     eprintln!("[BLADE WS] Connected successfully");
                     ws_stream = stream;
@@ -408,10 +422,25 @@ impl BladeWsClient {
                     }
                     Err(e) => {
                         eprintln!("[BLADE WS] Read error: {}", e);
-                        // Treat connection reset as a disconnect so upstream can finish gracefully
                         let msg = e.to_string();
+                        
+                        // Handle specific error types with appropriate recovery hints
                         if msg.contains("Connection reset by peer") {
+                            // Treat connection reset as a disconnect so upstream can finish gracefully
                             let _ = event_tx_clone.send(BladeWsEvent::Disconnected);
+                        } else if msg.contains("Space limit exceeded") || msg.contains("Message too long") {
+                            // Message size limit exceeded - tell the model to use smaller responses
+                            eprintln!("[BLADE WS] Message size limit exceeded, sending recoverable error");
+                            let _ = event_tx_clone.send(BladeWsEvent::Error {
+                                error_type: "message_too_large".to_string(),
+                                code: "size_limit_exceeded".to_string(),
+                                message: "The response was too large to process. Please break your response into smaller parts or use more concise output.".to_string(),
+                                token_count: None,
+                                max_tokens: None,
+                                excess: None,
+                                recoverable: Some(true),
+                                recovery_hint: Some("Your previous response exceeded the message size limit. Please retry with a more concise approach: use smaller code blocks, avoid outputting entire files, and break large changes into multiple smaller tool calls.".to_string()),
+                            });
                         } else {
                             let _ = event_tx_clone.send(BladeWsEvent::Error {
                                 error_type: "unknown_error".to_string(),
@@ -848,6 +877,40 @@ impl BladeWsClient {
                     action,
                 });
             }
+            "tool_progress" => {
+                // Tool progress - streaming partial arguments as tool call is being generated
+                let tool_call_id = msg
+                    .payload
+                    .get("tool_call_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let tool_name = msg
+                    .payload
+                    .get("tool_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let partial_arguments = msg
+                    .payload
+                    .get("partial_arguments")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                // Extract file path from partial_arguments using regex
+                // partial_arguments is incomplete JSON like: '{"path": "/home/stig/dev/ai/z'
+                let file_path = Self::extract_file_path_from_partial_args(partial_arguments);
+
+                eprintln!(
+                    "[BLADE WS] Tool Progress: {} ({}) -> {:?}",
+                    tool_name, tool_call_id, file_path
+                );
+                let _ = tx.send(BladeWsEvent::ToolProgress {
+                    tool_call_id,
+                    tool_name,
+                    file_path,
+                });
+            }
             "get_conversation_context" => {
                 // zcoderd sends payload as Base64-encoded JSON string
                 // Decode: "eyJzZXNzaW9uX2lkIjoiLi4uIn0=" -> {"session_id":"..."}
@@ -906,5 +969,34 @@ impl BladeWsClient {
         }
 
         Ok(())
+    }
+
+    /// Extract file path from partial JSON arguments
+    /// Handles incomplete JSON like: '{"path": "/home/stig/dev/ai/z'
+    fn extract_file_path_from_partial_args(partial_args: &str) -> Option<String> {
+        // Try multiple common field names for file paths
+        let patterns = [
+            r#""path"\s*:\s*"([^"]*)"#,
+            r#""file_path"\s*:\s*"([^"]*)"#,
+            r#""target_file"\s*:\s*"([^"]*)"#,
+            r#""absolute_path"\s*:\s*"([^"]*)"#,
+            r#""file"\s*:\s*"([^"]*)"#,
+        ];
+
+        for pattern in patterns {
+            if let Ok(re) = regex::Regex::new(pattern) {
+                if let Some(caps) = re.captures(partial_args) {
+                    if let Some(path) = caps.get(1) {
+                        let path_str = path.as_str();
+                        // Only return if we have a meaningful path (at least starts with /)
+                        if !path_str.is_empty() && path_str.starts_with('/') {
+                            return Some(path_str.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        None
     }
 }

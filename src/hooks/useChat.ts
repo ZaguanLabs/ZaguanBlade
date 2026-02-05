@@ -18,6 +18,9 @@ export function useChat() {
     const blocksRef = useRef<Map<string, import('../types/chat').MessageBlock[]>>(new Map());
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    
+    // Tool activity state for streaming progress display
+    const [toolActivity, setToolActivity] = useState<{ toolName: string; filePath: string; action: string } | null>(null);
 
     // v1.1: Message buffer and accumulation ref for atomic updates
     const messageBufferRef = useRef<MessageBuffer | null>(null);
@@ -61,6 +64,11 @@ export function useChat() {
                         // Natural conversation flow: tool calls first, then response text after
                         // This matches how the model actually works - it calls tools, gets results, then responds
                         const mergedBlocks = [...existingNonTextBlocks, ...newTextBlocks];
+                        
+                        // Debug: log if we have todos
+                        if (msg.todos && msg.todos.length > 0) {
+                            console.log(`[flushPendingUpdates] Preserving ${msg.todos.length} todos for message ${id}, has todo block: ${existingNonTextBlocks.some(b => b.type === 'todo')}`);
+                        }
                         
                         updated[idx] = {
                             ...msg,
@@ -373,6 +381,30 @@ export function useChat() {
             });
             unlistenContextLength = uContextLength;
 
+            // Listen for message-too-large errors
+            const uMessageTooLarge = await listen<{
+                message: string;
+                recovery_hint: string;
+            }>('message-too-large', (event) => {
+                console.log('[useChat] Message too large:', event.payload);
+                const { message, recovery_hint } = event.payload;
+                
+                setLoading(false);
+                
+                // Add a system message to the chat to inform the user
+                const msgId = `system-size-${Date.now()}`;
+                const systemMessage: ChatMessage = {
+                    id: msgId,
+                    role: 'Assistant',
+                    content: `⚠️ **Response Too Large**\n\n` +
+                        `${message}\n\n` +
+                        `**Recovery hint:** ${recovery_hint}`,
+                    blocks: [{ type: 'text', content: '', id: msgId }],
+                };
+                setMessages(prev => [...prev, systemMessage]);
+            });
+            let unlistenMessageTooLarge = uMessageTooLarge;
+
             // Listen for permission requests
             const u4 = await listen<RequestConfirmationPayload>('request-confirmation', (event) => {
                 console.log("Permission requested for:", event.payload);
@@ -474,7 +506,15 @@ export function useChat() {
 
                             if (existingTodoBlockIdx < 0) {
                                 // Add new todo block at current position in the conversation flow
-                                newBlocks.push({ type: 'todo', id: todoBlockId });
+                                newBlocks.push({ type: 'todo' as const, id: todoBlockId });
+                            }
+
+                            // CRITICAL: Also update blocksRef to prevent message buffer from overwriting
+                            if (msg.id) {
+                                const currentBlocksRef = blocksRef.current.get(msg.id) || [];
+                                if (!currentBlocksRef.some(b => b.type === 'todo')) {
+                                    blocksRef.current.set(msg.id, [...currentBlocksRef, { type: 'todo' as const, id: todoBlockId }]);
+                                }
                             }
 
                             updated[i] = {
@@ -483,7 +523,7 @@ export function useChat() {
                                 blocks: newBlocks
                             };
                             found = true;
-                            invoke('log_frontend', { message: `[FRONTEND] Attached todos to message at index ${i}, message has ${updated[i].todos?.length} todos` });
+                            invoke('log_frontend', { message: `[FRONTEND] Attached todos to message at index ${i}, message has ${updated[i].todos?.length} todos, blocks: ${JSON.stringify(newBlocks.map(b => b.type))}` });
                             break;
                         }
                     }
@@ -599,6 +639,31 @@ export function useChat() {
                                 return msg;
                             });
                         });
+                    } else if (chatEvent.type === 'ToolActivity') {
+                        // Handle tool activity events (including streaming progress)
+                        const { tool_name, file_path, action } = chatEvent.payload;
+                        console.log(`[v1.1 Chat] ToolActivity: ${tool_name} -> ${file_path} (${action})`);
+                        
+                        // Update tool activity state for UI display
+                        setToolActivity({
+                            toolName: tool_name,
+                            filePath: file_path,
+                            action: action
+                        });
+                        
+                        // Clear tool activity after a short delay if action is not "streaming"
+                        // For streaming, it will be cleared when the actual tool call arrives
+                        if (action !== 'streaming') {
+                            setTimeout(() => {
+                                setToolActivity(prev => {
+                                    // Only clear if it's still the same activity
+                                    if (prev?.toolName === tool_name && prev?.filePath === file_path) {
+                                        return null;
+                                    }
+                                    return prev;
+                                });
+                            }, 2000);
+                        }
                     }
                 }
             });
@@ -609,6 +674,7 @@ export function useChat() {
                 if (unlistenDone) unlistenDone();
                 if (unlistenError) unlistenError();
                 if (unlistenContextLength) unlistenContextLength();
+                if (unlistenMessageTooLarge) unlistenMessageTooLarge();
                 if (unlistenPerm) unlistenPerm();
                 if (unlistenCommand) unlistenCommand();
                 // if (unlistenToolCompleted) unlistenToolCompleted(); // Removed
@@ -775,5 +841,6 @@ export function useChat() {
         newConversation,
         undoTool,
         setConversation: setMessages,
+        toolActivity,
     };
 }

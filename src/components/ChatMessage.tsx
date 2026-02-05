@@ -321,12 +321,20 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                 {message.blocks && message.blocks.length > 0 ? (
                     <>
                         {(() => {
+                            // Debug: Log message state for todo debugging
+                            const hasTodoBlock = message.blocks!.some(b => b.type === 'todo');
+                            const hasTodos = message.todos && message.todos.length > 0;
+                            if (hasTodoBlock || hasTodos) {
+                                console.log(`[ChatMessage] Message ${message.id}: hasTodoBlock=${hasTodoBlock}, hasTodos=${hasTodos}, todos=${message.todos?.length}, blockTypes=${message.blocks!.map(b => b.type).join(',')}`);
+                            }
+                            
                             // Find the index of the last reasoning block
                             const lastReasoningIdx = message.blocks!.reduce((lastIdx, block, idx) => {
                                 return block.type === 'reasoning' ? idx : lastIdx;
                             }, -1);
                             
                             return message.blocks!.map((block, idx) => {
+                                console.log(`[ChatMessage] Processing block ${idx}: type=${block.type}, id=${block.id}`);
                                 if (block.type === 'reasoning') {
                                     // Only the last reasoning block is active
                                     const isReasoningActive = isActive && idx === lastReasoningIdx;
@@ -395,7 +403,11 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 );
                             } else if (block.type === 'todo') {
                                 // Render TODO list inline in the conversation flow
-                                if (!message.todos || message.todos.length === 0) return null;
+                                console.log('[ChatMessage] Rendering todo block, todos:', message.todos?.length);
+                                if (!message.todos || message.todos.length === 0) {
+                                    console.log('[ChatMessage] No todos to render for todo block');
+                                    return null;
+                                }
                                 return (
                                     <div key={block.id} className="mb-3">
                                         <TodoList todos={message.todos} />

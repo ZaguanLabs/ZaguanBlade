@@ -1043,6 +1043,7 @@ const AppLayoutInner: React.FC = () => {
                                 uncommittedChanges={uncommittedChanges}
                                 onAcceptAllChanges={acceptAllChanges}
                                 onRejectAllChanges={rejectAllChanges}
+                                toolActivity={chat.toolActivity}
                             />
                         </Suspense>
                     </div>

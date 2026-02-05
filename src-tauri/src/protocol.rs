@@ -88,6 +88,11 @@ pub enum ChatEvent {
         recoverable: bool,
         recovery_hint: Option<String>,
     },
+    /// Message too large error - response exceeded WebSocket message size limit
+    MessageTooLarge {
+        message: String,
+        recovery_hint: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

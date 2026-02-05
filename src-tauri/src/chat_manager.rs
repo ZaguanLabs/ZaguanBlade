@@ -51,6 +51,11 @@ pub enum DrainResult {
         recoverable: bool,
         recovery_hint: Option<String>,
     },
+    /// Message too large - WebSocket message size limit exceeded
+    MessageTooLarge {
+        message: String,
+        recovery_hint: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -481,6 +486,18 @@ impl ChatManager {
                                         let _ = tx.send(ChatEvent::Error(format!("{} - {}", message, hint)));
                                         // Don't break - these are transient
                                     }
+                                    "message_too_large" => {
+                                        // Message size limit exceeded - send error with recovery hint
+                                        // The recovery hint will be shown to the user and included in the error
+                                        let hint = recovery_hint.unwrap_or_else(|| 
+                                            "Please use smaller responses and break large changes into multiple tool calls.".to_string()
+                                        );
+                                        let _ = tx.send(ChatEvent::MessageTooLarge {
+                                            message: message.clone(),
+                                            recovery_hint: hint,
+                                        });
+                                        // Don't break - this is recoverable, model can retry with smaller output
+                                    }
                                     "authentication_error" => {
                                         // Fatal error - break the connection
                                         let _ = tx.send(ChatEvent::Error(message));
@@ -556,6 +573,26 @@ impl ChatManager {
                                         action,
                                     },
                                 ));
+                            }
+                            crate::blade_ws_client::BladeWsEvent::ToolProgress {
+                                tool_call_id,
+                                tool_name,
+                                file_path,
+                            } => {
+                                eprintln!(
+                                    "[CHAT MGR] Tool Progress: {} ({}) -> {:?}",
+                                    tool_name, tool_call_id, file_path
+                                );
+                                // Emit as ToolActivity with "streaming" action for UI display
+                                if let Some(path) = file_path {
+                                    let _ = tx.send(ChatEvent::ToolActivity(
+                                        crate::protocol::ToolActivityPayload {
+                                            tool_name,
+                                            file_path: path,
+                                            action: "streaming".to_string(),
+                                        },
+                                    ));
+                                }
                             }
                             crate::blade_ws_client::BladeWsEvent::GetConversationContext {
                                 request_id,
@@ -1830,6 +1867,15 @@ impl ChatManager {
                                 recovery_hint,
                             });
                             // Don't set done=true - session is still valid, user can continue
+                        }
+                        ChatEvent::MessageTooLarge { message, recovery_hint } => {
+                            // Message size limit exceeded - emit the event to frontend
+                            eprintln!("[DRAIN] Message too large: {} (hint: {})", message, recovery_hint);
+                            self.pending_results.push_back(DrainResult::MessageTooLarge {
+                                message,
+                                recovery_hint,
+                            });
+                            // Don't set done=true - this is recoverable, model can retry
                         }
                         _ => {}
                     }

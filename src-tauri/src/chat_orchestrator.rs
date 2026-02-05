@@ -606,6 +606,16 @@ pub async fn handle_send_message<R: Runtime>(
                         "recovery_hint": recovery_hint,
                     }),
                 );
+            } else if let DrainResult::MessageTooLarge { message, recovery_hint } = result {
+                // Message size limit exceeded - emit event to frontend
+                eprintln!("[LIB] Message too large: {} (hint: {})", message, recovery_hint);
+                let _ = window.emit(
+                    "message-too-large",
+                    serde_json::json!({
+                        "message": message,
+                        "recovery_hint": recovery_hint,
+                    }),
+                );
             } else if let DrainResult::ToolCalls(calls, content) = result {
                 println!("Tools requested: {:?}. Executing...", calls.len());
                 let state = app_handle.state::<AppState>();

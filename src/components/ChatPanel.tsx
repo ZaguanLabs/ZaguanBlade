@@ -43,6 +43,7 @@ interface ChatPanelProps {
     uncommittedChanges: UncommittedChange[];
     onAcceptAllChanges: () => void;
     onRejectAllChanges: () => void;
+    toolActivity?: { toolName: string; filePath: string; action: string } | null;
 }
 
 const ChatPanelComponent: React.FC<ChatPanelProps> = ({
@@ -64,6 +65,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     uncommittedChanges,
     onAcceptAllChanges,
     onRejectAllChanges,
+    toolActivity,
 }) => {
     const { t } = useTranslation();
     useCommandExecution();
@@ -321,7 +323,19 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                             </div>
                         )}
 
-
+                        {/* Tool activity indicator - shows streaming tool progress */}
+                        {toolActivity && (
+                            <div className="px-4 py-2 flex items-center gap-2 text-xs text-zinc-400 animate-pulse">
+                                <span className="text-emerald-500">🔧</span>
+                                <span className="font-mono text-zinc-500">{toolActivity.toolName}</span>
+                                <span className="text-zinc-600">→</span>
+                                <span className="font-mono text-zinc-400 truncate max-w-[300px]" title={toolActivity.filePath}>
+                                    {toolActivity.filePath.length > 50 
+                                        ? '...' + toolActivity.filePath.slice(-47)
+                                        : toolActivity.filePath}
+                                </span>
+                            </div>
+                        )}
 
                         {error && (
                             <div className="p-3 mx-4 mb-4 bg-red-500/5 border border-red-500/20 text-red-400 rounded-sm text-xs font-mono">
