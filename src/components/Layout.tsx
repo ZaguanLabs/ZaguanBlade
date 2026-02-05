@@ -79,6 +79,7 @@ const AppLayoutInner: React.FC = () => {
         push: pushGit,
         diff: diffGit,
         generateCommitMessage: generateGitCommitMessage,
+        commitPreflight: commitPreflightGit,
     } = useGitStatus();
     const gitChangedCount = gitStatus?.changedCount ?? 0;
     const { selectedModelId, setSelectedModelId, messages, refreshModels } = chat;
@@ -897,6 +898,7 @@ const AppLayoutInner: React.FC = () => {
                                     onPush={pushGit}
                                     onDiff={diffGit}
                                     onGenerateCommitMessage={() => generateGitCommitMessage(selectedModelId)}
+                                    onCommitPreflight={commitPreflightGit}
                                 />
                             </Suspense>
                         )}

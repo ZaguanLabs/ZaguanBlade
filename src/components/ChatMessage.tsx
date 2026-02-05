@@ -128,6 +128,8 @@ interface ChatMessageProps {
     pendingActions?: import('../types/events').StructuredAction[];
     onApproveCommand?: () => void;
     onSkipCommand?: () => void;
+    onApproveSingleCommand?: (callId: string) => void;
+    onSkipSingleCommand?: (callId: string) => void;
     isContinued?: boolean; // For visual grouping
     isActive?: boolean; // Is this the currently streaming message?
     onUndoTool?: (toolCallId: string) => void;
@@ -138,6 +140,8 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     pendingActions,
     onApproveCommand,
     onSkipCommand,
+    onApproveSingleCommand,
+    onSkipSingleCommand,
     isContinued = false,
     isActive = false,
     onUndoTool,
@@ -422,6 +426,8 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                     actions={pendingActions}
                                     onRun={onApproveCommand}
                                     onSkip={onSkipCommand}
+                                    onRunSingle={onApproveSingleCommand}
+                                    onSkipSingle={onSkipSingleCommand}
                                 />
                             </div>
                         )}
@@ -495,6 +501,8 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                             actions={pendingActions}
                                             onRun={onApproveCommand}
                                             onSkip={onSkipCommand}
+                                            onRunSingle={onApproveSingleCommand}
+                                            onSkipSingle={onSkipSingleCommand}
                                         />
                                     </div>
                                 )}

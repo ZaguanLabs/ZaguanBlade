@@ -30,6 +30,19 @@ pub struct GitFileStatus {
     pub status_code: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitPreflightResult {
+    pub can_commit: bool,
+    pub is_repo: bool,
+    pub branch: Option<String>,
+    pub is_detached: bool,
+    pub has_upstream: bool,
+    pub has_conflicts: bool,
+    pub staged_count: u32,
+    pub error_message: Option<String>,
+}
+
 fn empty_summary() -> GitStatusSummary {
     GitStatusSummary {
         is_repo: false,
@@ -162,8 +175,12 @@ fn run_git(root: &str, args: &[&str]) -> Result<String, String> {
 struct CommitContext {
     files: Vec<String>,
     diff: String,
+    diff_stat: String,
     new_file_content: String,
     staged: bool,
+    branch: Option<String>,
+    last_commit_message: Option<String>,
+    recent_commits: Vec<String>,
 }
 
 fn collect_changes_for_message(root: &str) -> Result<CommitContext, String> {
@@ -205,6 +222,34 @@ fn collect_changes_for_message(root: &str) -> Result<CommitContext, String> {
     };
     let mut diff = run_git(root, &diff_args)?;
 
+    // Get diff stats (insertions/deletions summary)
+    let diff_stat_args = if staged {
+        vec!["diff", "--cached", "--stat"]
+    } else {
+        vec!["diff", "--stat"]
+    };
+    let diff_stat = run_git(root, &diff_stat_args).unwrap_or_default();
+
+    // Get current branch
+    let branch = run_git(root, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s != "HEAD");
+
+    // Get last commit message for style reference
+    let last_commit_message = run_git(root, &["log", "-1", "--format=%B"])
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    // Get recent commits for context
+    let recent_commits: Vec<String> = run_git(root, &["log", "--oneline", "-5"])
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+
     // For untracked files, include a preview of their content
     let mut new_file_content = String::new();
     let files_to_preview = if staged { vec![] } else { untracked };
@@ -235,8 +280,12 @@ fn collect_changes_for_message(root: &str) -> Result<CommitContext, String> {
     Ok(CommitContext {
         files,
         diff,
+        diff_stat,
         new_file_content,
         staged,
+        branch,
+        last_commit_message,
+        recent_commits,
     })
 }
 
@@ -509,6 +558,104 @@ pub fn git_commit(state: State<'_, AppState>, message: String) -> Result<String,
 }
 
 #[tauri::command]
+pub fn git_commit_preflight(state: State<'_, AppState>) -> Result<CommitPreflightResult, String> {
+    let Some(root) = workspace_root(&state) else {
+        return Ok(CommitPreflightResult {
+            can_commit: false,
+            is_repo: false,
+            branch: None,
+            is_detached: false,
+            has_upstream: false,
+            has_conflicts: false,
+            staged_count: 0,
+            error_message: Some("No workspace open".to_string()),
+        });
+    };
+
+    // Check if it's a git repo
+    let is_repo = Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .arg("rev-parse")
+        .arg("--git-dir")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if !is_repo {
+        return Ok(CommitPreflightResult {
+            can_commit: false,
+            is_repo: false,
+            branch: None,
+            is_detached: false,
+            has_upstream: false,
+            has_conflicts: false,
+            staged_count: 0,
+            error_message: Some("Not a Git repository".to_string()),
+        });
+    }
+
+    // Get current branch (HEAD for detached)
+    let branch_output = run_git(&root, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .unwrap_or_else(|_| "HEAD".to_string());
+    let branch_name = branch_output.trim();
+    let is_detached = branch_name == "HEAD";
+    let branch = if is_detached { None } else { Some(branch_name.to_string()) };
+
+    // Check for upstream
+    let has_upstream = if !is_detached {
+        run_git(&root, &["rev-parse", "--abbrev-ref", &format!("{}@{{upstream}}", branch_name)])
+            .is_ok()
+    } else {
+        false
+    };
+
+    // Check for conflicts
+    let status_output = run_git(&root, &["status", "--porcelain=v2"])
+        .unwrap_or_default();
+    let has_conflicts = status_output.lines().any(|l| l.starts_with("u "));
+
+    // Count staged files
+    let staged_count = status_output
+        .lines()
+        .filter(|l| {
+            if let Some(rest) = l.strip_prefix("1 ").or_else(|| l.strip_prefix("2 ")) {
+                let xy = rest.split_whitespace().next().unwrap_or("..");
+                xy.chars().next().unwrap_or('.') != '.'
+            } else {
+                false
+            }
+        })
+        .count() as u32;
+
+    // Determine if we can commit
+    let mut error_message = None;
+    let can_commit = if has_conflicts {
+        error_message = Some("Resolve merge conflicts before committing".to_string());
+        false
+    } else if staged_count == 0 {
+        error_message = Some("No staged changes to commit".to_string());
+        false
+    } else if is_detached {
+        error_message = Some("Warning: HEAD is detached. Commits may be lost.".to_string());
+        true // Allow but warn
+    } else {
+        true
+    };
+
+    Ok(CommitPreflightResult {
+        can_commit,
+        is_repo: true,
+        branch,
+        is_detached,
+        has_upstream,
+        has_conflicts,
+        staged_count,
+        error_message,
+    })
+}
+
+#[tauri::command]
 pub fn git_push(state: State<'_, AppState>) -> Result<String, String> {
     let Some(root) = workspace_root(&state) else {
         return Err("No workspace open".to_string());
@@ -607,21 +754,47 @@ pub async fn git_generate_commit_message_ai(
         format!("\nNEW FILES CONTENT:\n{}", ctx.new_file_content)
     };
 
+    // Build context sections
+    let branch_section = ctx.branch
+        .as_ref()
+        .map(|b| format!("BRANCH: {}\n", b))
+        .unwrap_or_default();
+
+    let stats_section = if !ctx.diff_stat.is_empty() {
+        format!("CHANGE STATS:\n{}\n", ctx.diff_stat.trim())
+    } else {
+        String::new()
+    };
+
+    let style_section = if let Some(ref last_msg) = ctx.last_commit_message {
+        let recent = ctx.recent_commits.join("\n");
+        format!(
+            "RECENT COMMITS (for style reference):\n{}\n\nLAST COMMIT MESSAGE:\n{}\n",
+            recent, last_msg
+        )
+    } else {
+        String::new()
+    };
+
     let prompt = format!(
         r#"Generate a Git commit message for these changes. Use Conventional Commits: type(scope): description
 
 Types: feat, fix, refactor, docs, style, test, chore, perf
 Keep under 72 chars. Imperative mood. No period at end.
+Match the style of recent commits if possible.
 
-FILES ({stage}):
+{branch}FILES ({stage}):
 {files}
-{new_files}
+{stats}{style}{new_files}
 DIFF:
 {diff}
 
 Respond with ONLY the commit message, nothing else."#,
+        branch = branch_section,
         stage = if ctx.staged { "staged" } else { "unstaged" },
         files = file_list,
+        stats = stats_section,
+        style = style_section,
         new_files = new_files_section,
         diff = ctx.diff
     );

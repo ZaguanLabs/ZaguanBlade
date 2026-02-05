@@ -224,14 +224,28 @@ export function useChat() {
                     setLoading(true);
 
                     // Accumulate content/reasoning in refs (no re-render)
+                    // When ID changes, this indicates a new message stream - clear stale blocks
                     if (type === 'reasoning') {
                         if (accumulatedReasoningRef.current.id !== id) {
                             accumulatedReasoningRef.current = { id, content: '' };
+                            // New reasoning stream - clear stale reasoning blocks from blocksRef
+                            const existingBlocks = blocksRef.current.get(id) || [];
+                            if (existingBlocks.length > 0) {
+                                const nonReasoningBlocks = existingBlocks.filter(b => b.type !== 'reasoning');
+                                blocksRef.current.set(id, nonReasoningBlocks);
+                            }
                         }
                         accumulatedReasoningRef.current.content += chunk;
                     } else {
                         if (accumulatedContentRef.current.id !== id) {
                             accumulatedContentRef.current = { id, content: '' };
+                            // New content stream for this message - clear stale text blocks from blocksRef
+                            // Keep only non-text blocks (tool_call, command_execution, etc.)
+                            const existingBlocks = blocksRef.current.get(id) || [];
+                            if (existingBlocks.length > 0) {
+                                const nonTextBlocks = existingBlocks.filter(b => b.type !== 'text' && b.type !== 'reasoning');
+                                blocksRef.current.set(id, nonTextBlocks);
+                            }
                         }
                         accumulatedContentRef.current.content += chunk;
                     }

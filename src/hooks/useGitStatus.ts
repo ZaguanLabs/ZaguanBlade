@@ -24,6 +24,17 @@ export interface GitFileStatus {
     statusCode: string;
 }
 
+export interface CommitPreflightResult {
+    canCommit: boolean;
+    isRepo: boolean;
+    branch: string | null;
+    isDetached: boolean;
+    hasUpstream: boolean;
+    hasConflicts: boolean;
+    stagedCount: number;
+    errorMessage: string | null;
+}
+
 const DEFAULT_DEBOUNCE_MS = 700;
 
 export const useGitStatus = () => {
@@ -109,6 +120,10 @@ export const useGitStatus = () => {
         return invoke<string>('git_generate_commit_message');
     }, []);
 
+    const commitPreflight = useCallback(async () => {
+        return invoke<CommitPreflightResult>('git_commit_preflight');
+    }, []);
+
     useEffect(() => {
         refresh();
 
@@ -159,5 +174,6 @@ export const useGitStatus = () => {
         push,
         diff,
         generateCommitMessage,
+        commitPreflight,
     };
 };

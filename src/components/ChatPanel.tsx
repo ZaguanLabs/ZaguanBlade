@@ -228,6 +228,15 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         approveToolDecision('reject');
     }, [approveToolDecision]);
 
+    // Individual command approval/skip handlers
+    const handleApproveSingleCommand = useCallback((callId: string) => {
+        invoke('approve_single_command', { callId, approved: true });
+    }, []);
+
+    const handleSkipSingleCommand = useCallback((callId: string) => {
+        invoke('approve_single_command', { callId, approved: false });
+    }, []);
+
     return (
         <div className="flex flex-col h-full bg-[var(--bg-app)] text-[var(--fg-primary)] font-sans tracking-tight" onContextMenu={handleContextMenu}>
             {/* Tab Bar */}
@@ -296,6 +305,8 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                                     pendingActions={showPendingActions ? pendingActions : undefined}
                                     onApproveCommand={showPendingActions ? handleApproveCommand : undefined}
                                     onSkipCommand={showPendingActions ? handleSkipCommand : undefined}
+                                    onApproveSingleCommand={showPendingActions ? handleApproveSingleCommand : undefined}
+                                    onSkipSingleCommand={showPendingActions ? handleSkipSingleCommand : undefined}
                                     isContinued={isContinued}
                                     isActive={isActive}
                                     onUndoTool={onUndoTool}

@@ -2,7 +2,25 @@ use crate::app_state::AppState;
 use crate::events;
 use crate::utils::extract_root_command;
 use crate::workflow_controller::check_batch_completion;
+use regex::Regex;
 use tauri::{Emitter, Manager, Runtime, State, Window};
+
+/// Strip ANSI escape codes from terminal output for clean display in chat
+fn strip_ansi_codes(input: &str) -> String {
+    // Match ANSI escape sequences:
+    // - CSI sequences: \x1b[ followed by parameters and a letter
+    // - OSC sequences: \x1b] followed by content and terminated by \x07 or \x1b\\
+    // - Other escape sequences: \x1b followed by various characters
+    let ansi_regex = Regex::new(
+        r"(?x)
+        \x1b\[[0-9;?]*[A-Za-z]|     # CSI sequences (colors, cursor, etc.)
+        \x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|  # OSC sequences
+        \x1b[PX^_][^\x1b]*\x1b\\|   # DCS, SOS, PM, APC sequences
+        \x1b[\x20-\x2f]*[\x30-\x7e] # Other escape sequences
+        "
+    ).unwrap();
+    ansi_regex.replace_all(input, "").to_string()
+}
 
 // #[tauri::command]
 pub fn approve_tool<R: Runtime>(approved: bool, window: Window<R>, state: State<'_, AppState>) {
@@ -163,6 +181,65 @@ pub fn approve_tool_decision<R: Runtime>(
     approve_tool(approved, window, state);
 }
 
+/// Approve or skip a single command by its call_id
+/// This allows individual command approval instead of batch-only
+#[tauri::command]
+pub fn approve_single_command<R: Runtime>(
+    call_id: String,
+    approved: bool,
+    window: Window<R>,
+    state: State<'_, AppState>,
+) {
+    let app_handle = window.app_handle();
+    
+    {
+        let mut batch_guard = state.pending_batch.lock().unwrap();
+        if let Some(batch) = batch_guard.as_mut() {
+            // Find the command by call_id
+            if let Some(cmd) = batch.commands.iter().find(|c| c.call.id == call_id) {
+                // Check if result already exists
+                if !batch.file_results.iter().any(|(c, _)| c.id == call_id) {
+                    if approved {
+                        eprintln!("[SINGLE APPROVAL] User APPROVED command: {}", cmd.command);
+                        // Emit event for this specific command to be executed
+                        let command_id = format!("cmd-{}", cmd.call.id);
+                        let _ = window.emit(
+                            crate::events::event_names::COMMAND_EXECUTION_STARTED,
+                            crate::events::CommandExecutionStartedPayload {
+                                command_id,
+                                call_id: cmd.call.id.clone(),
+                                command: cmd.command.clone(),
+                                cwd: cmd.cwd.clone(),
+                            },
+                        );
+                    } else {
+                        eprintln!("[SINGLE APPROVAL] User SKIPPED command: {}", cmd.command);
+                        // Add skip result immediately
+                        let error_msg = format!(
+                            "User explicitly skipped this command: '{}'. Do NOT retry this command. Ask the user how they would like to proceed instead.",
+                            cmd.command
+                        );
+                        batch.file_results.push((cmd.call.clone(), crate::tools::ToolResult::err(&error_msg)));
+                        
+                        // Emit tool-execution-completed for UI update
+                        let _ = app_handle.emit(
+                            "tool-execution-completed",
+                            events::ToolExecutionCompletedPayload {
+                                tool_name: "run_command".to_string(),
+                                tool_call_id: call_id.clone(),
+                                success: false,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+    }
+    
+    // Check if all commands have been processed
+    check_batch_completion(&*state);
+}
+
 #[tauri::command]
 pub fn submit_command_result(
     call_id: String,
@@ -171,6 +248,9 @@ pub fn submit_command_result(
     state: State<'_, AppState>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
+    // Strip ANSI codes from output for clean display in chat and AI context
+    let clean_output = strip_ansi_codes(&output);
+    
     let mut batch_guard = state.pending_batch.lock().unwrap();
     if let Some(batch) = batch_guard.as_mut() {
         // Find the command by call_id
@@ -178,7 +258,7 @@ pub fn submit_command_result(
             // Check if result already exists
             if !batch.file_results.iter().any(|(c, _)| c.id == call_id) {
                 let result = if exit_code == 0 {
-                    crate::tools::ToolResult::ok(output.clone())
+                    crate::tools::ToolResult::ok(clean_output.clone())
                 } else if exit_code == 130 {
                     // Exit code 130 means the command was cancelled (SIGINT)
                     // Treat it as a skip
@@ -196,10 +276,10 @@ pub fn submit_command_result(
                     }
                 } else {
                     // Include the actual output in the error so the AI can see what failed
-                    let error_msg = if output.trim().is_empty() {
+                    let error_msg = if clean_output.trim().is_empty() {
                         format!("Command failed with exit code {} (no output)", exit_code)
                     } else {
-                        format!("Command failed with exit code {}:\n{}", exit_code, &output)
+                        format!("Command failed with exit code {}:\n{}", exit_code, &clean_output)
                     };
                     crate::tools::ToolResult::err(error_msg)
                 };
@@ -215,13 +295,13 @@ pub fn submit_command_result(
                     },
                 );
 
-                // Emit command-executed event with rich output for message blocks
+                // Emit command-executed event with clean output for message blocks
                 let _ = app_handle.emit(
                     events::event_names::COMMAND_EXECUTED,
                     events::CommandExecutedPayload {
                         command: cmd.command.clone(),
                         cwd: cmd.cwd.clone(),
-                        output: output.clone(),
+                        output: clean_output.clone(),
                         exit_code,
                         duration: None,
                         call_id: call_id.clone(),

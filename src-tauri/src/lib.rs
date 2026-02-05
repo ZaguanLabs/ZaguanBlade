@@ -211,6 +211,7 @@ pub fn run() {
             // Tools & Changes
             commands::tools::submit_command_result,
             commands::tools::approve_tool_decision,
+            commands::tools::approve_single_command,
             // History
             commands::history::get_file_history,
             commands::history::revert_file_to_snapshot,
@@ -247,6 +248,7 @@ pub fn run() {
             git::git_stage_all,
             git::git_unstage_all,
             git::git_commit,
+            git::git_commit_preflight,
             git::git_push,
             git::git_diff,
             git::git_generate_commit_message,

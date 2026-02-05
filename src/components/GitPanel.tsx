@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
-import type { GitFileStatus, GitStatusSummary } from '../hooks/useGitStatus';
-import { Sparkles, GitCommit, Upload, ChevronDown, ChevronRight, Plus, Minus, RefreshCw } from 'lucide-react';
+import type { GitFileStatus, GitStatusSummary, CommitPreflightResult } from '../hooks/useGitStatus';
+import { Sparkles, GitCommit, Upload, ChevronDown, ChevronRight, Plus, Minus, RefreshCw, AlertTriangle } from 'lucide-react';
 
 interface GitPanelProps {
     status: GitStatusSummary | null;
@@ -17,6 +17,7 @@ interface GitPanelProps {
     onPush: () => Promise<void>;
     onDiff: (path: string, staged: boolean) => Promise<string>;
     onGenerateCommitMessage: () => Promise<string>;
+    onCommitPreflight: () => Promise<CommitPreflightResult>;
 }
 
 type DiffState = Record<
@@ -44,12 +45,14 @@ export const GitPanel: React.FC<GitPanelProps> = ({
     onPush,
     onDiff,
     onGenerateCommitMessage,
+    onCommitPreflight,
 }) => {
     const isRepo = status?.isRepo ?? false;
     const changedCount = status?.changedCount ?? 0;
 
     const [commitMessage, setCommitMessage] = useState('');
     const [actionError, setActionError] = useState<string | null>(null);
+    const [preflightWarning, setPreflightWarning] = useState<string | null>(null);
     const [busyAction, setBusyAction] = useState<string | null>(null);
     const [diffs, setDiffs] = useState<DiffState>({});
     const [stagedExpanded, setStagedExpanded] = useState(true);
@@ -215,41 +218,60 @@ export const GitPanel: React.FC<GitPanelProps> = ({
 
                             {/* Action buttons row */}
                             <div className="flex items-center gap-2 mt-2">
-                                <button
-                                    className={`flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-md transition-colors font-medium ${busyAction === 'commit' || !commitMessage.trim() || (status?.stagedCount ?? 0) === 0
-                                            ? 'bg-[var(--bg-surface)] text-[var(--fg-tertiary)] cursor-not-allowed'
-                                            : 'bg-[var(--accent-primary)] text-white hover:bg-[var(--accent-primary)]/80'
+                                {/* Morphing Generate/Commit button */}
+                                {commitMessage.trim() ? (
+                                    <button
+                                        className={`flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-md transition-all font-medium ${
+                                            busyAction === 'commit' || (status?.stagedCount ?? 0) === 0
+                                                ? 'bg-[var(--bg-surface)] text-[var(--fg-tertiary)] cursor-not-allowed'
+                                                : 'bg-[var(--accent-primary)] text-white hover:bg-[var(--accent-primary)]/80'
                                         }`}
-                                    disabled={
-                                        busyAction === 'commit' ||
-                                        !commitMessage.trim() ||
-                                        (status?.stagedCount ?? 0) === 0
-                                    }
-                                    onClick={() =>
-                                        runAction('commit', async () => {
-                                            await onCommit(commitMessage);
-                                            setCommitMessage('');
-                                        })
-                                    }
-                                >
-                                    <GitCommit className="w-3 h-3" />
-                                    Commit
-                                </button>
-
-                                <button
-                                    className="flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-md border border-[var(--border-subtle)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                                    disabled={busyAction === 'generate-message'}
-                                    onClick={() =>
-                                        runAction('generate-message', async () => {
-                                            const message = await onGenerateCommitMessage();
-                                            setCommitMessage(message);
-                                        })
-                                    }
-                                    title="Generate commit message with AI"
-                                >
-                                    <Sparkles className={`w-3 h-3 ${busyAction === 'generate-message' ? 'animate-pulse' : ''}`} />
-                                    Generate
-                                </button>
+                                        disabled={busyAction === 'commit' || (status?.stagedCount ?? 0) === 0}
+                                        onClick={() =>
+                                            runAction('commit', async () => {
+                                                setPreflightWarning(null);
+                                                const preflight = await onCommitPreflight();
+                                                if (!preflight.isRepo) {
+                                                    throw new Error('Not a Git repository');
+                                                }
+                                                if (preflight.hasConflicts) {
+                                                    throw new Error('Resolve merge conflicts before committing');
+                                                }
+                                                if (preflight.isDetached) {
+                                                    setPreflightWarning('HEAD is detached. Commits may be lost if you switch branches.');
+                                                }
+                                                if (!preflight.canCommit && preflight.errorMessage) {
+                                                    throw new Error(preflight.errorMessage);
+                                                }
+                                                await onCommit(commitMessage);
+                                                setCommitMessage('');
+                                                setPreflightWarning(null);
+                                            })
+                                        }
+                                    >
+                                        <GitCommit className={`w-3 h-3 ${busyAction === 'commit' ? 'animate-spin' : ''}`} />
+                                        Commit
+                                    </button>
+                                ) : (
+                                    <button
+                                        className={`flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-md transition-all font-medium ${
+                                            busyAction === 'generate-message' || changedCount === 0
+                                                ? 'bg-[var(--bg-surface)] text-[var(--fg-tertiary)] cursor-not-allowed'
+                                                : 'bg-[var(--accent-primary)] text-white hover:bg-[var(--accent-primary)]/80'
+                                        }`}
+                                        disabled={busyAction === 'generate-message' || changedCount === 0}
+                                        onClick={() =>
+                                            runAction('generate-message', async () => {
+                                                const message = await onGenerateCommitMessage();
+                                                setCommitMessage(message);
+                                            })
+                                        }
+                                        title="Generate commit message with AI"
+                                    >
+                                        <Sparkles className={`w-3 h-3 ${busyAction === 'generate-message' ? 'animate-pulse' : ''}`} />
+                                        Generate
+                                    </button>
+                                )}
 
                                 <div className="flex-1" />
 
@@ -265,6 +287,15 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                 )}
                             </div>
 
+                            {/* Preflight warning (e.g., detached HEAD) */}
+                            {preflightWarning && (
+                                <div className="flex items-center gap-1.5 text-[10px] text-amber-400 mt-2 p-2 bg-amber-400/10 rounded-md">
+                                    <AlertTriangle className="w-3 h-3 shrink-0" />
+                                    <span>{preflightWarning}</span>
+                                </div>
+                            )}
+
+                            {/* Contextual hints */}
                             {(status?.stagedCount ?? 0) === 0 && changedCount > 0 && (
                                 <div className="text-[10px] text-[var(--fg-tertiary)] mt-2 italic">
                                     Stage changes to commit
