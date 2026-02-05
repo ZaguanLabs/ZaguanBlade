@@ -175,6 +175,7 @@ pub fn stop_generation(state: State<'_, AppState>, app_handle: tauri::AppHandle)
                 tool_name: "run_command".to_string(),
                 tool_call_id: call_id.clone(),
                 success: false,
+                skipped: true, // Cancelled commands are treated as skipped
             },
         );
     }

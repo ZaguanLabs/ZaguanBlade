@@ -14,6 +14,7 @@ pub struct ToolResult {
     pub success: bool,
     pub content: String,
     pub error: Option<String>,
+    pub skipped: bool,
 }
 
 /// RFC: Large Tool Result Handling - Size limits
@@ -28,6 +29,7 @@ impl ToolResult {
             success: true,
             content: content.into(),
             error: None,
+            skipped: false,
         }
     }
 
@@ -36,6 +38,16 @@ impl ToolResult {
             success: false,
             content: String::new(),
             error: Some(error.into()),
+            skipped: false,
+        }
+    }
+
+    pub fn skipped(message: impl Into<String>) -> Self {
+        Self {
+            success: false,
+            content: String::new(),
+            error: Some(message.into()),
+            skipped: true,
         }
     }
 

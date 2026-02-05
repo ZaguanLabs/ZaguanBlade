@@ -172,7 +172,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
     return (
         <div className="h-full bg-[var(--bg-panel)] border-r border-[var(--border-subtle)] flex flex-col text-[var(--fg-secondary)]">
             {/* Header */}
-            <div className="h-9 px-4 flex items-center bg-[var(--bg-panel)] border-b border-[var(--border-subtle)] text-[10px] uppercase tracking-wider font-semibold select-none justify-between text-[var(--fg-tertiary)]">
+            <div className="h-9 px-4 flex items-center bg-[var(--bg-panel)] border-b border-[var(--border-subtle)] text-[10px] uppercase tracking-wider font-semibold select-none justify-between text-[var(--fg-secondary)]">
                 <span>Source Control</span>
                 <button
                     onClick={() => runAction('refresh', async () => onRefresh())}
@@ -185,17 +185,17 @@ export const GitPanel: React.FC<GitPanelProps> = ({
 
             <div className="flex-1 overflow-y-auto flex flex-col">
                 {!isRepo && (
-                    <div className="p-4 text-[var(--fg-tertiary)] italic text-xs">Not a Git repository.</div>
+                    <div className="p-4 text-[var(--fg-secondary)] italic text-xs">Not a Git repository.</div>
                 )}
 
                 {isRepo && (
                     <>
                         {/* Commit Box - At the top, always visible */}
-                        <div className="p-3 border-b border-[var(--border-subtle)] bg-[var(--bg-surface)]/30">
+                        <div className="p-3 border-b border-[var(--border-subtle)] bg-[var(--bg-surface)]/50">
                             {/* Branch info inline */}
                             <div className="flex items-center justify-between mb-2 text-[10px]">
                                 <div className="flex items-center gap-2">
-                                    <span className="text-[var(--fg-tertiary)]">Branch:</span>
+                                    <span className="text-[var(--fg-secondary)]">Branch:</span>
                                     <span className="text-[var(--fg-primary)] font-medium">
                                         {status?.branch ?? 'detached'}
                                     </span>
@@ -210,7 +210,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
 
                             {/* Commit message textarea */}
                             <textarea
-                                className="w-full min-h-[60px] bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded-lg p-2.5 text-[11px] text-[var(--fg-primary)] placeholder-[var(--fg-tertiary)] resize-none focus:outline-none focus:border-[var(--accent-primary)]/50 focus:ring-1 focus:ring-[var(--accent-primary)]/20 transition-all"
+                                className="w-full min-h-[60px] bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg p-2.5 text-[11px] text-[var(--fg-primary)] placeholder-[var(--fg-secondary)] resize-none focus:outline-none focus:border-[var(--accent-primary)]/50 focus:ring-1 focus:ring-[var(--accent-primary)]/20 transition-all"
                                 placeholder="Commit message..."
                                 value={commitMessage}
                                 onChange={e => setCommitMessage(e.target.value)}
@@ -218,15 +218,50 @@ export const GitPanel: React.FC<GitPanelProps> = ({
 
                             {/* Action buttons row */}
                             <div className="flex items-center gap-2 mt-2">
-                                {/* Morphing Generate/Commit button */}
-                                {commitMessage.trim() ? (
+                                {/* Generate button - always visible */}
+                                <button
+                                    className={`flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-md transition-all font-medium border ${
+                                        busyAction === 'generate-message' || changedCount === 0
+                                            ? 'border-[var(--border-subtle)] text-[var(--fg-tertiary)] cursor-not-allowed opacity-50'
+                                            : 'border-[var(--border-default)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)]'
+                                    }`}
+                                    disabled={busyAction === 'generate-message' || changedCount === 0}
+                                    onClick={() =>
+                                        runAction('generate-message', async () => {
+                                            const message = await onGenerateCommitMessage();
+                                            setCommitMessage(message);
+                                        })
+                                    }
+                                    title="Generate commit message with AI"
+                                >
+                                    <Sparkles className={`w-3 h-3 ${busyAction === 'generate-message' ? 'animate-pulse' : ''}`} />
+                                    Generate
+                                </button>
+
+                                <div className="flex-1" />
+
+                                {/* Dynamic Commit/Push button */}
+                                {(status?.ahead ?? 0) > 0 ? (
                                     <button
                                         className={`flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-md transition-all font-medium ${
-                                            busyAction === 'commit' || (status?.stagedCount ?? 0) === 0
+                                            busyAction === 'push'
+                                                ? 'bg-[var(--bg-surface)] text-[var(--fg-tertiary)] cursor-not-allowed'
+                                                : 'bg-green-600 text-white hover:bg-green-500'
+                                        }`}
+                                        disabled={busyAction === 'push'}
+                                        onClick={() => runAction('push', () => onPush())}
+                                    >
+                                        <Upload className={`w-3 h-3 ${busyAction === 'push' ? 'animate-pulse' : ''}`} />
+                                        Push {status?.ahead}
+                                    </button>
+                                ) : (
+                                    <button
+                                        className={`flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-md transition-all font-medium ${
+                                            busyAction === 'commit' || !commitMessage.trim() || (status?.stagedCount ?? 0) === 0
                                                 ? 'bg-[var(--bg-surface)] text-[var(--fg-tertiary)] cursor-not-allowed'
                                                 : 'bg-[var(--accent-primary)] text-white hover:bg-[var(--accent-primary)]/80'
                                         }`}
-                                        disabled={busyAction === 'commit' || (status?.stagedCount ?? 0) === 0}
+                                        disabled={busyAction === 'commit' || !commitMessage.trim() || (status?.stagedCount ?? 0) === 0}
                                         onClick={() =>
                                             runAction('commit', async () => {
                                                 setPreflightWarning(null);
@@ -252,38 +287,6 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                         <GitCommit className={`w-3 h-3 ${busyAction === 'commit' ? 'animate-spin' : ''}`} />
                                         Commit
                                     </button>
-                                ) : (
-                                    <button
-                                        className={`flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-md transition-all font-medium ${
-                                            busyAction === 'generate-message' || changedCount === 0
-                                                ? 'bg-[var(--bg-surface)] text-[var(--fg-tertiary)] cursor-not-allowed'
-                                                : 'bg-[var(--accent-primary)] text-white hover:bg-[var(--accent-primary)]/80'
-                                        }`}
-                                        disabled={busyAction === 'generate-message' || changedCount === 0}
-                                        onClick={() =>
-                                            runAction('generate-message', async () => {
-                                                const message = await onGenerateCommitMessage();
-                                                setCommitMessage(message);
-                                            })
-                                        }
-                                        title="Generate commit message with AI"
-                                    >
-                                        <Sparkles className={`w-3 h-3 ${busyAction === 'generate-message' ? 'animate-pulse' : ''}`} />
-                                        Generate
-                                    </button>
-                                )}
-
-                                <div className="flex-1" />
-
-                                {(status?.ahead ?? 0) > 0 && (
-                                    <button
-                                        className="flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-md border border-[var(--border-subtle)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] disabled:opacity-50 transition-colors"
-                                        disabled={busyAction === 'push'}
-                                        onClick={() => runAction('push', () => onPush())}
-                                    >
-                                        <Upload className="w-3 h-3" />
-                                        Push
-                                    </button>
                                 )}
                             </div>
 
@@ -306,7 +309,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                         {/* Changes section */}
                         <div className="flex-1 overflow-y-auto">
                             {changedCount === 0 ? (
-                                <div className="p-4 text-[var(--fg-tertiary)] italic text-xs text-center">
+                                <div className="p-4 text-[var(--fg-secondary)] italic text-xs text-center">
                                     ✓ Working tree clean
                                 </div>
                             ) : (
@@ -317,7 +320,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                             className="w-full flex items-center justify-between px-3 py-2 hover:bg-[var(--bg-surface-hover)] transition-colors"
                                             onClick={() => setStagedExpanded(!stagedExpanded)}
                                         >
-                                            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-[var(--fg-tertiary)] font-semibold">
+                                            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-[var(--fg-secondary)] font-semibold">
                                                 {stagedExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                                                 Staged
                                                 <span className="text-emerald-400 font-normal normal-case">
@@ -363,7 +366,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                             className="w-full flex items-center justify-between px-3 py-2 hover:bg-[var(--bg-surface-hover)] transition-colors"
                                             onClick={() => setUnstagedExpanded(!unstagedExpanded)}
                                         >
-                                            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-[var(--fg-tertiary)] font-semibold">
+                                            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-[var(--fg-secondary)] font-semibold">
                                                 {unstagedExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                                                 Changes
                                                 <span className="text-amber-400 font-normal normal-case">

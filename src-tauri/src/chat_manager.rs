@@ -910,8 +910,43 @@ impl ChatManager {
                     }
 
                     if parsed.done.unwrap_or(false) {
+                        // Flush any buffered content from reasoning parser before Done
+                        if let Some(ref mut parser) = reasoning_parser {
+                            for segment in parser.flush() {
+                                match segment {
+                                    crate::reasoning_parser::ReasoningSegment::Text(text) => {
+                                        if !text.is_empty() {
+                                            let _ = tx.send(ChatEvent::Chunk(text));
+                                        }
+                                    }
+                                    crate::reasoning_parser::ReasoningSegment::Reasoning(reasoning) => {
+                                        if !reasoning.is_empty() {
+                                            let _ = tx.send(ChatEvent::ReasoningChunk(reasoning));
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         let _ = tx.send(ChatEvent::Done);
                         return;
+                    }
+                }
+            }
+
+            // Flush any buffered content before sending Done
+            if let Some(ref mut parser) = reasoning_parser {
+                for segment in parser.flush() {
+                    match segment {
+                        crate::reasoning_parser::ReasoningSegment::Text(text) => {
+                            if !text.is_empty() {
+                                let _ = tx.send(ChatEvent::Chunk(text));
+                            }
+                        }
+                        crate::reasoning_parser::ReasoningSegment::Reasoning(reasoning) => {
+                            if !reasoning.is_empty() {
+                                let _ = tx.send(ChatEvent::ReasoningChunk(reasoning));
+                            }
+                        }
                     }
                 }
             }
@@ -1191,9 +1226,44 @@ impl ChatManager {
                                 }
 
                                 if choice.finish_reason.is_some() {
+                                    // Flush any buffered content from reasoning parser before Done
+                                    if let Some(ref mut parser) = reasoning_parser {
+                                        for segment in parser.flush() {
+                                            match segment {
+                                                crate::reasoning_parser::ReasoningSegment::Text(text) => {
+                                                    if !text.is_empty() {
+                                                        let _ = tx.send(ChatEvent::Chunk(text));
+                                                    }
+                                                }
+                                                crate::reasoning_parser::ReasoningSegment::Reasoning(reasoning) => {
+                                                    if !reasoning.is_empty() {
+                                                        let _ = tx.send(ChatEvent::ReasoningChunk(reasoning));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                     let _ = tx.send(ChatEvent::Done);
                                     break;
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Flush any buffered content before sending Done
+            if let Some(ref mut parser) = reasoning_parser {
+                for segment in parser.flush() {
+                    match segment {
+                        crate::reasoning_parser::ReasoningSegment::Text(text) => {
+                            if !text.is_empty() {
+                                let _ = tx.send(ChatEvent::Chunk(text));
+                            }
+                        }
+                        crate::reasoning_parser::ReasoningSegment::Reasoning(reasoning) => {
+                            if !reasoning.is_empty() {
+                                let _ = tx.send(ChatEvent::ReasoningChunk(reasoning));
                             }
                         }
                     }
@@ -2047,7 +2117,7 @@ mod tests {
 
     #[test]
     fn test_start_stream_adds_assistant_placeholder() {
-        let mut chat_manager = ChatManager::new(10);
+        let mut chat_manager = ChatManager::new(50);
         let mut conversation = ConversationHistory::new();
         conversation.push(ChatMessage::new(ChatRole::User, "Test".to_string()));
 

@@ -163,7 +163,7 @@ impl AppState {
         ));
 
         Self {
-            chat_manager: Mutex::new(ChatManager::new(10)),
+            chat_manager: Mutex::new(ChatManager::new(50)),
             conversation: Mutex::new(ConversationHistory::new()),
             conversation_store: Mutex::new(conversation_store),
             workspace: Mutex::new(workspace_manager),

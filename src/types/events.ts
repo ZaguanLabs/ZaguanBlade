@@ -205,6 +205,7 @@ export interface ToolExecutionCompletedPayload {
   tool_name: string;
   tool_call_id: string;
   success: boolean;
+  skipped?: boolean;
 }
 
 /**

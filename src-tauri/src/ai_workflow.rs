@@ -196,6 +196,7 @@ impl AiWorkflow {
                                             "SYSTEM WARNING: NO PROGRESS DETECTED - You have been calling tools for multiple turns without making progress. DO NOT call any more tools. Answer the user's question NOW using the information you have gathered."
                                                 .to_string(),
                                         ),
+                                        skipped: false,
                                     },
                                 ));
                             }
@@ -290,6 +291,7 @@ impl AiWorkflow {
                             success: false,
                             content: String::new(),
                             error: Some("SYSTEM WARNING: LOOP DETECTED - You called this tool with identical arguments before. DO NOT call any more tools. Use the information from your previous tool calls to answer the user's question NOW.".to_string()),
+                            skipped: false,
                         },
                     ));
                     continue;
@@ -873,6 +875,7 @@ pub fn run_command_in_workspace(
                 success: false,
                 content: String::new(),
                 error: Some(e.to_string()),
+                skipped: false,
             };
         }
     };
@@ -896,6 +899,7 @@ pub fn run_command_in_workspace(
                         candidate.display(),
                         e
                     )),
+                    skipped: false,
                 };
             }
         };
@@ -908,6 +912,7 @@ pub fn run_command_in_workspace(
                     ws.display(),
                     candidate.display()
                 )),
+                skipped: false,
             };
         }
         candidate
@@ -947,12 +952,14 @@ pub fn run_command_in_workspace(
                 success: out.status.success(),
                 content: s,
                 error: None,
+                skipped: false,
             }
         }
         Err(e) => tools::ToolResult {
             success: false,
             content: String::new(),
             error: Some(e.to_string()),
+            skipped: false,
         },
     }
 }

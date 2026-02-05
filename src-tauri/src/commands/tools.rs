@@ -101,29 +101,29 @@ pub fn approve_tool<R: Runtime>(approved: bool, window: Window<R>, state: State<
                 // Skipped - add explicit error results with clear instruction not to retry
                 for cmd in &batch.commands {
                     if !batch.file_results.iter().any(|(c, _)| c.id == cmd.call.id) {
-                        eprintln!("[SKIP] Adding error result for command: {}", cmd.command);
-                        let error_msg = format!(
-                            "User explicitly rejected this command: '{}'. Do NOT retry this command or similar commands. Ask the user how they would like to proceed instead.",
+                        eprintln!("[SKIP] Adding skipped result for command: {}", cmd.command);
+                        let skip_msg = format!(
+                            "User skipped this command: '{}'. Do NOT retry this command or similar commands. Ask the user how they would like to proceed instead.",
                             cmd.command
                         );
                         batch
                             .file_results
-                            .push((cmd.call.clone(), crate::tools::ToolResult::err(&error_msg)));
+                            .push((cmd.call.clone(), crate::tools::ToolResult::skipped(&skip_msg)));
                     }
                 }
                 for conf in &batch.confirms {
                     if !batch.file_results.iter().any(|(c, _)| c.id == conf.call.id) {
                         eprintln!(
-                            "[SKIP] Adding error result for action: {}",
+                            "[SKIP] Adding skipped result for action: {}",
                             conf.description
                         );
-                        let error_msg = format!(
-                            "User explicitly rejected this action: '{}'. Do NOT retry this action. Ask the user how they would like to proceed instead.",
+                        let skip_msg = format!(
+                            "User skipped this action: '{}'. Do NOT retry this action. Ask the user how they would like to proceed instead.",
                             conf.description
                         );
                         batch
                             .file_results
-                            .push((conf.call.clone(), crate::tools::ToolResult::err(&error_msg)));
+                            .push((conf.call.clone(), crate::tools::ToolResult::skipped(&skip_msg)));
                     }
                 }
             }
@@ -228,6 +228,7 @@ pub fn approve_single_command<R: Runtime>(
                                 tool_name: "run_command".to_string(),
                                 tool_call_id: call_id.clone(),
                                 success: false,
+                                skipped: false,
                             },
                         );
                     }
@@ -266,14 +267,10 @@ pub fn submit_command_result(
                         "[SUBMIT] Command {} was cancelled (exit 130), treating as skip",
                         call_id
                     );
-                    crate::tools::ToolResult {
-                        success: false,
-                        content: format!(
-                            "User skipped: '{}'. This command was not executed.",
-                            cmd.command
-                        ),
-                        error: Some("Tool execution failed".to_string()),
-                    }
+                    crate::tools::ToolResult::skipped(format!(
+                        "User cancelled: '{}'. This command was not executed.",
+                        cmd.command
+                    ))
                 } else {
                     // Include the actual output in the error so the AI can see what failed
                     let error_msg = if clean_output.trim().is_empty() {
@@ -283,6 +280,7 @@ pub fn submit_command_result(
                     };
                     crate::tools::ToolResult::err(error_msg)
                 };
+                let is_skipped = result.skipped;
                 batch.file_results.push((cmd.call.clone(), result));
 
                 // Emit tool-execution-completed event for UI to update status
@@ -292,6 +290,7 @@ pub fn submit_command_result(
                         tool_name: "run_command".to_string(),
                         tool_call_id: call_id.clone(),
                         success: exit_code == 0,
+                        skipped: is_skipped,
                     },
                 );
 

@@ -197,6 +197,8 @@ pub struct ToolExecutionCompletedPayload {
     pub tool_name: String,
     pub tool_call_id: String,
     pub success: bool,
+    #[serde(default)]
+    pub skipped: bool,
 }
 
 /// Payload for model-changed event

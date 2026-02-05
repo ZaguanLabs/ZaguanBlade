@@ -132,6 +132,24 @@ impl ReasoningParser {
         self.interrupted_reasoning = None;
     }
 
+    /// Flush any buffered content when the stream ends
+    /// Returns any content that was buffered but not yet emitted
+    pub fn flush(&mut self) -> Vec<ReasoningSegment> {
+        let mut segments = Vec::new();
+        
+        // If there's content in the tag buffer, emit it as text (partial tag that never completed)
+        if !self.tag_buffer.is_empty() {
+            if self.in_reasoning {
+                segments.push(ReasoningSegment::Reasoning(self.tag_buffer.clone()));
+            } else {
+                segments.push(ReasoningSegment::Text(self.tag_buffer.clone()));
+            }
+            self.tag_buffer.clear();
+        }
+        
+        segments
+    }
+
     /// Check if currently inside a reasoning block
     pub fn is_in_reasoning(&self) -> bool {
         self.in_reasoning

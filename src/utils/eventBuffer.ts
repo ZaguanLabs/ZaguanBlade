@@ -41,6 +41,13 @@ export class EventBuffer<T> {
      * Add a chunk to the buffer and apply all sequential chunks
      */
     add(seq: number, data: T, is_final?: boolean): void {
+        // CRITICAL FIX: If we receive seq 0 but nextSeq > 0, this is a new stream
+        // Reset the buffer to avoid dropping chunks from the new stream
+        if (seq === 0 && this.nextSeq > 0) {
+            console.log(`[EventBuffer] New stream detected (seq=0, nextSeq=${this.nextSeq}), resetting buffer`);
+            this.clear();
+        }
+
         // Store the chunk
         this.chunks.set(seq, { seq, data, is_final });
 
