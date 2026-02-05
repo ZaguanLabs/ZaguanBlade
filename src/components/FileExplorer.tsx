@@ -1,4 +1,4 @@
-import React, { useMemo, useCallback, useState } from 'react';
+import React, { useMemo, useCallback, useState, useRef, useEffect } from 'react';
 import { useTree } from '@headless-tree/react';
 import {
     selectionFeature,
@@ -12,7 +12,7 @@ import { BladeDispatcher } from '../services/blade';
 import { FileEntry } from '../types/blade';
 import { Folder, ChevronRight, FileCode, FileText, FileBox, Search, FilePlus, FolderPlus, Pencil, Trash2, Copy, Scissors, Clipboard, Terminal, Loader2 } from 'lucide-react';
 import { useContextMenu, ContextMenuItem } from './ui/ContextMenu';
-import { InputModal, ConfirmModal } from './ui/Modal';
+import { ConfirmModal } from './ui/Modal';
 import { listen, emit } from '@tauri-apps/api/event';
 
 // Define the Node type for our tree
@@ -53,15 +53,20 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
     const pendingRequests = React.useRef(new Map<string | null, Promise<string[]>>());
     const { showMenu } = useContextMenu();
 
-    // Modal state
-    const [inputModal, setInputModal] = useState<{
-        isOpen: boolean;
-        type: 'new-file' | 'new-folder' | 'rename';
-        title: string;
-        defaultValue: string;
-        targetPath: string;
+    // State for inline new item creation
+    const [newItem, setNewItem] = useState<{
+        parentPath: string;
         isDir: boolean;
-    }>({ isOpen: false, type: 'new-file', title: '', defaultValue: '', targetPath: '', isDir: false });
+        name: string;
+    } | null>(null);
+    const newItemInputRef = useRef<HTMLInputElement>(null);
+    
+    // Focus the new item input when it appears
+    useEffect(() => {
+        if (newItem && newItemInputRef.current) {
+            newItemInputRef.current.focus();
+        }
+    }, [newItem]);
 
     const [confirmModal, setConfirmModal] = useState<{
         isOpen: boolean;
@@ -148,21 +153,6 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
             console.error('[Explorer] Failed to delete:', err);
         }
     };
-
-    const handleRenameFile = async (oldPath: string, newName: string) => {
-        const parentPath = oldPath.substring(0, oldPath.lastIndexOf('/'));
-        const newPath = `${parentPath}/${newName}`;
-        try {
-            await BladeDispatcher.file({
-                type: 'Rename',
-                payload: { old_path: oldPath, new_path: newPath }
-            });
-            console.log('[Explorer] Renamed:', oldPath, '->', newPath);
-        } catch (err) {
-            console.error('[Explorer] Failed to rename:', err);
-        }
-    };
-
     const handlePaste = async (targetFolder: string) => {
         if (!clipboard) return;
 
@@ -200,14 +190,13 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                     icon: <FilePlus className="w-4 h-4" />,
                     shortcut: 'Ctrl+N',
                     onClick: () => {
-                        setInputModal({
-                            isOpen: true,
-                            type: 'new-file',
-                            title: 'New File',
-                            defaultValue: '',
-                            targetPath: itemId,
-                            isDir: false
-                        });
+                        // Start inline new file creation
+                        setNewItem({ parentPath: itemId, isDir: false, name: '' });
+                        // Expand the folder to show the new item input
+                        const item = treeRef.current?.getItemInstance(itemId);
+                        if (item && !item.isExpanded()) {
+                            item.expand();
+                        }
                     }
                 },
                 {
@@ -216,14 +205,13 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                     icon: <FolderPlus className="w-4 h-4" />,
                     shortcut: 'Ctrl+Shift+N',
                     onClick: () => {
-                        setInputModal({
-                            isOpen: true,
-                            type: 'new-folder',
-                            title: 'New Folder',
-                            defaultValue: '',
-                            targetPath: itemId,
-                            isDir: true
-                        });
+                        // Start inline new folder creation
+                        setNewItem({ parentPath: itemId, isDir: true, name: '' });
+                        // Expand the folder to show the new item input
+                        const item = treeRef.current?.getItemInstance(itemId);
+                        if (item && !item.isExpanded()) {
+                            item.expand();
+                        }
                     }
                 },
                 { id: 'div-1', label: '', divider: true }
@@ -270,14 +258,11 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                 icon: <Pencil className="w-4 h-4" />,
                 shortcut: 'F2',
                 onClick: () => {
-                    setInputModal({
-                        isOpen: true,
-                        type: 'rename',
-                        title: 'Rename',
-                        defaultValue: itemName,
-                        targetPath: itemId,
-                        isDir: isFolder
-                    });
+                    // Trigger inline rename via headless-tree
+                    const item = treeRef.current?.getItemInstance(itemId);
+                    if (item && typeof item.startRenaming === 'function') {
+                        item.startRenaming();
+                    }
                 }
             },
             {
@@ -353,14 +338,8 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                 icon: <FilePlus className="w-4 h-4" />,
                 shortcut: 'Ctrl+N',
                 onClick: () => {
-                    setInputModal({
-                        isOpen: true,
-                        type: 'new-file',
-                        title: 'New File',
-                        defaultValue: '',
-                        targetPath: workspaceRoot,
-                        isDir: false
-                    });
+                    // Start inline new file creation at workspace root
+                    setNewItem({ parentPath: workspaceRoot, isDir: false, name: '' });
                 }
             },
             {
@@ -369,14 +348,8 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                 icon: <FolderPlus className="w-4 h-4" />,
                 shortcut: 'Ctrl+Shift+N',
                 onClick: () => {
-                    setInputModal({
-                        isOpen: true,
-                        type: 'new-folder',
-                        title: 'New Folder',
-                        defaultValue: '',
-                        targetPath: workspaceRoot,
-                        isDir: true
-                    });
+                    // Start inline new folder creation at workspace root
+                    setNewItem({ parentPath: workspaceRoot, isDir: true, name: '' });
                 }
             },
             { id: 'div-1', label: '', divider: true },
@@ -413,9 +386,18 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
         ],
 
         onRename: async (item, newName) => {
+            // Validate newName - don't rename if empty or unchanged
+            if (!newName || !newName.trim()) {
+                return;
+            }
+            const trimmedName = newName.trim();
             const oldPath = item.getId();
+            const oldName = oldPath.substring(oldPath.lastIndexOf('/') + 1);
+            if (oldName === trimmedName) {
+                return;
+            }
             const parentPath = oldPath.substring(0, oldPath.lastIndexOf('/'));
-            const newPath = `${parentPath}/${newName}`;
+            const newPath = `${parentPath}/${trimmedName}`;
             try {
                 await BladeDispatcher.file({
                     type: 'Rename',
@@ -687,70 +669,121 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                 className="flex-1 overflow-y-auto text-xs select-none outline-none"
                 onContextMenu={handleBackgroundContextMenu}
             >
-                {tree.getItems().map(item => (
-                    <div
-                        {...item.getProps()}
-                        key={item.getId()}
-                        data-tree-item
-                        className={`group flex items-center gap-1.5 py-1 px-2 cursor-pointer relative
-                            ${item.isSelected()
-                                ? 'bg-[var(--bg-selection)] text-[var(--accent-secondary)]'
-                                : 'text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)]'
-                            }
-                            ${item.isFocused() ? 'ring-1 ring-inset ring-[var(--border-focus)]' : ''}
-                        `}
-                        style={{ paddingLeft: `${(item.getItemMeta().level) * 12 + 8}px` }}
-                        onClick={(e) => {
-                            // Don't handle click if renaming
-                            if (item.isRenaming?.()) return;
-                            
-                            if (item.isFolder()) {
-                                if (item.isExpanded()) {
-                                    item.collapse();
-                                } else {
-                                    item.expand();
-                                }
-                            } else {
-                                item.select();
-                                onFileSelect(item.getId());
-                            }
-                        }}
-                        onContextMenu={(e) => handleContextMenu(e, item.getId(), item.isFolder(), item.getItemName() || '')}
-                    >
-                        {/* Indentation Guides */}
-                        {Array.from({ length: item.getItemMeta().level }).map((_, i) => (
+                {tree.getItems().map(item => {
+                    // Check if we should show the new item input as first child of this folder
+                    const showNewItemInput = newItem && 
+                        item.isFolder() && 
+                        item.getId() === newItem.parentPath && 
+                        item.isExpanded();
+                    
+                    return (
+                        <React.Fragment key={item.getId()}>
                             <div
-                                key={i}
-                                className="absolute top-0 bottom-0 w-px bg-[var(--border-subtle)]/20"
-                                style={{ left: `${i * 12 + 11}px` }}
-                            />
-                        ))}
+                                {...item.getProps()}
+                                data-tree-item
+                                className={`group flex items-center gap-1.5 py-1 px-2 cursor-pointer relative
+                                    ${item.isSelected()
+                                        ? 'bg-[var(--bg-selection)] text-[var(--accent-secondary)]'
+                                        : 'text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)]'
+                                    }
+                                    ${item.isFocused() ? 'ring-1 ring-inset ring-[var(--border-focus)]' : ''}
+                                `}
+                                style={{ paddingLeft: `${(item.getItemMeta().level) * 12 + 8}px` }}
+                                onClick={(e) => {
+                                    // Don't handle click if renaming
+                                    if (item.isRenaming?.()) return;
+                                    
+                                    if (item.isFolder()) {
+                                        if (item.isExpanded()) {
+                                            item.collapse();
+                                        } else {
+                                            item.expand();
+                                        }
+                                    } else {
+                                        item.select();
+                                        onFileSelect(item.getId());
+                                    }
+                                }}
+                                onContextMenu={(e) => handleContextMenu(e, item.getId(), item.isFolder(), item.getItemName() || '')}
+                            >
+                                {/* Indentation Guides */}
+                                {Array.from({ length: item.getItemMeta().level }).map((_, i) => (
+                                    <div
+                                        key={i}
+                                        className="absolute top-0 bottom-0 w-px bg-[var(--border-subtle)]/20"
+                                        style={{ left: `${i * 12 + 11}px` }}
+                                    />
+                                ))}
 
-                        <span className={`transition-transform duration-200 ${item.isExpanded() ? 'rotate-90' : ''}`}>
-                            {item.isFolder() ? <ChevronRight className="w-3 h-3 text-[var(--fg-tertiary)] group-hover:text-[var(--fg-secondary)] transition-colors" /> : <span className="w-3" />}
-                        </span>
+                                <span className={`transition-transform duration-200 ${item.isExpanded() ? 'rotate-90' : ''}`}>
+                                    {item.isFolder() ? <ChevronRight className="w-3 h-3 text-[var(--fg-tertiary)] group-hover:text-[var(--fg-secondary)] transition-colors" /> : <span className="w-3" />}
+                                </span>
 
-                        {getIcon(item.getItemName(), item.isFolder(), item.isExpanded())}
+                                {getIcon(item.getItemName(), item.isFolder(), item.isExpanded())}
 
-                        {/* Loading indicator */}
-                        {item.isLoading?.() && (
-                            <Loader2 className="w-3 h-3 text-[var(--fg-tertiary)] animate-spin" />
-                        )}
+                                {/* Loading indicator */}
+                                {item.isLoading?.() && (
+                                    <Loader2 className="w-3 h-3 text-[var(--fg-tertiary)] animate-spin" />
+                                )}
 
-                        {/* Inline rename input or item name */}
-                        {item.isRenaming?.() ? (
-                            <input
-                                {...(item.getRenameInputProps?.() || {})}
-                                className="bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded px-1 text-xs text-[var(--fg-primary)] outline-none flex-1 min-w-0"
-                                autoFocus
-                            />
-                        ) : (
-                            <span className="truncate opacity-90 group-hover:opacity-100 transition-opacity">
-                                {item.getItemName()}
-                            </span>
-                        )}
-                    </div>
-                ))}
+                                {/* Inline rename input or item name */}
+                                {item.isRenaming?.() ? (
+                                    <input
+                                        {...(item.getRenameInputProps?.() || {})}
+                                        className="bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded px-1 text-xs text-[var(--fg-primary)] outline-none flex-1 min-w-0"
+                                        autoFocus
+                                    />
+                                ) : (
+                                    <span className="truncate opacity-90 group-hover:opacity-100 transition-opacity">
+                                        {item.getItemName()}
+                                    </span>
+                                )}
+                            </div>
+                            
+                            {/* Inline new item input - shows as first child of expanded folder */}
+                            {showNewItemInput && (
+                                <div
+                                    className="flex items-center gap-1.5 py-1 px-2 relative bg-[var(--bg-surface-hover)]"
+                                    style={{ paddingLeft: `${(item.getItemMeta().level + 1) * 12 + 8}px` }}
+                                >
+                                    {/* Indentation Guides */}
+                                    {Array.from({ length: item.getItemMeta().level + 1 }).map((_, i) => (
+                                        <div
+                                            key={i}
+                                            className="absolute top-0 bottom-0 w-px bg-[var(--border-subtle)]/20"
+                                            style={{ left: `${i * 12 + 11}px` }}
+                                        />
+                                    ))}
+                                    
+                                    <span className="w-3" />
+                                    {getIcon(newItem.name || (newItem.isDir ? 'folder' : 'file'), newItem.isDir, false)}
+                                    
+                                    <input
+                                        ref={newItemInputRef}
+                                        type="text"
+                                        value={newItem.name}
+                                        onChange={(e) => setNewItem(prev => prev ? { ...prev, name: e.target.value } : null)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' && newItem.name.trim()) {
+                                                handleCreateFile(newItem.name.trim(), newItem.parentPath, newItem.isDir);
+                                                setNewItem(null);
+                                            } else if (e.key === 'Escape') {
+                                                setNewItem(null);
+                                            }
+                                        }}
+                                        onBlur={() => {
+                                            // Small delay to allow click events to fire first
+                                            setTimeout(() => setNewItem(null), 150);
+                                        }}
+                                        placeholder={newItem.isDir ? 'folder name...' : 'file name...'}
+                                        className="bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded px-1 text-xs text-[var(--fg-primary)] outline-none flex-1 min-w-0"
+                                        autoFocus
+                                    />
+                                </div>
+                            )}
+                        </React.Fragment>
+                    );
+                })}
 
                 {/* Drag line for drag-and-drop */}
                 <div 
@@ -766,24 +799,6 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                     </div>
                 )}
             </div>
-
-            {/* Input Modal for New File/Folder/Rename */}
-            <InputModal
-                isOpen={inputModal.isOpen}
-                title={inputModal.title}
-                placeholder={inputModal.type === 'rename' ? 'Enter new name...' : inputModal.type === 'new-file' ? 'Enter file name...' : 'Enter folder name...'}
-                defaultValue={inputModal.defaultValue}
-                confirmLabel={inputModal.type === 'rename' ? 'Rename' : 'Create'}
-                onConfirm={(value) => {
-                    if (inputModal.type === 'rename') {
-                        handleRenameFile(inputModal.targetPath, value);
-                    } else {
-                        handleCreateFile(value, inputModal.targetPath, inputModal.isDir);
-                    }
-                    setInputModal(prev => ({ ...prev, isOpen: false }));
-                }}
-                onCancel={() => setInputModal(prev => ({ ...prev, isOpen: false }))}
-            />
 
             {/* Confirm Modal for Delete */}
             <ConfirmModal
