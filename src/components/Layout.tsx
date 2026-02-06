@@ -814,6 +814,8 @@ const AppLayoutInner: React.FC = () => {
                 <div className="w-[50px] bg-[var(--bg-panel)] border-r border-[var(--border-subtle)] flex flex-col items-center py-4 gap-6 z-50 shrink-0 relative">
                     <div
                         onClick={() => toggleSidebar('explorer')}
+                        title="Explorer"
+                        aria-label="Explorer"
                         className={`relative p-2 rounded-md cursor-pointer transition-all duration-[var(--transition-fast)] ${isSidebarOpen && activeSidebar === 'explorer'
                             ? 'text-[var(--fg-bright)] bg-[var(--bg-surface)]'
                             : 'text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]'}
@@ -828,6 +830,8 @@ const AppLayoutInner: React.FC = () => {
                     </div>
                     <div
                         onClick={() => toggleSidebar('git')}
+                        title="Git"
+                        aria-label="Git"
                         className={`relative p-2 rounded-md cursor-pointer transition-all duration-[var(--transition-fast)] ${isSidebarOpen && activeSidebar === 'git'
                             ? 'text-[var(--fg-bright)] bg-[var(--bg-surface)]'
                             : 'text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]'}
@@ -845,6 +849,8 @@ const AppLayoutInner: React.FC = () => {
                     </div>
                     <div
                         onClick={() => toggleSidebar('history')}
+                        title="File History"
+                        aria-label="File History"
                         className={`relative p-2 rounded-md cursor-pointer transition-all duration-[var(--transition-fast)] ${isSidebarOpen && activeSidebar === 'history'
                             ? 'text-[var(--fg-bright)] bg-[var(--bg-surface)]'
                             : 'text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]'}
@@ -855,13 +861,19 @@ const AppLayoutInner: React.FC = () => {
                         )}
                         <Clock className="w-5 h-5" />
                     </div>
-                    <div className="relative p-2 rounded-md text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)] transition-all duration-[var(--transition-fast)] cursor-pointer">
+                    <div
+                        title="Search"
+                        aria-label="Search"
+                        className="relative p-2 rounded-md text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)] transition-all duration-[var(--transition-fast)] cursor-pointer"
+                    >
                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                         </svg>
                     </div>
                     <div
                         onClick={() => setIsSettingsOpen(true)}
+                        title="Settings"
+                        aria-label="Settings"
                         className="relative mt-auto p-2 rounded-md text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)] transition-all duration-[var(--transition-fast)] cursor-pointer"
                     >
                         <Settings className="w-5 h-5" />

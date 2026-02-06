@@ -41,9 +41,16 @@ export type BladeIntent =
     | { type: "Language"; payload: LanguageIntent };
 
 export type ChatIntent =
-    | { type: "SendMessage"; payload: { content: string; model: string; context?: EditorContext } }
+    | { type: "SendMessage"; payload: { content: string; model: string; images?: ChatImagePayload[]; context?: EditorContext } }
     | { type: "StopGeneration"; payload: Record<string, never> }
     | { type: "ClearHistory"; payload: Record<string, never> };
+
+export type ChatImagePayload = {
+    data: string;
+    mime_type: string;
+    name?: string;
+    size?: number;
+};
 
 export type EditorContext = {
     active_file: string | null;
@@ -242,6 +249,7 @@ export type BladeError =
 export interface ChatMessage {
     role: "User" | "Assistant" | "System" | "Tool";
     content: string;
+    images?: ChatImagePayload[];
     reasoning?: string;
     tool_call_id?: string;
     // ... complete as needed based on Rust struct

@@ -832,7 +832,7 @@ Respond with ONLY the commit message, nothing else."#,
 
     // Send the commit message generation request
     ws_manager
-        .send_message(None, model_id, prompt, Some(workspace_info))
+        .send_message(None, model_id, prompt, None, Some(workspace_info))
         .await
         .map_err(|e| format!("Failed to send message: {}", e))?;
 

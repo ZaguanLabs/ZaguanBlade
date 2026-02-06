@@ -103,6 +103,7 @@ pub async fn dispatch(
                 blade_protocol::ChatIntent::SendMessage {
                     content,
                     model,
+                    images,
                     context,
                 } => {
                     // Extract context if available
@@ -129,6 +130,7 @@ pub async fn dispatch(
 
                     handle_send_message(
                         content,
+                        images,
                         Some(model),
                         active_file,
                         open_files,

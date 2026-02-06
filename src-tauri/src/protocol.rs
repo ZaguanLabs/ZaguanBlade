@@ -11,10 +11,22 @@ pub enum ChatRole {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatImage {
+    pub data: String,
+    pub mime_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub id: Option<String>,
     pub role: ChatRole,
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub images: Option<Vec<ChatImage>>,
     pub reasoning: Option<String>,
     pub tool_call_id: Option<String>,
     pub tool_calls: Option<Vec<ToolCall>>,
@@ -33,6 +45,7 @@ impl ChatMessage {
             id: Some(Uuid::new_v4().to_string()),
             role,
             content,
+            images: None,
             reasoning: None,
             tool_call_id: None,
             tool_calls: None,

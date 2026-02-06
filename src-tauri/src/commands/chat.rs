@@ -8,6 +8,7 @@ use tauri::{AppHandle, Emitter, Runtime, State, Window};
 #[tauri::command]
 pub async fn send_message<R: Runtime>(
     message: String,
+    images: Option<Vec<crate::protocol::ChatImage>>,
     model_id: Option<String>,
     active_file: Option<String>,
     open_files: Option<Vec<String>>,
@@ -21,6 +22,7 @@ pub async fn send_message<R: Runtime>(
 ) -> Result<(), String> {
     handle_send_message(
         message,
+        images,
         model_id,
         active_file,
         open_files,

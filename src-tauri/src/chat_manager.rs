@@ -64,6 +64,8 @@ struct OllamaMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    images: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<OllamaToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<String>,
@@ -330,6 +332,9 @@ impl ChatManager {
                         .collect();
                     blade_msg["tool_calls"] = serde_json::json!(tc_json);
                 }
+                if let Some(ref images) = msg.images {
+                    blade_msg["images"] = serde_json::json!(images);
+                }
                 blade_msg
             })
             .collect();
@@ -339,6 +344,13 @@ impl ChatManager {
 
         // Create a channel to send session_id back to main thread
         let (session_tx, session_rx) = std::sync::mpsc::channel();
+
+        let user_images = conversation
+            .get_messages()
+            .iter()
+            .rev()
+            .find(|m| m.role == ChatRole::User)
+            .and_then(|m| m.images.clone());
 
         // Spawn async task to connect and handle events
         let task = tokio::spawn(async move {
@@ -367,6 +379,7 @@ impl ChatManager {
                                         session_id.clone(),
                                         model_id.clone(),
                                         user_message.clone(),
+                                        user_images.clone(),
                                         Some(workspace_info.clone()),
                                         storage_mode.clone(),
                                     )
@@ -712,6 +725,7 @@ impl ChatManager {
                 messages.push(OllamaMessage {
                     role: "system".to_string(),
                     content: Some(rendered_prompt),
+                    images: None,
                     tool_calls: None,
                     tool_call_id: None,
                     tool_name: None,
@@ -789,9 +803,18 @@ impl ChatManager {
                 None
             };
 
+            let images = if msg.role == ChatRole::User {
+                msg.images.as_ref().map(|imgs| {
+                    imgs.iter().map(|img| img.data.clone()).collect()
+                })
+            } else {
+                None
+            };
+
             messages.push(OllamaMessage {
                 role: role.to_string(),
                 content,
+                images,
                 tool_calls,
                 tool_call_id,
                 tool_name,
@@ -1026,10 +1049,31 @@ impl ChatManager {
         let shell_value = std::env::var("SHELL").unwrap_or_default();
 
         #[derive(Serialize, Clone)]
+        #[serde(untagged)]
+        enum OpenAIContent {
+            Text(String),
+            Parts(Vec<OpenAIContentPart>),
+        }
+
+        #[derive(Serialize, Clone)]
+        #[serde(tag = "type")]
+        enum OpenAIContentPart {
+            #[serde(rename = "text")]
+            Text { text: String },
+            #[serde(rename = "image_url")]
+            ImageUrl { image_url: OpenAIImageUrl },
+        }
+
+        #[derive(Serialize, Clone)]
+        struct OpenAIImageUrl {
+            url: String,
+        }
+
+        #[derive(Serialize, Clone)]
         struct OpenAIMessage {
             role: String,
             #[serde(skip_serializing_if = "Option::is_none")]
-            content: Option<String>,
+            content: Option<OpenAIContent>,
             #[serde(skip_serializing_if = "Option::is_none")]
             tool_calls: Option<Vec<crate::protocol::ToolCall>>,
             #[serde(skip_serializing_if = "Option::is_none")]
@@ -1057,7 +1101,7 @@ impl ChatManager {
             if !rendered_prompt.trim().is_empty() {
                 messages.push(OpenAIMessage {
                     role: "system".to_string(),
-                    content: Some(rendered_prompt),
+                    content: Some(OpenAIContent::Text(rendered_prompt)),
                     tool_calls: None,
                     tool_call_id: None,
                 });
@@ -1067,17 +1111,50 @@ impl ChatManager {
         // Convert conversation history to OpenAI format
         for msg in conversation.get_messages() {
             match msg.role {
-                ChatRole::User => messages.push(OpenAIMessage {
-                    role: "user".to_string(),
-                    content: Some(msg.content.clone()),
-                    tool_calls: None,
-                    tool_call_id: None,
-                }),
+                ChatRole::User => {
+                    let mut parts: Vec<OpenAIContentPart> = Vec::new();
+                    if !msg.content.trim().is_empty() {
+                        parts.push(OpenAIContentPart::Text {
+                            text: msg.content.clone(),
+                        });
+                    }
+                    if let Some(images) = &msg.images {
+                        for image in images {
+                            parts.push(OpenAIContentPart::ImageUrl {
+                                image_url: OpenAIImageUrl {
+                                    url: format!(
+                                        "data:{};base64,{}",
+                                        image.mime_type,
+                                        image.data
+                                    ),
+                                },
+                            });
+                        }
+                    }
+
+                    let content = if parts.is_empty() {
+                        None
+                    } else if parts.len() == 1 {
+                        match &parts[0] {
+                            OpenAIContentPart::Text { text } => Some(OpenAIContent::Text(text.clone())),
+                            OpenAIContentPart::ImageUrl { .. } => Some(OpenAIContent::Parts(parts)),
+                        }
+                    } else {
+                        Some(OpenAIContent::Parts(parts))
+                    };
+
+                    messages.push(OpenAIMessage {
+                        role: "user".to_string(),
+                        content,
+                        tool_calls: None,
+                        tool_call_id: None,
+                    });
+                }
                 ChatRole::Assistant => {
                     let content = if msg.content.trim().is_empty() {
                         None
                     } else {
-                        Some(msg.content.clone())
+                        Some(OpenAIContent::Text(msg.content.clone()))
                     };
                     messages.push(OpenAIMessage {
                         role: "assistant".to_string(),
@@ -1088,13 +1165,13 @@ impl ChatManager {
                 }
                 ChatRole::System => messages.push(OpenAIMessage {
                     role: "system".to_string(),
-                    content: Some(msg.content.clone()),
+                    content: Some(OpenAIContent::Text(msg.content.clone())),
                     tool_calls: None,
                     tool_call_id: None,
                 }),
                 ChatRole::Tool => messages.push(OpenAIMessage {
                     role: "tool".to_string(),
-                    content: Some(msg.content.clone()),
+                    content: Some(OpenAIContent::Text(msg.content.clone())),
                     tool_calls: None,
                     tool_call_id: msg.tool_call_id.clone(),
                 }),

@@ -61,7 +61,7 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
                 onClick={() => !disabled && setIsOpen(!isOpen)}
                 disabled={disabled}
                 className={`
-                    w-full flex items-center justify-between px-2 py-1
+                    w-full flex items-center justify-between px-1.5 py-0.5 max-w-[120px]
                     bg-transparent hover:bg-[var(--bg-surface-hover)]/30
                     border-0 rounded transition-colors duration-150
                     ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
@@ -71,11 +71,11 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
                     <div className="shrink-0">
                         {selectedModel ? getModelIcon(selectedModel.id) : <Box className="w-3 h-3" />}
                     </div>
-                    <span className="text-[10px] font-medium text-[var(--fg-secondary)] truncate">
+                    <span className="text-[9px] font-medium text-[var(--fg-secondary)] truncate">
                         {selectedModel?.name || 'Select Model'}
                     </span>
                 </div>
-                <ChevronDown className={`w-3 h-3 text-[var(--fg-tertiary)] transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
+                <ChevronDown className={`w-2.5 h-2.5 text-[var(--fg-tertiary)] transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
             </button>
 
             {isOpen && (

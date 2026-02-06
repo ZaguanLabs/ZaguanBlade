@@ -1,8 +1,24 @@
 import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import { invoke } from '@tauri-apps/api/core';
 import { Send, Square, BookOpen, Globe } from 'lucide-react';
 import { CompactModelSelector } from './CompactModelSelector';
-import type { ModelInfo } from '../types/chat';
+import { FeatureMenu } from './FeatureMenu';
+import { ImageAttachmentBar } from './ImageAttachmentBar';
+import { WindowPicker } from './WindowPicker';
+import { RegionSelector } from './RegionSelector';
+import type { ImageAttachment, ModelInfo } from '../types/chat';
+import type { CaptureResult, WindowInfo } from '../types/screenshot';
+import {
+    createThumbnailDataUrl,
+    extractBase64FromDataUrl,
+    extractMimeTypeFromDataUrl,
+    fileToDataUrl,
+    getBase64ByteLength,
+    validateImageByteLength,
+    validateImageMimeType,
+    validateImageSize
+} from '../utils/imageUtils';
 
 const COMMANDS = [
     { 
@@ -20,7 +36,7 @@ const COMMANDS = [
 ];
 
 interface CommandCenterProps {
-    onSend: (text: string) => void;
+    onSend: (text: string, attachments?: ImageAttachment[]) => void;
     onStop?: () => void;
     disabled?: boolean;
     loading?: boolean;
@@ -43,7 +59,24 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
     const [showCommands, setShowCommands] = useState(false);
     const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
     const [commandFilter, setCommandFilter] = useState('');
+    const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
+    const [attachmentError, setAttachmentError] = useState<string | null>(null);
+    const [windowPickerOpen, setWindowPickerOpen] = useState(false);
+    const [windowPickerLoading, setWindowPickerLoading] = useState(false);
+    const [windowPickerMode, setWindowPickerMode] = useState<'capture' | 'region'>('capture');
+    const [capturableWindows, setCapturableWindows] = useState<WindowInfo[]>([]);
+    const [regionSourceWindowId, setRegionSourceWindowId] = useState<number | null>(null);
+    const [regionCapture, setRegionCapture] = useState<{
+        dataUrl: string;
+        width: number;
+        height: number;
+    } | null>(null);
+    const [isCapturing, setIsCapturing] = useState(false);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const isLocalOnly = useMemo(() => (
+        models.length > 0
+        && models.every((model) => model.provider === 'ollama' || model.provider === 'openai-compat')
+    ), [models]);
 
     // Reset textarea height when text is cleared (after sending)
     useEffect(() => {
@@ -52,7 +85,185 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
         }
     }, [text]);
 
+    const handlePaste = useCallback(async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+        const items = Array.from(event.clipboardData.items);
+        const imageItems = items.filter((item) => item.type.startsWith('image/'));
+        if (imageItems.length === 0) return;
+
+        if (isLocalOnly) {
+            setAttachmentError('Image support requires a subscription. Go to Settings.');
+            return;
+        }
+
+        event.preventDefault();
+
+        const newAttachments: ImageAttachment[] = [];
+        const errors: string[] = [];
+        for (const item of imageItems) {
+            const file = item.getAsFile();
+            if (!file) continue;
+            const sizeError = validateImageSize(file);
+            if (sizeError) {
+                errors.push(sizeError);
+                continue;
+            }
+            const mimeError = validateImageMimeType(file.type);
+            if (mimeError) {
+                errors.push(mimeError);
+                continue;
+            }
+            const dataUrl = await fileToDataUrl(file);
+            const thumbnailUrl = await createThumbnailDataUrl(dataUrl, 64, 64);
+            const mimeType = extractMimeTypeFromDataUrl(dataUrl) || file.type || 'image/png';
+            newAttachments.push({
+                id: crypto.randomUUID(),
+                dataUrl,
+                data: extractBase64FromDataUrl(dataUrl),
+                mime_type: mimeType,
+                thumbnailUrl,
+                name: file.name,
+                size: file.size,
+            });
+        }
+
+        if (newAttachments.length > 0) {
+            setAttachments((prev) => [...prev, ...newAttachments]);
+        }
+        if (errors.length > 0) {
+            setAttachmentError(errors[0]);
+        } else if (newAttachments.length > 0) {
+            setAttachmentError(null);
+        }
+    }, [isLocalOnly]);
+
+    const handleRemoveAttachment = useCallback((id: string) => {
+        setAttachments((prev) => prev.filter((attachment) => attachment.id !== id));
+    }, []);
+
     const hasCommand = text.includes('@');
+
+    const addCaptureAttachment = useCallback(async (result: CaptureResult, name?: string) => {
+        const mimeError = validateImageMimeType(result.mime_type);
+        if (mimeError) {
+            setAttachmentError(mimeError);
+            return;
+        }
+        const byteLength = getBase64ByteLength(result.data);
+        const sizeError = validateImageByteLength(byteLength);
+        if (sizeError) {
+            setAttachmentError(sizeError);
+            return;
+        }
+        const dataUrl = `data:${result.mime_type};base64,${result.data}`;
+        const thumbnailUrl = await createThumbnailDataUrl(dataUrl, 64, 64);
+        setAttachments((prev) => [
+            ...prev,
+            {
+                id: crypto.randomUUID(),
+                dataUrl,
+                data: result.data,
+                mime_type: result.mime_type,
+                thumbnailUrl,
+                name: name || 'screenshot.png',
+                size: byteLength,
+            },
+        ]);
+        setAttachmentError(null);
+    }, []);
+
+    const handleWindowCapture = useCallback(async () => {
+        if (isLocalOnly) {
+            setAttachmentError('Image support requires a subscription. Go to Settings.');
+            return;
+        }
+        setWindowPickerMode('capture');
+        setWindowPickerOpen(true);
+        setWindowPickerLoading(true);
+        try {
+            const windows = await invoke<WindowInfo[]>('list_capturable_windows');
+            setCapturableWindows(windows);
+        } catch (error) {
+            console.error('[CommandCenter] Failed to list windows:', error);
+            setAttachmentError('Failed to list windows for capture.');
+            setWindowPickerOpen(false);
+        } finally {
+            setWindowPickerLoading(false);
+        }
+    }, [isLocalOnly]);
+
+    const handleRegionCapture = useCallback(async () => {
+        if (isLocalOnly) {
+            setAttachmentError('Image support requires a subscription. Go to Settings.');
+            return;
+        }
+        setWindowPickerMode('region');
+        setWindowPickerOpen(true);
+        setWindowPickerLoading(true);
+        try {
+            const windows = await invoke<WindowInfo[]>('list_capturable_windows');
+            setCapturableWindows(windows);
+        } catch (error) {
+            console.error('[CommandCenter] Failed to list windows:', error);
+            setAttachmentError('Failed to list windows for capture.');
+            setWindowPickerOpen(false);
+        } finally {
+            setWindowPickerLoading(false);
+        }
+    }, [isLocalOnly]);
+
+    const handleScreenshot = useCallback((mode: 'window' | 'region') => {
+        if (mode === 'window') {
+            void handleWindowCapture();
+        } else {
+            void handleRegionCapture();
+        }
+    }, [handleRegionCapture, handleWindowCapture]);
+
+    const handleWindowSelect = useCallback(async (windowId: number) => {
+        setWindowPickerLoading(true);
+        try {
+            const result = await invoke<CaptureResult>('capture_window', { windowId });
+            setWindowPickerOpen(false);
+            if (windowPickerMode === 'region') {
+                const dataUrl = `data:${result.mime_type};base64,${result.data}`;
+                setRegionSourceWindowId(windowId);
+                setRegionCapture({ dataUrl, width: result.width, height: result.height });
+            } else {
+                await addCaptureAttachment(result, `window-${windowId}.png`);
+            }
+        } catch (error) {
+            console.error('[CommandCenter] Failed to capture window:', error);
+            setAttachmentError('Failed to capture window.');
+        } finally {
+            setWindowPickerLoading(false);
+        }
+    }, [addCaptureAttachment, windowPickerMode]);
+
+    const handleRegionConfirm = useCallback(async (region: { x: number; y: number; width: number; height: number }) => {
+        if (regionSourceWindowId == null) {
+            setAttachmentError('No source window selected.');
+            setRegionCapture(null);
+            return;
+        }
+        setIsCapturing(true);
+        try {
+            const result = await invoke<CaptureResult>('capture_window_region', {
+                windowId: regionSourceWindowId,
+                x: region.x,
+                y: region.y,
+                width: region.width,
+                height: region.height,
+            });
+            await addCaptureAttachment(result, 'region.png');
+        } catch (error) {
+            console.error('[CommandCenter] Failed to capture region:', error);
+            setAttachmentError('Failed to capture region.');
+        } finally {
+            setIsCapturing(false);
+            setRegionCapture(null);
+            setRegionSourceWindowId(null);
+        }
+    }, [addCaptureAttachment, regionSourceWindowId]);
 
     // Filter commands based on what user typed after @
     const filteredCommands = React.useMemo(() =>
@@ -149,26 +360,46 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
 
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            if (text.trim() && !disabled && !loading) {
-                onSend(text);
+            if (isLocalOnly && attachments.length > 0) {
+                setAttachmentError('Image support requires a subscription. Go to Settings.');
+                return;
+            }
+            if ((text.trim() || attachments.length > 0) && !disabled && !loading) {
+                onSend(text, attachments);
                 setText('');
+                setAttachments([]);
+                setAttachmentError(null);
             }
         }
     };
 
     return (
-        <div className="shrink-0 border-t border-[var(--border-subtle)] bg-[var(--bg-app)]">
-            <div className="px-2 pt-3 pb-2">
-                <div className="bg-[var(--bg-editor)] rounded-md border border-[var(--border-default)] shadow-[var(--shadow-lg)]">
-                    {/* Model Selector */}
-                    <div className="border-b border-[var(--border-subtle)]/50 px-1 py-0.5">
-                        <CompactModelSelector
-                            models={models}
-                            selectedId={selectedModelId || ''}
-                            onSelect={setSelectedModelId}
-                            disabled={disabled}
-                        />
+        <>
+            <div className="shrink-0 border-t border-[var(--border-subtle)] bg-[var(--bg-app)]">
+                <div className="px-2 pt-3 pb-2">
+                    <div className="bg-[var(--bg-editor)] rounded-md border border-[var(--border-default)] shadow-[var(--shadow-lg)]">
+                    {/* Header */}
+                    <div className="border-b border-[var(--border-subtle)]/50 px-2 py-1">
+                        <div className="flex items-center justify-between gap-2">
+                            <FeatureMenu onScreenshot={handleScreenshot} disabled={disabled} />
+                            <div className="flex-1" />
+                            <div className="w-[170px] max-w-[45%] shrink-0">
+                                <CompactModelSelector
+                                    models={models}
+                                    selectedId={selectedModelId || ''}
+                                    onSelect={setSelectedModelId}
+                                    disabled={disabled}
+                                />
+                            </div>
+                        </div>
                     </div>
+
+                    <ImageAttachmentBar attachments={attachments} onRemove={handleRemoveAttachment} />
+                    {attachmentError && (
+                        <div className="px-3 pb-2 text-[11px] text-red-400">
+                            {attachmentError}
+                        </div>
+                    )}
 
                     {/* Chat Input */}
                     <div className={`relative transition-colors ${loading ? 'bg-[var(--bg-surface)]' : ''}`}>
@@ -203,6 +434,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                             ref={textareaRef}
                             value={text}
                             onChange={handleTextChange}
+                            onPaste={handlePaste}
                             onKeyDown={handleKeyDown}
                             placeholder={t('chat.inputPlaceholder')}
                             className="w-full bg-transparent p-3 pr-10 outline-none resize-none min-h-[42px] max-h-[400px] overflow-y-auto text-xs font-sans placeholder-[var(--fg-tertiary)] leading-relaxed relative z-10 text-[var(--fg-secondary)]"
@@ -211,15 +443,19 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                         />
                         <button
                             onClick={() => {
-                                const showStop = loading && !text.trim();
+                                const showStop = loading && !text.trim() && attachments.length === 0;
                                 if (showStop && onStop) {
                                     onStop();
-                                } else if (text.trim() && !disabled) {
-                                    onSend(text);
+                                } else if (isLocalOnly && attachments.length > 0) {
+                                    setAttachmentError('Image support requires a subscription. Go to Settings.');
+                                } else if ((text.trim() || attachments.length > 0) && !disabled) {
+                                    onSend(text, attachments);
                                     setText('');
+                                    setAttachments([]);
+                                    setAttachmentError(null);
                                 }
                             }}
-                            disabled={(!text.trim() && !loading) || disabled}
+                            disabled={(!text.trim() && attachments.length === 0 && !loading) || disabled}
                             className={`absolute right-2 bottom-2 p-1.5 transition-colors rounded hover:bg-[var(--bg-surface-hover)] z-20 ${loading && !text.trim()
                                 ? 'text-red-400'
                                 : 'text-[var(--fg-tertiary)] hover:text-[var(--fg-primary)] disabled:opacity-30 disabled:cursor-not-allowed'
@@ -234,7 +470,27 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                     </div>
                 </div>
             </div>
-        </div>
+            </div>
+            <WindowPicker
+                isOpen={windowPickerOpen}
+                windows={capturableWindows}
+                loading={windowPickerLoading}
+                title={windowPickerMode === 'region' ? 'Select Window for Region Capture' : 'Capture Window'}
+                subtitle={windowPickerMode === 'region' ? 'Pick a window, then select a region to crop' : 'Select a window to capture'}
+                onSelect={handleWindowSelect}
+                onCancel={() => setWindowPickerOpen(false)}
+            />
+            {regionCapture && (
+                <RegionSelector
+                    isOpen={Boolean(regionCapture)}
+                    dataUrl={regionCapture.dataUrl}
+                    imageWidth={regionCapture.width}
+                    imageHeight={regionCapture.height}
+                    onCancel={() => setRegionCapture(null)}
+                    onConfirm={handleRegionConfirm}
+                />
+            )}
+        </>
     );
 };
 

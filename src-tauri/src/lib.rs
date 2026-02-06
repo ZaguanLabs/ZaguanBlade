@@ -38,6 +38,7 @@ pub mod protocol_dispatcher;
 pub mod reasoning_parser;
 pub mod semantic_patch;
 pub mod symbol_index;
+pub mod screenshot;
 pub mod terminal;
 pub mod tool_execution;
 pub mod uncommitted_changes;
@@ -190,6 +191,12 @@ pub fn run() {
             commands::project::save_project_settings,
             commands::project::init_zblade_directory,
             commands::project::has_zblade_directory,
+            // Screenshot
+            commands::screenshot::list_capturable_windows,
+            commands::screenshot::capture_window,
+            commands::screenshot::capture_full_screen,
+            commands::screenshot::capture_window_region,
+            commands::screenshot::capture_screen_region,
             // Settings
             commands::settings::get_global_settings,
             commands::settings::save_global_settings,

@@ -170,6 +170,8 @@ struct ChatRequestPayload {
     model_id: String,
     message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    images: Option<Vec<crate::protocol::ChatImage>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     workspace: Option<WorkspaceInfo>,
     api_key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -475,9 +477,10 @@ impl BladeWsClient {
         session_id: Option<String>,
         model_id: String,
         message: String,
+        images: Option<Vec<crate::protocol::ChatImage>>,
         workspace: Option<WorkspaceInfo>,
     ) -> Result<(), String> {
-        self.send_message_with_storage_mode(session_id, model_id, message, workspace, None)
+        self.send_message_with_storage_mode(session_id, model_id, message, images, workspace, None)
             .await
     }
 
@@ -487,6 +490,7 @@ impl BladeWsClient {
         session_id: Option<String>,
         model_id: String,
         message: String,
+        images: Option<Vec<crate::protocol::ChatImage>>,
         workspace: Option<WorkspaceInfo>,
         storage_mode: Option<String>,
     ) -> Result<(), String> {
@@ -497,6 +501,7 @@ impl BladeWsClient {
             session_id,
             model_id,
             message,
+            images,
             workspace,
             api_key: self.api_key.clone(),
             storage_mode,
