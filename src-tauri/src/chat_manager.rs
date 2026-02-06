@@ -20,8 +20,8 @@ use std::collections::HashMap;
 
 pub enum DrainResult {
     None,
-    Update(ChatMessage, String), // Immediate update for streaming chunks with the delta
-    Reasoning(ChatMessage, String), // Reasoning chunk delta
+    Update(String, String), // (message_id, delta) - streaming text chunk
+    Reasoning(String, String), // (message_id, delta) - reasoning chunk
     Research {
         content: String,
         suggested_name: String,
@@ -120,6 +120,7 @@ pub struct ChatManager {
     pub message_seq: u64, // v1.1: sequence number for MessageDelta events
     pub pending_results: std::collections::VecDeque<DrainResult>,
     ws_client: Option<Arc<BladeWsClient>>, // Persistent connection for the conversation
+    pending_tool_progress: HashMap<String, String>, // tool_call_id -> tool_name from tool_progress (cleared when tool_call arrives)
 }
 
 fn supports_reasoning_tags(model_id: &str) -> bool {
@@ -146,6 +147,7 @@ impl ChatManager {
             message_seq: 0,
             pending_results: std::collections::VecDeque::new(),
             ws_client: None,
+            pending_tool_progress: HashMap::new(),
         }
     }
     pub fn start_stream(
@@ -571,6 +573,7 @@ impl ChatManager {
                                         tool_name,
                                         file_path,
                                         action,
+                                        tool_call_id: None,
                                     },
                                 ));
                             }
@@ -590,6 +593,7 @@ impl ChatManager {
                                             tool_name,
                                             file_path: path,
                                             action: "streaming".to_string(),
+                                            tool_call_id: Some(tool_call_id),
                                         },
                                     ));
                                 }
@@ -1577,8 +1581,9 @@ impl ChatManager {
                     if let Some(assistant_msg) = conversation.last_assistant_mut() {
                         if is_openai_text {
                             assistant_msg.content.push_str(&s);
+                            let mid = assistant_msg.id.clone().unwrap_or_default();
                             self.pending_results
-                                .push_back(DrainResult::Update(assistant_msg.clone(), s));
+                                .push_back(DrainResult::Update(mid, s));
                         } else {
                             let segments =
                                 self.process_incoming_chunk(&s, assistant_msg, use_reasoning_parser);
@@ -1597,8 +1602,9 @@ impl ChatManager {
                                                 .get_or_insert_with(String::new);
                                             after.push_str(&text);
                                         }
+                                        let mid = assistant_msg.id.clone().unwrap_or_default();
                                         self.pending_results.push_back(DrainResult::Update(
-                                            assistant_msg.clone(),
+                                            mid,
                                             text,
                                         ));
                                     }
@@ -1610,8 +1616,9 @@ impl ChatManager {
                                         }
                                         let r = assistant_msg.reasoning.get_or_insert_with(String::new);
                                         r.push_str(&reasoning);
+                                        let mid = assistant_msg.id.clone().unwrap_or_default();
                                         self.pending_results.push_back(DrainResult::Reasoning(
-                                            assistant_msg.clone(),
+                                            mid,
                                             reasoning,
                                         ));
                                     }
@@ -1623,8 +1630,9 @@ impl ChatManager {
                         if let Some(new_last) = conversation.last_mut() {
                             if is_openai_text {
                                 new_last.content.push_str(&s);
+                                let mid = new_last.id.clone().unwrap_or_default();
                                 self.pending_results
-                                    .push_back(DrainResult::Update(new_last.clone(), s));
+                                    .push_back(DrainResult::Update(mid, s));
                             } else {
                                 let segments =
                                     self.process_incoming_chunk(&s, new_last, use_reasoning_parser);
@@ -1634,8 +1642,9 @@ impl ChatManager {
                                             if text.is_empty() {
                                                 continue;
                                             }
+                                            let mid = new_last.id.clone().unwrap_or_default();
                                             self.pending_results.push_back(DrainResult::Update(
-                                                new_last.clone(),
+                                                mid,
                                                 text,
                                             ));
                                         }
@@ -1647,8 +1656,9 @@ impl ChatManager {
                                             }
                                             let r = new_last.reasoning.get_or_insert_with(String::new);
                                             r.push_str(&reasoning);
+                                            let mid = new_last.id.clone().unwrap_or_default();
                                             self.pending_results.push_back(DrainResult::Reasoning(
-                                                new_last.clone(),
+                                                mid,
                                                 reasoning,
                                             ));
                                         }
@@ -1685,6 +1695,12 @@ impl ChatManager {
                 }
                 ChatEvent::ToolActivity(payload) => {
                     flush_batch!();
+                    // Track tool_call_ids from tool_progress so we can detect dropped tool calls
+                    if payload.action == "streaming" {
+                        if let Some(ref id) = payload.tool_call_id {
+                            self.pending_tool_progress.insert(id.clone(), payload.tool_name.clone());
+                        }
+                    }
                     self.pending_results.push_back(DrainResult::ToolActivity {
                         tool_name: payload.tool_name,
                         file_path: payload.file_path,
@@ -1712,8 +1728,9 @@ impl ChatManager {
                     if let Some(assistant_msg) = conversation.last_assistant_mut() {
                         let r = assistant_msg.reasoning.get_or_insert_with(String::new);
                         r.push_str(&s);
+                        let mid = assistant_msg.id.clone().unwrap_or_default();
                         self.pending_results
-                            .push_back(DrainResult::Reasoning(assistant_msg.clone(), s));
+                            .push_back(DrainResult::Reasoning(mid, s));
                     }
                 }
 
@@ -1742,6 +1759,10 @@ impl ChatManager {
                             });
                         }
                         ChatEvent::ToolCalls(calls) => {
+                            // Clear matching tool_progress tracking - these tool calls arrived successfully
+                            for call in &calls {
+                                self.pending_tool_progress.remove(&call.id);
+                            }
                             self.accumulated_tool_calls.extend(calls.clone());
                             let calls_for_emit = calls.clone();
 
@@ -1792,6 +1813,24 @@ impl ChatManager {
                             // We decide whether to clear rx / emit MessageCompleted later, once we know if
                             // there are accumulated tool calls.
                             eprintln!("[DRAIN] ChatEvent::Done received");
+
+                            // Detect dropped tool calls: tool_progress was seen but tool_call never arrived
+                            if !self.pending_tool_progress.is_empty() && self.accumulated_tool_calls.is_empty() {
+                                let dropped: Vec<(String, String)> = self.pending_tool_progress.drain().collect();
+                                let tool_names: Vec<&str> = dropped.iter().map(|(_, name)| name.as_str()).collect();
+                                let hint = format!(
+                                    "The server was unable to deliver {} tool call(s) ({}) — likely because the response was too large. \
+                                     Please ask the model to retry with smaller, incremental changes.",
+                                    dropped.len(),
+                                    tool_names.join(", ")
+                                );
+                                eprintln!("[DRAIN] Dropped tool calls detected: {:?}", dropped);
+                                self.pending_results.push_back(DrainResult::MessageTooLarge {
+                                    message: format!("Tool call(s) dropped: {}", tool_names.join(", ")),
+                                    recovery_hint: hint,
+                                });
+                            }
+                            self.pending_tool_progress.clear();
                             
                             // Ensure progress is cleared on done
                             if let Some(last) = conversation.last_assistant_mut() {

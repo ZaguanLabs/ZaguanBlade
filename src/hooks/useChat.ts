@@ -575,10 +575,14 @@ export function useChat() {
                         }
 
                         setLoading(false);
+                        setToolActivity(null);
                         // Buffer will auto-clear on is_final, but this provides explicit confirmation
                     } else if (chatEvent.type === 'ToolUpdate') {
                         const { message_id, tool_call_id, status, result, tool_call } = chatEvent.payload;
                         console.log(`[v1.1 Chat] ToolUpdate: msg=${message_id} tool=${tool_call_id} status=${status}`);
+
+                        // Clear the tool activity preview — the real ToolCallDisplay takes over
+                        setToolActivity(null);
 
                         setMessages(prev => {
                             const existingIdx = prev.findIndex(msg => msg.id === message_id);

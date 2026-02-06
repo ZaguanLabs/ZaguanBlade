@@ -241,7 +241,7 @@ impl BladeWsClient {
             // This prevents "Space limit exceeded" errors for large tool results
             let ws_config = WebSocketConfig {
                 max_message_size: Some(64 * 1024 * 1024), // 64MB
-                max_frame_size: Some(16 * 1024 * 1024),   // 16MB per frame
+                max_frame_size: Some(64 * 1024 * 1024),   // 64MB per frame
                 ..Default::default()
             };
 
@@ -407,7 +407,11 @@ impl BladeWsClient {
             while let Some(msg_result) = read.next().await {
                 match msg_result {
                     Ok(Message::Text(text)) => {
-                        eprintln!("[BLADE WS] Received: {}", text);
+                        if text.len() > 500 {
+                            eprintln!("[BLADE WS] Received: {}... ({} bytes)", &text[..200], text.len());
+                        } else {
+                            eprintln!("[BLADE WS] Received: {}", text);
+                        }
                         if let Err(e) = Self::parse_message(&text, &event_tx_clone) {
                             eprintln!("[BLADE WS] Parse error: {}", e);
                         }
@@ -697,19 +701,16 @@ impl BladeWsClient {
                 // This ensures ChatManager's to_string() produces clean JSON, not an escaped string
                 let raw_args = msg.payload.get("arguments");
                 let arguments = if let Some(str_args) = raw_args.and_then(|v| v.as_str()) {
-                    eprintln!("[BLADE WS] Parsing string arguments: {}", str_args);
+                    let preview: String = str_args.chars().take(200).collect();
+                    eprintln!("[BLADE WS] Parsing string arguments ({} bytes): {}...", str_args.len(), preview);
                     match serde_json::from_str::<Value>(str_args) {
-                        Ok(v) => {
-                            eprintln!("[BLADE WS] Successfully parsed arguments to JSON object");
-                            v
-                        }
+                        Ok(v) => v,
                         Err(e) => {
                             eprintln!("[BLADE WS] Failed to parse arguments as JSON: {}", e);
                             Value::String(str_args.to_string())
                         }
                     }
                 } else {
-                    eprintln!("[BLADE WS] Arguments are not a string, using raw value");
                     raw_args.cloned().unwrap_or(Value::Null)
                 };
 
@@ -985,14 +986,19 @@ impl BladeWsClient {
 
         for pattern in patterns {
             if let Ok(re) = regex::Regex::new(pattern) {
-                if let Some(caps) = re.captures(partial_args) {
+                // Use the LAST match - partial_arguments accumulates repeated prefixes,
+                // so the last match has the longest/most complete path
+                let mut best: Option<String> = None;
+                for caps in re.captures_iter(partial_args) {
                     if let Some(path) = caps.get(1) {
                         let path_str = path.as_str();
-                        // Only return if we have a meaningful path (at least starts with /)
                         if !path_str.is_empty() && path_str.starts_with('/') {
-                            return Some(path_str.to_string());
+                            best = Some(path_str.to_string());
                         }
                     }
+                }
+                if best.is_some() {
+                    return best;
                 }
             }
         }

@@ -139,6 +139,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
 
         let unlistenFileChanges: (() => void) | undefined;
+        let unlistenChangeApplied: (() => void) | undefined;
 
         const setupListeners = async () => {
             unlistenFileChanges = await listen<{ count: number, paths: string[] }>('file-changes-detected', (event) => {
@@ -148,12 +149,23 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     setReloadTrigger(prev => prev + 1);
                 }
             });
+
+            // Also listen for change-applied events from tool edits (apply_patch, edit_file, etc.)
+            // The fs_watcher has a 250ms debounce that can drop events during rapid multi-edit sequences,
+            // so this provides a reliable, direct notification when a tool modifies a file.
+            unlistenChangeApplied = await listen<{ change_id: string; file_path: string }>('change-applied', (event) => {
+                if (activeFile && event.payload.file_path === activeFile) {
+                    console.log('[EDITOR] Tool change applied to active file, reloading:', activeFile);
+                    setReloadTrigger(prev => prev + 1);
+                }
+            });
         };
 
         setupListeners();
 
         return () => {
             if (unlistenFileChanges) unlistenFileChanges();
+            if (unlistenChangeApplied) unlistenChangeApplied();
         };
     }, [activeFile]);
 

@@ -26,8 +26,6 @@ type PendingCommand = {
 
 const OSC_PREFIX_RAW = '\x1b]633;';
 const OSC_TERMINATOR_RAW = '\x07';
-const OSC_PREFIX_LITERAL = '\\x1b]633;';
-const OSC_TERMINATOR_LITERAL = '\\x07';
 const CMD_START_PREFIX = 'BLADE_CMD_START=';
 const CMD_EXIT_PREFIX = 'BLADE_CMD_EXIT=';
 
@@ -67,14 +65,27 @@ export function useCommandExecution() {
 
     const sendCommandToBlade = useCallback((pending: PendingCommand) => {
         const { callId, command, cwd } = pending;
+
+        // Build the command to send to the interactive terminal.
+        //
+        // We embed OSC 633 markers so we can detect command start/end in the terminal output.
+        // Previously, the markers used `printf '\\x1b]633;...'` which caused the shell to echo
+        // raw escape literals (\x1b) in the prompt — visible as garbage in the terminal.
+        //
+        // Fix: Use $'...' ANSI-C quoting so the shell interprets \x1b and \x07 as real escape
+        // bytes at parse time. The prompt echo shows the $'...' syntax but NOT raw escape chars.
+        // We also wrap the markers in a subshell group to keep the visible command clean.
+
+        const startOsc = `$'\\x1b]633;${CMD_START_PREFIX}${callId}\\x07'`;
+        const exitOsc = `$'\\x1b]633;${CMD_EXIT_PREFIX}${callId};'`;
+
         const parts: string[] = [];
-        parts.push(`printf '${OSC_PREFIX_LITERAL}${CMD_START_PREFIX}${callId}${OSC_TERMINATOR_LITERAL}'`);
+        parts.push(`printf %s ${startOsc}`);
         if (cwd) {
             parts.push(`cd ${escapeShellArg(cwd)}`);
         }
         parts.push(command);
-        parts.push('exit_code=$?');
-        parts.push(`printf '${OSC_PREFIX_LITERAL}${CMD_EXIT_PREFIX}${callId};%s${OSC_TERMINATOR_LITERAL}' "$exit_code"`);
+        parts.push(`__e=$?; printf '%s%s' ${exitOsc} "$__e"; printf $'\\x07'`);
         const payload = `${parts.join('; ')}\n`;
 
         enqueueBladeInput(() => {

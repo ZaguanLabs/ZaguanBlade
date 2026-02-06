@@ -65,6 +65,18 @@ pub async fn handle_send_message<R: Runtime>(
     // Parse @commands and convert to tool calls
     let (actual_message, forced_tool) = parse_command(&message);
 
+    // Check for pending error feedback from previous turn (e.g. message too large)
+    // Prepend it as a system note so the model knows what happened
+    let actual_message = {
+        let mut feedback = state.pending_error_feedback.lock().unwrap();
+        if let Some(hint) = feedback.take() {
+            eprintln!("[SEND MSG] Prepending error feedback to message: {}", hint);
+            format!("[SYSTEM NOTE: {}]\n\n{}", hint, actual_message)
+        } else {
+            actual_message
+        }
+    };
+
     // 1. Add User Message
     {
         let mut conversation = state.conversation.lock().unwrap();
@@ -384,19 +396,14 @@ pub async fn handle_send_message<R: Runtime>(
                     .unwrap_or_default();
 
                 // Continue polling for done event
-            } else if let DrainResult::Update(msg, chunk) = result {
+            } else if let DrainResult::Update(msg_id, chunk) = result {
                 // Emit streaming chunk immediately for real-time updates
                 // v1.1: Use MessageDelta with sequence number
                 let mut mgr = state.chat_manager.lock().unwrap();
                 let seq = mgr.message_seq;
                 mgr.message_seq += 1;
-                // Get the message ID if possible, otherwise use a temporary one (chat manager should track this properly in future)
-                // For now, we assume the frontend can correlate by expecting a stream
-                let msg_id = msg
-                    .id
-                    .clone()
-                    .unwrap_or_else(|| "streaming-msg".to_string());
                 drop(mgr);
+                let msg_id = if msg_id.is_empty() { "streaming-msg".to_string() } else { msg_id };
 
                 // 2. Emit Blade v1.1 MessageDelta
                 let _ = window.emit(
@@ -418,15 +425,12 @@ pub async fn handle_send_message<R: Runtime>(
                         ),
                     },
                 );
-            } else if let DrainResult::Reasoning(msg, chunk) = result {
+            } else if let DrainResult::Reasoning(msg_id, chunk) = result {
                 let mut mgr = state.chat_manager.lock().unwrap();
                 let seq = mgr.message_seq;
                 mgr.message_seq += 1;
-                let msg_id = msg
-                    .id
-                    .clone()
-                    .unwrap_or_else(|| "streaming-msg".to_string());
                 drop(mgr);
+                let msg_id = if msg_id.is_empty() { "streaming-msg".to_string() } else { msg_id };
 
                 let _ = window.emit(
                     "blade-event",
@@ -607,15 +611,13 @@ pub async fn handle_send_message<R: Runtime>(
                     }),
                 );
             } else if let DrainResult::MessageTooLarge { message, recovery_hint } = result {
-                // Message size limit exceeded - emit event to frontend
+                // Message size limit exceeded - emit as chat-error (reliable) + store recovery hint
                 eprintln!("[LIB] Message too large: {} (hint: {})", message, recovery_hint);
-                let _ = window.emit(
-                    "message-too-large",
-                    serde_json::json!({
-                        "message": message,
-                        "recovery_hint": recovery_hint,
-                    }),
-                );
+                let error_text = format!("⚠️ Response too large: {} — {}", message, recovery_hint);
+                window.emit("chat-error", &error_text).unwrap_or_default();
+                // Store recovery hint so it gets prepended to the next user message
+                let state = app_handle.state::<AppState>();
+                *state.pending_error_feedback.lock().unwrap() = Some(recovery_hint);
             } else if let DrainResult::ToolCalls(calls, content) = result {
                 println!("Tools requested: {:?}. Executing...", calls.len());
                 let state = app_handle.state::<AppState>();

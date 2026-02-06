@@ -294,13 +294,14 @@ pub fn submit_command_result(
                     },
                 );
 
-                // Emit command-executed event with clean output for message blocks
+                // Emit command-executed event with RAW output for UI display
+                // (ansi-to-react will render ANSI color codes)
                 let _ = app_handle.emit(
                     events::event_names::COMMAND_EXECUTED,
                     events::CommandExecutedPayload {
                         command: cmd.command.clone(),
                         cwd: cmd.cwd.clone(),
-                        output: clean_output.clone(),
+                        output: output.clone(), // Use raw output with ANSI codes for UI
                         exit_code,
                         duration: None,
                         call_id: call_id.clone(),

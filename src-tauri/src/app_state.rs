@@ -49,6 +49,7 @@ pub struct AppState {
     pub tabs: Mutex<Vec<crate::core_state::TabInfo>>, // Headless: tab state
     pub active_tab_id: Mutex<Option<String>>, // Headless: active tab ID
     pub ws_connection: Arc<WsConnectionManager>, // Persistent WebSocket connection to zcoderd
+    pub pending_error_feedback: Mutex<Option<String>>, // Recovery hint to prepend to next user message
 }
 
 impl AppState {
@@ -195,6 +196,7 @@ impl AppState {
             tabs: Mutex::new(Vec::new()),
             active_tab_id: Mutex::new(None),
             ws_connection,
+            pending_error_feedback: Mutex::new(None),
         }
     }
 }

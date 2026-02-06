@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useCallback, useState, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useTranslation } from 'react-i18next';
-import { Check, X, Settings, Key } from 'lucide-react';
+import { Check, X, Settings, Key, Loader2 } from 'lucide-react';
 import { useCommandExecution } from '../hooks/useCommandExecution';
 import { useHistory } from '../hooks/useHistory';
 import type { ChatMessage as ChatMessageType, ModelInfo } from '../types/chat';
@@ -323,19 +323,53 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                             </div>
                         )}
 
-                        {/* Tool activity indicator - shows streaming tool progress */}
-                        {toolActivity && (
-                            <div className="px-4 py-2 flex items-center gap-2 text-xs text-zinc-400 animate-pulse">
-                                <span className="text-emerald-500">🔧</span>
-                                <span className="font-mono text-zinc-500">{toolActivity.toolName}</span>
-                                <span className="text-zinc-600">→</span>
-                                <span className="font-mono text-zinc-400 truncate max-w-[300px]" title={toolActivity.filePath}>
-                                    {toolActivity.filePath.length > 50 
-                                        ? '...' + toolActivity.filePath.slice(-47)
-                                        : toolActivity.filePath}
-                                </span>
-                            </div>
-                        )}
+                        {/* Tool activity indicator - shows streaming tool progress, styled like ToolCallDisplay */}
+                        {toolActivity && (() => {
+                            const prettyToolNames: Record<string, string> = {
+                                'write_file': 'Writing File',
+                                'read_file': 'Reading File',
+                                'apply_patch': 'Applying Code Changes',
+                                'create_file': 'Creating File',
+                                'edit_file': 'Editing File',
+                                'delete_file': 'Deleting File',
+                                'execute_command': 'Running Command',
+                                'run_command': 'Running Command',
+                                'search_files': 'Searching Code',
+                                'list_files': 'Listing Files',
+                                'grep_search': 'Searching Code',
+                                'find_by_name': 'Finding Files',
+                                'multi_edit': 'Multi-Edit File',
+                                'list_dir': 'Listing Directory',
+                                'list_directory': 'Listing Directory',
+                                'codebase_search': 'Searching Codebase',
+                                'get_workspace_structure': 'Analyzing Workspace',
+                                'view_file': 'Viewing File',
+                                'replace_file_content': 'Replacing Content',
+                                'multi_replace_file_content': 'Multi-Edit File',
+                                'write_to_file': 'Writing to File',
+                            };
+                            const prettyName = prettyToolNames[toolActivity.toolName] || toolActivity.toolName;
+                            const displayPath = toolActivity.filePath.split('/').pop() || toolActivity.filePath;
+                            return (
+                                <div className="px-4">
+                                    <div className="flex items-center gap-2 py-1 text-[11px] text-zinc-500">
+                                        <Loader2 className="w-3.5 h-3.5 text-blue-400 animate-spin" />
+                                        <span className="font-medium text-zinc-400">
+                                            {prettyName}
+                                        </span>
+                                        {displayPath && (
+                                            <span
+                                                className="text-[10px] text-zinc-500 truncate max-w-[260px]"
+                                                title={toolActivity.filePath}
+                                            >
+                                                {displayPath}
+                                            </span>
+                                        )}
+                                        <span className="text-[9px] text-blue-400 animate-pulse">running...</span>
+                                    </div>
+                                </div>
+                            );
+                        })()}
 
                         {error && (
                             <div className="p-3 mx-4 mb-4 bg-red-500/5 border border-red-500/20 text-red-400 rounded-sm text-xs font-mono">
