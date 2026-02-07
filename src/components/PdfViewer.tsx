@@ -1,9 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
+import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Maximize2, FileText } from 'lucide-react';
 import { readFile } from '@tauri-apps/plugin-fs';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+// Use the Vite-bundled worker URL. In Tauri's custom protocol (tauri://),
+// PDF.js's origin check fails and it wraps the URL in a blob with
+// `await import(url)` — which works correctly with Vite's hashed asset URLs.
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(pdfjsWorkerUrl, import.meta.url).href;
 
 interface PdfViewerProps {
     filePath: string;
@@ -34,7 +38,12 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
                 console.log('[PDF] File read successfully, size:', fileData.length, 'bytes');
                 
                 // Load the PDF from the binary data (fileData is already Uint8Array)
-                const loadingTask = pdfjsLib.getDocument({ data: fileData });
+                const loadingTask = pdfjsLib.getDocument({
+                    data: fileData,
+                    useWorkerFetch: false,
+                    isEvalSupported: false,
+                    useSystemFonts: true,
+                });
                 const pdf = await loadingTask.promise;
                 console.log('[PDF] PDF loaded successfully, pages:', pdf.numPages);
                 
