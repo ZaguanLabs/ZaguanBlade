@@ -3,6 +3,7 @@ use std::process::Command;
 use tauri::State;
 
 use crate::AppState;
+use crate::models::{ollama, openai_compat, registry};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -181,6 +182,67 @@ struct CommitContext {
     branch: Option<String>,
     last_commit_message: Option<String>,
     recent_commits: Vec<String>,
+}
+
+async fn load_available_models(state: &State<'_, AppState>) -> Vec<registry::ModelInfo> {
+    let (blade_url, api_key, ollama_enabled, ollama_url, openai_compat_enabled, openai_compat_url) = {
+        let config = state.config.lock().unwrap();
+        (
+            config.blade_url.clone(),
+            config.api_key.clone(),
+            config.ollama_enabled,
+            config.ollama_url.clone(),
+            config.openai_compat_enabled,
+            config.openai_compat_url.clone(),
+        )
+    };
+
+    let mut models = registry::get_models(&blade_url, &api_key).await;
+    if ollama_enabled {
+        let mut ollama_models = ollama::get_models(&ollama_url).await;
+        models.append(&mut ollama_models);
+    }
+
+    if openai_compat_enabled {
+        let mut openai_compat_models = openai_compat::get_models(&openai_compat_url).await;
+        models.append(&mut openai_compat_models);
+    }
+
+    models
+}
+
+fn resolve_model_id(models: &[registry::ModelInfo], requested_id: &str) -> String {
+    let matched = models
+        .iter()
+        .position(|m| m.id == requested_id)
+        .or_else(|| models.iter().position(|m| m.api_id.as_deref() == Some(requested_id)))
+        .or_else(|| {
+            let id_lower = requested_id.to_lowercase();
+            models
+                .iter()
+                .position(|m| m.id.to_lowercase() == id_lower)
+                .or_else(|| {
+                    models.iter().position(|m| {
+                        m.api_id
+                            .as_ref()
+                            .map(|s| s.to_lowercase())
+                            .as_deref()
+                            == Some(&id_lower)
+                    })
+                })
+        });
+
+    if let Some(idx) = matched {
+        let model = &models[idx];
+        let provider = model.provider.as_deref().unwrap_or("");
+        if provider == "ollama" || provider == "openai-compat" {
+            model.id.clone()
+        } else {
+            model.api_id.as_ref().unwrap_or(&model.id).clone()
+        }
+    } else {
+        requested_id.to_string()
+    }
 }
 
 fn collect_changes_for_message(root: &str) -> Result<CommitContext, String> {
@@ -807,6 +869,9 @@ Respond with ONLY the commit message, nothing else."#,
         open_files: Vec::new(),
     };
 
+    let available_models = load_available_models(&state).await;
+    let resolved_model_id = resolve_model_id(&available_models, &model_id);
+
     // Use shared WebSocket connection manager from AppState
     let ws_manager = state.ws_connection.clone();
     
@@ -832,7 +897,7 @@ Respond with ONLY the commit message, nothing else."#,
 
     // Send the commit message generation request
     ws_manager
-        .send_message(None, model_id, prompt, None, Some(workspace_info))
+        .send_message(None, resolved_model_id, prompt, None, Some(workspace_info))
         .await
         .map_err(|e| format!("Failed to send message: {}", e))?;
 
