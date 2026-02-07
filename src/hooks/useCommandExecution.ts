@@ -24,16 +24,18 @@ type PendingCommand = {
     started: boolean;
 };
 
-const OSC_PREFIX_RAW = '\x1b]633;';
-const OSC_TERMINATOR_RAW = '\x07';
-const CMD_START_PREFIX = 'BLADE_CMD_START=';
-const CMD_EXIT_PREFIX = 'BLADE_CMD_EXIT=';
+// Plain-text sentinel markers — NO escape characters.
+// These are detected and stripped by the Rust terminal reader thread (terminal.rs)
+// before the output reaches xterm, so they never appear in the terminal display.
+// The Rust side emits dedicated events when it detects these sentinels.
+const SENTINEL_START = '##BLADE_CMD_START:';
+const SENTINEL_EXIT = '##BLADE_CMD_EXIT:';
+const SENTINEL_END = '##';
 
 export function useCommandExecution() {
     const [executions, setExecutions] = useState<Map<string, CommandExecution>>(new Map());
     const pendingCommandsRef = useRef<Map<string, PendingCommand>>(new Map());
     const activeCallIdRef = useRef<string | null>(null);
-    const oscBufferRef = useRef<string>('');
     const bladeReadyRef = useRef<boolean>(false);
     const pendingInputsRef = useRef<Array<() => void>>([]);
 
@@ -56,37 +58,33 @@ export function useCommandExecution() {
         queue.forEach(send => send());
     }, []);
 
-    const sanitizeOutput = useCallback((value: string) => {
-        return value
-            .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
-            .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, match => (match.endsWith('m') ? match : ''))
-            .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
-    }, []);
-
     const sendCommandToBlade = useCallback((pending: PendingCommand) => {
         const { callId, command, cwd } = pending;
 
         // Build the command to send to the interactive terminal.
         //
-        // We embed OSC 633 markers so we can detect command start/end in the terminal output.
-        // Previously, the markers used `printf '\\x1b]633;...'` which caused the shell to echo
-        // raw escape literals (\x1b) in the prompt — visible as garbage in the terminal.
+        // We use plain-text sentinel markers (no escape characters) to detect
+        // command start/end in the terminal output stream. The Rust terminal
+        // reader thread strips these sentinels before they reach xterm display
+        // and emits dedicated events for command tracking.
         //
-        // Fix: Use $'...' ANSI-C quoting so the shell interprets \x1b and \x07 as real escape
-        // bytes at parse time. The prompt echo shows the $'...' syntax but NOT raw escape chars.
-        // We also wrap the markers in a subshell group to keep the visible command clean.
-
-        const startOsc = `$'\\x1b]633;${CMD_START_PREFIX}${callId}\\x07'`;
-        const exitOsc = `$'\\x1b]633;${CMD_EXIT_PREFIX}${callId};'`;
+        // The sentinels are emitted via `echo` to stdout so they appear in the
+        // PTY output stream. The shell echoes the command line, but the Rust
+        // reader strips the sentinel echo lines too.
 
         const parts: string[] = [];
-        parts.push(`printf %s ${startOsc}`);
+        // Emit start sentinel to stdout (will be stripped by Rust)
+        parts.push(`echo '${SENTINEL_START}${callId}${SENTINEL_END}'`);
         if (cwd) {
             parts.push(`cd ${escapeShellArg(cwd)}`);
         }
         parts.push(command);
-        parts.push(`__e=$?; printf '%s%s' ${exitOsc} "$__e"; printf $'\\x07'`);
-        const payload = `${parts.join('; ')}\n`;
+        // Capture exit code and emit exit sentinel
+        parts.push(`__blade_ec=$?; echo '${SENTINEL_EXIT}${callId}:'"$__blade_ec"'${SENTINEL_END}'; exit $__blade_ec`);
+        // Use semicolons to join — this becomes a single shell command line
+        // Wrap in a subshell so `exit` doesn't kill the interactive shell
+        const innerCmd = parts.join('; ');
+        const payload = `( ${innerCmd} )\n`;
 
         enqueueBladeInput(() => {
             BladeDispatcher.terminal({
@@ -101,6 +99,8 @@ export function useCommandExecution() {
         let unlistenOutput: (() => void) | undefined;
         let unlistenExit: (() => void) | undefined;
         let unlistenBlade: (() => void) | undefined;
+        let unlistenCmdDetected: (() => void) | undefined;
+        let unlistenCmdExitDetected: (() => void) | undefined;
 
         const setupListeners = async () => {
             unlistenBlade = await listen<BladeEventEnvelope>('blade-event', (event) => {
@@ -131,6 +131,11 @@ export function useCommandExecution() {
                 };
                 pendingCommandsRef.current.set(event.payload.call_id, pending);
 
+                // Set active call immediately so output accumulation starts
+                // before the blade-cmd-started event arrives from Rust
+                pending.started = true;
+                activeCallIdRef.current = event.payload.call_id;
+
                 setExecutions(prev => {
                     const next = new Map(prev);
                     next.set(event.payload.call_id, {
@@ -149,87 +154,35 @@ export function useCommandExecution() {
                 sendCommandToBlade(pending);
             });
 
-            unlistenOutput = await listen<{ id: string; data: string }>('terminal-output', (event) => {
-                if (event.payload.id !== BLADE_TERMINAL_ID) return;
-                const parsed = parseBladeOutput(event.payload.data);
-                if (!parsed) return;
+            // Listen for sentinel-detected events from Rust terminal reader
+            // (confirmation only — activeCallIdRef is already set in command-execution-started)
+            unlistenCmdDetected = await listen<{ terminal_id: string; call_id: string }>('blade-cmd-started', (_event) => {
+                // No-op: output accumulation is already active
+            });
 
-                const { cleaned, startedIds, exited } = parsed;
-                startedIds.forEach(callId => {
-                    const pending = pendingCommandsRef.current.get(callId);
-                    if (pending) {
-                        pending.started = true;
-                        activeCallIdRef.current = callId;
-                    }
-                });
-
-                if (cleaned) {
-                    const activeCallId = activeCallIdRef.current;
-                    if (activeCallId) {
-                        const pending = pendingCommandsRef.current.get(activeCallId);
-                        if (pending) {
-                            pending.output += sanitizeOutput(cleaned);
-                        }
+            unlistenCmdExitDetected = await listen<{ terminal_id: string; call_id: string; exit_code: number; output: string }>('blade-cmd-exited', (event) => {
+                if (event.payload.terminal_id !== BLADE_TERMINAL_ID) return;
+                const { call_id: callId, exit_code: exitCode, output: cmdOutput } = event.payload;
+                const pending = pendingCommandsRef.current.get(callId);
+                if (pending) {
+                    // Use output accumulated in Rust (reliable, no race condition)
+                    handleCommandComplete(callId, cmdOutput, exitCode);
+                    pendingCommandsRef.current.delete(callId);
+                    if (activeCallIdRef.current === callId) {
+                        activeCallIdRef.current = null;
                     }
                 }
-
-                exited.forEach(({ callId, exitCode }) => {
-                    const pending = pendingCommandsRef.current.get(callId);
-                    if (pending) {
-                        handleCommandComplete(callId, pending.output, exitCode);
-                        pendingCommandsRef.current.delete(callId);
-                        if (activeCallIdRef.current === callId) {
-                            activeCallIdRef.current = null;
-                        }
-                    }
-                });
             });
+
+            // terminal-output events are used by Terminal.tsx for display.
+            // Output accumulation for command results is handled in Rust.
+            unlistenOutput = undefined;
 
             unlistenExit = await listen<{ id: string; exit_code: number }>('terminal-exit', (event) => {
                 if (event.payload.id === BLADE_TERMINAL_ID) {
                     bladeReadyRef.current = false;
                 }
             });
-        };
-
-        const parseBladeOutput = (data: string) => {
-            const combined = `${oscBufferRef.current}${data}`;
-            oscBufferRef.current = '';
-            let cursor = 0;
-            let cleaned = '';
-            const startedIds: string[] = [];
-            const exited: Array<{ callId: string; exitCode: number }> = [];
-
-            while (cursor < combined.length) {
-                const startIdx = combined.indexOf(OSC_PREFIX_RAW, cursor);
-                if (startIdx === -1) {
-                    cleaned += combined.slice(cursor);
-                    break;
-                }
-
-                cleaned += combined.slice(cursor, startIdx);
-                const endIdx = combined.indexOf(OSC_TERMINATOR_RAW, startIdx);
-                if (endIdx === -1) {
-                    oscBufferRef.current = combined.slice(startIdx);
-                    break;
-                }
-
-                const payload = combined.slice(startIdx + OSC_PREFIX_RAW.length, endIdx);
-                if (payload.startsWith(CMD_START_PREFIX)) {
-                    startedIds.push(payload.slice(CMD_START_PREFIX.length));
-                } else if (payload.startsWith(CMD_EXIT_PREFIX)) {
-                    const exitPayload = payload.slice(CMD_EXIT_PREFIX.length);
-                    const [callId, exitCodeRaw] = exitPayload.split(';');
-                    const exitCode = Number(exitCodeRaw);
-                    if (callId) {
-                        exited.push({ callId, exitCode: Number.isNaN(exitCode) ? 1 : exitCode });
-                    }
-                }
-
-                cursor = endIdx + OSC_TERMINATOR_RAW.length;
-            }
-
-            return { cleaned, startedIds, exited };
         };
 
         setupListeners();
@@ -239,6 +192,8 @@ export function useCommandExecution() {
             if (unlistenOutput) unlistenOutput();
             if (unlistenExit) unlistenExit();
             if (unlistenBlade) unlistenBlade();
+            if (unlistenCmdDetected) unlistenCmdDetected();
+            if (unlistenCmdExitDetected) unlistenCmdExitDetected();
         };
     }, [flushPendingInputs, sendCommandToBlade]);
 

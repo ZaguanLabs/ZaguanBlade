@@ -157,18 +157,91 @@ pub fn create_terminal<R: Runtime>(
     let ptys_arc = state.ptys.clone();
 
     thread::spawn(move || {
-        let mut buffer = [0u8; 1024];
+        let mut buffer = [0u8; 4096];
         let mut pending_osc = String::new();
+        let mut line_buffer = String::new();
+        // Track active command: accumulate output between start/exit sentinels
+        let mut active_cmd: Option<String> = None; // call_id of active command
+        let mut cmd_output_buffer = String::new();
+
+        let emit_output = |app: &tauri::AppHandle<R>, id: &str, data: String, seq: &Arc<Mutex<u64>>| {
+            if data.is_empty() { return; }
+            let _seq = {
+                let mut seq_guard = seq.lock().unwrap();
+                let current = *seq_guard;
+                *seq_guard += 1;
+                current
+            };
+            let payload = TerminalOutput {
+                id: id.to_string(),
+                data,
+            };
+            let _ = app.emit("terminal-output", payload);
+        };
+
+        let process_chunk = |processable: &str,
+                             app: &tauri::AppHandle<R>,
+                             id: &str,
+                             seq: &Arc<Mutex<u64>>,
+                             active_cmd: &mut Option<String>,
+                             cmd_output_buffer: &mut String| {
+            let sentinel_result = strip_blade_sentinels(processable);
+
+            // Order matters! Within a single chunk the start sentinel appears
+            // before the command output which appears before the exit sentinel.
+            //
+            // 1. Process STARTED sentinels first → sets active_cmd so output
+            //    accumulation works for output in this same chunk.
+            for call_id in &sentinel_result.started {
+                *active_cmd = Some(call_id.clone());
+                cmd_output_buffer.clear();
+                let _ = app.emit(
+                    "blade-cmd-started",
+                    BladeCmdStarted {
+                        terminal_id: id.to_string(),
+                        call_id: call_id.clone(),
+                    },
+                );
+            }
+
+            // 2. Emit cleaned output for terminal display AND accumulate for
+            //    the active command (active_cmd is now set if start was in this chunk).
+            if !sentinel_result.cleaned.is_empty() {
+                if active_cmd.is_some() {
+                    cmd_output_buffer.push_str(&sentinel_result.cleaned);
+                }
+                emit_output(app, id, sentinel_result.cleaned, seq);
+            }
+
+            // 3. Process EXITED sentinels last → takes the accumulated output.
+            for (call_id, exit_code) in &sentinel_result.exited {
+                let output = std::mem::take(cmd_output_buffer);
+                if active_cmd.as_deref() == Some(call_id.as_str()) {
+                    *active_cmd = None;
+                }
+                let _ = app.emit(
+                    "blade-cmd-exited",
+                    BladeCmdExited {
+                        terminal_id: id.to_string(),
+                        call_id: call_id.clone(),
+                        exit_code: *exit_code,
+                        output,
+                    },
+                );
+            }
+        };
+
         loop {
             match reader.read(&mut buffer) {
                 Ok(n) if n > 0 => {
-                    let output = String::from_utf8_lossy(&buffer[..n]).to_string();
+                    let raw_output = String::from_utf8_lossy(&buffer[..n]).to_string();
 
+                    // Extract OSC 7 cwd updates
                     let combined = if pending_osc.is_empty() {
-                        output.clone()
+                        raw_output.clone()
                     } else {
-                        let mut merged = pending_osc;
-                        merged.push_str(&output);
+                        let mut merged = std::mem::take(&mut pending_osc);
+                        merged.push_str(&raw_output);
                         merged
                     };
                     let (cwd_updates, new_pending) = extract_osc7_paths(&combined);
@@ -183,23 +256,39 @@ pub fn create_terminal<R: Runtime>(
                         );
                     }
 
-                    // v1.1: Increment sequence number
-                    let _seq = {
-                        let mut seq_guard = seq_counter.lock().unwrap();
-                        let current = *seq_guard;
-                        *seq_guard += 1;
-                        current
-                    };
+                    // Buffer lines for sentinel detection
+                    line_buffer.push_str(&raw_output);
 
-                    let payload = TerminalOutput {
-                        id: id_clone.clone(),
-                        data: output,
-                    };
-                    // Emit 'terminal-output' event (legacy format)
-                    let _ = app_handle_clone.emit("terminal-output", payload);
+                    if let Some(last_newline) = line_buffer.rfind('\n') {
+                        let processable = line_buffer[..=last_newline].to_string();
+                        line_buffer = line_buffer[last_newline + 1..].to_string();
+                        process_chunk(&processable, &app_handle_clone, &id_clone, &seq_counter,
+                                      &mut active_cmd, &mut cmd_output_buffer);
+                    } else if line_buffer.len() > 8192 {
+                        // Large buffer without newlines — flush
+                        let flushed = std::mem::take(&mut line_buffer);
+                        process_chunk(&flushed, &app_handle_clone, &id_clone, &seq_counter,
+                                      &mut active_cmd, &mut cmd_output_buffer);
+                    }
                 }
-                Ok(_) => break,  // EOF
-                Err(_) => break, // Error
+                Ok(_) => {
+                    // EOF — flush remaining
+                    if !line_buffer.is_empty() {
+                        let flushed = std::mem::take(&mut line_buffer);
+                        process_chunk(&flushed, &app_handle_clone, &id_clone, &seq_counter,
+                                      &mut active_cmd, &mut cmd_output_buffer);
+                    }
+                    break;
+                }
+                Err(_) => {
+                    // Error — flush remaining
+                    if !line_buffer.is_empty() {
+                        let flushed = std::mem::take(&mut line_buffer);
+                        process_chunk(&flushed, &app_handle_clone, &id_clone, &seq_counter,
+                                      &mut active_cmd, &mut cmd_output_buffer);
+                    }
+                    break;
+                }
             }
         }
 
@@ -291,6 +380,89 @@ struct TerminalOutput {
 struct TerminalExit {
     id: String,
     exit_code: i32,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct BladeCmdStarted {
+    terminal_id: String,
+    call_id: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct BladeCmdExited {
+    terminal_id: String,
+    call_id: String,
+    exit_code: i32,
+    output: String,
+}
+
+// Sentinel markers used by the command execution system.
+// These are plain-text strings (no escape characters) that are echoed to stdout
+// by the shell command wrapper. The terminal reader thread detects and strips them.
+const SENTINEL_START: &str = "##BLADE_CMD_START:";
+const SENTINEL_EXIT: &str = "##BLADE_CMD_EXIT:";
+const SENTINEL_END: &str = "##";
+
+/// Strip BLADE sentinel markers from terminal output.
+/// Returns the cleaned output and any detected sentinel events.
+/// Also strips the shell echo of the command line containing sentinels.
+struct SentinelResult {
+    cleaned: String,
+    started: Vec<String>,       // call_ids
+    exited: Vec<(String, i32)>, // (call_id, exit_code)
+}
+
+fn strip_blade_sentinels(input: &str) -> SentinelResult {
+    let mut cleaned = String::with_capacity(input.len());
+    let mut started = Vec::new();
+    let mut exited = Vec::new();
+
+    for line in input.split_inclusive('\n') {
+        // Robust sentinel detection even if the sentinel appears mid-line
+        // (e.g. prompt/ANSI prefixes or no newline before exit sentinel).
+        if let Some(start_idx) = line.find(SENTINEL_START) {
+            let rest = &line[start_idx + SENTINEL_START.len()..];
+            if let Some(end_rel) = rest.find(SENTINEL_END) {
+                let call_id = &rest[..end_rel];
+                started.push(call_id.to_string());
+                // Drop the entire line to avoid showing sentinel artifacts
+                continue;
+            }
+        }
+
+        if let Some(exit_idx) = line.find(SENTINEL_EXIT) {
+            let rest = &line[exit_idx + SENTINEL_EXIT.len()..];
+            if let Some(end_rel) = rest.find(SENTINEL_END) {
+                let payload = &rest[..end_rel];
+                if let Some((call_id, exit_str)) = payload.rsplit_once(':') {
+                    let exit_code = exit_str.parse::<i32>().unwrap_or(1);
+                    exited.push((call_id.to_string(), exit_code));
+
+                    // Preserve any output before/after the sentinel on this line.
+                    // This handles commands that don't end with a newline.
+                    let prefix = &line[..exit_idx];
+                    let suffix_start = exit_idx + SENTINEL_EXIT.len() + end_rel + SENTINEL_END.len();
+                    let suffix = line.get(suffix_start..).unwrap_or("");
+                    if !prefix.is_empty() {
+                        cleaned.push_str(prefix);
+                    }
+                    if !suffix.is_empty() {
+                        cleaned.push_str(suffix);
+                    }
+                    continue;
+                }
+            }
+        }
+
+        // Strip echoed command lines that contain sentinel text but didn't parse
+        if line.contains(SENTINEL_START) || line.contains(SENTINEL_EXIT) {
+            continue;
+        }
+
+        cleaned.push_str(line);
+    }
+
+    SentinelResult { cleaned, started, exited }
 }
 
 fn ensure_zsh_zdotdir() -> Option<String> {

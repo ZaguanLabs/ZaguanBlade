@@ -610,7 +610,9 @@ export function useChat() {
                                     const existingTools = msg.tool_calls || [];
                                     const toolIndex = existingTools.findIndex(tc => tc.id === tool_call_id);
                                     let newTools = [...existingTools];
-                                    let newBlocks = [...(msg.blocks || [])];
+                                    // Preserve any in-flight text/reasoning blocks from blocksRef
+                                    const liveBlocks = blocksRef.current.get(message_id);
+                                    let newBlocks = liveBlocks ? [...liveBlocks] : [...(msg.blocks || [])];
 
                                     if (toolIndex >= 0) {
                                         // Update existing tool
@@ -620,7 +622,11 @@ export function useChat() {
                                     } else {
                                         // Add new tool call
                                         if (tool_call) {
-                                            const contentBefore = msg.content_before_tools !== undefined ? msg.content_before_tools : msg.content;
+                                            const contentBefore = msg.content_before_tools !== undefined
+                                                ? msg.content_before_tools
+                                                : (accumulatedContentRef.current.id === message_id
+                                                    ? accumulatedContentRef.current.content
+                                                    : msg.content);
                                             // Check if block already exists (idempotency safety)
                                             if (!newBlocks.some(b => b.type === 'tool_call' && b.id === tool_call_id)) {
                                                 newBlocks.push({ type: 'tool_call', id: tool_call_id });

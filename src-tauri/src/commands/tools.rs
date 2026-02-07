@@ -5,21 +5,57 @@ use crate::workflow_controller::check_batch_completion;
 use regex::Regex;
 use tauri::{Emitter, Manager, Runtime, State, Window};
 
-/// Strip ANSI escape codes from terminal output for clean display in chat
+/// Strip ANSI escape codes and BLADE command scaffolding from terminal output
+/// for clean display in chat and AI context.
 fn strip_ansi_codes(input: &str) -> String {
-    // Match ANSI escape sequences:
-    // - CSI sequences: \x1b[ followed by parameters and a letter
-    // - OSC sequences: \x1b] followed by content and terminated by \x07 or \x1b\\
-    // - Other escape sequences: \x1b followed by various characters
+    // 1. Strip ANSI escape sequences
     let ansi_regex = Regex::new(
         r"(?x)
-        \x1b\[[0-9;?]*[A-Za-z]|     # CSI sequences (colors, cursor, etc.)
-        \x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|  # OSC sequences
-        \x1b[PX^_][^\x1b]*\x1b\\|   # DCS, SOS, PM, APC sequences
-        \x1b[\x20-\x2f]*[\x30-\x7e] # Other escape sequences
+        \x1b\[[0-9;?]*[A-Za-z]|           # CSI sequences (colors, cursor, etc.)
+        \x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|# OSC sequences
+        \x1b[PX^_][^\x1b]*\x1b\\|         # DCS, SOS, PM, APC sequences
+        \x1b[\x20-\x2f]*[\x30-\x7e]       # Other escape sequences
         "
-    ).unwrap();
-    ansi_regex.replace_all(input, "").to_string()
+    )
+    .unwrap();
+    let result = ansi_regex.replace_all(input, "").to_string();
+
+    // 2. Strip BLADE command marker scaffolding (from shell echo)
+    let blade_regex = Regex::new(
+        r"(?x)
+        printf\s+%s\s+\$'[^']*BLADE_CMD[^']*'[;\s]*|                           # Start marker printf
+        __e=\$\?;\s*printf\s+'%s%s'\s+\$'[^']*BLADE_CMD[^']*'\s+\x22\$__e\x22;\s*printf\s+\$'[^']*'  # Exit marker printf
+        "
+    )
+    .unwrap();
+    let result = blade_regex.replace_all(&result, "").to_string();
+
+    // 3. Strip stray control characters (keep \n, \r, \t)
+    let control_regex = Regex::new(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]").unwrap();
+    let result = control_regex.replace_all(&result, "").to_string();
+
+    // 4. Strip any remaining bare ESC bytes (all known sequences already stripped above)
+    let result = result.replace('\x1b', "");
+
+    // 5. Strip orphaned CSI bracket sequences where ESC byte is already gone
+    //    These look like: [0m, [1m, [38;5;4m, [0;1m, [38;5;2m, [39;49m etc.
+    let orphan_regex = Regex::new(r"\[([0-9;?]*)([A-Za-z])").unwrap();
+    let result = orphan_regex.replace_all(&result, |caps: &regex::Captures| {
+        let params = caps.get(1).map_or("", |m| m.as_str());
+        // Only strip if params are purely digits/semicolons/question marks (ANSI CSI params)
+        if params.chars().all(|c| c.is_ascii_digit() || c == ';' || c == '?') {
+            String::new()
+        } else {
+            caps[0].to_string()
+        }
+    }).to_string();
+
+    // 6. Strip BEL characters
+    let result = result.replace('\x07', "");
+
+    // 7. Clean up excessive blank lines
+    let cleanup_regex = Regex::new(r"\n{3,}").unwrap();
+    cleanup_regex.replace_all(&result, "\n\n").trim().to_string()
 }
 
 // #[tauri::command]

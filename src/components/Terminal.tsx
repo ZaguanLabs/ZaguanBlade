@@ -12,6 +12,16 @@ import { useContextMenu, ContextMenuItem } from "./ui/ContextMenu";
 import { Copy, ClipboardPaste, Trash2, MessageSquare } from "lucide-react";
 import { BLADE_TERMINAL_ID } from "../constants/terminal";
 
+/**
+ * Strip any remaining BLADE sentinel artifacts from terminal output.
+ * The Rust terminal reader thread handles the primary sentinel stripping,
+ * but the v1.1 blade-event path bypasses that, so we catch stragglers here.
+ */
+function sanitizeTerminalOutput(data: string): string {
+    // Strip lines containing BLADE sentinel markers
+    return data.replace(/^.*##BLADE_CMD_(?:START|EXIT):.*##.*$/gm, '');
+}
+
 interface TerminalProps {
     id?: string;
     cwd?: string;
@@ -224,7 +234,8 @@ export default function Terminal({ id = "main-terminal", cwd }: TerminalProps) {
             terminalBufferRef.current = new TerminalBuffer(
                 (termId, data) => {
                     if (termId === id && xtermRef.current) {
-                        xtermRef.current.write(data);
+                        const cleaned = sanitizeTerminalOutput(data);
+                        if (cleaned) xtermRef.current.write(cleaned);
                     }
                 }
             );
@@ -235,7 +246,8 @@ export default function Terminal({ id = "main-terminal", cwd }: TerminalProps) {
             "terminal-output",
             (event) => {
                 if (event.payload.id === id) {
-                    term.write(event.payload.data);
+                    const cleaned = sanitizeTerminalOutput(event.payload.data);
+                    if (cleaned) term.write(cleaned);
                 }
             }
         );
