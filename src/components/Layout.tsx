@@ -862,9 +862,9 @@ const AppLayoutInner: React.FC = () => {
                         <Clock className="w-5 h-5" />
                     </div>
                     <div
-                        title="Search"
+                        title="Search (coming soon)"
                         aria-label="Search"
-                        className="relative p-2 rounded-md text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)] transition-all duration-[var(--transition-fast)] cursor-pointer"
+                        className="hidden relative p-2 rounded-md text-[var(--fg-nav)] opacity-40 cursor-not-allowed transition-all duration-[var(--transition-fast)]"
                     >
                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -1065,15 +1065,11 @@ const AppLayoutInner: React.FC = () => {
 
             {/* Status Bar */}
             <div className="h-6 bg-[var(--bg-panel)] border-t border-[var(--border-subtle)] text-[var(--fg-tertiary)] flex items-center px-3 text-[10px] font-mono justify-between select-none z-40">
-                <div className="relative flex-1 flex flex-col">
+                <div className="flex items-center gap-1.5">
                     <span className="flex items-center gap-1.5 hover:text-[var(--fg-secondary)] cursor-pointer transition-colors duration-[var(--transition-fast)]">
-                        <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></svg>
-                        main*
+                        <GitBranch className="w-3 h-3" />
+                        {gitStatus?.branch ?? 'no branch'}{gitStatus?.dirty ? '*' : ''}
                     </span>
-                    <span className="text-[var(--fg-secondary)]">{(() => {
-                        const activeTab = tabs.find(tab => tab.id === activeTabId);
-                        return activeTab ? activeTab.title : t('editor.noFileOpen');
-                    })()}</span>
                 </div>
                 <div className="flex items-center gap-4 opacity-70">
                     {/* Saving Indicator */}
@@ -1081,7 +1077,22 @@ const AppLayoutInner: React.FC = () => {
                         <span className="text-emerald-500 animate-pulse font-semibold">Saving...</span>
                     )}
                     <span>{t('editor.encoding')}</span>
-                    <span>Rust</span>
+                    <span>{(() => {
+                        const activeTab = tabs.find(tab => tab.id === activeTabId);
+                        if (!activeTab?.path) return null;
+                        const ext = activeTab.path.split('.').pop()?.toLowerCase();
+                        const langMap: Record<string, string> = {
+                            rs: 'Rust', ts: 'TypeScript', tsx: 'TypeScript React', js: 'JavaScript', jsx: 'JavaScript React',
+                            py: 'Python', rb: 'Ruby', go: 'Go', java: 'Java', kt: 'Kotlin', swift: 'Swift',
+                            c: 'C', cpp: 'C++', h: 'C Header', hpp: 'C++ Header', cs: 'C#',
+                            html: 'HTML', css: 'CSS', scss: 'SCSS', less: 'Less', json: 'JSON', yaml: 'YAML', yml: 'YAML',
+                            xml: 'XML', md: 'Markdown', toml: 'TOML', sql: 'SQL', sh: 'Shell', bash: 'Bash',
+                            lua: 'Lua', zig: 'Zig', dart: 'Dart', php: 'PHP', r: 'R',
+                            svelte: 'Svelte', vue: 'Vue', astro: 'Astro',
+                            txt: 'Plain Text', csv: 'CSV', svg: 'SVG',
+                        };
+                        return langMap[ext ?? ''] ?? ext?.toUpperCase() ?? null;
+                    })()}</span>
                     <span>{t('app.name')}</span>
                 </div>
             </div>
