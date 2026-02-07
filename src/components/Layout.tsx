@@ -86,6 +86,37 @@ const AppLayoutInner: React.FC = () => {
     const processingFilesRef = useRef<Set<string>>(new Set());
     const terminalPaneRef = useRef<TerminalPaneHandle>(null);
 
+    // Tab history stack: tracks previously active tabs for "go back" on close
+    const tabHistoryRef = useRef<string[]>([]);
+
+    // Push to history whenever the active tab changes
+    useEffect(() => {
+        if (activeTabId) {
+            const history = tabHistoryRef.current;
+            // Don't push duplicates at the top
+            if (history[history.length - 1] !== activeTabId) {
+                history.push(activeTabId);
+                // Cap at 50 entries to avoid unbounded growth
+                if (history.length > 50) history.shift();
+            }
+        }
+    }, [activeTabId]);
+
+    // Pop the history stack to find the most recent tab that's still open
+    const popTabHistory = (closedId: string, openTabs: Tab[]): string | null => {
+        const history = tabHistoryRef.current;
+        const openIds = new Set(openTabs.filter(t => t.id !== closedId).map(t => t.id));
+        while (history.length > 0) {
+            const prev = history.pop()!;
+            if (prev !== closedId && openIds.has(prev)) {
+                return prev;
+            }
+        }
+        // Fallback: pick the last remaining tab, or null
+        const remaining = openTabs.filter(t => t.id !== closedId);
+        return remaining.length > 0 ? remaining[remaining.length - 1].id : null;
+    };
+
     // Sync active tab to EditorContext
     const { setActiveFile } = useEditor();
     useEffect(() => {
@@ -112,8 +143,14 @@ const AppLayoutInner: React.FC = () => {
                     });
                 } else if (editorEvent.type === 'TabClosed') {
                     const closedId = editorEvent.payload.tab_id;
-                    setTabs(prev => prev.filter(t => t.id !== closedId));
-                    setActiveTabId(prev => prev === closedId ? null : prev);
+                    setTabs(prev => {
+                        const remaining = prev.filter(t => t.id !== closedId);
+                        setActiveTabId(prevActive => {
+                            if (prevActive !== closedId) return prevActive;
+                            return popTabHistory(closedId, prev);
+                        });
+                        return remaining;
+                    });
                 } else if (editorEvent.type === 'ActiveTabChanged') {
                     setActiveTabId(editorEvent.payload.tab_id);
                 } else if (editorEvent.type === 'TabsReordered') {
@@ -396,10 +433,10 @@ const AppLayoutInner: React.FC = () => {
         if (isTabsBackendAuthoritative()) {
             EditorFacade.closeTab(tabId).catch(console.error);
         } else {
-            setTabs(prev => prev.filter(t => t.id !== tabId));
             if (activeTabId === tabId) {
-                setActiveTabId(tabs.length > 1 ? tabs[0].id : null);
+                setActiveTabId(popTabHistory(tabId, tabs));
             }
+            setTabs(prev => prev.filter(t => t.id !== tabId));
         }
     };
 
