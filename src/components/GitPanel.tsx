@@ -47,11 +47,6 @@ export const GitPanel: React.FC<GitPanelProps> = ({
     onGenerateCommitMessage,
     onCommitPreflight,
 }) => {
-    const isRepo = status?.isRepo ?? false;
-    const changedCount = status?.changedCount ?? 0;
-    const stagedCount = status?.stagedCount ?? 0;
-    const canCommit = commitMessage.trim().length > 0 && changedCount > 0;
-
     const [commitMessage, setCommitMessage] = useState('');
     const [actionError, setActionError] = useState<string | null>(null);
     const [preflightWarning, setPreflightWarning] = useState<string | null>(null);
@@ -59,6 +54,11 @@ export const GitPanel: React.FC<GitPanelProps> = ({
     const [diffs, setDiffs] = useState<DiffState>({});
     const [stagedExpanded, setStagedExpanded] = useState(true);
     const [unstagedExpanded, setUnstagedExpanded] = useState(true);
+
+    const isRepo = status?.isRepo ?? false;
+    const changedCount = status?.changedCount ?? 0;
+    const stagedCount = status?.stagedCount ?? 0;
+    const canCommit = commitMessage.trim().length > 0 && changedCount > 0;
 
     const stagedFiles = useMemo(
         () => files.filter(file => file.staged),
