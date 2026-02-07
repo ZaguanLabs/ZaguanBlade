@@ -1,12 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ChevronDown, Plus, Monitor, Scan } from 'lucide-react';
+import { ChevronDown, Plus, Monitor, Scan, ImageUp } from 'lucide-react';
 
 interface FeatureMenuProps {
     onScreenshot: (mode: 'window' | 'region') => void;
+    onUploadImage: () => void;
     disabled?: boolean;
 }
 
-export const FeatureMenu: React.FC<FeatureMenuProps> = ({ onScreenshot, disabled }) => {
+export const FeatureMenu: React.FC<FeatureMenuProps> = ({ onScreenshot, onUploadImage, disabled }) => {
     const [isOpen, setIsOpen] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
 
@@ -68,6 +69,21 @@ export const FeatureMenu: React.FC<FeatureMenuProps> = ({ onScreenshot, disabled
                     >
                         <Scan className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
                         <span>Capture Region</span>
+                    </button>
+                    <div className="my-1 border-t border-[var(--border-subtle)]/30" />
+                    <div className="px-2 py-1 text-[9px] uppercase tracking-wide text-[var(--fg-tertiary)]">
+                        Attach
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            onUploadImage();
+                            setIsOpen(false);
+                        }}
+                        className="w-full flex items-center gap-2 px-2 py-1.5 text-left text-xs text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--fg-primary)] transition-colors"
+                    >
+                        <ImageUp className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                        <span>Upload Image</span>
                     </button>
                 </div>
             )}

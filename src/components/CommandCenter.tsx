@@ -1,6 +1,8 @@
 import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-dialog';
+import { readFile } from '@tauri-apps/plugin-fs';
 import { Send, Square, BookOpen, Globe } from 'lucide-react';
 import { CompactModelSelector } from './CompactModelSelector';
 import { FeatureMenu } from './FeatureMenu';
@@ -219,6 +221,80 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
         }
     }, [handleRegionCapture, handleWindowCapture]);
 
+    const handleUploadImage = useCallback(async () => {
+        if (isLocalOnly) {
+            setAttachmentError('Image support requires a subscription. Go to Settings.');
+            return;
+        }
+        try {
+            const selected = await open({
+                multiple: true,
+                filters: [{
+                    name: 'Images',
+                    extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'],
+                }],
+            });
+            if (!selected) return;
+            const paths = Array.isArray(selected) ? selected : [selected];
+
+            const newAttachments: ImageAttachment[] = [];
+            const errors: string[] = [];
+
+            for (const filePath of paths) {
+                const bytes = await readFile(filePath);
+                const sizeError = validateImageByteLength(bytes.length);
+                if (sizeError) {
+                    errors.push(sizeError);
+                    continue;
+                }
+                const ext = filePath.split('.').pop()?.toLowerCase() || '';
+                const mimeMap: Record<string, string> = {
+                    png: 'image/png',
+                    jpg: 'image/jpeg',
+                    jpeg: 'image/jpeg',
+                    webp: 'image/webp',
+                    gif: 'image/gif',
+                };
+                const mimeType = mimeMap[ext] || 'image/png';
+                const mimeError = validateImageMimeType(mimeType);
+                if (mimeError) {
+                    errors.push(mimeError);
+                    continue;
+                }
+                // Convert Uint8Array to base64
+                let binary = '';
+                for (let i = 0; i < bytes.length; i++) {
+                    binary += String.fromCharCode(bytes[i]);
+                }
+                const base64 = btoa(binary);
+                const dataUrl = `data:${mimeType};base64,${base64}`;
+                const thumbnailUrl = await createThumbnailDataUrl(dataUrl, 64, 64);
+                const fileName = filePath.split('/').pop() || filePath.split('\\').pop() || 'image';
+                newAttachments.push({
+                    id: crypto.randomUUID(),
+                    dataUrl,
+                    data: base64,
+                    mime_type: mimeType,
+                    thumbnailUrl,
+                    name: fileName,
+                    size: bytes.length,
+                });
+            }
+
+            if (newAttachments.length > 0) {
+                setAttachments((prev) => [...prev, ...newAttachments]);
+            }
+            if (errors.length > 0) {
+                setAttachmentError(errors[0]);
+            } else if (newAttachments.length > 0) {
+                setAttachmentError(null);
+            }
+        } catch (error) {
+            console.error('[CommandCenter] Failed to upload image:', error);
+            setAttachmentError('Failed to upload image.');
+        }
+    }, [isLocalOnly]);
+
     const handleWindowSelect = useCallback(async (windowId: number) => {
         setWindowPickerLoading(true);
         try {
@@ -381,7 +457,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                     {/* Header */}
                     <div className="border-b border-[var(--border-subtle)]/50 px-2 py-1">
                         <div className="flex items-center justify-between gap-2">
-                            <FeatureMenu onScreenshot={handleScreenshot} disabled={disabled} />
+                            <FeatureMenu onScreenshot={handleScreenshot} onUploadImage={handleUploadImage} disabled={disabled} />
                             <div className="flex-1" />
                             <div className="w-[170px] max-w-[45%] shrink-0">
                                 <CompactModelSelector
