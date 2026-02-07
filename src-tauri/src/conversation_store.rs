@@ -32,6 +32,8 @@ pub struct SerializableChatMessage {
     pub role: String,
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub images: Option<Vec<crate::protocol::ChatImage>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
@@ -47,6 +49,7 @@ impl From<&ChatMessage> for SerializableChatMessage {
                 ChatRole::Tool => "tool".to_string(),
             },
             content: msg.content.clone(),
+            images: msg.images.clone(),
             reasoning: msg.reasoning.clone(),
             tool_call_id: msg.tool_call_id.clone(),
         }
@@ -65,6 +68,7 @@ impl From<SerializableChatMessage> for ChatMessage {
             },
             msg.content,
         );
+        chat_msg.images = msg.images;
         chat_msg.reasoning = msg.reasoning;
         chat_msg.tool_call_id = msg.tool_call_id;
         chat_msg

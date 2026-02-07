@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { listen, emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { BladeDispatcher } from '../services/blade';
-import type { ChatMessage, ModelInfo, ToolCall } from '../types/chat';
+import type { ChatMessage, ImageAttachment, ModelInfo, ToolCall } from '../types/chat';
 import type { Change } from '../types/change';
 import { EventNames, type RequestConfirmationPayload, type StructuredAction, type ChangeAppliedPayload, type AllEditsAppliedPayload, type ToolExecutionCompletedPayload } from '../types/events';
 import { useEditor } from '../contexts/EditorContext';
@@ -698,9 +698,9 @@ export function useChat() {
         };
     }, [queueMessageUpdate, flushPendingUpdates]);
 
-    const [messageQueue, setMessageQueue] = useState<string[]>([]);
+    const [messageQueue, setMessageQueue] = useState<{ text: string; attachments?: ImageAttachment[] }[]>([]);
 
-    const dispatchToBackend = useCallback(async (text: string) => {
+    const dispatchToBackend = useCallback(async (text: string, attachments?: ImageAttachment[]) => {
         try {
             setLoading(true);
             setError(null);
@@ -717,6 +717,12 @@ export function useChat() {
                 payload: {
                     content: text,
                     model: selectedModelIdRef.current,
+                    images: attachments?.map((attachment) => ({
+                        data: attachment.data,
+                        mime_type: attachment.mime_type,
+                        name: attachment.name,
+                        size: attachment.size,
+                    })),
                     context: {
                         active_file: safeActiveFile, // Use active tab file as context
                         open_files: openFiles,
@@ -746,25 +752,26 @@ export function useChat() {
         console.log('[TRIPWIRE] Queue effect - loading:', loading, 'queueLength:', messageQueue.length);
         if (!loading && messageQueue.length > 0) {
             const nextMessage = messageQueue[0];
-            console.log('[TRIPWIRE] Processing queued message:', nextMessage.substring(0, 50));
+            console.log('[TRIPWIRE] Processing queued message:', nextMessage.text.substring(0, 50));
             setMessageQueue(prev => prev.slice(1));
-            dispatchToBackend(nextMessage);
+            dispatchToBackend(nextMessage.text, nextMessage.attachments);
         }
     }, [loading, messageQueue, dispatchToBackend]);
 
-    const sendMessage = useCallback((text: string) => {
+    const sendMessage = useCallback((text: string, attachments?: ImageAttachment[]) => {
         console.log('[TRIPWIRE] sendMessage called - loading:', loading, 'text:', text.substring(0, 50));
         // Optimistically add user message
         const userMsg: ChatMessage = {
             id: crypto.randomUUID(),
             role: 'User',
-            content: text
+            content: text,
+            images: attachments
         };
         setMessages(prev => [...prev, userMsg]);
 
         // Add to queue for processing
         console.log('[TRIPWIRE] Adding message to queue');
-        setMessageQueue(prev => [...prev, text]);
+        setMessageQueue(prev => [...prev, { text, attachments }]);
     }, [loading]);
     const stopGeneration = useCallback(async () => {
         try {

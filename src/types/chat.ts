@@ -2,10 +2,24 @@ import { TodoItem } from './events';
 
 export type ChatRole = 'User' | 'Assistant' | 'System' | 'Tool';
 
+export interface ChatImage {
+    data: string;
+    mime_type: string;
+    name?: string;
+    size?: number;
+}
+
+export interface ImageAttachment extends ChatImage {
+    id: string;
+    dataUrl: string;
+    thumbnailUrl: string;
+}
+
 export interface ChatMessage {
     id?: string;
     role: 'User' | 'Assistant' | 'System' | 'Tool';
     content: string;
+    images?: ChatImage[];
     reasoning?: string;
     tool_call_id?: string;
     tool_calls?: ToolCall[];

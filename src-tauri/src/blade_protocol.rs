@@ -87,6 +87,8 @@ pub enum ChatIntent {
         content: String,
         model: String,
         #[serde(default)]
+        images: Option<Vec<crate::protocol::ChatImage>>,
+        #[serde(default)]
         context: Option<EditorContext>,
     },
     StopGeneration {},
@@ -627,6 +629,7 @@ mod tests {
         let intent = BladeIntent::Chat(ChatIntent::SendMessage {
             content: "Hello World".to_string(),
             model: "gwt-5".to_string(),
+            images: None,
             context: None,
         });
 

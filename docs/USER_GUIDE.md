@@ -243,7 +243,28 @@ Right-click on files/folders in the explorer:
 
 ---
 
-## 10. Privacy & Data
+## 10. Screenshot Capture
+
+You can attach screenshots to your chat messages to give the AI visual context. Access capture options from the **Feature Menu** (grid icon) in the Command Center.
+
+### Capture Modes
+
+*   **Capture Window**: Select a window from the picker and attach a full screenshot of it.
+*   **Capture Region**: Select a window, then drag to crop a specific region from it.
+
+### Platform Notes (Linux / X11)
+
+On X11-based desktops (e.g., Openbox, i3, Fluxbox), window capture has the following limitations:
+
+*   **Current workspace only**: The window picker only shows windows on your active workspace. Windows on other virtual desktops cannot be captured because X11 does not render off-screen windows.
+*   **Window must be visible**: The target window must be visible and not fully obscured by another window. If a window is covered, the capture may return a black image. **Click the window to bring it to the front before capturing.**
+*   **Compositors help**: If you run a compositor such as `picom` or `compton`, these limitations are largely eliminated — compositors maintain off-screen buffers for all windows, enabling capture of obscured or unfocused windows.
+
+These limitations do not apply to **Wayland** desktops (GNOME, KDE Plasma 6) or **macOS**, which use compositing by default.
+
+---
+
+## 11. Privacy & Data
 
 *   **No Telemetry**: Zaguán Blade does not collect usage telemetry.
 *   **Local Storage Mode**: When using local storage, your code and conversations never leave your machine.
@@ -251,7 +272,7 @@ Right-click on files/folders in the explorer:
 
 ---
 
-## 11. Support & Feedback
+## 12. Support & Feedback
 
 This is an **Alpha Release**. We define "Alpha" as "Feature incomplete, but good enough to be useful."
 

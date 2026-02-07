@@ -35,6 +35,7 @@ async fn load_available_models(state: &State<'_, AppState>) -> Vec<crate::models
 
 pub async fn handle_send_message<R: Runtime>(
     message: String,
+    images: Option<Vec<crate::protocol::ChatImage>>,
     model_id: Option<String>,
     active_file: Option<String>,
     open_files: Option<Vec<String>>,
@@ -80,10 +81,12 @@ pub async fn handle_send_message<R: Runtime>(
     // 1. Add User Message
     {
         let mut conversation = state.conversation.lock().unwrap();
-        conversation.push(crate::protocol::ChatMessage::new(
+        let mut chat_msg = crate::protocol::ChatMessage::new(
             crate::protocol::ChatRole::User,
             actual_message.clone(),
-        ));
+        );
+        chat_msg.images = images.clone();
+        conversation.push(chat_msg);
     }
 
     // Commands like @research, @search, @web are now handled directly by zcoderd

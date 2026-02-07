@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { Check, X, Settings, Key, Loader2 } from 'lucide-react';
 import { useCommandExecution } from '../hooks/useCommandExecution';
 import { useHistory } from '../hooks/useHistory';
-import type { ChatMessage as ChatMessageType, ModelInfo } from '../types/chat';
+import type { ChatMessage as ChatMessageType, ImageAttachment, ModelInfo } from '../types/chat';
 
 import type { StructuredAction } from '../types/events';
 import type { ApiConfig } from '../types/settings';
@@ -28,7 +28,7 @@ interface ChatPanelProps {
     messages: ChatMessageType[];
     loading: boolean;
     error: string | null;
-    sendMessage: (text: string) => void;
+    sendMessage: (text: string, attachments?: ImageAttachment[]) => void;
     stopGeneration: () => void;
     models: ModelInfo[];
     selectedModelId: string;

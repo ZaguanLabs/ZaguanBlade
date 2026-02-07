@@ -131,11 +131,12 @@ impl WsConnectionManager {
         session_id: Option<String>,
         model_id: String,
         message: String,
+        images: Option<Vec<crate::protocol::ChatImage>>,
         workspace: Option<WorkspaceInfo>,
     ) -> Result<(), String> {
         let client_lock = self.client.lock().await;
         let client = client_lock.as_ref().ok_or("Not connected")?;
-        client.send_message(session_id, model_id, message, workspace).await
+        client.send_message(session_id, model_id, message, images, workspace).await
     }
 
     /// Send a chat message with storage mode
@@ -144,12 +145,13 @@ impl WsConnectionManager {
         session_id: Option<String>,
         model_id: String,
         message: String,
+        images: Option<Vec<crate::protocol::ChatImage>>,
         workspace: Option<WorkspaceInfo>,
         storage_mode: Option<String>,
     ) -> Result<(), String> {
         let client_lock = self.client.lock().await;
         let client = client_lock.as_ref().ok_or("Not connected")?;
-        client.send_message_with_storage_mode(session_id, model_id, message, workspace, storage_mode).await
+        client.send_message_with_storage_mode(session_id, model_id, message, images, workspace, storage_mode).await
     }
 
     /// Send a tool result
