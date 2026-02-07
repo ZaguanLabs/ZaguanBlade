@@ -47,9 +47,6 @@ export const GitPanel: React.FC<GitPanelProps> = ({
     onGenerateCommitMessage,
     onCommitPreflight,
 }) => {
-    const isRepo = status?.isRepo ?? false;
-    const changedCount = status?.changedCount ?? 0;
-
     const [commitMessage, setCommitMessage] = useState('');
     const [actionError, setActionError] = useState<string | null>(null);
     const [preflightWarning, setPreflightWarning] = useState<string | null>(null);
@@ -57,6 +54,11 @@ export const GitPanel: React.FC<GitPanelProps> = ({
     const [diffs, setDiffs] = useState<DiffState>({});
     const [stagedExpanded, setStagedExpanded] = useState(true);
     const [unstagedExpanded, setUnstagedExpanded] = useState(true);
+
+    const isRepo = status?.isRepo ?? false;
+    const changedCount = status?.changedCount ?? 0;
+    const stagedCount = status?.stagedCount ?? 0;
+    const canCommit = commitMessage.trim().length > 0 && changedCount > 0;
 
     const stagedFiles = useMemo(
         () => files.filter(file => file.staged),
@@ -257,14 +259,17 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                 ) : (
                                     <button
                                         className={`flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-md transition-all font-medium ${
-                                            busyAction === 'commit' || !commitMessage.trim() || (status?.stagedCount ?? 0) === 0
+                                            busyAction === 'commit' || !canCommit
                                                 ? 'bg-[var(--bg-surface)] text-[var(--fg-tertiary)] cursor-not-allowed'
                                                 : 'bg-[var(--accent-primary)] text-white hover:bg-[var(--accent-primary)]/80'
                                         }`}
-                                        disabled={busyAction === 'commit' || !commitMessage.trim() || (status?.stagedCount ?? 0) === 0}
+                                        disabled={busyAction === 'commit' || !canCommit}
                                         onClick={() =>
                                             runAction('commit', async () => {
                                                 setPreflightWarning(null);
+                                                if (stagedCount === 0 && changedCount > 0) {
+                                                    await onStageAll();
+                                                }
                                                 const preflight = await onCommitPreflight();
                                                 if (!preflight.isRepo) {
                                                     throw new Error('Not a Git repository');
@@ -299,9 +304,9 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                             )}
 
                             {/* Contextual hints */}
-                            {(status?.stagedCount ?? 0) === 0 && changedCount > 0 && (
+                            {stagedCount === 0 && changedCount > 0 && (
                                 <div className="text-[10px] text-[var(--fg-tertiary)] mt-2 italic">
-                                    Stage changes to commit
+                                    Unstaged changes will be staged on commit
                                 </div>
                             )}
                         </div>
