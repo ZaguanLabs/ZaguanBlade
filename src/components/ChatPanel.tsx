@@ -7,7 +7,7 @@ import { useCommandExecution } from '../hooks/useCommandExecution';
 import { useHistory } from '../hooks/useHistory';
 import type { ChatMessage as ChatMessageType, ImageAttachment, ModelInfo } from '../types/chat';
 
-import type { StructuredAction } from '../types/events';
+import type { StructuredAction, TodoItem } from '../types/events';
 import type { ApiConfig } from '../types/settings';
 import { ChatMessage } from './ChatMessage';
 import { ChatTabBar } from './ChatTabBar';
@@ -15,6 +15,7 @@ import { CommandCenter } from './CommandCenter';
 import { HistoryTab } from './HistoryTab';
 import { ProgressIndicator } from './ProgressIndicator';
 import { GlobalChangeActions } from './editor/GlobalChangeActions';
+import { TaskPanel } from './TaskPanel';
 import type { UncommittedChange } from '../types/uncommitted';
 
 interface ResearchProgress {
@@ -44,6 +45,8 @@ interface ChatPanelProps {
     onAcceptAllChanges: () => void;
     onRejectAllChanges: () => void;
     toolActivity?: { toolName: string; filePath: string; action: string } | null;
+    activeTodos: TodoItem[];
+    setActiveTodos: React.Dispatch<React.SetStateAction<TodoItem[]>>;
 }
 
 const ChatPanelComponent: React.FC<ChatPanelProps> = ({
@@ -66,9 +69,12 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     onAcceptAllChanges,
     onRejectAllChanges,
     toolActivity,
+    activeTodos,
+    setActiveTodos,
 }) => {
     const { t } = useTranslation();
     useCommandExecution();
+    const [taskPanelCollapsed, setTaskPanelCollapsed] = useState(false);
     const { loadConversation } = useHistory();
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const isUserAtBottomRef = useRef(true);
@@ -393,6 +399,13 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                 changes={uncommittedChanges}
                 onAcceptAll={onAcceptAllChanges}
                 onRejectAll={onRejectAllChanges}
+            />
+
+            {/* Task Panel - persistent TODO above Command Center */}
+            <TaskPanel
+                todos={activeTodos}
+                isCollapsed={taskPanelCollapsed}
+                onToggleCollapse={() => setTaskPanelCollapsed(prev => !prev)}
             />
 
             <CommandCenter

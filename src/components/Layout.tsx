@@ -1093,6 +1093,8 @@ const AppLayoutInner: React.FC = () => {
                                 onAcceptAllChanges={acceptAllChanges}
                                 onRejectAllChanges={rejectAllChanges}
                                 toolActivity={chat.toolActivity}
+                                activeTodos={chat.activeTodos}
+                                setActiveTodos={chat.setActiveTodos}
                             />
                         </Suspense>
                     </div>

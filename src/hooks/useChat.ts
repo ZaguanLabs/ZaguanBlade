@@ -22,6 +22,9 @@ export function useChat() {
     // Tool activity state for streaming progress display
     const [toolActivity, setToolActivity] = useState<{ toolName: string; filePath: string; action: string } | null>(null);
 
+    // Active todo list state — lifted out of messages for persistent TaskPanel
+    const [activeTodos, setActiveTodos] = useState<import('../types/events').TodoItem[]>([]);
+
     // v1.1: Message buffer and accumulation ref for atomic updates
     const messageBufferRef = useRef<MessageBuffer | null>(null);
     const accumulatedContentRef = useRef<{ id: string; content: string }>({ id: '', content: '' });
@@ -64,11 +67,6 @@ export function useChat() {
                         // Natural conversation flow: tool calls first, then response text after
                         // This matches how the model actually works - it calls tools, gets results, then responds
                         const mergedBlocks = [...existingNonTextBlocks, ...newTextBlocks];
-                        
-                        // Debug: log if we have todos
-                        if (msg.todos && msg.todos.length > 0) {
-                            console.log(`[flushPendingUpdates] Preserving ${msg.todos.length} todos for message ${id}, has todo block: ${existingNonTextBlocks.some(b => b.type === 'todo')}`);
-                        }
                         
                         updated[idx] = {
                             ...msg,
@@ -488,52 +486,32 @@ export function useChat() {
 
 
 
-            // Listen for todo list updates
+            // Listen for todo list updates — update shared state for TaskPanel
             const u10 = await listen<{ todos: import('../types/events').TodoItem[] }>(EventNames.TODO_UPDATED, (event) => {
-                invoke('log_frontend', { message: `[FRONTEND] TODO_UPDATED received: ${event.payload.todos.length} items` });
-                setMessages((prev) => {
-                    const updated = [...prev];
-                    // Find the last assistant message and attach the todos
-                    let found = false;
-                    for (let i = updated.length - 1; i >= 0; i--) {
-                        if (updated[i].role === 'Assistant') {
-                            const msg = updated[i];
-                            const newBlocks = [...(msg.blocks || [])];
+                const todos = event.payload.todos;
+                invoke('log_frontend', { message: `[FRONTEND] TODO_UPDATED received: ${todos.length} items` });
+                setActiveTodos(todos);
 
-                            // Check if we already have a todo block - update it if so, otherwise add one
-                            const existingTodoBlockIdx = newBlocks.findIndex(b => b.type === 'todo');
-                            const todoBlockId = existingTodoBlockIdx >= 0
-                                ? newBlocks[existingTodoBlockIdx].id
-                                : crypto.randomUUID();
-
-                            if (existingTodoBlockIdx < 0) {
-                                // Add new todo block at current position in the conversation flow
-                                newBlocks.push({ type: 'todo' as const, id: todoBlockId });
-                            }
-
-                            // CRITICAL: Also update blocksRef to prevent message buffer from overwriting
-                            if (msg.id) {
-                                const currentBlocksRef = blocksRef.current.get(msg.id) || [];
-                                if (!currentBlocksRef.some(b => b.type === 'todo')) {
-                                    blocksRef.current.set(msg.id, [...currentBlocksRef, { type: 'todo' as const, id: todoBlockId }]);
-                                }
-                            }
-
-                            updated[i] = {
-                                ...msg,
-                                todos: event.payload.todos,
-                                blocks: newBlocks
-                            };
-                            found = true;
-                            invoke('log_frontend', { message: `[FRONTEND] Attached todos to message at index ${i}, message has ${updated[i].todos?.length} todos, blocks: ${JSON.stringify(newBlocks.map(b => b.type))}` });
-                            break;
-                        }
-                    }
-                    if (!found) {
-                        invoke('log_frontend', { message: `[FRONTEND] No assistant message found to attach todos! Messages: ${updated.length}` });
-                    }
-                    return updated;
-                });
+                // Completion detection: all tasks done → brief "all done" state → hide panel + insert summary
+                const allCompleted = todos.length > 0 && todos.every(t => t.status === 'completed');
+                if (allCompleted) {
+                    setTimeout(() => {
+                        setActiveTodos([]);
+                        // Insert compact plan summary message into chat
+                        const summaryId = `plan-summary-${Date.now()}`;
+                        const summaryMessage: ChatMessage = {
+                            id: summaryId,
+                            role: 'Assistant',
+                            content: '',
+                            blocks: [{ type: 'plan_summary' as const, id: summaryId }],
+                            planSummary: {
+                                todos: [...todos],
+                                completedAt: Date.now(),
+                            },
+                        };
+                        setMessages(prev => [...prev, summaryMessage]);
+                    }, 1500);
+                }
             });
             const unlistenTodoUpdated = u10;
 
@@ -827,6 +805,7 @@ export function useChat() {
             setMessages([]);
             setLoading(false);
             setPendingActions(null);
+            setActiveTodos([]);
         } catch (e) {
             console.error('Failed to start new conversation:', e);
         }
@@ -861,5 +840,7 @@ export function useChat() {
         undoTool,
         setConversation: setMessages,
         toolActivity,
+        activeTodos,
+        setActiveTodos,
     };
 }

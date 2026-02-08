@@ -1,11 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { ChatMessage as ChatMessageType } from '../types/chat';
-import { User, Bot, Terminal, Brain, ChevronDown, ChevronRight, Loader2, Copy, RotateCcw, Pencil, MessageSquare } from 'lucide-react';
+import type { ChatMessage as ChatMessageType, ChatImage, ImageAttachment } from '../types/chat';
+import { User, Bot, Terminal, Brain, ChevronDown, ChevronRight, Loader2, Copy, RotateCcw, Pencil, MessageSquare, Check } from 'lucide-react';
 import { ToolCallDisplay } from './ToolCallDisplay';
 import { ProgressIndicator } from './ProgressIndicator';
 import { CommandOutputDisplay } from './CommandOutputDisplay';
 import { CommandApprovalCard } from './CommandApprovalCard';
-import { TodoList } from './TodoList';
 import { useContextMenu, ContextMenuItem } from './ui/ContextMenu';
 import { MarkdownRenderer } from './MarkdownRenderer';
 
@@ -123,6 +122,52 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
     );
 };
 
+const resolveImageUrls = (image: ChatImage) => {
+    const attachment = image as ImageAttachment;
+    const fullUrl = attachment.dataUrl
+        || (image.data && image.mime_type ? `data:${image.mime_type};base64,${image.data}` : '');
+    const previewUrl = attachment.thumbnailUrl || fullUrl;
+    return {
+        fullUrl,
+        previewUrl,
+        name: image.name,
+    };
+};
+
+const PlanSummaryDisplay: React.FC<{ todos: import('../types/events').TodoItem[] }> = ({ todos }) => {
+    const [isExpanded, setIsExpanded] = useState(false);
+    const completedCount = todos.filter(t => t.status === 'completed').length;
+
+    return (
+        <div className="my-2">
+            <button
+                onClick={() => setIsExpanded(!isExpanded)}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-emerald-500/5 border border-emerald-500/20 hover:bg-emerald-500/10 transition-colors text-left w-full"
+            >
+                <Check className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+                <span className="text-[11px] text-emerald-400 font-medium">
+                    Plan completed ({completedCount}/{todos.length} tasks)
+                </span>
+                {isExpanded ? (
+                    <ChevronDown className="w-3 h-3 text-zinc-500 ml-auto flex-shrink-0" />
+                ) : (
+                    <ChevronRight className="w-3 h-3 text-zinc-500 ml-auto flex-shrink-0" />
+                )}
+            </button>
+            {isExpanded && (
+                <div className="mt-1 px-3 py-2 rounded-md bg-emerald-500/5 border border-emerald-500/10 space-y-0.5">
+                    {todos.map((todo, idx) => (
+                        <div key={idx} className="flex items-center gap-2 text-[11px]">
+                            <Check className="w-3 h-3 text-emerald-400/60 flex-shrink-0" />
+                            <span className="text-zinc-500 line-through">{todo.content}</span>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
 interface ChatMessageProps {
     message: ChatMessageType;
     pendingActions?: import('../types/events').StructuredAction[];
@@ -186,6 +231,16 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     }
 
     const hasContent = initialText.length > 0 || finalText.length > 0;
+    const imageAttachments = (message.images || []).flatMap((image, index) => {
+        const { fullUrl, previewUrl, name } = resolveImageUrls(image);
+        if (!fullUrl) return [];
+        return [{
+            id: `${message.id || 'msg'}-image-${index}`,
+            fullUrl,
+            previewUrl,
+            name: name || `Attachment ${index + 1}`
+        }];
+    });
 
     // Context menu for chat messages
     const handleContextMenu = useCallback((e: React.MouseEvent) => {
@@ -296,6 +351,36 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                     <ProgressIndicator progress={message.progress} />
                 )}
 
+                {imageAttachments.length > 0 && (
+                    <div className="mb-2">
+                        <div className="flex flex-wrap gap-2">
+                            {imageAttachments.map((image) => (
+                                <a
+                                    key={image.id}
+                                    href={image.fullUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="block max-w-[240px]"
+                                >
+                                    <div className="overflow-hidden rounded-md border border-zinc-800/60 bg-zinc-900/40">
+                                        <img
+                                            src={image.previewUrl}
+                                            alt={image.name}
+                                            loading="lazy"
+                                            className="w-full max-h-48 object-contain"
+                                        />
+                                    </div>
+                                    {image.name && (
+                                        <div className="mt-1 text-[10px] text-zinc-500 truncate">
+                                            {image.name}
+                                        </div>
+                                    )}
+                                </a>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
                 {/* Thinking indicator for slow models - show when active but no content yet */}
                 {/* DISABLED: Investigating raw reasoning output
                 {isActive && isAssistant && !hasContent && !hasReasoning && !message.progress && (
@@ -321,13 +406,6 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                 {message.blocks && message.blocks.length > 0 ? (
                     <>
                         {(() => {
-                            // Debug: Log message state for todo debugging
-                            const hasTodoBlock = message.blocks!.some(b => b.type === 'todo');
-                            const hasTodos = message.todos && message.todos.length > 0;
-                            if (hasTodoBlock || hasTodos) {
-                                console.log(`[ChatMessage] Message ${message.id}: hasTodoBlock=${hasTodoBlock}, hasTodos=${hasTodos}, todos=${message.todos?.length}, blockTypes=${message.blocks!.map(b => b.type).join(',')}`);
-                            }
-                            
                             // Find the index of the last reasoning block
                             const lastReasoningIdx = message.blocks!.reduce((lastIdx, block, idx) => {
                                 return block.type === 'reasoning' ? idx : lastIdx;
@@ -402,16 +480,16 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                     </div>
                                 );
                             } else if (block.type === 'todo') {
-                                // Render TODO list inline in the conversation flow
-                                console.log('[ChatMessage] Rendering todo block, todos:', message.todos?.length);
-                                if (!message.todos || message.todos.length === 0) {
-                                    console.log('[ChatMessage] No todos to render for todo block');
-                                    return null;
-                                }
+                                // Todo blocks are now rendered in the persistent TaskPanel
+                                return null;
+                            } else if (block.type === 'plan_summary') {
+                                // Compact summary of a completed plan
+                                if (!message.planSummary) return null;
                                 return (
-                                    <div key={block.id} className="mb-3">
-                                        <TodoList todos={message.todos} />
-                                    </div>
+                                    <PlanSummaryDisplay
+                                        key={block.id}
+                                        todos={message.planSummary.todos}
+                                    />
                                 );
                             } else if (block.type === 'research_progress') {
                                 // Render research progress activity
@@ -444,8 +522,6 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                             </div>
                         )}
 
-                        {/* Legacy: Render todos if no todo block exists (backward compat) */}
-                        {message.todos && message.todos.length > 0 && !message.blocks?.some(b => b.type === 'todo') && <TodoList todos={message.todos} />}
 
                         {/* Legacy: Render commandExecutions that don't have block entries (backward compat) */}
                         {message.commandExecutions && message.commandExecutions.length > 0 && (
@@ -543,7 +619,6 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                             ))}
                                     </div>
                                 )}
-                                {message.todos && message.todos.length > 0 && <TodoList todos={message.todos} />}
                                 {finalText && (
                                     <div className="select-text">
                                         <MarkdownRenderer content={finalText} />

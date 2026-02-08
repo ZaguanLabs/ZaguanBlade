@@ -333,16 +333,10 @@ pub async fn handle_send_message<R: Runtime>(
                     // v1.1: Emit MessageCompleted event for explicit end-of-stream
                     let msg_id = {
                         let conversation = state.conversation.lock().unwrap();
-                        conversation.last().and_then(|msg| {
-                            if msg.role == crate::protocol::ChatRole::Assistant {
-                                // Use existing ID if available (v1.1 compliant), else fallback to new
-                                msg.id
-                                    .clone()
-                                    .or_else(|| Some(uuid::Uuid::new_v4().to_string()))
-                            } else {
-                                None
-                            }
-                        })
+                        conversation
+                            .last_assistant()
+                            .and_then(|msg| msg.id.clone())
+                            .or_else(|| Some(uuid::Uuid::new_v4().to_string()))
                     };
 
                     if let Some(id) = msg_id {
