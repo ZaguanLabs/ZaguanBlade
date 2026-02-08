@@ -25,7 +25,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSend, onStop, disabled, 
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             console.log('[TRIPWIRE] Enter pressed - disabled:', disabled, 'loading:', loading, 'hasText:', !!text.trim());
-            if (text.trim() && !disabled && !loading) {
+            if (text.trim() && !disabled) {
                 console.log('[TRIPWIRE] Calling onSend from Enter key');
                 onSend(text);
                 setText('');

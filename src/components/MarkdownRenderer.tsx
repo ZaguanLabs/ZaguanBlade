@@ -136,7 +136,7 @@ const markdownComponents = {
     // Paragraphs
     p({ children }: { children?: React.ReactNode }) {
         return (
-            <p className="text-[12px] text-zinc-300 leading-relaxed my-2 first:mt-0 last:mb-0">
+            <p className="text-[12px] font-medium text-zinc-300 leading-relaxed my-2 first:mt-0 last:mb-0">
                 {children}
             </p>
         );
@@ -189,7 +189,7 @@ const markdownComponents = {
     },
     li({ children }: { children?: React.ReactNode }) {
         return (
-            <li className="text-[12px] text-zinc-300 leading-relaxed pl-1">
+            <li className="text-[12px] font-medium text-zinc-300 leading-relaxed pl-1">
                 {children}
             </li>
         );

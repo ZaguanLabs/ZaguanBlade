@@ -229,7 +229,9 @@ export function useChat() {
         if (!messageBufferRef.current) {
             messageBufferRef.current = new MessageBuffer(
                 (id, chunk, is_final, type) => {
-                    setLoading(true);
+                    // NOTE: Do NOT call setLoading(true) here. Loading is set in dispatchToBackend.
+                    // Calling it on every chunk creates a race condition: if a chunk flushes after
+                    // chat-done/MessageCompleted sets loading=false, it re-sets loading=true permanently.
 
                     // Accumulate content/reasoning in refs (no re-render)
                     // When ID changes, this indicates a new message stream - clear stale blocks
