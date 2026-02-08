@@ -264,11 +264,25 @@ pub fn create_terminal<R: Runtime>(
                         line_buffer = line_buffer[last_newline + 1..].to_string();
                         process_chunk(&processable, &app_handle_clone, &id_clone, &seq_counter,
                                       &mut active_cmd, &mut cmd_output_buffer);
-                    } else if line_buffer.len() > 8192 {
-                        // Large buffer without newlines — flush
-                        let flushed = std::mem::take(&mut line_buffer);
-                        process_chunk(&flushed, &app_handle_clone, &id_clone, &seq_counter,
-                                      &mut active_cmd, &mut cmd_output_buffer);
+                    }
+
+                    // Flush partial line buffer if it cannot contain a sentinel.
+                    // Sentinel markers always start with "##BLADE_CMD_", so if the
+                    // buffer doesn't contain that prefix (or a partial start of it),
+                    // it's safe to emit immediately. This ensures interactive typed
+                    // characters are visible without waiting for a newline.
+                    if !line_buffer.is_empty() {
+                        let could_be_sentinel = line_buffer.contains("##BLADE_CMD_")
+                            || "##BLADE_CMD_".starts_with(&line_buffer)
+                            || "##BLADE_CMD_".starts_with(
+                                   &line_buffer[line_buffer.len().saturating_sub(12)..])
+                            || line_buffer.len() > 8192;
+
+                        if !could_be_sentinel || line_buffer.len() > 8192 {
+                            let flushed = std::mem::take(&mut line_buffer);
+                            process_chunk(&flushed, &app_handle_clone, &id_clone, &seq_counter,
+                                          &mut active_cmd, &mut cmd_output_buffer);
+                        }
                     }
                 }
                 Ok(_) => {

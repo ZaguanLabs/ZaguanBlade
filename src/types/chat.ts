@@ -27,8 +27,12 @@ export interface ChatMessage {
     content_before_tools?: string;
     content_after_tools?: string;
     commandExecutions?: CommandExecution[];
-    todos?: TodoItem[];
+    todos?: TodoItem[];  // Legacy: kept for backward compat with saved conversations
     blocks?: MessageBlock[];
+    planSummary?: {
+        todos: TodoItem[];
+        completedAt: number;
+    };
     researchActivities?: ResearchActivity[];
 }
 
@@ -45,7 +49,8 @@ export type MessageBlock =
     | { type: 'reasoning'; content: string; id: string }
     | { type: 'tool_call'; id: string }
     | { type: 'command_execution'; id: string }  // References commandExecutions by id
-    | { type: 'todo'; id: string }  // References todos by id (or latest snapshot)
+    | { type: 'todo'; id: string }  // Legacy: kept for backward compat with saved conversations
+    | { type: 'plan_summary'; id: string }  // Compact summary of a completed plan
     | { type: 'research_progress'; id: string };  // References research progress activities
 
 export interface ProgressInfo {

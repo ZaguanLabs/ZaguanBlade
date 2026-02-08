@@ -89,10 +89,18 @@ export function reconstructBlocks(message: ChatMessage): MessageBlock[] {
         }
     }
 
-    // 5. Add TODO block if todos are present
+    // 5. Add TODO block if todos are present (legacy backward compat)
     if (message.todos && message.todos.length > 0) {
         blocks.push({
             type: 'todo',
+            id: crypto.randomUUID()
+        });
+    }
+
+    // 5b. Add plan_summary block if planSummary data is present
+    if (message.planSummary) {
+        blocks.push({
+            type: 'plan_summary',
             id: crypto.randomUUID()
         });
     }

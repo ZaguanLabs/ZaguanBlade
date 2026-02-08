@@ -2023,15 +2023,10 @@ impl ChatManager {
                 self.rx = None;
                 self.streaming = false; // Disable streaming to deactivate Stop button
 
-                let msg_id = conversation.last().and_then(|msg| {
-                    if msg.role == ChatRole::Assistant {
-                        msg.id
-                            .clone()
-                            .or_else(|| Some(uuid::Uuid::new_v4().to_string()))
-                    } else {
-                        None
-                    }
-                });
+                let msg_id = conversation
+                    .last_assistant()
+                    .and_then(|msg| msg.id.clone())
+                    .or_else(|| Some(uuid::Uuid::new_v4().to_string()));
                 if let Some(id) = msg_id {
                     self.pending_results
                         .push_back(DrainResult::MessageCompleted(id));

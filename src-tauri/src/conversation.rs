@@ -49,6 +49,13 @@ impl ConversationHistory {
         self.messages.last_mut()
     }
 
+    pub fn last_assistant(&self) -> Option<&ChatMessage> {
+        self.messages
+            .iter()
+            .rev()
+            .find(|m| m.role == ChatRole::Assistant)
+    }
+
     pub fn last_assistant_mut(&mut self) -> Option<&mut ChatMessage> {
         self.messages
             .iter_mut()
