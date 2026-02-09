@@ -51,6 +51,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
     const [actionError, setActionError] = useState<string | null>(null);
     const [preflightWarning, setPreflightWarning] = useState<string | null>(null);
     const [busyAction, setBusyAction] = useState<string | null>(null);
+    const [pushSuccess, setPushSuccess] = useState(false);
     const [diffs, setDiffs] = useState<DiffState>({});
     const [stagedExpanded, setStagedExpanded] = useState(true);
     const [unstagedExpanded, setUnstagedExpanded] = useState(true);
@@ -243,18 +244,33 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                 <div className="flex-1" />
 
                                 {/* Dynamic Commit/Push button */}
-                                {(status?.ahead ?? 0) > 0 ? (
+                                {(status?.ahead ?? 0) > 0 || pushSuccess ? (
                                     <button
                                         className={`flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-md transition-all font-medium ${
-                                            busyAction === 'push'
-                                                ? 'bg-[var(--bg-surface)] text-[var(--fg-tertiary)] cursor-not-allowed'
-                                                : 'bg-green-600 text-white hover:bg-green-500'
+                                            pushSuccess
+                                                ? 'bg-emerald-600 text-white'
+                                                : busyAction === 'push'
+                                                    ? 'bg-green-600/70 text-white/80 cursor-not-allowed animate-pulse'
+                                                    : 'bg-green-600 text-white hover:bg-green-500'
                                         }`}
-                                        disabled={busyAction === 'push'}
-                                        onClick={() => runAction('push', () => onPush())}
+                                        disabled={busyAction === 'push' || pushSuccess}
+                                        onClick={() => runAction('push', async () => {
+                                            await onPush();
+                                            setPushSuccess(true);
+                                            setTimeout(() => setPushSuccess(false), 2000);
+                                        })}
                                     >
-                                        <Upload className={`w-3 h-3 ${busyAction === 'push' ? 'animate-pulse' : ''}`} />
-                                        Push {status?.ahead}
+                                        {pushSuccess ? (
+                                            <>
+                                                <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                                                Pushed
+                                            </>
+                                        ) : (
+                                            <>
+                                                <Upload className={`w-3 h-3 ${busyAction === 'push' ? 'animate-bounce' : ''}`} />
+                                                {busyAction === 'push' ? 'Pushing...' : `Push ${status?.ahead}`}
+                                            </>
+                                        )}
                                     </button>
                                 ) : (
                                     <button

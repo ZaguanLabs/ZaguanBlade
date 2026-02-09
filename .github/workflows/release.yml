@@ -19,7 +19,7 @@ jobs:
             args: '--target aarch64-apple-darwin'
             rust_target: 'aarch64-apple-darwin'
           # Linux x86_64
-          - platform: 'ubuntu-22.04'
+          - platform: 'ubuntu-24.04'
             args: ''
             rust_target: ''
           # Windows x86_64
@@ -37,7 +37,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: install dependencies (ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.platform == 'ubuntu-24.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libpipewire-0.3-dev rpm
