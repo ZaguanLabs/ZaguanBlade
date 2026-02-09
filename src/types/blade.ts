@@ -43,7 +43,9 @@ export type BladeIntent =
 export type ChatIntent =
     | { type: "SendMessage"; payload: { content: string; model: string; images?: ChatImagePayload[]; context?: EditorContext } }
     | { type: "StopGeneration"; payload: Record<string, never> }
-    | { type: "ClearHistory"; payload: Record<string, never> };
+    | { type: "ClearHistory"; payload: Record<string, never> }
+    | { type: "NewConversation"; payload: { model: string } }
+    | { type: "SetSelectedModel"; payload: { model: string } };
 
 export type ChatImagePayload = {
     data: string;

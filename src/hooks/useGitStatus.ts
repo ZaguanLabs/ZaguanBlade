@@ -24,6 +24,11 @@ export interface GitFileStatus {
     statusCode: string;
 }
 
+interface GitStatusSnapshot {
+    summary: GitStatusSummary;
+    files: GitFileStatus[];
+}
+
 export interface CommitPreflightResult {
     canCommit: boolean;
     isRepo: boolean;
@@ -44,30 +49,27 @@ export const useGitStatus = () => {
     const [filesError, setFilesError] = useState<string | null>(null);
     const [lastRefreshedAt, setLastRefreshedAt] = useState<number | null>(null);
     const debounceRef = useRef<number | null>(null);
+    const refreshInFlightRef = useRef(false);
 
     const refresh = useCallback(async () => {
         if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
+        if (refreshInFlightRef.current) return;
+        refreshInFlightRef.current = true;
 
-        const [summaryResult, filesResult] = await Promise.allSettled([
-            invoke<GitStatusSummary>('git_status_summary'),
-            invoke<GitFileStatus[]>('git_status_files'),
-        ]);
-
-        if (summaryResult.status === 'fulfilled') {
-            setStatus(summaryResult.value);
+        try {
+            const snapshot = await invoke<GitStatusSnapshot>('git_status');
+            setStatus(snapshot.summary);
+            setFiles(snapshot.files);
             setError(null);
-        } else {
-            setError(String(summaryResult.reason));
-        }
-
-        if (filesResult.status === 'fulfilled') {
-            setFiles(filesResult.value);
             setFilesError(null);
-        } else {
-            setFilesError(String(filesResult.reason));
+        } catch (err) {
+            const message = String(err);
+            setError(message);
+            setFilesError(message);
+        } finally {
+            refreshInFlightRef.current = false;
+            setLastRefreshedAt(Date.now());
         }
-
-        setLastRefreshedAt(Date.now());
     }, []);
 
     const scheduleRefresh = useCallback(() => {

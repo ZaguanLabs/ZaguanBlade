@@ -1,6 +1,8 @@
 // use crate::app_state::AppState;
 // use tauri::{AppHandle, Manager, State};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
+#[cfg(feature = "devtools")]
+use tauri::Manager;
 
 #[tauri::command]
 pub fn greet(name: &str) -> String {
@@ -9,24 +11,19 @@ pub fn greet(name: &str) -> String {
 
 #[tauri::command]
 pub fn toggle_devtools(app: AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        #[cfg(debug_assertions)]
-        {
+    #[cfg(feature = "devtools")]
+    {
+        if let Some(window) = app.get_webview_window("main") {
             if window.is_devtools_open() {
                 window.close_devtools();
             } else {
                 window.open_devtools();
             }
         }
-        #[cfg(not(debug_assertions))]
-        {
-            // In production builds with devtools feature enabled
-            if window.is_devtools_open() {
-                window.close_devtools();
-            } else {
-                window.open_devtools();
-            }
-        }
+    }
+    #[cfg(not(feature = "devtools"))]
+    {
+        let _ = app;
     }
 }
 

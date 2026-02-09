@@ -14,7 +14,7 @@ i18n
     debug: import.meta.env.DEV,
 
     interpolation: {
-      escapeValue: false, // React already safes from xss
+      escapeValue: false, // React already escapes output — double-escaping breaks content
     },
 
     backend: {
