@@ -33,6 +33,13 @@ pub struct GitFileStatus {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct GitStatusSnapshot {
+    pub summary: GitStatusSummary,
+    pub files: Vec<GitFileStatus>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CommitPreflightResult {
     pub can_commit: bool,
     pub is_repo: bool,
@@ -157,6 +164,28 @@ fn workspace_root(state: &State<'_, AppState>) -> Option<String> {
         .map(|p| p.to_string_lossy().to_string())
 }
 
+fn git_status_output(root: &str) -> Result<Option<String>, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("status")
+        .arg("--porcelain=v2")
+        .arg("-uall")
+        .arg("--branch")
+        .output()
+        .map_err(|e| format!("failed to run git status: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        if stderr.contains("not a git repository") {
+            return Ok(None);
+        }
+        return Err(format!("git status failed: {}", stderr.trim()));
+    }
+
+    Ok(Some(String::from_utf8_lossy(&output.stdout).to_string()))
+}
+
 fn run_git(root: &str, args: &[&str]) -> Result<String, String> {
     let output = Command::new("git")
         .arg("-C")
@@ -246,7 +275,7 @@ fn resolve_model_id(models: &[registry::ModelInfo], requested_id: &str) -> Strin
 }
 
 fn collect_changes_for_message(root: &str) -> Result<CommitContext, String> {
-    let staged_files = run_git(root, &["diff", "--cached", "--name-only"])?;
+    let staged_files = run_git(root, &["diff", "--cached", "--name-only"][..])?;
     let mut files: Vec<String> = staged_files
         .lines()
         .map(|l| l.trim().to_string())
@@ -256,7 +285,7 @@ fn collect_changes_for_message(root: &str) -> Result<CommitContext, String> {
     let staged = !files.is_empty();
 
     if !staged {
-        let unstaged_files = run_git(root, &["diff", "--name-only"])?;
+        let unstaged_files = run_git(root, &["diff", "--name-only"][..])?;
         files = unstaged_files
             .lines()
             .map(|l| l.trim().to_string())
@@ -265,7 +294,7 @@ fn collect_changes_for_message(root: &str) -> Result<CommitContext, String> {
     }
 
     // Get untracked files
-    let untracked_output = run_git(root, &["ls-files", "--others", "--exclude-standard"])?;
+    let untracked_output = run_git(root, &["ls-files", "--others", "--exclude-standard"][..])?;
     let untracked: Vec<String> = untracked_output
         .lines()
         .map(|l| l.trim().to_string())
@@ -277,35 +306,34 @@ fn collect_changes_for_message(root: &str) -> Result<CommitContext, String> {
         files.extend(untracked.clone());
     }
 
-    let diff_args = if staged {
-        vec!["diff", "--cached", "--unified=3"]
+    let mut diff = if staged {
+        run_git(root, &["diff", "--cached", "--unified=3"][..])?
     } else {
-        vec!["diff", "--unified=3"]
+        run_git(root, &["diff", "--unified=3"][..])?
     };
-    let mut diff = run_git(root, &diff_args)?;
 
     // Get diff stats (insertions/deletions summary)
-    let diff_stat_args = if staged {
-        vec!["diff", "--cached", "--stat"]
+    let diff_stat = if staged {
+        run_git(root, &["diff", "--cached", "--stat"][..])
     } else {
-        vec!["diff", "--stat"]
-    };
-    let diff_stat = run_git(root, &diff_stat_args).unwrap_or_default();
+        run_git(root, &["diff", "--stat"][..])
+    }
+    .unwrap_or_default();
 
     // Get current branch
-    let branch = run_git(root, &["rev-parse", "--abbrev-ref", "HEAD"])
+    let branch = run_git(root, &["rev-parse", "--abbrev-ref", "HEAD"][..])
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty() && s != "HEAD");
 
     // Get last commit message for style reference
-    let last_commit_message = run_git(root, &["log", "-1", "--format=%B"])
+    let last_commit_message = run_git(root, &["log", "-1", "--format=%B"][..])
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
 
     // Get recent commits for context
-    let recent_commits: Vec<String> = run_git(root, &["log", "--oneline", "-5"])
+    let recent_commits: Vec<String> = run_git(root, &["log", "--oneline", "-5"][..])
         .unwrap_or_default()
         .lines()
         .map(|l| l.trim().to_string())
@@ -448,26 +476,11 @@ pub fn git_status_summary(state: State<'_, AppState>) -> Result<GitStatusSummary
     let Some(root) = workspace_root(&state) else {
         return Ok(empty_summary());
     };
+    let stdout = match git_status_output(&root)? {
+        Some(output) => output,
+        None => return Ok(empty_summary()),
+    };
 
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(&root)
-        .arg("status")
-        .arg("--porcelain=v2")
-        .arg("-uall")
-        .arg("--branch")
-        .output()
-        .map_err(|e| format!("failed to run git status: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        if stderr.contains("not a git repository") {
-            return Ok(empty_summary());
-        }
-        return Err(format!("git status failed: {}", stderr.trim()));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     Ok(parse_git_status(&stdout))
 }
 
@@ -476,26 +489,37 @@ pub fn git_status_files(state: State<'_, AppState>) -> Result<Vec<GitFileStatus>
     let Some(root) = workspace_root(&state) else {
         return Ok(Vec::new());
     };
+    let stdout = match git_status_output(&root)? {
+        Some(output) => output,
+        None => return Ok(Vec::new()),
+    };
 
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(&root)
-        .arg("status")
-        .arg("--porcelain=v2")
-        .arg("-uall")
-        .output()
-        .map_err(|e| format!("failed to run git status: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        if stderr.contains("not a git repository") {
-            return Ok(Vec::new());
-        }
-        return Err(format!("git status failed: {}", stderr.trim()));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     Ok(parse_git_status_files(&stdout))
+}
+
+#[tauri::command]
+pub fn git_status(state: State<'_, AppState>) -> Result<GitStatusSnapshot, String> {
+    let Some(root) = workspace_root(&state) else {
+        return Ok(GitStatusSnapshot {
+            summary: empty_summary(),
+            files: Vec::new(),
+        });
+    };
+
+    let stdout = match git_status_output(&root)? {
+        Some(output) => output,
+        None => {
+            return Ok(GitStatusSnapshot {
+                summary: empty_summary(),
+                files: Vec::new(),
+            })
+        }
+    };
+
+    Ok(GitStatusSnapshot {
+        summary: parse_git_status(&stdout),
+        files: parse_git_status_files(&stdout),
+    })
 }
 
 #[tauri::command]
@@ -658,7 +682,7 @@ pub fn git_commit_preflight(state: State<'_, AppState>) -> Result<CommitPrefligh
     }
 
     // Get current branch (HEAD for detached)
-    let branch_output = run_git(&root, &["rev-parse", "--abbrev-ref", "HEAD"])
+    let branch_output = run_git(&root, &["rev-parse", "--abbrev-ref", "HEAD"][..])
         .unwrap_or_else(|_| "HEAD".to_string());
     let branch_name = branch_output.trim();
     let is_detached = branch_name == "HEAD";
@@ -666,14 +690,17 @@ pub fn git_commit_preflight(state: State<'_, AppState>) -> Result<CommitPrefligh
 
     // Check for upstream
     let has_upstream = if !is_detached {
-        run_git(&root, &["rev-parse", "--abbrev-ref", &format!("{}@{{upstream}}", branch_name)])
+        run_git(
+            &root,
+            &["rev-parse", "--abbrev-ref", &format!("{}@{{upstream}}", branch_name)][..],
+        )
             .is_ok()
     } else {
         false
     };
 
     // Check for conflicts
-    let status_output = run_git(&root, &["status", "--porcelain=v2"])
+    let status_output = run_git(&root, &["status", "--porcelain=v2"][..])
         .unwrap_or_default();
     let has_conflicts = status_output.lines().any(|l| l.starts_with("u "));
 

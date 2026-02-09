@@ -14,6 +14,7 @@ import { Folder, ChevronRight, FileCode, FileText, FileBox, Search, FilePlus, Fo
 import { useContextMenu, ContextMenuItem } from './ui/ContextMenu';
 import { ConfirmModal } from './ui/Modal';
 import { listen, emit } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 
 // Define the Node type for our tree
 interface NodeData {
@@ -473,48 +474,25 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                     return existingRequest;
                 }
 
-                const requestPromise = new Promise<string[]>((resolve, reject) => {
-                    let resolved = false;
-
-                    listen<any>('sys-event', (eventRaw) => {
-                        let evt = eventRaw.payload;
-                        if (evt.event && evt.id && evt.timestamp) {
-                            evt = evt.event;
-                        }
-
-                        if (evt.type === 'File' &&
-                            evt.payload.type === 'Listing' &&
-                            evt.payload.payload.path === path) {
-                            resolved = true;
-                            const entries = evt.payload.payload.entries;
-
-                            entries.forEach((e: any) => {
-                                itemCache.current.set(e.path, {
-                                    id: e.path,
-                                    name: e.name,
-                                    is_dir: e.is_dir,
-                                    data: e
-                                });
+                const requestPromise = (async () => {
+                    try {
+                        const entries = await invoke<FileEntry[]>('list_files', { path });
+                        entries.forEach((entry) => {
+                            itemCache.current.set(entry.path, {
+                                id: entry.path,
+                                name: entry.name,
+                                is_dir: entry.is_dir,
+                                data: entry
                             });
-
-                            resolve(entries.map((e: any) => e.path));
-                        }
-                    }).then(unlisten => {
-                        BladeDispatcher.file({ type: 'List', payload: { path: path } });
-
-                        setTimeout(() => {
-                            unlisten();
-                            // Clean up pending request when done
-                            pendingRequests.current.delete(path);
-                            if (!resolved) {
-                                resolve([]);
-                            }
-                        }, 5000);
-                    }).catch((err) => {
+                        });
+                        return entries.map((entry) => entry.path);
+                    } catch (err) {
+                        console.error('[Explorer] Failed to list files:', err);
+                        return [];
+                    } finally {
                         pendingRequests.current.delete(path);
-                        reject(err);
-                    });
-                });
+                    }
+                })();
 
                 // Store the pending request
                 pendingRequests.current.set(path, requestPromise);

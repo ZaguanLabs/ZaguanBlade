@@ -248,6 +248,7 @@ pub fn run() {
             commands::state::get_feature_flags,
             commands::state::set_feature_flag,
             // Git commands
+            git::git_status,
             git::git_status_summary,
             git::git_status_files,
             git::git_stage_file,

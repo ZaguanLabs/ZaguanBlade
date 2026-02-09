@@ -3,6 +3,7 @@ use crate::blade_protocol::{self, BladeError, BladeIntent, SystemEvent, Version}
 use crate::chat_orchestrator::handle_send_message;
 use crate::commands::{chat, files, tools};
 use tauri::{Emitter, State};
+use std::sync::atomic::Ordering;
 
 #[tauri::command]
 pub async fn dispatch(
@@ -76,22 +77,24 @@ pub async fn dispatch(
     }
 
     // 3. Emit ProtocolVersion on first dispatch
-    let protocol_version_event = SystemEvent::ProtocolVersion {
-        supported: vec![Version::CURRENT],
-        current: Version::CURRENT,
-    };
-    let _ = window.emit(
-        "blade-event",
-        blade_protocol::BladeEventEnvelope {
-            id: uuid::Uuid::new_v4(),
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64,
-            causality_id: None,
-            event: blade_protocol::BladeEvent::System(protocol_version_event),
-        },
-    );
+    if !state.protocol_version_emitted.swap(true, Ordering::SeqCst) {
+        let protocol_version_event = SystemEvent::ProtocolVersion {
+            supported: vec![Version::CURRENT],
+            current: Version::CURRENT,
+        };
+        let _ = window.emit(
+            "blade-event",
+            blade_protocol::BladeEventEnvelope {
+                id: uuid::Uuid::new_v4(),
+                timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+                causality_id: None,
+                event: blade_protocol::BladeEvent::System(protocol_version_event),
+            },
+        );
+    }
 
     // 4. Ack (Process Started)
     let _ = window.emit("sys-event", SystemEvent::ProcessStarted { intent_id });
@@ -162,6 +165,22 @@ pub async fn dispatch(
                         }),
                     );
                     Ok(())
+                }
+                blade_protocol::ChatIntent::NewConversation { model } => {
+                    chat::new_conversation(model, state.clone())
+                        .map(|_| ())
+                        .map_err(|e| blade_protocol::BladeError::Internal {
+                            trace_id: intent_id.to_string(),
+                            message: e,
+                        })
+                }
+                blade_protocol::ChatIntent::SetSelectedModel { model } => {
+                    chat::set_selected_model(model, state.clone())
+                        .await
+                        .map_err(|e| blade_protocol::BladeError::Internal {
+                            trace_id: intent_id.to_string(),
+                            message: e,
+                        })
                 }
             }
         }

@@ -144,7 +144,10 @@ export function useChat() {
         selectedModelIdRef.current = modelId;
         setSelectedModelIdState(modelId);
         try {
-            await invoke('set_selected_model', { modelId });
+            await BladeDispatcher.chat({
+                type: 'SetSelectedModel',
+                payload: { model: modelId }
+            });
             console.log('[useChat] Synced model to backend:', modelId);
         } catch (e) {
             console.error('[useChat] Failed to sync model to backend:', e);
@@ -801,7 +804,10 @@ export function useChat() {
 
     const newConversation = useCallback(async () => {
         try {
-            await invoke('new_conversation', { modelId: selectedModelIdRef.current });
+            await BladeDispatcher.chat({
+                type: 'NewConversation',
+                payload: { model: selectedModelIdRef.current }
+            });
             setMessages([]);
             setLoading(false);
             setPendingActions(null);

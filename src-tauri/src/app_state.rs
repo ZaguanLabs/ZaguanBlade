@@ -11,7 +11,7 @@ use crate::workspace_manager::WorkspaceManager;
 use crate::ws_connection_manager::WsConnectionManager;
 use dotenvy::dotenv;
 use notify::RecommendedWatcher;
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 pub struct AppState {
     pub chat_manager: Mutex<ChatManager>,
@@ -39,6 +39,7 @@ pub struct AppState {
     pub idempotency_cache: crate::idempotency::IdempotencyCache, // v1.1: Idempotency support
     pub warmup_client: warmup::WarmupClient,                     // v2.1: Cache warmup
     pub user_id: Mutex<Option<String>>, // Authenticated user ID from WebSocket
+    pub protocol_version_emitted: AtomicBool, // Track protocol version broadcast
     pub fs_watcher: Mutex<Option<RecommendedWatcher>>, // Workspace file watcher
     pub history_service: std::sync::Arc<crate::history::HistoryService>, // File history service
     pub language_service: std::sync::Arc<crate::language_service::LanguageService>, // v1.3: Unified Language Service
@@ -187,6 +188,7 @@ impl AppState {
             idempotency_cache: crate::idempotency::IdempotencyCache::default(), // 24h TTL
             warmup_client, // v2.1: Cache warmup
             fs_watcher: Mutex::new(None),
+            protocol_version_emitted: AtomicBool::new(false),
             history_service,
             language_service,
             language_handler,
