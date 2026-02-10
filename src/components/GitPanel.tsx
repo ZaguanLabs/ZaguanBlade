@@ -250,31 +250,51 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                 {/* Dynamic Commit/Push button */}
                                 {(status?.ahead ?? 0) > 0 || pushSuccess ? (
                                     <button
-                                        className={`flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-md transition-all font-medium ${
+                                        className={`relative flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-md transition-all duration-300 font-medium overflow-hidden ${
                                             pushSuccess
-                                                ? 'bg-emerald-600 text-white'
+                                                ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/30 scale-[1.02]'
                                                 : busyAction === 'push'
-                                                    ? 'bg-green-600/70 text-white/80 cursor-not-allowed animate-pulse'
-                                                    : 'bg-green-600 text-white hover:bg-green-500'
+                                                    ? 'bg-green-600 text-white cursor-not-allowed'
+                                                    : 'bg-green-600 text-white hover:bg-green-500 hover:shadow-md hover:shadow-green-500/20'
                                         }`}
                                         disabled={busyAction === 'push' || pushSuccess}
                                         onClick={() => runAction('push', async () => {
                                             await onPush();
                                             setPushSuccess(true);
-                                            setTimeout(() => setPushSuccess(false), 2000);
+                                            setTimeout(() => setPushSuccess(false), 2500);
                                         })}
                                     >
-                                        {pushSuccess ? (
-                                            <>
-                                                <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
-                                                Pushed
-                                            </>
-                                        ) : (
-                                            <>
-                                                <Upload className={`w-3 h-3 ${busyAction === 'push' ? 'animate-bounce' : ''}`} />
-                                                {busyAction === 'push' ? 'Pushing...' : `Push ${status?.ahead}`}
-                                            </>
+                                        {/* Animated progress bar overlay while pushing */}
+                                        {busyAction === 'push' && (
+                                            <div className="absolute inset-0 overflow-hidden rounded-md">
+                                                <div
+                                                    className="absolute inset-0 bg-gradient-to-r from-green-600 via-emerald-400 to-green-600"
+                                                    style={{
+                                                        backgroundSize: '200% 100%',
+                                                        animation: 'push-shimmer 1.2s ease-in-out infinite',
+                                                    }}
+                                                />
+                                            </div>
                                         )}
+                                        {/* Button content */}
+                                        <span className="relative z-10 flex items-center gap-1.5">
+                                            {pushSuccess ? (
+                                                <>
+                                                    <svg className="w-3.5 h-3.5 animate-[push-check_0.3s_ease-out]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                                                    Pushed!
+                                                </>
+                                            ) : busyAction === 'push' ? (
+                                                <>
+                                                    <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round"><path d="M12 2a10 10 0 0 1 10 10" /></svg>
+                                                    Pushing...
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <Upload className="w-3 h-3" />
+                                                    Push {status?.ahead}
+                                                </>
+                                            )}
+                                        </span>
                                     </button>
                                 ) : (
                                     <button
