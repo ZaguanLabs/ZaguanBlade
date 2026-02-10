@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Minus, Square, X, Maximize2, ChevronDown } from 'lucide-react';
+import zbladeAppIcon from '../assets/zblade-app-icon.png';
 
 /**
  * Custom TitleBar Component
@@ -194,7 +195,7 @@ export const TitleBar: React.FC = () => {
                 data-tauri-drag-region
             >
                 {/* Logo/Icon */}
-                <div className="w-4 h-4 rounded bg-gradient-to-br from-[var(--fg-secondary)] to-[var(--fg-tertiary)] opacity-60" />
+                <img src={zbladeAppIcon} alt="" className="w-5 h-5 object-contain" draggable={false} />
 
                 {/* App name */}
                 <span

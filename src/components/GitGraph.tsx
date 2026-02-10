@@ -223,7 +223,7 @@ export const GitGraph: React.FC<GitGraphProps> = ({ expanded, onToggle }) => {
     };
 
     return (
-        <div className={`flex flex-col ${expanded ? 'flex-1 min-h-0' : ''}`}>
+        <div className={`flex flex-col ${expanded ? 'basis-1/2 shrink-0 grow-0 min-h-0' : ''}`}>
             {/* Header */}
             <button
                 className="w-full flex items-center gap-1.5 px-3 py-2 hover:bg-[var(--bg-surface-hover)] transition-colors border-t border-[var(--border-subtle)] shrink-0"

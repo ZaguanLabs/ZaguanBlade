@@ -195,8 +195,8 @@ export const GitPanel: React.FC<GitPanelProps> = ({
 
                 {isRepo && (
                     <>
-                        {/* Top section: commit box + changes */}
-                        <div className={`overflow-y-auto shrink-0 ${graphExpanded ? 'max-h-[50%]' : 'flex-1'}`}>
+                        {/* Top section: commit box + changes — always scrollable */}
+                        <div className="flex-1 min-h-0 overflow-y-auto">
                         {/* Commit Box - At the top, always visible */}
                         <div className="p-3 border-b border-[var(--border-subtle)] bg-[var(--bg-surface)]/50">
                             {/* Branch info inline */}
