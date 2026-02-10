@@ -123,7 +123,7 @@ export const TitleBar: React.FC = () => {
 
     return (
         <div
-            className="h-9 bg-[var(--bg-app)] flex items-center justify-between px-1 select-none border-b border-[var(--border-subtle)] relative z-[51]"
+            className="h-9 bg-[var(--bg-app)] flex items-center justify-between px-1 select-none border-b border-black relative z-[51]"
             data-tauri-drag-region
         >
             {/* Left: File Menu */}

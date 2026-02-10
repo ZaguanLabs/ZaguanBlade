@@ -343,13 +343,7 @@ We welcome contributions! Zaguán Blade is MIT licensed and open source.
 - 📖 **Improve docs**: Documentation PRs always welcome
 - 🌍 **Translations**: Help us support more languages
 
-**Development setup:**
-```bash
-git clone https://github.com/ZaguanLabs/ZaguanBlade.git
-cd ZaguanBlade
-bun install
-bun run tauri dev
-```
+**Development setup:** Follow the [Building from Source](#building-from-source) instructions, then run the dev server with `bun run tauri dev`.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines (coming soon).
 
