@@ -216,14 +216,14 @@ impl SymbolExtractor {
 
             // Process children with this symbol as parent
             for i in 0..node.child_count() {
-                if let Some(child) = node.child(i) {
+                if let Some(child) = node.child(i as u32) {
                     self.extract_from_node(child, source, language, Some(&symbol_id), symbols);
                 }
             }
         } else {
             // No symbol at this node, process children with same parent
             for i in 0..node.child_count() {
-                if let Some(child) = node.child(i) {
+                if let Some(child) = node.child(i as u32) {
                     self.extract_from_node(child, source, language, parent_id, symbols);
                 }
             }

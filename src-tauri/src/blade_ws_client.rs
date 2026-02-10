@@ -241,11 +241,9 @@ impl BladeWsClient {
 
             // Configure WebSocket with larger message size limit (64MB instead of default 16MB)
             // This prevents "Space limit exceeded" errors for large tool results
-            let ws_config = WebSocketConfig {
-                max_message_size: Some(64 * 1024 * 1024), // 64MB
-                max_frame_size: Some(64 * 1024 * 1024),   // 64MB per frame
-                ..Default::default()
-            };
+            let mut ws_config = WebSocketConfig::default();
+            ws_config.max_message_size = Some(64 * 1024 * 1024); // 64MB
+            ws_config.max_frame_size = Some(64 * 1024 * 1024);   // 64MB per frame
 
             match connect_async_with_config(&url, Some(ws_config), false).await {
                 Ok((stream, _)) => {
@@ -306,7 +304,7 @@ impl BladeWsClient {
                         );
 
                         eprintln!("[WS WRITE] T+{:?} Calling write.send()...", t0.elapsed());
-                        if let Err(e) = write.send(Message::Text(text)).await {
+                        if let Err(e) = write.send(Message::Text(text.into())).await {
                             eprintln!("[WS WRITE] Write error after {:?}: {}", t0.elapsed(), e);
                             break;
                         }
@@ -326,7 +324,7 @@ impl BladeWsClient {
                         );
                     }
                     WsMessage::Ping => {
-                        if let Err(e) = write.send(Message::Ping(Vec::new())).await {
+                        if let Err(e) = write.send(Message::Ping(Vec::new().into())).await {
                             eprintln!("[BLADE WS] Ping error: {}", e);
                             break;
                         }

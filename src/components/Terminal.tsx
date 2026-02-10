@@ -155,6 +155,17 @@ export default function Terminal({ id = "main-terminal", cwd }: TerminalProps) {
 
         term.open(terminalRef.current);
 
+        // Fix: On Linux, Alt-Gr composed characters (e.g. ~, @, {, [) fire both
+        // a keydown and a composition/input event, causing double input. xterm.js
+        // only handles AltGraph for Windows in _isThirdLevelShift. We suppress the
+        // keydown processing here so the composition path handles it instead.
+        term.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
+            if (ev.type === 'keydown' && ev.getModifierState('AltGraph')) {
+                return false;
+            }
+            return true;
+        });
+
         // Robust Fit Strategy:
         // PTY spawning needs dimensions. We must ensure the terminal has size before fitting.
         // We poll for a short period until we get valid dimensions.
