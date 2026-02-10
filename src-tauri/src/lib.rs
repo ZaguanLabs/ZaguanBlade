@@ -261,6 +261,9 @@ pub fn run() {
             git::git_diff,
             git::git_generate_commit_message,
             git::git_generate_commit_message_ai,
+            git::git_log,
+            git::git_commit_stats,
+            git::git_remote_url,
             // Ephemeral
             ephemeral_commands::create_ephemeral_document,
             ephemeral_commands::get_ephemeral_document,

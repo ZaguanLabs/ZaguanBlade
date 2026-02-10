@@ -9,6 +9,7 @@ import { useEditor } from '../contexts/EditorContext';
 import { BladeDispatcher } from '../services/blade';
 import { BladeEvent, FileEvent } from '../types/blade';
 import { ArrowRight, Settings } from 'lucide-react';
+import zbladeLogoUrl from '../assets/zblade-in-app-logo.png';
 import { FileChangeBar } from './editor/FileChangeBar';
 import { Breadcrumb } from './editor/Breadcrumb';
 import { useUncommittedChanges } from '../hooks/useUncommittedChanges';
@@ -50,12 +51,12 @@ const WelcomePage: React.FC<{ onOpenSettings?: () => void }> = ({ onOpenSettings
         <div className="h-full flex flex-col items-center justify-center bg-[var(--bg-editor)] text-center p-8 animate-in fade-in duration-300">
             <div className="max-w-xl w-full">
                 <div className="mb-8 flex justify-center">
-                    <div className="relative w-24 h-24 rounded-2xl bg-gradient-to-br from-emerald-500/20 to-sky-500/20 flex items-center justify-center border border-[var(--border-default)] shadow-xl shadow-emerald-500/10">
-                        <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-emerald-500/10 to-transparent blur-xl"></div>
-                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="text-emerald-500 relative z-10">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 3v18M3 12h18M5 5l14 14M5 19L19 5" />
-                        </svg>
-                    </div>
+                    <img
+                        src={zbladeLogoUrl}
+                        alt="Zaguán Blade"
+                        className="w-32 h-32 object-contain drop-shadow-lg"
+                        draggable={false}
+                    />
                 </div>
 
                 <h1 className="text-3xl font-bold text-[var(--fg-primary)] mb-3 tracking-tight">

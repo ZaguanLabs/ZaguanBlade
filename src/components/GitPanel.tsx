@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import type { GitFileStatus, GitStatusSummary, CommitPreflightResult } from '../hooks/useGitStatus';
 import { Sparkles, GitCommit, Upload, ChevronDown, ChevronRight, Plus, Minus, RefreshCw, AlertTriangle } from 'lucide-react';
+import { GitGraph } from './GitGraph';
 
 interface GitPanelProps {
     status: GitStatusSummary | null;
@@ -55,6 +56,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
     const [diffs, setDiffs] = useState<DiffState>({});
     const [stagedExpanded, setStagedExpanded] = useState(true);
     const [unstagedExpanded, setUnstagedExpanded] = useState(true);
+    const [graphExpanded, setGraphExpanded] = useState(false);
 
     const isRepo = status?.isRepo ?? false;
     const changedCount = status?.changedCount ?? 0;
@@ -186,13 +188,15 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                 </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto flex flex-col">
+            <div className="flex-1 min-h-0 flex flex-col">
                 {!isRepo && (
                     <div className="p-4 text-[var(--fg-secondary)] italic text-xs">Not a Git repository.</div>
                 )}
 
                 {isRepo && (
                     <>
+                        {/* Top section: commit box + changes — always scrollable */}
+                        <div className="flex-1 min-h-0 overflow-y-auto">
                         {/* Commit Box - At the top, always visible */}
                         <div className="p-3 border-b border-[var(--border-subtle)] bg-[var(--bg-surface)]/50">
                             {/* Branch info inline */}
@@ -328,7 +332,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                         </div>
 
                         {/* Changes section */}
-                        <div className="flex-1 overflow-y-auto">
+                        <div>
                             {changedCount === 0 ? (
                                 <div className="p-4 text-[var(--fg-secondary)] italic text-xs text-center">
                                     ✓ Working tree clean
@@ -429,6 +433,10 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                 </div>
                             )}
                         </div>
+                        </div>
+
+                        {/* Graph section - pinned to bottom */}
+                        <GitGraph expanded={graphExpanded} onToggle={() => setGraphExpanded(!graphExpanded)} />
                     </>
                 )}
 

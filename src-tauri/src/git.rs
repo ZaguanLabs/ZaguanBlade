@@ -164,6 +164,25 @@ fn workspace_root(state: &State<'_, AppState>) -> Option<String> {
         .map(|p| p.to_string_lossy().to_string())
 }
 
+fn open_repo(state: &State<'_, AppState>) -> Result<gix::Repository, String> {
+    let git_dir = state.git_dir.read().unwrap();
+    let path = git_dir.as_ref().ok_or("Not a Git repository")?;
+    gix::open(path).map_err(|e| format!("Failed to open git repository: {}", e))
+}
+
+fn normalize_remote_url(url: &str) -> String {
+    if url.starts_with("git@") {
+        let without_prefix = url.trim_start_matches("git@");
+        let normalized = without_prefix.replacen(':', "/", 1);
+        let trimmed = normalized.trim_end_matches(".git");
+        format!("https://{}", trimmed)
+    } else if url.starts_with("https://") || url.starts_with("http://") {
+        url.trim_end_matches(".git").to_string()
+    } else {
+        url.to_string()
+    }
+}
+
 fn git_status_output(root: &str) -> Result<Option<String>, String> {
     let output = Command::new("git")
         .arg("-C")
@@ -320,25 +339,51 @@ fn collect_changes_for_message(root: &str) -> Result<CommitContext, String> {
     }
     .unwrap_or_default();
 
-    // Get current branch
-    let branch = run_git(root, &["rev-parse", "--abbrev-ref", "HEAD"][..])
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty() && s != "HEAD");
-
-    // Get last commit message for style reference
-    let last_commit_message = run_git(root, &["log", "-1", "--format=%B"][..])
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-
-    // Get recent commits for context
-    let recent_commits: Vec<String> = run_git(root, &["log", "--oneline", "-5"][..])
-        .unwrap_or_default()
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect();
+    // Get current branch, last commit, and recent commits via gix if possible
+    let (branch, last_commit_message, recent_commits) = {
+        let repo = gix::discover(root).ok();
+        if let Some(repo) = repo {
+            let branch = repo.head().ok().and_then(|h| {
+                if h.is_detached() { None } else { h.referent_name().map(|n| n.shorten().to_string()) }
+            });
+            let head_id = repo.head_id().ok();
+            let last_commit_message = head_id.as_ref().and_then(|id| {
+                id.object().ok().map(|o| {
+                    let c = o.into_commit();
+                    c.decode().ok().map(|cr| cr.message().summary().to_string())
+                }).flatten()
+            });
+            let recent_commits: Vec<String> = head_id.map(|id| {
+                id.ancestors().all().ok().map(|walk| {
+                    walk.take(5).filter_map(|info| {
+                        let info = info.ok()?;
+                        let commit = info.id().object().ok()?.into_commit();
+                        let cr = commit.decode().ok()?;
+                        let short = &info.id().to_string()[..7];
+                        Some(format!("{} {}", short, cr.message().summary()))
+                    }).collect()
+                }).unwrap_or_default()
+            }).unwrap_or_default();
+            (branch, last_commit_message, recent_commits)
+        } else {
+            // Fallback to CLI
+            let branch = run_git(root, &["rev-parse", "--abbrev-ref", "HEAD"][..])
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty() && s != "HEAD");
+            let last_commit_message = run_git(root, &["log", "-1", "--format=%B"][..])
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let recent_commits: Vec<String> = run_git(root, &["log", "--oneline", "-5"][..])
+                .unwrap_or_default()
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect();
+            (branch, last_commit_message, recent_commits)
+        }
+    };
 
     // For untracked files, include a preview of their content
     let mut new_file_content = String::new();
@@ -645,66 +690,46 @@ pub fn git_commit(state: State<'_, AppState>, message: String) -> Result<String,
 
 #[tauri::command]
 pub fn git_commit_preflight(state: State<'_, AppState>) -> Result<CommitPreflightResult, String> {
-    let Some(root) = workspace_root(&state) else {
-        return Ok(CommitPreflightResult {
-            can_commit: false,
-            is_repo: false,
-            branch: None,
-            is_detached: false,
-            has_upstream: false,
-            has_conflicts: false,
-            staged_count: 0,
-            error_message: Some("No workspace open".to_string()),
-        });
+    let repo = match open_repo(&state) {
+        Ok(r) => r,
+        Err(_) => {
+            return Ok(CommitPreflightResult {
+                can_commit: false,
+                is_repo: false,
+                branch: None,
+                is_detached: false,
+                has_upstream: false,
+                has_conflicts: false,
+                staged_count: 0,
+                error_message: Some("Not a Git repository".to_string()),
+            });
+        }
     };
 
-    // Check if it's a git repo
-    let is_repo = Command::new("git")
-        .arg("-C")
-        .arg(&root)
-        .arg("rev-parse")
-        .arg("--git-dir")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    if !is_repo {
-        return Ok(CommitPreflightResult {
-            can_commit: false,
-            is_repo: false,
-            branch: None,
-            is_detached: false,
-            has_upstream: false,
-            has_conflicts: false,
-            staged_count: 0,
-            error_message: Some("Not a Git repository".to_string()),
-        });
-    }
-
-    // Get current branch (HEAD for detached)
-    let branch_output = run_git(&root, &["rev-parse", "--abbrev-ref", "HEAD"][..])
-        .unwrap_or_else(|_| "HEAD".to_string());
-    let branch_name = branch_output.trim();
-    let is_detached = branch_name == "HEAD";
-    let branch = if is_detached { None } else { Some(branch_name.to_string()) };
-
-    // Check for upstream
-    let has_upstream = if !is_detached {
-        run_git(
-            &root,
-            &["rev-parse", "--abbrev-ref", &format!("{}@{{upstream}}", branch_name)][..],
-        )
-            .is_ok()
+    // Branch info from HEAD
+    let head = repo.head().map_err(|e| format!("Failed to read HEAD: {}", e))?;
+    let is_detached = head.is_detached();
+    let branch = if is_detached {
+        None
     } else {
-        false
+        head.referent_name().map(|n| n.shorten().to_string())
     };
 
-    // Check for conflicts
+    // Check for upstream tracking ref via config: branch.<name>.remote
+    let has_upstream = branch.as_ref().map_or(false, |b| {
+        let config = repo.config_snapshot();
+        let key = format!("branch.{}.remote", b);
+        config.string(&key).is_some()
+    });
+
+    // Use CLI for status checks (staged count + conflicts) until gix status API is wired
+    let root = match workspace_root(&state) {
+        Some(r) => r,
+        None => return Err("No workspace open".to_string()),
+    };
     let status_output = run_git(&root, &["status", "--porcelain=v2"][..])
         .unwrap_or_default();
     let has_conflicts = status_output.lines().any(|l| l.starts_with("u "));
-
-    // Count staged files
     let staged_count = status_output
         .lines()
         .filter(|l| {
@@ -950,4 +975,268 @@ Respond with ONLY the commit message, nothing else."#,
     } else {
         Ok(message.to_string())
     }
+}
+
+// ── Git Graph / Log ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommitStats {
+    pub insertions: u32,
+    pub deletions: u32,
+    pub files_changed: u32,
+}
+
+#[tauri::command]
+pub fn git_commit_stats(state: State<'_, AppState>, hash: String) -> Result<GitCommitStats, String> {
+    let Some(root) = workspace_root(&state) else {
+        return Err("No workspace open".to_string());
+    };
+
+    // Use diff-tree --numstat for efficient stat computation
+    let output = run_git(
+        &root,
+        &["diff-tree", "--numstat", "--no-commit-id", "-r", &hash][..],
+    )?;
+
+    let mut insertions = 0u32;
+    let mut deletions = 0u32;
+    let mut files_changed = 0u32;
+
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        files_changed += 1;
+        let mut parts = line.split_whitespace();
+        if let Some(ins) = parts.next() {
+            insertions += ins.parse::<u32>().unwrap_or(0); // "-" for binary
+        }
+        if let Some(del) = parts.next() {
+            deletions += del.parse::<u32>().unwrap_or(0);
+        }
+    }
+
+    Ok(GitCommitStats {
+        insertions,
+        deletions,
+        files_changed,
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitLogEntry {
+    pub hash: String,
+    pub short_hash: String,
+    pub author_name: String,
+    pub author_email: String,
+    pub date: String,        // ISO 8601
+    pub relative_date: String,
+    pub subject: String,
+    pub refs: Vec<String>,   // e.g. ["HEAD -> main", "origin/main", "tag: v1.0"]
+    pub parents: Vec<String>, // short parent hashes
+    pub insertions: u32,
+    pub deletions: u32,
+    pub files_changed: u32,
+}
+
+#[tauri::command]
+pub fn git_log(state: State<'_, AppState>, count: Option<u32>) -> Result<Vec<GitLogEntry>, String> {
+    let repo = match open_repo(&state) {
+        Ok(r) => r,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    let n = count.unwrap_or(50).min(500) as usize;
+
+    // Build ref decoration map: commit_id -> Vec<decoration_string>
+    let ref_map = build_ref_map(&repo);
+
+    // Walk commits from HEAD
+    let head_id = match repo.head_id() {
+        Ok(id) => id,
+        Err(_) => return Ok(Vec::new()), // empty repo or unborn branch
+    };
+
+    let walk = head_id
+        .ancestors()
+        .all()
+        .map_err(|e| format!("Failed to walk commits: {}", e))?;
+
+    let now = chrono::Utc::now();
+    let mut entries = Vec::with_capacity(n);
+
+    for info in walk {
+        if entries.len() >= n {
+            break;
+        }
+        let info = info.map_err(|e| format!("Commit walk error: {}", e))?;
+        let commit = info.id().object().map_err(|e| format!("Failed to read commit: {}", e))?;
+        let commit = commit.into_commit();
+        let commit_ref = commit.decode().map_err(|e| format!("Failed to decode commit: {}", e))?;
+
+        let hash = info.id().to_string();
+        let short_hash = hash[..7.min(hash.len())].to_string();
+
+        let author = commit_ref.author().map_err(|e| format!("Failed to parse author: {}", e))?;
+        let author_name = author.name.to_string();
+        let author_email = author.email.to_string();
+
+        // Convert git timestamp to ISO 8601 and relative date
+        // author.time is a raw string like "1707580800 +0100"
+        let (ts, offset_secs) = parse_git_time(author.time);
+        let fixed_offset = chrono::FixedOffset::east_opt(offset_secs)
+            .unwrap_or_else(|| chrono::FixedOffset::east_opt(0).unwrap());
+        let dt = chrono::DateTime::from_timestamp(ts as i64, 0)
+            .unwrap_or_default()
+            .with_timezone(&fixed_offset);
+        let date = dt.to_rfc3339();
+        let relative_date = format_relative_date(now, dt.with_timezone(&chrono::Utc));
+
+        let subject = commit_ref.message().summary().to_string();
+
+        let parents: Vec<String> = commit_ref
+            .parents()
+            .map(|id| {
+                let s = id.to_string();
+                s[..7.min(s.len())].to_string()
+            })
+            .collect();
+
+        let refs = ref_map.get(&info.id().detach()).cloned().unwrap_or_default();
+
+        entries.push(GitLogEntry {
+            hash,
+            short_hash,
+            author_name,
+            author_email,
+            date,
+            relative_date,
+            subject,
+            refs,
+            parents,
+            insertions: 0,
+            deletions: 0,
+            files_changed: 0,
+        });
+    }
+
+    Ok(entries)
+}
+
+fn build_ref_map(repo: &gix::Repository) -> std::collections::HashMap<gix::ObjectId, Vec<String>> {
+    let mut map: std::collections::HashMap<gix::ObjectId, Vec<String>> = std::collections::HashMap::new();
+
+    let head_ref_name = repo.head().ok().and_then(|h| {
+        h.referent_name().map(|n| n.as_bstr().to_string())
+    });
+
+    if let Ok(refs) = repo.references() {
+        if let Ok(all) = refs.all() {
+            for reference in all.flatten() {
+                let full_name = reference.name().as_bstr().to_string();
+                let id = match reference.try_id() {
+                    Some(id) => id.detach(),
+                    None => continue,
+                };
+
+                let decoration = if full_name.starts_with("refs/heads/") {
+                    let branch = full_name.strip_prefix("refs/heads/").unwrap();
+                    if head_ref_name.as_deref() == Some(&full_name) {
+                        format!("HEAD -> {}", branch)
+                    } else {
+                        branch.to_string()
+                    }
+                } else if full_name.starts_with("refs/remotes/") {
+                    let remote_branch = full_name.strip_prefix("refs/remotes/").unwrap();
+                    if remote_branch == "HEAD" || remote_branch.ends_with("/HEAD") {
+                        continue;
+                    }
+                    remote_branch.to_string()
+                } else if full_name.starts_with("refs/tags/") {
+                    let tag = full_name.strip_prefix("refs/tags/").unwrap();
+                    format!("tag: {}", tag)
+                } else {
+                    continue;
+                };
+
+                map.entry(id).or_default().push(decoration);
+            }
+        }
+    }
+
+    map
+}
+
+fn parse_git_time(raw: &str) -> (i64, i32) {
+    let mut parts = raw.split_whitespace();
+    let seconds: i64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let offset_str = parts.next().unwrap_or("+0000");
+    // offset_str is like "+0100" or "-0500"
+    let sign = if offset_str.starts_with('-') { -1i32 } else { 1i32 };
+    let digits = offset_str.trim_start_matches(['+', '-']);
+    let hours: i32 = digits.get(..2).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let mins: i32 = digits.get(2..4).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let offset_secs = sign * (hours * 3600 + mins * 60);
+    (seconds, offset_secs)
+}
+
+fn format_relative_date(now: chrono::DateTime<chrono::Utc>, then: chrono::DateTime<chrono::Utc>) -> String {
+    let duration = now.signed_duration_since(then);
+    let secs = duration.num_seconds();
+    if secs < 0 {
+        return "in the future".to_string();
+    }
+    let secs = secs as u64;
+    if secs < 60 {
+        return format!("{} seconds ago", secs);
+    }
+    let mins = secs / 60;
+    if mins < 60 {
+        return if mins == 1 { "1 minute ago".to_string() } else { format!("{} minutes ago", mins) };
+    }
+    let hours = mins / 60;
+    if hours < 24 {
+        return if hours == 1 { "1 hour ago".to_string() } else { format!("{} hours ago", hours) };
+    }
+    let days = hours / 24;
+    if days < 7 {
+        return if days == 1 { "1 day ago".to_string() } else { format!("{} days ago", days) };
+    }
+    let weeks = days / 7;
+    if weeks < 5 {
+        return if weeks == 1 { "1 week ago".to_string() } else { format!("{} weeks ago", weeks) };
+    }
+    let months = days / 30;
+    if months < 12 {
+        return if months == 1 { "1 month ago".to_string() } else { format!("{} months ago", months) };
+    }
+    let years = days / 365;
+    if years == 1 { "1 year ago".to_string() } else { format!("{} years ago", years) }
+}
+
+#[tauri::command]
+pub fn git_remote_url(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    let repo = match open_repo(&state) {
+        Ok(r) => r,
+        Err(_) => return Ok(None),
+    };
+
+    let remote = match repo.find_remote("origin") {
+        Ok(r) => r,
+        Err(_) => return Ok(None),
+    };
+
+    let url = match remote.url(gix::remote::Direction::Fetch) {
+        Some(u) => u.to_bstring().to_string(),
+        None => return Ok(None),
+    };
+
+    if url.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(normalize_remote_url(&url)))
 }

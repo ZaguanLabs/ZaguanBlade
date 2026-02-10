@@ -9,6 +9,21 @@ pub async fn open_workspace_logic(
     let mut ws = state.workspace.lock().unwrap();
     ws.set_workspace(std::path::PathBuf::from(&path));
     drop(ws);
+
+    // Re-discover git repository for new workspace
+    let new_git_dir = match gix::discover(&path) {
+        Ok(repo) => {
+            let git_path = repo.path().to_path_buf();
+            eprintln!("[GIT] Discovered repository at: {:?}", git_path);
+            Some(git_path)
+        }
+        Err(e) => {
+            eprintln!("[GIT] No repository found: {}", e);
+            None
+        }
+    };
+    *state.git_dir.write().unwrap() = new_git_dir;
+
     crate::fs_watcher::restart_fs_watcher(app_handle);
     let _ = app_handle.emit(crate::events::event_names::REFRESH_EXPLORER, ());
 

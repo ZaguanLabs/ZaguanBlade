@@ -11,7 +11,8 @@ use crate::workspace_manager::WorkspaceManager;
 use crate::ws_connection_manager::WsConnectionManager;
 use dotenvy::dotenv;
 use notify::RecommendedWatcher;
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use std::sync::{atomic::AtomicBool, Arc, Mutex, RwLock};
+use std::path::PathBuf;
 
 pub struct AppState {
     pub chat_manager: Mutex<ChatManager>,
@@ -51,6 +52,7 @@ pub struct AppState {
     pub active_tab_id: Mutex<Option<String>>, // Headless: active tab ID
     pub ws_connection: Arc<WsConnectionManager>, // Persistent WebSocket connection to zcoderd
     pub pending_error_feedback: Mutex<Option<String>>, // Recovery hint to prepend to next user message
+    pub git_dir: RwLock<Option<PathBuf>>, // Path to .git directory for gix::open()
 }
 
 impl AppState {
@@ -115,6 +117,24 @@ impl AppState {
         if let Some(path_str) = &initial_path {
             workspace_manager.set_workspace(std::path::PathBuf::from(path_str));
         }
+
+        // Discover git repository from workspace path
+        let git_dir = workspace_manager
+            .workspace
+            .as_ref()
+            .and_then(|ws_path| {
+                match gix::discover(ws_path) {
+                    Ok(repo) => {
+                        let path = repo.path().to_path_buf();
+                        eprintln!("[GIT] Discovered repository at: {:?}", path);
+                        Some(path)
+                    }
+                    Err(e) => {
+                        eprintln!("[GIT] No repository found: {}", e);
+                        None
+                    }
+                }
+            });
 
         // Get or create user_id
         let user_id = config::get_or_create_user_id(&config_path);
@@ -199,6 +219,7 @@ impl AppState {
             active_tab_id: Mutex::new(None),
             ws_connection,
             pending_error_feedback: Mutex::new(None),
+            git_dir: RwLock::new(git_dir),
         }
     }
 }
