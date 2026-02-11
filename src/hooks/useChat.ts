@@ -56,17 +56,27 @@ export function useChat() {
                             updated = [...prev];
                             changed = true;
                         }
-                        // Merge blocks: keep tool_call/command_execution/todo/research blocks from existing message,
-                        // replace text/reasoning blocks with new ones from the buffer
-                        const existingNonTextBlocks = (msg.blocks || []).filter(
-                            b => b.type !== 'text' && b.type !== 'reasoning'
+                        // Use blocks from blocksRef (via update.blocks) directly — they already
+                        // maintain the correct interleaved order (text → tool_call → text, etc.).
+                        // Only inject non-text blocks from msg.blocks that blocksRef doesn't know about
+                        // (e.g. tool_call blocks added by ToolUpdate between flush cycles).
+                        const updateBlockIds = new Set(update.blocks.map(b => b.id));
+                        const missingNonTextBlocks = (msg.blocks || []).filter(
+                            b => b.type !== 'text' && b.type !== 'reasoning' && !updateBlockIds.has(b.id)
                         );
-                        const newTextBlocks = update.blocks.filter(
-                            b => b.type === 'text' || b.type === 'reasoning'
-                        );
-                        // Natural conversation flow: tool calls first, then response text after
-                        // This matches how the model actually works - it calls tools, gets results, then responds
-                        const mergedBlocks = [...existingNonTextBlocks, ...newTextBlocks];
+                        // Append any missing non-text blocks at their natural position (end of existing non-text run)
+                        let mergedBlocks = [...update.blocks];
+                        if (missingNonTextBlocks.length > 0) {
+                            // Find the last non-text block in update.blocks to insert after
+                            let insertIdx = mergedBlocks.length;
+                            for (let i = mergedBlocks.length - 1; i >= 0; i--) {
+                                if (mergedBlocks[i].type !== 'text' && mergedBlocks[i].type !== 'reasoning') {
+                                    insertIdx = i + 1;
+                                    break;
+                                }
+                            }
+                            mergedBlocks.splice(insertIdx, 0, ...missingNonTextBlocks);
+                        }
                         
                         updated[idx] = {
                             ...msg,

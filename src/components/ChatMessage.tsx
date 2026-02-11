@@ -660,6 +660,7 @@ export const ChatMessage = React.memo(ChatMessageComponent, (prevProps, nextProp
     if (prevMsg.content !== nextMsg.content) return false;
     if (prevMsg.reasoning !== nextMsg.reasoning) return false;
     if (prevMsg.tool_calls?.length !== nextMsg.tool_calls?.length) return false;
+    if (prevMsg.blocks?.length !== nextMsg.blocks?.length) return false;
     
     // Check tool call statuses (important for showing execution state)
     if (prevMsg.tool_calls && nextMsg.tool_calls) {
