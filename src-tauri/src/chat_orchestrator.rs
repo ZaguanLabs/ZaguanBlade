@@ -895,8 +895,18 @@ pub async fn handle_send_message<R: Runtime>(
                         }
                     }
 
-                    // Check if loop was detected - if so, stop the agentic loop
-                    if batch.loop_detected {
+                    // Check if user requested stop — if so, don't start a new stream.
+                    // After request_stop(): streaming=false AND rx=None.
+                    // During normal tool execution: streaming=false but rx is still Some.
+                    let user_stopped = {
+                        let mgr = state.chat_manager.lock().unwrap();
+                        !mgr.streaming && mgr.rx.is_none()
+                    };
+                    if user_stopped {
+                        eprintln!("[ORCHESTRATOR] User requested stop — skipping continue_tool_batch");
+                        // Fall through to let the loop break naturally on next iteration
+                    } else if batch.loop_detected {
+                        // Check if loop was detected - if so, stop the agentic loop
                         eprintln!("[AGENTIC LOOP] Stopping due to loop detection");
 
                         let models = load_available_models(&state).await;

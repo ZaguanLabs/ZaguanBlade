@@ -67,6 +67,9 @@ temp_next/
 # Internal documentation
 /docs/internal/
 
+# Internal streaming experiments
+/streaming/
+
 # IDE
 .vscode/
 .idea/

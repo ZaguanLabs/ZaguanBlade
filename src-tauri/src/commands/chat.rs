@@ -164,6 +164,16 @@ pub fn stop_generation(state: State<'_, AppState>, app_handle: tauri::AppHandle)
     let mut batch_guard = state.pending_batch.lock().unwrap();
     *batch_guard = None;
 
+    // Signal the pending_approval oneshot so the orchestrator unblocks
+    // from command approval waits (e.g. waiting for user to approve a command)
+    {
+        let mut approval_guard = state.pending_approval.lock().unwrap();
+        if let Some(tx) = approval_guard.take() {
+            eprintln!("[STOP] Signalling pending_approval oneshot to unblock orchestrator");
+            let _ = tx.send(false); // false = not approved, just unblocking
+        }
+    }
+
     // Cancel all executing commands and emit events immediately
     let mut executing = state.executing_commands.lock().unwrap();
     for (call_id, cancel_flag) in executing.drain() {
@@ -181,6 +191,10 @@ pub fn stop_generation(state: State<'_, AppState>, app_handle: tauri::AppHandle)
             },
         );
     }
+
+    // Emit chat-done so the frontend resets loading state immediately
+    // The orchestrator loop will also see streaming=false + rx=None and break
+    let _ = app_handle.emit("chat-done", ());
 
     stopped
 }

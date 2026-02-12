@@ -28,7 +28,7 @@ pub async fn handle_get_full_context(
         
         let root = idx.root.clone();
         let file_count = idx.file_count();
-        let tree_render = idx.tree.render(3);
+        let tree_render = idx.tree.render(10);
         let file_paths: Vec<PathBuf> = idx.files.keys()
             .take(options.max_files)
             .cloned()

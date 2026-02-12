@@ -11,6 +11,15 @@ pub fn index_workspace(root: &Path) -> Result<ProjectIndex, Box<dyn std::error::
         .git_ignore(true)
         .git_global(true)
         .git_exclude(true)
+        .filter_entry(|entry| {
+            // Skip known non-project directories
+            if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                if let Some(name) = entry.file_name().to_str() {
+                    return !crate::indexer::types::SKIP_DIRS.contains(&name);
+                }
+            }
+            true
+        })
         .build();
     
     for entry in walker {
@@ -64,24 +73,28 @@ pub fn build_tree(files: &HashMap<PathBuf, FileMetadata>, root: &Path) -> Direct
     
     for path in files.keys() {
         if let Ok(rel_path) = path.strip_prefix(root) {
-            if let Some(parent) = rel_path.parent() {
-                let parent_path = root.join(parent);
-                
+            let parent = rel_path.parent();
+            // Root-level files: parent() returns Some("") for files directly in root
+            if parent.is_none() || parent == Some(Path::new("")) {
+                if let Some(file_name) = path.file_name() {
+                    root_tree.add_file(file_name.to_string_lossy().to_string());
+                }
+            } else {
+                let parent_path = root.join(parent.unwrap());
                 if let Some(dir_tree) = dir_map.get_mut(&parent_path) {
                     if let Some(file_name) = path.file_name() {
                         dir_tree.add_file(file_name.to_string_lossy().to_string());
                     }
-                }
-            } else {
-                if let Some(file_name) = path.file_name() {
-                    root_tree.add_file(file_name.to_string_lossy().to_string());
                 }
             }
         }
     }
     
     let mut sorted_dirs: Vec<_> = dir_map.into_iter().collect();
-    sorted_dirs.sort_by(|a, b| b.0.components().count().cmp(&a.0.components().count()));
+    // Sort shallowest-first so parents are inserted into root_tree before their children.
+    // The previous deepest-first sort caused children to be silently dropped because
+    // find_tree_mut couldn't find their not-yet-inserted parent nodes.
+    sorted_dirs.sort_by(|a, b| a.0.components().count().cmp(&b.0.components().count()));
     
     for (dir_path, dir_tree) in sorted_dirs {
         if let Some(parent) = dir_path.parent() {
