@@ -80,6 +80,11 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
         && models.every((model) => model.provider === 'ollama' || model.provider === 'openai-compat')
     ), [models]);
 
+    const isGlmModel = useMemo(() => {
+        const id = selectedModelId.toLowerCase();
+        return id.includes('glm-4') || id.includes('glm-5') || id.includes('glm4') || id.includes('glm5');
+    }, [selectedModelId]);
+
     // Reset textarea height when text is cleared (after sending)
     useEffect(() => {
         if (textareaRef.current && text === '') {
@@ -94,6 +99,10 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
 
         if (isLocalOnly) {
             setAttachmentError('Image support requires a subscription. Go to Settings.');
+            return;
+        }
+        if (isGlmModel) {
+            setAttachmentError('GLM models do not support image attachments. Please select a different model.');
             return;
         }
 
@@ -136,7 +145,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
         } else if (newAttachments.length > 0) {
             setAttachmentError(null);
         }
-    }, [isLocalOnly]);
+    }, [isLocalOnly, isGlmModel]);
 
     const handleRemoveAttachment = useCallback((id: string) => {
         setAttachments((prev) => prev.filter((attachment) => attachment.id !== id));
@@ -178,6 +187,10 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
             setAttachmentError('Image support requires a subscription. Go to Settings.');
             return;
         }
+        if (isGlmModel) {
+            setAttachmentError('GLM models do not support image attachments. Please select a different model.');
+            return;
+        }
         setWindowPickerMode('capture');
         setWindowPickerOpen(true);
         setWindowPickerLoading(true);
@@ -191,11 +204,15 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
         } finally {
             setWindowPickerLoading(false);
         }
-    }, [isLocalOnly]);
+    }, [isLocalOnly, isGlmModel]);
 
     const handleRegionCapture = useCallback(async () => {
         if (isLocalOnly) {
             setAttachmentError('Image support requires a subscription. Go to Settings.');
+            return;
+        }
+        if (isGlmModel) {
+            setAttachmentError('GLM models do not support image attachments. Please select a different model.');
             return;
         }
         setWindowPickerMode('region');
@@ -211,7 +228,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
         } finally {
             setWindowPickerLoading(false);
         }
-    }, [isLocalOnly]);
+    }, [isLocalOnly, isGlmModel]);
 
     const handleScreenshot = useCallback((mode: 'window' | 'region') => {
         if (mode === 'window') {
@@ -224,6 +241,10 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
     const handleUploadImage = useCallback(async () => {
         if (isLocalOnly) {
             setAttachmentError('Image support requires a subscription. Go to Settings.');
+            return;
+        }
+        if (isGlmModel) {
+            setAttachmentError('GLM models do not support image attachments. Please select a different model.');
             return;
         }
         try {
@@ -293,7 +314,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
             console.error('[CommandCenter] Failed to upload image:', error);
             setAttachmentError('Failed to upload image.');
         }
-    }, [isLocalOnly]);
+    }, [isLocalOnly, isGlmModel]);
 
     const handleWindowSelect = useCallback(async (windowId: number) => {
         setWindowPickerLoading(true);
@@ -440,6 +461,10 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                 setAttachmentError('Image support requires a subscription. Go to Settings.');
                 return;
             }
+            if (isGlmModel && attachments.length > 0) {
+                setAttachmentError('GLM models do not support image attachments. Please select a different model.');
+                return;
+            }
             if ((text.trim() || attachments.length > 0) && !disabled) {
                 onSend(text, attachments);
                 setText('');
@@ -524,6 +549,8 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                     onStop();
                                 } else if (isLocalOnly && attachments.length > 0) {
                                     setAttachmentError('Image support requires a subscription. Go to Settings.');
+                                } else if (isGlmModel && attachments.length > 0) {
+                                    setAttachmentError('GLM models do not support image attachments. Please select a different model.');
                                 } else if ((text.trim() || attachments.length > 0) && !disabled) {
                                     onSend(text, attachments);
                                     setText('');
