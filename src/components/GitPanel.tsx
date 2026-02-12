@@ -264,6 +264,12 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                             setTimeout(() => setPushSuccess(false), 2500);
                                         })}
                                     >
+                                        {/* Push indicator badge */}
+                                        {status?.ahead && status.ahead > 0 && !pushSuccess && (
+                                            <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center w-3.5 h-3.5 bg-white text-green-600 rounded-full text-[8px] font-bold animate-pulse">
+                                                {status.ahead}
+                                            </span>
+                                        )}
                                         {/* Animated progress bar overlay while pushing */}
                                         {busyAction === 'push' && (
                                             <div className="absolute inset-0 overflow-hidden rounded-md">

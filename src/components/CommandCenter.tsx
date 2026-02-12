@@ -538,7 +538,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                             onPaste={handlePaste}
                             onKeyDown={handleKeyDown}
                             placeholder={t('chat.inputPlaceholder')}
-                            className="w-full bg-transparent p-3 pr-10 outline-none resize-none min-h-[42px] max-h-[400px] overflow-y-auto text-xs font-sans font-semibold placeholder-[var(--fg-tertiary)] leading-relaxed relative z-10 text-[var(--fg-secondary)]"
+                            className="w-full bg-transparent p-3 pr-12 outline-none resize-none min-h-[42px] max-h-[400px] overflow-y-auto text-xs font-sans font-semibold placeholder-[var(--fg-tertiary)] leading-relaxed relative z-10 text-[var(--fg-secondary)]"
                             rows={1}
                             disabled={disabled}
                         />
