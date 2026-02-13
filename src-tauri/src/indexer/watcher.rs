@@ -67,9 +67,20 @@ fn debounced_update_loop(
     }
 }
 
+fn is_in_skip_dir(path: &PathBuf) -> bool {
+    path.components().any(|c| {
+        if let std::path::Component::Normal(name) = c {
+            if let Some(s) = name.to_str() {
+                return crate::indexer::types::SKIP_DIRS.contains(&s);
+            }
+        }
+        false
+    })
+}
+
 fn extract_paths(event: &Event) -> Vec<PathBuf> {
     event.paths.iter()
-        .filter(|p| is_code_file(p))
+        .filter(|p| is_code_file(p) && !is_in_skip_dir(p))
         .cloned()
         .collect()
 }

@@ -7,13 +7,15 @@ use crate::{blade_protocol, local_artifacts};
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 async fn load_available_models(state: &State<'_, AppState>) -> Vec<crate::models::registry::ModelInfo> {
-    let (blade_url, api_key, ollama_enabled, ollama_url, openai_compat_enabled, openai_compat_url) = {
+    let (blade_url, api_key, ollama_enabled, ollama_url, ollama_cloud_enabled, ollama_cloud_api_key, openai_compat_enabled, openai_compat_url) = {
         let config = state.config.lock().unwrap();
         (
             config.blade_url.clone(),
             config.api_key.clone(),
             config.ollama_enabled,
             config.ollama_url.clone(),
+            config.ollama_cloud_enabled,
+            config.ollama_cloud_api_key.clone(),
             config.openai_compat_enabled,
             config.openai_compat_url.clone(),
         )
@@ -21,7 +23,7 @@ async fn load_available_models(state: &State<'_, AppState>) -> Vec<crate::models
 
     let mut models = get_models(&blade_url, &api_key).await;
     if ollama_enabled {
-        let mut ollama_models = crate::models::ollama::get_models(&ollama_url).await;
+        let mut ollama_models = crate::models::ollama::get_models(&ollama_url, ollama_cloud_enabled, &ollama_cloud_api_key).await;
         models.append(&mut ollama_models);
     }
 

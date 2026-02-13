@@ -272,10 +272,16 @@ pub fn create_terminal<R: Runtime>(
                     // it's safe to emit immediately. This ensures interactive typed
                     // characters are visible without waiting for a newline.
                     if !line_buffer.is_empty() {
-                        let could_be_sentinel = line_buffer.contains("##BLADE_CMD_")
-                            || "##BLADE_CMD_".starts_with(&line_buffer)
-                            || "##BLADE_CMD_".starts_with(
-                                   &line_buffer[line_buffer.len().saturating_sub(12)..])
+                        // Check if the buffer might contain (or be building towards)
+                        // a sentinel marker. We strip ANSI codes first because shells
+                        // with syntax highlighting (e.g. zsh) insert escape sequences
+                        // into the echoed command line, breaking plain-text detection.
+                        let plain = strip_ansi_escapes(&line_buffer);
+                        let could_be_sentinel = plain.contains("##BLADE_CMD_")
+                            || plain.contains("BLADE_CMD_")
+                            || "##BLADE_CMD_".starts_with(plain.trim())
+                            || plain.len() <= 12 && "##BLADE_CMD_".starts_with(
+                                   &plain[plain.len().saturating_sub(12)..])
                             || line_buffer.len() > 8192;
 
                         if !could_be_sentinel || line_buffer.len() > 8192 {
@@ -417,6 +423,46 @@ const SENTINEL_START: &str = "##BLADE_CMD_START:";
 const SENTINEL_EXIT: &str = "##BLADE_CMD_EXIT:";
 const SENTINEL_END: &str = "##";
 
+/// Strip ANSI escape sequences from a string for plain-text matching.
+/// This handles CSI sequences (\x1b[...X), OSC sequences (\x1b]...ST),
+/// and simple two-byte sequences (\x1bX).
+fn strip_ansi_escapes(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x1b {
+            i += 1;
+            if i >= bytes.len() { break; }
+            if bytes[i] == b'[' {
+                // CSI sequence: skip until final byte (0x40-0x7E)
+                i += 1;
+                while i < bytes.len() && !(0x40..=0x7E).contains(&bytes[i]) {
+                    i += 1;
+                }
+                if i < bytes.len() { i += 1; } // skip final byte
+            } else if bytes[i] == b']' {
+                // OSC sequence: skip until ST (BEL or ESC\)
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == 0x07 { i += 1; break; }
+                    if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
+                        i += 2; break;
+                    }
+                    i += 1;
+                }
+            } else {
+                // Simple two-byte escape
+                i += 1;
+            }
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    out
+}
+
 /// Strip BLADE sentinel markers from terminal output.
 /// Returns the cleaned output and any detected sentinel events.
 /// Also strips the shell echo of the command line containing sentinels.
@@ -432,10 +478,15 @@ fn strip_blade_sentinels(input: &str) -> SentinelResult {
     let mut exited = Vec::new();
 
     for line in input.split_inclusive('\n') {
+        // Strip ANSI escape codes for sentinel detection. Shells with syntax
+        // highlighting (e.g. zsh-syntax-highlighting) insert escape sequences
+        // into the echoed command line, breaking plain-text sentinel matching.
+        let plain = strip_ansi_escapes(line);
+
         // Robust sentinel detection even if the sentinel appears mid-line
         // (e.g. prompt/ANSI prefixes or no newline before exit sentinel).
-        if let Some(start_idx) = line.find(SENTINEL_START) {
-            let rest = &line[start_idx + SENTINEL_START.len()..];
+        if let Some(start_idx) = plain.find(SENTINEL_START) {
+            let rest = &plain[start_idx + SENTINEL_START.len()..];
             if let Some(end_rel) = rest.find(SENTINEL_END) {
                 let call_id = &rest[..end_rel];
                 started.push(call_id.to_string());
@@ -444,19 +495,20 @@ fn strip_blade_sentinels(input: &str) -> SentinelResult {
             }
         }
 
-        if let Some(exit_idx) = line.find(SENTINEL_EXIT) {
-            let rest = &line[exit_idx + SENTINEL_EXIT.len()..];
+        if let Some(exit_idx) = plain.find(SENTINEL_EXIT) {
+            let rest = &plain[exit_idx + SENTINEL_EXIT.len()..];
             if let Some(end_rel) = rest.find(SENTINEL_END) {
                 let payload = &rest[..end_rel];
                 if let Some((call_id, exit_str)) = payload.rsplit_once(':') {
                     let exit_code = exit_str.parse::<i32>().unwrap_or(1);
                     exited.push((call_id.to_string(), exit_code));
 
-                    // Preserve any output before/after the sentinel on this line.
-                    // This handles commands that don't end with a newline.
-                    let prefix = &line[..exit_idx];
+                    // For exit sentinels, preserve any output before/after the
+                    // sentinel on this line (handles commands without trailing newline).
+                    // Use the plain version for index calculation.
+                    let prefix = &plain[..exit_idx];
                     let suffix_start = exit_idx + SENTINEL_EXIT.len() + end_rel + SENTINEL_END.len();
-                    let suffix = line.get(suffix_start..).unwrap_or("");
+                    let suffix = plain.get(suffix_start..).unwrap_or("");
                     if !prefix.is_empty() {
                         cleaned.push_str(prefix);
                     }
@@ -469,7 +521,7 @@ fn strip_blade_sentinels(input: &str) -> SentinelResult {
         }
 
         // Strip echoed command lines that contain sentinel text but didn't parse
-        if line.contains(SENTINEL_START) || line.contains(SENTINEL_EXIT) {
+        if plain.contains(SENTINEL_START) || plain.contains(SENTINEL_EXIT) {
             continue;
         }
 

@@ -834,6 +834,14 @@ impl ChatManager {
             api_config.ollama_url.trim_end_matches('/')
         );
 
+        // Send Authorization header whenever cloud is enabled and we have an API key.
+        // The Ollama server may require auth for ALL requests, not just :cloud models.
+        let cloud_api_key = if api_config.ollama_cloud_enabled && !api_config.ollama_cloud_api_key.is_empty() {
+            api_config.ollama_cloud_api_key.clone()
+        } else {
+            String::new()
+        };
+
         let task = tokio::spawn(async move {
             // CRITICAL FIX: Only use reasoning parser for models that actually support reasoning tags.
             // The reasoning parser looks for <think> and <thinking> tags in the response.
@@ -847,8 +855,14 @@ impl ChatManager {
             } else {
                 None
             };
+
+            // Build the request with optional Authorization header for cloud models
+            let mut request_builder = http.post(&url).json(&request);
+            if !cloud_api_key.is_empty() {
+                request_builder = request_builder.header("Authorization", format!("Bearer {}", cloud_api_key));
+            }
             
-            let response = match http.post(&url).json(&request).send().await {
+            let response = match request_builder.send().await {
                 Ok(res) => res,
                 Err(e) => {
                     let _ = tx.send(ChatEvent::Error(format!(
@@ -858,6 +872,20 @@ impl ChatManager {
                     return;
                 }
             };
+
+            // Check HTTP status before attempting to stream
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                let err_msg = if status.as_u16() == 401 {
+                    format!("Ollama authentication failed (401). Check your cloud API key in Settings.")
+                } else {
+                    format!("Ollama returned HTTP {}: {}", status, body.chars().take(500).collect::<String>())
+                };
+                eprintln!("[OLLAMA CHAT] HTTP error: {}", err_msg);
+                let _ = tx.send(ChatEvent::Error(err_msg));
+                return;
+            }
 
             let mut stream = response.bytes_stream();
             let mut buffer = String::new();

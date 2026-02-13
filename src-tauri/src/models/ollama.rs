@@ -27,13 +27,22 @@ lazy_static::lazy_static! {
 
 async fn fetch_models_from_server(
     ollama_url: &str,
+    cloud_enabled: bool,
+    cloud_api_key: &str,
 ) -> Result<Vec<ModelInfo>, Box<dyn std::error::Error + Send + Sync>> {
     let url = format!("{}/api/tags", ollama_url.trim_end_matches('/'));
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()?;
 
-    let response = client.get(&url).send().await?;
+    let mut request = client.get(&url);
+    
+    // Add Authorization header if cloud is enabled and we have an API key
+    if cloud_enabled && !cloud_api_key.is_empty() {
+        request = request.header("Authorization", format!("Bearer {}", cloud_api_key));
+    }
+    
+    let response = request.send().await?;
     let response_text = response.text().await?;
 
     let tags_response: OllamaTagsResponse = match serde_json::from_str(&response_text) {
@@ -53,7 +62,7 @@ async fn fetch_models_from_server(
         .into_iter()
         .map(|m| ModelInfo {
             id: format!("ollama/{}", m.name),
-            name: m.name,
+            name: m.name.clone(),
             description: "Ollama".to_string(),
             provider: Some("ollama".to_string()),
             reasoning_effort: None,
@@ -64,7 +73,11 @@ async fn fetch_models_from_server(
     Ok(models)
 }
 
-pub async fn get_models(ollama_url: &str) -> Vec<ModelInfo> {
+pub async fn get_models(
+    ollama_url: &str,
+    cloud_enabled: bool,
+    cloud_api_key: &str,
+) -> Vec<ModelInfo> {
     if let Ok(cache) = MODEL_CACHE.lock() {
         if let Some(ref cached) = *cache {
             if cached.last_fetch.elapsed() < CACHE_TTL {
@@ -87,7 +100,7 @@ pub async fn get_models(ollama_url: &str) -> Vec<ModelInfo> {
     let max_retries = 2;
 
     loop {
-        match fetch_models_from_server(ollama_url).await {
+        match fetch_models_from_server(ollama_url, cloud_enabled, cloud_api_key).await {
             Ok(models) => {
                 if let Ok(mut cache) = MODEL_CACHE.lock() {
                     *cache = Some(ModelCache {

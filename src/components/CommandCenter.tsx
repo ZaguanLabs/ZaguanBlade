@@ -319,8 +319,11 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
     const handleWindowSelect = useCallback(async (windowId: number) => {
         setWindowPickerLoading(true);
         try {
-            const result = await invoke<CaptureResult>('capture_window', { windowId });
+            // Close the picker first and wait for it to disappear from screen
+            // so it doesn't appear in the captured screenshot
             setWindowPickerOpen(false);
+            await new Promise(resolve => setTimeout(resolve, 500));
+            const result = await invoke<CaptureResult>('capture_window', { windowId });
             if (windowPickerMode === 'region') {
                 const dataUrl = `data:${result.mime_type};base64,${result.data}`;
                 setRegionSourceWindowId(windowId);

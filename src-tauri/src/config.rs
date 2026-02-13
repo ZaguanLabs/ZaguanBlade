@@ -17,6 +17,10 @@ pub struct ApiConfig {
     #[serde(default = "default_ollama_url")]
     pub ollama_url: String,
     #[serde(default)]
+    pub ollama_cloud_enabled: bool,
+    #[serde(default)]
+    pub ollama_cloud_api_key: String,
+    #[serde(default)]
     pub openai_compat_enabled: bool,
     #[serde(default = "default_openai_compat_url")]
     pub openai_compat_url: String,

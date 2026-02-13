@@ -37,6 +37,8 @@ interface SettingsState {
     localAi: {
         ollamaEnabled: boolean;
         ollamaUrl: string;
+        ollamaCloudEnabled: boolean;
+        ollamaCloudApiKey: string;
         openaiCompatEnabled: boolean;
         openaiCompatUrl: string;
     };
@@ -73,6 +75,8 @@ const defaultSettings: SettingsState = {
     localAi: {
         ollamaEnabled: false,
         ollamaUrl: 'http://localhost:11434',
+        ollamaCloudEnabled: false,
+        ollamaCloudApiKey: '',
         openaiCompatEnabled: false,
         openaiCompatUrl: 'http://localhost:8080/v1',
     },
@@ -97,6 +101,8 @@ function backendGlobalToFrontend(backend: ApiConfig): Pick<SettingsState, 'accou
         localAi: {
             ollamaEnabled: backend.ollama_enabled,
             ollamaUrl: backend.ollama_url,
+            ollamaCloudEnabled: backend.ollama_cloud_enabled,
+            ollamaCloudApiKey: backend.ollama_cloud_api_key,
             openaiCompatEnabled: backend.openai_compat_enabled,
             openaiCompatUrl: backend.openai_compat_url,
         },
@@ -110,6 +116,8 @@ function frontendGlobalToBackend(frontend: SettingsState): ApiConfig {
         user_id: frontend.account.userId,
         ollama_enabled: frontend.localAi.ollamaEnabled,
         ollama_url: frontend.localAi.ollamaUrl,
+        ollama_cloud_enabled: frontend.localAi.ollamaCloudEnabled,
+        ollama_cloud_api_key: frontend.localAi.ollamaCloudApiKey,
         openai_compat_enabled: frontend.localAi.openaiCompatEnabled,
         openai_compat_url: frontend.localAi.openaiCompatUrl,
         theme: frontend.account.theme,
@@ -563,6 +571,37 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                             {ollamaTestMessage}
                         </span>
                     )}
+                </div>
+            </div>
+
+            {/* Ollama Cloud Section */}
+            <div className="border border-[var(--border-subtle)] rounded-lg p-4 space-y-4">
+                <div className="flex items-center justify-between">
+                    <div>
+                        <div className="text-sm font-medium text-[var(--fg-primary)]">Ollama Cloud</div>
+                        <div className="text-xs text-[var(--fg-tertiary)]">
+                            Enable Ollama Cloud models (requires API key for cloud models ending with :cloud).
+                        </div>
+                    </div>
+                    <Toggle
+                        checked={settings.ollamaCloudEnabled}
+                        onChange={(checked) => onChange({ ollamaCloudEnabled: checked })}
+                    />
+                </div>
+
+                <div className="space-y-2">
+                    <label className="text-xs text-[var(--fg-secondary)] block">API Key</label>
+                    <input
+                        type="password"
+                        value={settings.ollamaCloudApiKey}
+                        onChange={(e) => onChange({ ollamaCloudApiKey: e.target.value })}
+                        placeholder="sk-..."
+                        disabled={!settings.ollamaCloudEnabled}
+                        className="w-full bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded-lg py-2 px-3 text-sm text-[var(--fg-primary)] focus:outline-none focus:border-[var(--accent-primary)] placeholder-[var(--fg-tertiary)] disabled:opacity-60"
+                    />
+                    <p className="text-xs text-[var(--fg-tertiary)] mt-1">
+                        Required for cloud models (models ending with :cloud). Get your key from ollama.com.
+                    </p>
                 </div>
             </div>
 

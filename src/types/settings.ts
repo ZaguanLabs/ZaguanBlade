@@ -4,6 +4,8 @@ export interface ApiConfig {
     user_id: string;
     ollama_enabled: boolean;
     ollama_url: string;
+    ollama_cloud_enabled: boolean;
+    ollama_cloud_api_key: string;
     openai_compat_enabled: boolean;
     openai_compat_url: string;
     theme: string;

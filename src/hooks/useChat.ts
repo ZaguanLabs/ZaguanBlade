@@ -21,6 +21,10 @@ export function useChat() {
     
     // Tool activity state for streaming progress display
     const [toolActivity, setToolActivity] = useState<{ toolName: string; filePath: string; action: string } | null>(null);
+    // Throttle tool activity updates to avoid re-render storms during rapid search operations
+    const pendingToolActivityRef = useRef<{ toolName: string; filePath: string; action: string } | null>(null);
+    const toolActivityFlushRef = useRef<number | null>(null);
+    const TOOL_ACTIVITY_THROTTLE_MS = 250; // Max 4 updates/sec
 
     // Active todo list state — lifted out of messages for persistent TaskPanel
     const [activeTodos, setActiveTodos] = useState<import('../types/events').TodoItem[]>([]);
@@ -467,7 +471,11 @@ export function useChat() {
                     }
 
                     // 3. Update blocks for proper interleaving
-                    const newBlocks = [...(msg.blocks || [])];
+                    // CRITICAL: Use blocksRef as source of truth (like ToolUpdate does)
+                    // to avoid desync where blocksRef has newer tool_call blocks that
+                    // msg.blocks doesn't know about yet.
+                    const liveBlocks = blocksRef.current.get(msg.id!);
+                    const newBlocks = liveBlocks ? [...liveBlocks] : [...(msg.blocks || [])];
 
                     // Find if block already exists
                     const existingBlockIndex = newBlocks.findIndex(b => b.type === 'command_execution' && b.id === call_id);
@@ -484,6 +492,9 @@ export function useChat() {
                             newBlocks.push({ type: 'command_execution', id: call_id });
                         }
                     }
+
+                    // Sync back to blocksRef so future MessageDelta flushes preserve this block
+                    blocksRef.current.set(msg.id!, newBlocks);
 
                     updated[msgIndex] = {
                         ...msg,
@@ -569,6 +580,11 @@ export function useChat() {
 
                         setLoading(false);
                         setToolActivity(null);
+                        pendingToolActivityRef.current = null;
+                        if (toolActivityFlushRef.current !== null) {
+                            clearTimeout(toolActivityFlushRef.current);
+                            toolActivityFlushRef.current = null;
+                        }
                         // Buffer will auto-clear on is_final, but this provides explicit confirmation
                     } else if (chatEvent.type === 'ToolUpdate') {
                         const { message_id, tool_call_id, status, result, tool_call } = chatEvent.payload;
@@ -576,6 +592,11 @@ export function useChat() {
 
                         // Clear the tool activity preview — the real ToolCallDisplay takes over
                         setToolActivity(null);
+                        pendingToolActivityRef.current = null;
+                        if (toolActivityFlushRef.current !== null) {
+                            clearTimeout(toolActivityFlushRef.current);
+                            toolActivityFlushRef.current = null;
+                        }
 
                         setMessages(prev => {
                             const existingIdx = prev.findIndex(msg => msg.id === message_id);
@@ -645,14 +666,21 @@ export function useChat() {
                     } else if (chatEvent.type === 'ToolActivity') {
                         // Handle tool activity events (including streaming progress)
                         const { tool_name, file_path, action } = chatEvent.payload;
-                        console.log(`[v1.1 Chat] ToolActivity: ${tool_name} -> ${file_path} (${action})`);
                         
-                        // Update tool activity state for UI display
-                        setToolActivity({
-                            toolName: tool_name,
-                            filePath: file_path,
-                            action: action
-                        });
+                        const activity = { toolName: tool_name, filePath: file_path, action };
+                        pendingToolActivityRef.current = activity;
+
+                        // Throttle: only flush to React state at most every TOOL_ACTIVITY_THROTTLE_MS
+                        if (toolActivityFlushRef.current === null) {
+                            setToolActivity(activity); // First event goes through immediately
+                            toolActivityFlushRef.current = window.setTimeout(() => {
+                                toolActivityFlushRef.current = null;
+                                // Flush the latest buffered activity
+                                if (pendingToolActivityRef.current) {
+                                    setToolActivity(pendingToolActivityRef.current);
+                                }
+                            }, TOOL_ACTIVITY_THROTTLE_MS);
+                        }
                         
                         // Clear tool activity after a short delay if action is not "streaming"
                         // For streaming, it will be cleared when the actual tool call arrives
