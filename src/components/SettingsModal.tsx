@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { emit } from '@tauri-apps/api/event';
 import { X, Database, Cloud, Shield, Zap, HardDrive, Server, ChevronRight, Info, Loader2, Code, Key, CheckCircle2 } from 'lucide-react';
-import type { ApiConfig, BackendSettings } from '../types/settings';
+import type { BackendSettings, LocalAiConfig, RemoteAiConfig } from '../types/settings';
 
 type StorageMode = 'local' | 'server';
 
@@ -89,7 +89,7 @@ const defaultSettings: SettingsState = {
 
 
 
-function backendGlobalToFrontend(backend: ApiConfig): Pick<SettingsState, 'account' | 'localAi'> {
+function backendRemoteToFrontend(backend: RemoteAiConfig): Pick<SettingsState, 'account'> {
     return {
         account: {
             bladeUrl: '', // Always empty, internal only
@@ -98,6 +98,11 @@ function backendGlobalToFrontend(backend: ApiConfig): Pick<SettingsState, 'accou
             theme: backend.theme,
             markdownView: backend.markdown_view,
         },
+    };
+}
+
+function backendLocalToFrontend(backend: LocalAiConfig): Pick<SettingsState, 'localAi'> {
+    return {
         localAi: {
             ollamaEnabled: backend.ollama_enabled,
             ollamaUrl: backend.ollama_url,
@@ -109,19 +114,24 @@ function backendGlobalToFrontend(backend: ApiConfig): Pick<SettingsState, 'accou
     };
 }
 
-function frontendGlobalToBackend(frontend: SettingsState): ApiConfig {
+function frontendRemoteToBackend(frontend: SettingsState): RemoteAiConfig {
     return {
         blade_url: '', // Frontend does not set this
         api_key: frontend.account.apiKey,
         user_id: frontend.account.userId,
+        theme: frontend.account.theme,
+        markdown_view: frontend.account.markdownView,
+    };
+}
+
+function frontendLocalToBackend(frontend: SettingsState): LocalAiConfig {
+    return {
         ollama_enabled: frontend.localAi.ollamaEnabled,
         ollama_url: frontend.localAi.ollamaUrl,
         ollama_cloud_enabled: frontend.localAi.ollamaCloudEnabled,
         ollama_cloud_api_key: frontend.localAi.ollamaCloudApiKey,
         openai_compat_enabled: frontend.localAi.openaiCompatEnabled,
         openai_compat_url: frontend.localAi.openaiCompatUrl,
-        theme: frontend.account.theme,
-        markdown_view: frontend.account.markdownView,
     };
 }
 
@@ -212,11 +222,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
             setIsLoading(true);
             setError(null);
             try {
-                // Load Global Settings (Account)
-                const globalSettings = await invoke<ApiConfig>('get_global_settings');
-                const globalFrontend = backendGlobalToFrontend(globalSettings);
-
-                let mergedSettings = { ...defaultSettings, ...globalFrontend };
+                // Load split settings (remote account + local AI)
+                const [remoteSettings, localSettings] = await Promise.all([
+                    invoke<RemoteAiConfig>('get_remote_ai_settings'),
+                    invoke<LocalAiConfig>('get_local_ai_settings'),
+                ]);
+                let mergedSettings = {
+                    ...defaultSettings,
+                    ...backendRemoteToFrontend(remoteSettings),
+                    ...backendLocalToFrontend(localSettings),
+                };
 
                 // Load Project Settings (if workspace open)
                 if (workspacePath) {
@@ -265,10 +280,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
         setIsSaving(true);
         setError(null);
         try {
-            // Save Global Settings
-            const globalSettings = frontendGlobalToBackend(settings);
-            await invoke('save_global_settings', {
-                settings: globalSettings,
+            // Save split global settings
+            const remoteSettings = frontendRemoteToBackend(settings);
+            const localSettings = frontendLocalToBackend(settings);
+            await invoke('save_remote_ai_settings', {
+                settings: remoteSettings,
+            });
+            await invoke('save_local_ai_settings', {
+                settings: localSettings,
             });
             await emit('global-settings-changed');
 
@@ -453,7 +472,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
         setOllamaTestResult('idle');
         setOllamaTestMessage(null);
         try {
-            await invoke('test_ollama_connection', { ollamaUrl: settings.ollamaUrl });
+            await invoke('test_local_ollama_connection', { ollamaUrl: settings.ollamaUrl });
             setOllamaTestResult('success');
             setOllamaTestMessage('Connection successful.');
         } catch (e) {
@@ -467,7 +486,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
     const handleRefreshOllamaModels = async () => {
         setIsRefreshingOllama(true);
         try {
-            await invoke('refresh_ollama_models');
+            await invoke('refresh_local_ollama_models');
             if (onRefreshModels) {
                 await onRefreshModels();
             }
@@ -483,7 +502,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
         setOpenaiTestResult('idle');
         setOpenaiTestMessage(null);
         try {
-            await invoke('test_openai_compat_connection', { serverUrl: settings.openaiCompatUrl });
+            await invoke('test_local_openai_compat_connection', { serverUrl: settings.openaiCompatUrl });
             setOpenaiTestResult('success');
             setOpenaiTestMessage('Connection successful.');
         } catch (e) {
@@ -497,7 +516,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
     const handleRefreshOpenAIModels = async () => {
         setIsRefreshingOpenAI(true);
         try {
-            await invoke('refresh_openai_compat_models');
+            await invoke('refresh_local_openai_compat_models');
             if (onRefreshModels) {
                 await onRefreshModels();
             }

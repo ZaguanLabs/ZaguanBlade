@@ -28,6 +28,76 @@ pub struct ApiConfig {
     pub markdown_view: String,
 }
 
+#[derive(Default, Serialize, Deserialize, Clone)]
+pub struct RemoteAiConfig {
+    #[serde(default = "default_blade_url")]
+    pub blade_url: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default)]
+    pub user_id: String,
+    #[serde(default)]
+    pub theme: String,
+    #[serde(default)]
+    pub markdown_view: String,
+}
+
+#[derive(Default, Serialize, Deserialize, Clone)]
+pub struct LocalAiConfig {
+    #[serde(default)]
+    pub ollama_enabled: bool,
+    #[serde(default = "default_ollama_url")]
+    pub ollama_url: String,
+    #[serde(default)]
+    pub ollama_cloud_enabled: bool,
+    #[serde(default)]
+    pub ollama_cloud_api_key: String,
+    #[serde(default)]
+    pub openai_compat_enabled: bool,
+    #[serde(default = "default_openai_compat_url")]
+    pub openai_compat_url: String,
+}
+
+impl ApiConfig {
+    pub fn remote_config(&self) -> RemoteAiConfig {
+        RemoteAiConfig {
+            blade_url: self.blade_url.clone(),
+            api_key: self.api_key.clone(),
+            user_id: self.user_id.clone(),
+            theme: self.theme.clone(),
+            markdown_view: self.markdown_view.clone(),
+        }
+    }
+
+    pub fn local_ai_config(&self) -> LocalAiConfig {
+        LocalAiConfig {
+            ollama_enabled: self.ollama_enabled,
+            ollama_url: self.ollama_url.clone(),
+            ollama_cloud_enabled: self.ollama_cloud_enabled,
+            ollama_cloud_api_key: self.ollama_cloud_api_key.clone(),
+            openai_compat_enabled: self.openai_compat_enabled,
+            openai_compat_url: self.openai_compat_url.clone(),
+        }
+    }
+
+    pub fn apply_remote_config(&mut self, remote: &RemoteAiConfig) {
+        self.blade_url = remote.blade_url.clone();
+        self.api_key = remote.api_key.clone();
+        self.user_id = remote.user_id.clone();
+        self.theme = remote.theme.clone();
+        self.markdown_view = remote.markdown_view.clone();
+    }
+
+    pub fn apply_local_ai_config(&mut self, local: &LocalAiConfig) {
+        self.ollama_enabled = local.ollama_enabled;
+        self.ollama_url = local.ollama_url.clone();
+        self.ollama_cloud_enabled = local.ollama_cloud_enabled;
+        self.ollama_cloud_api_key = local.ollama_cloud_api_key.clone();
+        self.openai_compat_enabled = local.openai_compat_enabled;
+        self.openai_compat_url = local.openai_compat_url.clone();
+    }
+}
+
 fn default_blade_url() -> String {
     // Check environment variable first, then fall back to fidelity
     std::env::var("BLADE_URL").unwrap_or_else(|_| "https://coder.zaguanai.com".to_string())
@@ -86,6 +156,26 @@ pub fn save_api_config(path: &Path, cfg: &ApiConfig) -> Result<(), String> {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     fs::write(path, json).map_err(|e| e.to_string())
+}
+
+pub fn load_remote_ai_config(path: &Path) -> RemoteAiConfig {
+    load_api_config(path).remote_config()
+}
+
+pub fn save_remote_ai_config(path: &Path, remote: &RemoteAiConfig) -> Result<(), String> {
+    let mut cfg = load_api_config(path);
+    cfg.apply_remote_config(remote);
+    save_api_config(path, &cfg)
+}
+
+pub fn load_local_ai_config(path: &Path) -> LocalAiConfig {
+    load_api_config(path).local_ai_config()
+}
+
+pub fn save_local_ai_config(path: &Path, local: &LocalAiConfig) -> Result<(), String> {
+    let mut cfg = load_api_config(path);
+    cfg.apply_local_ai_config(local);
+    save_api_config(path, &cfg)
 }
 
 /// Generate or get user_id from config

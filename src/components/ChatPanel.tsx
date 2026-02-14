@@ -8,7 +8,7 @@ import { useHistory } from '../hooks/useHistory';
 import type { ChatMessage as ChatMessageType, ImageAttachment, ModelInfo } from '../types/chat';
 
 import type { StructuredAction, TodoItem } from '../types/events';
-import type { ApiConfig } from '../types/settings';
+import type { RemoteAiConfig } from '../types/settings';
 import { ChatMessage } from './ChatMessage';
 import { ChatTabBar } from './ChatTabBar';
 import { CommandCenter } from './CommandCenter';
@@ -85,7 +85,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     // Check API Key
     const checkApiKey = useCallback(async () => {
         try {
-            const config = await invoke<ApiConfig>('get_global_settings');
+            const config = await invoke<RemoteAiConfig>('get_remote_ai_settings');
             setHasApiKey(!!config.api_key && config.api_key.length > 0);
         } catch (e) {
             console.error('Failed to check API key:', e);

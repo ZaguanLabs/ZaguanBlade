@@ -27,9 +27,7 @@ const WelcomePage: React.FC<{ onOpenSettings?: () => void }> = ({ onOpenSettings
             }
 
             try {
-                // We import ApiConfig type dynamically or use 'any' if not strictly needed here, 
-                // but let's try to infer from response
-                const settings = await invoke<{ api_key: string }>('get_global_settings');
+                const settings = await invoke<{ api_key: string }>('get_remote_ai_settings');
                 setHasApiKey(!!settings.api_key && settings.api_key.length > 0);
             } catch (e) {
                 console.warn('Failed to check API key status:', e);
