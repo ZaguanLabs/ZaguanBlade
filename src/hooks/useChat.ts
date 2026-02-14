@@ -350,6 +350,36 @@ export function useChat() {
             const u2 = await listen('chat-done', () => {
                 setLoading(false);
                 setPendingActions(null); // Clear any hanging dialogs
+
+                // Auto-complete lingering todos when chat finishes.
+                // Models sometimes forget to send a final todo_write marking the last task as completed.
+                // Wait briefly to allow any in-flight todo_updated events to arrive first.
+                setTimeout(() => {
+                    setActiveTodos(prev => {
+                        if (prev.length === 0) return prev;
+                        const hasIncomplete = prev.some(t => t.status !== 'completed');
+                        if (!hasIncomplete) return prev; // Already all completed, normal flow handles it
+                        // Mark all remaining items as completed
+                        const completed = prev.map(t => ({ ...t, status: 'completed' as const }));
+                        // Trigger the completion flow (clear panel + insert summary) after brief display
+                        setTimeout(() => {
+                            setActiveTodos([]);
+                            const summaryId = `plan-summary-${Date.now()}`;
+                            const summaryMessage: ChatMessage = {
+                                id: summaryId,
+                                role: 'Assistant',
+                                content: '',
+                                blocks: [{ type: 'plan_summary' as const, id: summaryId }],
+                                planSummary: {
+                                    todos: [...completed],
+                                    completedAt: Date.now(),
+                                },
+                            };
+                            setMessages(prev => [...prev, summaryMessage]);
+                        }, 1500);
+                        return completed;
+                    });
+                }, 500);
             });
             unlistenDone = u2;
 
@@ -641,9 +671,33 @@ export function useChat() {
                                                 : (accumulatedContentRef.current.id === message_id
                                                     ? accumulatedContentRef.current.content
                                                     : msg.content);
+                                            
                                             // Check if block already exists (idempotency safety)
                                             if (!newBlocks.some(b => b.type === 'tool_call' && b.id === tool_call_id)) {
-                                                newBlocks.push({ type: 'tool_call', id: tool_call_id });
+                                                // Find the correct insertion position for the tool_call block
+                                                // Insert after the text block that contains contentBefore length
+                                                let insertIdx = newBlocks.length; // Default: append to end
+                                                
+                                                if (contentBefore && contentBefore.length > 0) {
+                                                    // Find the text block that contains the contentBefore length
+                                                    let charsProcessed = 0;
+                                                    for (let i = 0; i < newBlocks.length; i++) {
+                                                        const block = newBlocks[i];
+                                                        if (block.type === 'text' && block.content) {
+                                                            const blockEnd = charsProcessed + block.content.length;
+                                                            if (blockEnd >= contentBefore.length) {
+                                                                // Found the text block that contains contentBefore
+                                                                // Insert the tool_call block after this text block
+                                                                insertIdx = i + 1;
+                                                                break;
+                                                            }
+                                                            charsProcessed = blockEnd;
+                                                        }
+                                                    }
+                                                }
+                                                
+                                                // Insert the tool_call block at the correct position
+                                                newBlocks.splice(insertIdx, 0, { type: 'tool_call', id: tool_call_id });
                                             }
 
                                             blocksRef.current.set(message_id, newBlocks);

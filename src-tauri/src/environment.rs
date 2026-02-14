@@ -57,9 +57,12 @@ impl EnvironmentInfo {
         let shell = detect_shell();
         let package_manager = detect_package_manager();
         let home_dir = dirs::home_dir().map(|p| p.to_string_lossy().to_string());
-        let working_dir = env::current_dir()
+        // For AppImage: Use OWD (Original Working Directory) if available.
+        // AppImages change CWD to their mount point (/tmp/.mount_XXX/usr),
+        // but preserve the original directory in OWD.
+        let working_dir = env::var("OWD")
             .ok()
-            .map(|p| p.to_string_lossy().to_string());
+            .or_else(|| env::current_dir().ok().map(|p| p.to_string_lossy().to_string()));
 
         // Check for available tools
         let has_git = check_command_exists("git");

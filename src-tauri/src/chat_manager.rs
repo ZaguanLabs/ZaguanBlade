@@ -352,10 +352,12 @@ impl ChatManager {
             .find(|m| m.role == ChatRole::User)
             .and_then(|m| m.images.clone());
 
+        let ws_workspace_path = workspace.map(|p| p.to_string_lossy().to_string());
+
         // Spawn async task to connect and handle events
         let task = tokio::spawn(async move {
             eprintln!("[CHAT MGR] Connecting to WebSocket");
-            match ws_client.connect().await {
+            match ws_client.connect(ws_workspace_path).await {
                 Ok(mut ws_rx) => {
                     eprintln!("[CHAT MGR] WebSocket connected, waiting for authenticated");
 
@@ -363,6 +365,9 @@ impl ChatManager {
                     let mut authenticated = false;
                     let mut saw_chat_done = false;
                     let mut saw_content = false;
+                    // Some providers may emit the same content as both reasoning and text chunks.
+                    // Keep the latest reasoning chunk so we can skip an immediate duplicate text chunk.
+                    let mut last_reasoning_chunk: Option<String> = None;
                     while let Some(event) = ws_rx.recv().await {
                         eprintln!(
                             "[CHAT MGR] Received event: {:?}",
@@ -408,11 +413,20 @@ impl ChatManager {
                             }
                             crate::blade_ws_client::BladeWsEvent::TextChunk(text) => {
                                 eprintln!("[CHAT MGR] Text chunk: {}", text);
+                                if last_reasoning_chunk.as_deref() == Some(text.as_str()) {
+                                    eprintln!(
+                                        "[CHAT MGR] Skipping duplicate text chunk (already emitted as reasoning)"
+                                    );
+                                    last_reasoning_chunk = None;
+                                    continue;
+                                }
+                                last_reasoning_chunk = None;
                                 saw_content = true;
                                 let _ = tx.send(ChatEvent::Chunk(text));
                             }
                             crate::blade_ws_client::BladeWsEvent::ReasoningChunk(text) => {
                                 eprintln!("[CHAT MGR] Reasoning chunk: {}", text);
+                                last_reasoning_chunk = Some(text.clone());
                                 saw_content = true;
                                 let _ = tx.send(ChatEvent::ReasoningChunk(text));
                             }

@@ -219,7 +219,8 @@ impl BladeWsClient {
     }
 
     /// Connect to the WebSocket server and authenticate with retry logic
-    pub async fn connect(&self) -> Result<mpsc::UnboundedReceiver<BladeWsEvent>, String> {
+    /// If `workspace_path` is provided, it overrides `working_dir` in the environment info.
+    pub async fn connect(&self, workspace_path: Option<String>) -> Result<mpsc::UnboundedReceiver<BladeWsEvent>, String> {
         // Convert HTTP URL to WebSocket URL
         let ws_url = self
             .base_url
@@ -365,7 +366,12 @@ impl BladeWsClient {
 
         tokio::spawn(async move {
             // Collect environment information for the system prompt
-            let environment = EnvironmentInfo::collect();
+            let mut environment = EnvironmentInfo::collect();
+            // Override working_dir with the actual workspace path if available.
+            // env::current_dir() returns the AppImage mount point, not the user's workspace.
+            if let Some(ref ws_path) = workspace_path {
+                environment.working_dir = Some(ws_path.clone());
+            }
             eprintln!("[BLADE WS] Environment: os={}, arch={:?}, shell={:?}", 
                 environment.os, environment.arch, environment.shell);
             
