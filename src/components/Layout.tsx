@@ -922,10 +922,11 @@ const AppLayoutInner: React.FC = () => {
 
                     {/* Explorer / Sidebar (Floating) */}
                     <div className={`
-                        absolute top-0 bottom-0 left-0 w-80 bg-[var(--bg-panel)] border-r border-[var(--border-subtle)] 
-                        shadow-[var(--shadow-lg)] z-30 flex flex-col
+                        absolute top-0 bottom-0 left-0 w-80 bg-[var(--bg-panel)] z-30 flex flex-col
                         transition-transform duration-[var(--transition-base)] ease-out
-                        ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+                        ${isSidebarOpen
+                            ? 'translate-x-0 border-r border-[var(--border-subtle)] shadow-[var(--shadow-lg)]'
+                            : '-translate-x-full border-r border-transparent shadow-none pointer-events-none'}
                     `}>
                         {activeSidebar === 'explorer' && (
                             <ExplorerPanel onFileSelect={handleFileSelect} activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
@@ -1039,8 +1040,6 @@ const AppLayoutInner: React.FC = () => {
                                             );
                                         })}
 
-                                        {/* Show placeholder if no tabs */}
-                                        {tabs.length === 0 && <EditorPanel activeFile={null} highlightLines={null} />}
                                     </>
                                 );
                             })()}
@@ -1048,10 +1047,17 @@ const AppLayoutInner: React.FC = () => {
 
                         {/* Terminal Resizer */}
                         <div
-                            className={`h-[1px] bg-[var(--border-subtle)] hover:bg-[var(--accent-primary)] hover:h-[2px] transition-all duration-[var(--transition-fast)] z-20 ${isDragging ? 'bg-[var(--accent-primary)] h-[2px]' : ''}`}
+                            className="relative h-3 -my-1 z-20 shrink-0 group flex items-center"
                             style={{ cursor: 'row-resize' }}
                             onMouseDown={handleMouseDown}
-                        />
+                        >
+                            <div
+                                className={`w-full h-[1px] transition-all duration-[var(--transition-fast)] ${isDragging
+                                    ? 'bg-[var(--accent-primary)] h-[2px]'
+                                    : 'bg-[var(--border-subtle)] group-hover:bg-[var(--accent-primary)] group-hover:h-[2px]'
+                                    }`}
+                            />
+                        </div>
 
                         {/* Terminal Pane */}
                         <div style={{ height: terminalHeight }} className="bg-[var(--term-bg)]">
@@ -1061,10 +1067,17 @@ const AppLayoutInner: React.FC = () => {
 
                     {/* Chat Panel Resizer */}
                     <div
-                        className={`w-[3px] bg-transparent hover:bg-[var(--accent-primary)] transition-colors duration-[var(--transition-fast)] z-40 ${isChatDragging ? 'bg-[var(--accent-primary)]' : ''}`}
+                        className="relative w-4 -mx-[2px] z-40 shrink-0 group flex justify-center"
                         style={{ cursor: 'col-resize' }}
                         onMouseDown={handleChatMouseDown}
-                    />
+                    >
+                        <div
+                            className={`h-full w-[1px] transition-colors duration-[var(--transition-fast)] ${isChatDragging
+                                ? 'bg-[var(--accent-primary)]'
+                                : 'bg-transparent group-hover:bg-[var(--accent-primary)]'
+                                }`}
+                        />
+                    </div>
 
                     {/* AI Chat */}
                     <div

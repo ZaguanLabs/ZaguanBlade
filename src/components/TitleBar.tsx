@@ -215,36 +215,36 @@ export const TitleBar: React.FC = () => {
 
             {/* Right: Window controls - hidden in fullscreen for immersive experience */}
             {!isFullscreen && (
-                <div className="flex items-center h-full">
+                <div className="flex items-center h-full gap-1 pr-1">
                     {/* Minimize */}
                     <button
                         onClick={handleMinimize}
-                        className="window-control-btn h-full w-11 flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[var(--bg-surface)] hover:text-[var(--fg-secondary)] transition-all duration-150"
+                        className="window-control-btn h-7 w-7 rounded-md flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[var(--bg-surface)] hover:text-[var(--fg-secondary)] active:scale-95 transition-all duration-150"
                         title="Minimize"
                     >
-                        <Minus className="w-4 h-4" strokeWidth={1.5} />
+                        <Minus className="w-3.5 h-3.5" strokeWidth={1.8} />
                     </button>
 
                     {/* Maximize/Restore */}
                     <button
                         onClick={handleMaximizeRestore}
-                        className="window-control-btn h-full w-11 flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[var(--bg-surface)] hover:text-[var(--fg-secondary)] transition-all duration-150"
+                        className="window-control-btn h-7 w-7 rounded-md flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[var(--bg-surface)] hover:text-[var(--fg-secondary)] active:scale-95 transition-all duration-150"
                         title={isMaximized ? "Restore" : "Maximize"}
                     >
                         {isMaximized ? (
-                            <Maximize2 className="w-3.5 h-3.5" strokeWidth={1.5} />
+                            <Maximize2 className="w-3 h-3" strokeWidth={1.8} />
                         ) : (
-                            <Square className="w-3.5 h-3.5" strokeWidth={1.5} />
+                            <Square className="w-3 h-3" strokeWidth={1.8} />
                         )}
                     </button>
 
                     {/* Close */}
                     <button
                         onClick={handleClose}
-                        className="window-control-btn h-full w-11 flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[#c42b1c] hover:text-white transition-all duration-150"
+                        className="window-control-btn h-7 w-7 rounded-md flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[#c42b1c] hover:text-white active:scale-95 transition-all duration-150"
                         title="Close"
                     >
-                        <X className="w-4 h-4" strokeWidth={1.5} />
+                        <X className="w-3.5 h-3.5" strokeWidth={1.8} />
                     </button>
                 </div>
             )}

@@ -700,11 +700,14 @@ fn read_file_range(workspace_root: &Path, args: &HashMap<String, serde_json::Val
         .unwrap_or(0) as usize;
 
     // Adjust for 1-indexed and apply context
-    let start = start_line.saturating_sub(1).saturating_sub(context_lines);
-    let end = end_line
-        .min(total_lines)
+    // Clamp final bounds to avoid panics when requested range exceeds file length.
+    let requested_start = start_line.saturating_sub(1).saturating_sub(context_lines);
+    let requested_end = end_line
         .saturating_add(context_lines)
         .min(total_lines);
+
+    let start = requested_start.min(total_lines);
+    let end = requested_end.max(start).min(total_lines);
 
     let selected_lines: Vec<String> = lines[start..end]
         .iter()

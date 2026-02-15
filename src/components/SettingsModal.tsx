@@ -276,44 +276,50 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
         setHasChanges(true);
     };
 
-    const handleSave = async () => {
+    const handleSave = () => {
+        if (isSaving || !hasChanges) return;
+
+        const settingsSnapshot = settings;
+        const workspacePathSnapshot = workspacePath;
+        const refreshModels = onRefreshModels;
+
         setIsSaving(true);
         setError(null);
-        try {
-            // Save split global settings
-            const remoteSettings = frontendRemoteToBackend(settings);
-            const localSettings = frontendLocalToBackend(settings);
-            await invoke('save_remote_ai_settings', {
-                settings: remoteSettings,
-            });
-            await invoke('save_local_ai_settings', {
-                settings: localSettings,
-            });
-            await emit('global-settings-changed');
+        setHasChanges(false);
+        onClose();
 
-            // Save Project Settings (if workspace is open)
-            if (workspacePath) {
-                const backendSettings = frontendToBackend(settings);
-                await invoke('save_project_settings', {
-                    projectPath: workspacePath,
-                    settings: backendSettings,
+        void (async () => {
+            try {
+                // Save split global settings
+                const remoteSettings = frontendRemoteToBackend(settingsSnapshot);
+                const localSettings = frontendLocalToBackend(settingsSnapshot);
+                await invoke('save_remote_ai_settings', {
+                    settings: remoteSettings,
                 });
-            }
+                await invoke('save_local_ai_settings', {
+                    settings: localSettings,
+                });
+                await emit('global-settings-changed');
 
-            // Refresh models if local AI settings changed
-            if (onRefreshModels) {
-                await onRefreshModels();
-            }
+                // Save Project Settings (if workspace is open)
+                if (workspacePathSnapshot) {
+                    const backendSettings = frontendToBackend(settingsSnapshot);
+                    await invoke('save_project_settings', {
+                        projectPath: workspacePathSnapshot,
+                        settings: backendSettings,
+                    });
+                }
 
-            console.log('[Settings] Saved settings');
-            setHasChanges(false);
-            onClose();
-        } catch (e) {
-            console.error('[Settings] Failed to save:', e);
-            setError(String(e));
-        } finally {
-            setIsSaving(false);
-        }
+                // Refresh models if local AI settings changed
+                if (refreshModels) {
+                    await refreshModels();
+                }
+
+                console.log('[Settings] Saved settings');
+            } catch (e) {
+                console.error('[Settings] Failed to save in background:', e);
+            }
+        })();
     };
 
     if (!isOpen) return null;

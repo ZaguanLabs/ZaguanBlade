@@ -264,11 +264,12 @@ export function useChat() {
                     } else {
                         if (accumulatedContentRef.current.id !== id) {
                             accumulatedContentRef.current = { id, content: '' };
-                            // New content stream for this message - clear stale text blocks from blocksRef
-                            // Keep only non-text blocks (tool_call, command_execution, etc.)
+                            // New content stream for this message - clear stale text blocks from blocksRef.
+                            // IMPORTANT: keep reasoning blocks so chain-of-thought summary remains visible
+                            // when the assistant transitions from reasoning to final answer.
                             const existingBlocks = blocksRef.current.get(id) || [];
                             if (existingBlocks.length > 0) {
-                                const nonTextBlocks = existingBlocks.filter(b => b.type !== 'text' && b.type !== 'reasoning');
+                                const nonTextBlocks = existingBlocks.filter(b => b.type !== 'text');
                                 blocksRef.current.set(id, nonTextBlocks);
                             }
                         }

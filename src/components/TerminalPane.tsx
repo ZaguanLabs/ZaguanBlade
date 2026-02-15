@@ -189,7 +189,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
     return (
         <div className="h-full flex flex-row bg-[#1e1e1e]">
             {/* Terminal Area */}
-            <div className="flex-1 relative overflow-hidden pl-6">
+            <div className="flex-1 relative overflow-hidden pl-8">
                 {terminals.map((term) => (
                     <div
                         key={term.id}

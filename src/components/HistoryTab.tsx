@@ -11,6 +11,20 @@ interface HistoryTabProps {
 export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConversation }) => {
     const { conversations, loading, error, fetchConversations } = useHistory();
 
+    const getConversationTitle = (conversation: ConversationSummary) => {
+        const title = (conversation.title || '').trim();
+        if (title.length > 0) {
+            return title;
+        }
+
+        const preview = (conversation.preview || '').trim();
+        if (preview.length > 0) {
+            return preview.slice(0, 80);
+        }
+
+        return `Conversation ${formatTimestamp(conversation.last_active_at)}`;
+    };
+
     useEffect(() => {
         console.log('[HistoryTab] projectId:', projectId);
         console.log('[HistoryTab] conversations.length:', conversations.length);
@@ -145,7 +159,7 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
                                             </div>
                                             <div className="flex-1 min-w-0">
                                                 <h4 className="text-sm font-medium text-[var(--fg-primary)] truncate">
-                                                    {conversation.title}
+                                                    {getConversationTitle(conversation)}
                                                 </h4>
                                             </div>
                                             <div className="flex items-center gap-2.5 text-[10px] text-[var(--fg-tertiary)] shrink-0">
