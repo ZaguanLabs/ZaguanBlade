@@ -5,7 +5,7 @@
 Zaguán Blade is a high-performance AI code editor that takes a fundamentally different approach from VSCode forks. While others bolt AI onto existing editors, we built from the ground up with AI as the foundation—and Rust as the engine.
 
 > [!WARNING]
-> **Alpha Release (v0.1.1)**
+> **Alpha Release (v0.2.0)**
 > 
 > Zaguán Blade is in active alpha development. It's functional and good enough for basic daily work, but expect bugs and incomplete features.
 > 
@@ -392,10 +392,11 @@ Zaguán Blade is free and open source. The hosted AI backend requires a subscrip
 
 ## Project Status
 
-**Current Version:** v0.1.1  
+**Current Version:** v0.2.0  
 **Status:** Active Development  
 **Stability:** Alpha (usable, but expect bugs)  
 **License:** MIT  
-**Language:** Rust (backend) + TypeScript (frontend)
+**Language:** Rust (backend) + TypeScript (frontend)  
+**Changelog:** [zblade.dev/changelog](https://zblade.dev/changelog/)
 
 **Star us on GitHub if you find this project interesting!** ⭐
