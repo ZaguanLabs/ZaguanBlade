@@ -1,15 +1,18 @@
-export interface ApiConfig {
+export interface RemoteAiConfig {
     blade_url: string;
     api_key: string;
     user_id: string;
+    theme: string;
+    markdown_view: string;
+}
+
+export interface LocalAiConfig {
     ollama_enabled: boolean;
     ollama_url: string;
     ollama_cloud_enabled: boolean;
     ollama_cloud_api_key: string;
     openai_compat_enabled: boolean;
     openai_compat_url: string;
-    theme: string;
-    markdown_view: string;
 }
 
 export interface BackendSettings {

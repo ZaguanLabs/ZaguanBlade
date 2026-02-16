@@ -3,7 +3,8 @@ use std::process::Command;
 use tauri::State;
 
 use crate::AppState;
-use crate::models::{ollama, openai_compat, registry};
+use crate::models::{catalog, registry};
+use crate::providers;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -221,6 +222,82 @@ fn run_git(root: &str, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+fn is_conventional_commit_subject(line: &str) -> bool {
+    let trimmed = line.trim();
+    let Some((prefix, _)) = trimmed.split_once(':') else {
+        return false;
+    };
+
+    let prefix = prefix.trim();
+    if prefix.is_empty() || prefix.contains(' ') {
+        return false;
+    }
+
+    let base = if let Some(open) = prefix.find('(') {
+        if open == 0 || !prefix.ends_with(')') {
+            return false;
+        }
+        &prefix[..open]
+    } else {
+        prefix
+    };
+
+    const TYPES: &[&str] = &[
+        "feat", "fix", "refactor", "docs", "style", "test", "chore", "perf", "build", "ci",
+        "revert",
+    ];
+
+    TYPES.iter().any(|t| base.eq_ignore_ascii_case(t))
+}
+
+fn extract_commit_message(raw: &str) -> String {
+    let mut normalized = raw.replace("\r\n", "\n").replace('\r', "\n").trim().to_string();
+    if normalized.is_empty() {
+        return String::new();
+    }
+
+    // If model wrapped output in a code fence, prefer fenced content.
+    if let Some(start) = normalized.find("```") {
+        let after_start = &normalized[start + 3..];
+        let fence_content = if let Some(first_newline) = after_start.find('\n') {
+            &after_start[first_newline + 1..]
+        } else {
+            after_start
+        };
+
+        if let Some(end) = fence_content.find("```") {
+            normalized = fence_content[..end].trim().to_string();
+        }
+    }
+
+    let lines: Vec<&str> = normalized.lines().map(str::trim_end).collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    let start_idx = lines
+        .iter()
+        .position(|line| is_conventional_commit_subject(line.trim()))
+        .or_else(|| lines.iter().position(|line| !line.trim().is_empty()))
+        .unwrap_or(0);
+
+    let mut selected: Vec<&str> = lines[start_idx..].to_vec();
+    while selected.first().is_some_and(|line| line.trim().is_empty()) {
+        selected.remove(0);
+    }
+    while selected.last().is_some_and(|line| line.trim().is_empty()) {
+        selected.pop();
+    }
+
+    selected
+        .join("\n")
+        .trim()
+        .trim_matches('`')
+        .trim_matches('"')
+        .trim()
+        .to_string()
+}
+
 struct CommitContext {
     files: Vec<String>,
     diff: String,
@@ -232,64 +309,14 @@ struct CommitContext {
     recent_commits: Vec<String>,
 }
 
-async fn load_available_models(state: &State<'_, AppState>) -> Vec<registry::ModelInfo> {
-    let (blade_url, api_key, ollama_enabled, ollama_url, ollama_cloud_enabled, ollama_cloud_api_key, openai_compat_enabled, openai_compat_url) = {
-        let config = state.config.lock().unwrap();
-        (
-            config.blade_url.clone(),
-            config.api_key.clone(),
-            config.ollama_enabled,
-            config.ollama_url.clone(),
-            config.ollama_cloud_enabled,
-            config.ollama_cloud_api_key.clone(),
-            config.openai_compat_enabled,
-            config.openai_compat_url.clone(),
-        )
-    };
-
-    let mut models = registry::get_models(&blade_url, &api_key).await;
-    if ollama_enabled {
-        let mut ollama_models = ollama::get_models(&ollama_url, ollama_cloud_enabled, &ollama_cloud_api_key).await;
-        models.append(&mut ollama_models);
-    }
-
-    if openai_compat_enabled {
-        let mut openai_compat_models = openai_compat::get_models(&openai_compat_url).await;
-        models.append(&mut openai_compat_models);
-    }
-
-    models
+async fn load_models(state: &State<'_, AppState>) -> Vec<registry::ModelInfo> {
+    let config = { state.config.lock().unwrap().clone() };
+    catalog::list_all_models(&config).await
 }
 
 fn resolve_model_id(models: &[registry::ModelInfo], requested_id: &str) -> String {
-    let matched = models
-        .iter()
-        .position(|m| m.id == requested_id)
-        .or_else(|| models.iter().position(|m| m.api_id.as_deref() == Some(requested_id)))
-        .or_else(|| {
-            let id_lower = requested_id.to_lowercase();
-            models
-                .iter()
-                .position(|m| m.id.to_lowercase() == id_lower)
-                .or_else(|| {
-                    models.iter().position(|m| {
-                        m.api_id
-                            .as_ref()
-                            .map(|s| s.to_lowercase())
-                            .as_deref()
-                            == Some(&id_lower)
-                    })
-                })
-        });
-
-    if let Some(idx) = matched {
-        let model = &models[idx];
-        let provider = model.provider.as_deref().unwrap_or("");
-        if provider == "ollama" || provider == "openai-compat" {
-            model.id.clone()
-        } else {
-            model.api_id.as_ref().unwrap_or(&model.id).clone()
-        }
+    if let Some(idx) = catalog::resolve_model_index(models, requested_id) {
+        providers::resolve_model_selection(models, idx).model_id_for_request
     } else {
         requested_id.to_string()
     }
@@ -893,10 +920,12 @@ pub async fn git_generate_commit_message_ai(
     };
 
     let prompt = format!(
-        r#"Generate a Git commit message for these changes. Use Conventional Commits: type(scope): description
+        r#"Generate a Git commit message for these changes.
+Use Conventional Commits format: type(scope): description
 
-Types: feat, fix, refactor, docs, style, test, chore, perf
-Keep under 72 chars. Imperative mood. No period at end.
+Allowed types: feat, fix, refactor, docs, style, test, chore, perf
+Subject requirements: <=72 chars, imperative mood, no period at end.
+You may include an optional body after a blank line for key details.
 Match the style of recent commits if possible.
 
 {branch}FILES ({stage}):
@@ -905,7 +934,7 @@ Match the style of recent commits if possible.
 DIFF:
 {diff}
 
-Respond with ONLY the commit message, nothing else."#,
+Respond with ONLY the commit message text (subject + optional body), nothing else."#,
         branch = branch_section,
         stage = if ctx.staged { "staged" } else { "unstaged" },
         files = file_list,
@@ -923,7 +952,7 @@ Respond with ONLY the commit message, nothing else."#,
         open_files: Vec::new(),
     };
 
-    let available_models = load_available_models(&state).await;
+    let available_models = load_models(&state).await;
     let resolved_model_id = resolve_model_id(&available_models, &model_id);
 
     // Use shared WebSocket connection manager from AppState
@@ -955,12 +984,16 @@ Respond with ONLY the commit message, nothing else."#,
         .await
         .map_err(|e| format!("Failed to send message: {}", e))?;
 
-    // Collect response
+    // Collect response (some models stream answer via reasoning_chunk).
     let mut content = String::new();
+    let mut reasoning = String::new();
     while let Some(event) = ws_rx.recv().await {
         match event {
             crate::blade_ws_client::BladeWsEvent::TextChunk(chunk) => {
                 content.push_str(&chunk);
+            }
+            crate::blade_ws_client::BladeWsEvent::ReasoningChunk(chunk) => {
+                reasoning.push_str(&chunk);
             }
             crate::blade_ws_client::BladeWsEvent::ChatDone { .. } => break,
             crate::blade_ws_client::BladeWsEvent::Error { message, .. } => {
@@ -971,11 +1004,21 @@ Respond with ONLY the commit message, nothing else."#,
         }
     }
 
-    let message = content.lines().next().unwrap_or("").trim();
+    // Prefer final assistant text, but fall back to reasoning stream when providers
+    // emit the completion there. Then extract the last non-empty line because some
+    // models include analysis before the final commit message.
+    let raw = if content.trim().is_empty() {
+        reasoning.as_str()
+    } else {
+        content.as_str()
+    };
+
+    let message = extract_commit_message(raw);
+
     if message.is_empty() {
         Err("AI returned empty response".to_string())
     } else {
-        Ok(message.to_string())
+        Ok(message)
     }
 }
 

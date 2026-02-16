@@ -277,11 +277,24 @@ pub fn create_terminal<R: Runtime>(
                         // with syntax highlighting (e.g. zsh) insert escape sequences
                         // into the echoed command line, breaking plain-text detection.
                         let plain = strip_ansi_escapes(&line_buffer);
+                        let trimmed = plain.trim_start();
+                        // The shell echo of our wrapper begins with patterns like
+                        // "( echo '##BLADE_CMD_START:...". On chunk boundaries, a short
+                        // prefix such as "( echo '" may arrive before the sentinel text.
+                        // Keep these short prefixes buffered so they can be stripped once
+                        // the full sentinel token arrives, instead of leaking into xterm.
+                        let looks_like_sentinel_echo_prefix = (trimmed.starts_with("( echo '")
+                            || trimmed.starts_with("(echo '")
+                            || trimmed.starts_with("echo '")
+                            || trimmed.starts_with("( printf '")
+                            || trimmed.starts_with("printf '"))
+                            && trimmed.len() <= 48;
                         let could_be_sentinel = plain.contains("##BLADE_CMD_")
                             || plain.contains("BLADE_CMD_")
                             || "##BLADE_CMD_".starts_with(plain.trim())
                             || plain.len() <= 12 && "##BLADE_CMD_".starts_with(
                                    &plain[plain.len().saturating_sub(12)..])
+                            || looks_like_sentinel_echo_prefix
                             || line_buffer.len() > 8192;
 
                         if !could_be_sentinel || line_buffer.len() > 8192 {

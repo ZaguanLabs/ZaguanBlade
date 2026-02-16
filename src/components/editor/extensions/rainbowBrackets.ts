@@ -48,48 +48,55 @@ const rainbowBracketsPlugin = ViewPlugin.fromClass(
             const builder = new RangeSetBuilder<Decoration>();
             const doc = view.state.doc;
             const tree = syntaxTree(view.state);
+            const visibleRanges = [...view.visibleRanges].sort(
+                (a, b) => a.from - b.from || a.to - b.to
+            );
+
+            // Collect all brackets across visible ranges, then sort before adding.
+            // Visible ranges expanded to line boundaries can overlap, so we deduplicate
+            // by tracking the furthest position processed.
+            const allBrackets: { from: number; to: number; depth: number }[] = [];
+            let maxProcessed = -1;
             
-            // Process each visible range independently with local depth tracking
-            for (const { from, to } of view.visibleRanges) {
-                const lineStart = doc.lineAt(from).from;
+            for (const { from, to } of visibleRanges) {
+                const lineStart = Math.max(doc.lineAt(from).from, maxProcessed + 1);
                 const lineEnd = doc.lineAt(to).to;
+                if (lineStart > lineEnd) continue;
+                maxProcessed = lineEnd;
                 
-                // Get text for this range only
                 const text = doc.sliceString(lineStart, lineEnd);
-                const brackets: { from: number; to: number; depth: number }[] = [];
                 let depth = 0;
                 
-                // Simple bracket matching without full document scan
                 for (let i = 0; i < text.length; i++) {
                     const char = text[i];
                     const pos = lineStart + i;
                     
-                    // Quick syntax check - only resolve if it's a bracket
                     if (openBrackets.has(char) || closeBrackets.has(char)) {
                         const nodeAt = tree.resolveInner(pos, 1);
                         const nodeType = nodeAt.type.name;
                         
-                        // Skip if inside string or comment (case-insensitive check)
                         const lowerType = nodeType.toLowerCase();
                         if (lowerType.includes("string") || lowerType.includes("comment")) {
                             continue;
                         }
 
                         if (openBrackets.has(char)) {
-                            brackets.push({ from: pos, to: pos + 1, depth });
+                            allBrackets.push({ from: pos, to: pos + 1, depth });
                             depth++;
                         } else if (closeBrackets.has(char)) {
                             depth = Math.max(0, depth - 1);
-                            brackets.push({ from: pos, to: pos + 1, depth });
+                            allBrackets.push({ from: pos, to: pos + 1, depth });
                         }
                     }
                 }
-                
-                // Add decorations for this range
-                for (const bracket of brackets) {
-                    const colorIndex = bracket.depth % bracketColors.length;
-                    builder.add(bracket.from, bracket.to, bracketDecorations[colorIndex]);
-                }
+            }
+
+            // Sort by position (required by RangeSetBuilder)
+            allBrackets.sort((a, b) => a.from - b.from || a.to - b.to);
+
+            for (const bracket of allBrackets) {
+                const colorIndex = bracket.depth % bracketColors.length;
+                builder.add(bracket.from, bracket.to, bracketDecorations[colorIndex]);
             }
 
             return builder.finish();

@@ -8,7 +8,7 @@ import { useHistory } from '../hooks/useHistory';
 import type { ChatMessage as ChatMessageType, ImageAttachment, ModelInfo } from '../types/chat';
 
 import type { StructuredAction, TodoItem } from '../types/events';
-import type { ApiConfig } from '../types/settings';
+import type { RemoteAiConfig } from '../types/settings';
 import { ChatMessage } from './ChatMessage';
 import { ChatTabBar } from './ChatTabBar';
 import { CommandCenter } from './CommandCenter';
@@ -76,7 +76,6 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     useCommandExecution();
     const [taskPanelCollapsed, setTaskPanelCollapsed] = useState(false);
     const { loadConversation } = useHistory();
-    const messagesEndRef = useRef<HTMLDivElement>(null);
     const isUserAtBottomRef = useRef(true);
     const prevMessageCountRef = useRef(0);
     const [activeTab, setActiveTab] = useState<'chat' | 'history'>('chat');
@@ -85,7 +84,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     // Check API Key
     const checkApiKey = useCallback(async () => {
         try {
-            const config = await invoke<ApiConfig>('get_global_settings');
+            const config = await invoke<RemoteAiConfig>('get_remote_ai_settings');
             setHasApiKey(!!config.api_key && config.api_key.length > 0);
         } catch (e) {
             console.error('Failed to check API key:', e);
@@ -100,54 +99,69 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         };
     }, [checkApiKey]);
 
-    // Auto-scroll logic - optimized to prevent excessive re-renders
-    // Use a ref to track the last scroll time to throttle scroll operations
-    const lastScrollTimeRef = useRef(0);
-    const scrollRafRef = useRef<number | null>(null);
-    
+    // Track visible range for virtualization
+    const [visibleRange, setVisibleRange] = useState({ start: 0, end: 50 });
+    const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+    const lastMessage = messages[messages.length - 1];
+    const streamingSignature = useMemo(() => {
+        if (!lastMessage) return '';
+        return [
+            lastMessage.id ?? messages.length,
+            lastMessage.content ?? '',
+            lastMessage.reasoning ?? '',
+            lastMessage.blocks?.length ?? 0,
+        ].join('|');
+    }, [lastMessage, messages.length]);
+
+    const scrollToBottom = useCallback(() => {
+        const container = scrollContainerRef.current;
+        if (!container) return;
+        container.scrollTop = container.scrollHeight;
+    }, []);
+
+    // Scroll to bottom when a different conversation is loaded (or on initial mount).
+    // Detect conversation change by tracking the first message's ID.
+    const prevFirstMsgIdRef = useRef<string | undefined>(undefined);
+    useEffect(() => {
+        const firstId = messages[0]?.id;
+        if (messages.length > 0 && firstId !== prevFirstMsgIdRef.current) {
+            prevFirstMsgIdRef.current = firstId;
+            // Reset "at bottom" tracking so streaming auto-scroll works for the new conversation
+            isUserAtBottomRef.current = true;
+            prevMessageCountRef.current = messages.length;
+            // Delay to ensure DOM has rendered the loaded messages
+            const timer = setTimeout(scrollToBottom, 50);
+            return () => clearTimeout(timer);
+        }
+    }, [messages, scrollToBottom]);
+
+    // Scroll when a new message is appended (or user sends a message)
     useEffect(() => {
         const currentCount = messages.length;
-        
-        // Only scroll if message count actually changed
+
         if (currentCount === prevMessageCountRef.current) {
             return;
         }
-        
-        prevMessageCountRef.current = currentCount;
 
-        // Check if the last message is User, implies we just sent it -> Force Scroll
+        prevMessageCountRef.current = currentCount;
         const lastMsg = messages[currentCount - 1];
         const justSent = lastMsg?.role === 'User';
 
         if (justSent || isUserAtBottomRef.current) {
-            // Cancel any pending scroll
-            if (scrollRafRef.current) {
-                cancelAnimationFrame(scrollRafRef.current);
-            }
-            
-            // Throttle scrolls to max once per 100ms during streaming
-            const now = Date.now();
-            const timeSinceLastScroll = now - lastScrollTimeRef.current;
-            const delay = loading && timeSinceLastScroll < 100 ? 100 - timeSinceLastScroll : 0;
-            
-            scrollRafRef.current = requestAnimationFrame(() => {
-                setTimeout(() => {
-                    lastScrollTimeRef.current = Date.now();
-                    // Use simple scrollTop instead of scrollIntoView for better performance
-                    const container = messagesEndRef.current?.parentElement?.parentElement;
-                    if (container) {
-                        container.scrollTop = container.scrollHeight;
-                    }
-                }, delay);
-            });
+            const rafId = requestAnimationFrame(scrollToBottom);
+            return () => cancelAnimationFrame(rafId);
         }
-        
-        return () => {
-            if (scrollRafRef.current) {
-                cancelAnimationFrame(scrollRafRef.current);
-            }
-        };
-    }, [messages.length, loading]);
+
+        return;
+    }, [messages.length, messages, scrollToBottom]);
+
+    // Scroll during streaming updates only while user stays at bottom
+    useEffect(() => {
+        if (!loading || !isUserAtBottomRef.current) return;
+        const rafId = requestAnimationFrame(scrollToBottom);
+        return () => cancelAnimationFrame(rafId);
+    }, [loading, streamingSignature, scrollToBottom]);
 
     // Prevent default context menu on empty areas
     const handleContextMenu = useCallback((e: React.MouseEvent) => {
@@ -155,10 +169,6 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         e.preventDefault();
     }, []);
 
-    // Track visible range for virtualization
-    const [visibleRange, setVisibleRange] = useState({ start: 0, end: 50 });
-    const scrollContainerRef = useRef<HTMLDivElement>(null);
-    
     // Scroll handler - memoized to prevent recreation on every render
     const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
         const target = e.target as HTMLDivElement;
@@ -257,6 +267,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
             {/* Content Area - conditionally render based on active tab */}
             {activeTab === 'chat' ? (
                 <div
+                    ref={scrollContainerRef}
                     className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent"
                     onScroll={handleScroll}
                 >
@@ -383,8 +394,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                             </div>
                         )}
 
-                        {/* We actually don't need this div if we scroll container, but it's useful for 'scrollIntoView' method */}
-                        <div ref={messagesEndRef} className="h-4" />
+                        <div className="h-4" />
                     </div>
                 </div>
             ) : (

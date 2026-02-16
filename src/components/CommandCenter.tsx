@@ -75,6 +75,22 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
     } | null>(null);
     const [isCapturing, setIsCapturing] = useState(false);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const resizeRafRef = useRef<number | null>(null);
+    const resizeTextarea = useCallback((textarea?: HTMLTextAreaElement | null) => {
+        if (!textarea) return;
+        textarea.style.height = 'auto';
+        textarea.style.height = `${Math.min(textarea.scrollHeight, 400)}px`;
+    }, []);
+    const scheduleTextareaResize = useCallback((textarea?: HTMLTextAreaElement | null) => {
+        if (!textarea) return;
+        if (resizeRafRef.current !== null) {
+            cancelAnimationFrame(resizeRafRef.current);
+        }
+        resizeRafRef.current = requestAnimationFrame(() => {
+            resizeRafRef.current = null;
+            resizeTextarea(textarea);
+        });
+    }, [resizeTextarea]);
     const isLocalOnly = useMemo(() => (
         models.length > 0
         && models.every((model) => model.provider === 'ollama' || model.provider === 'openai-compat')
@@ -85,12 +101,14 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
         return id.includes('glm-4') || id.includes('glm-5') || id.includes('glm4') || id.includes('glm5');
     }, [selectedModelId]);
 
-    // Reset textarea height when text is cleared (after sending)
+    // Cleanup pending resize RAF on unmount.
     useEffect(() => {
-        if (textareaRef.current && text === '') {
-            textareaRef.current.style.height = '42px';
-        }
-    }, [text]);
+        return () => {
+            if (resizeRafRef.current !== null) {
+                cancelAnimationFrame(resizeRafRef.current);
+            }
+        };
+    }, []);
 
     const handlePaste = useCallback(async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
         const items = Array.from(event.clipboardData.items);
@@ -375,14 +393,10 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
     // Detect @ and show command popup
     const handleTextChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
         const newText = e.target.value;
-        const textarea = e.target;
-        
+
         // Update text immediately for responsive typing
         setText(newText);
-
-        // Adjust height immediately for responsive UI (especially for new lines)
-        textarea.style.height = '42px';
-        textarea.style.height = `${Math.min(textarea.scrollHeight, 400)}px`;
+        scheduleTextareaResize(e.currentTarget);
 
         // Find if we're typing a command (@ at start or after space)
         const cursorPos = e.target.selectionStart;
@@ -404,7 +418,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
             }
         }
         setShowCommands(false);
-    }, []);
+    }, [scheduleTextareaResize]);
 
     // Insert selected command
     const insertCommand = useCallback((commandName: string) => {
@@ -416,6 +430,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
         if (lastAtIndex !== -1) {
             const newText = textBeforeCursor.slice(0, lastAtIndex) + `@${commandName} ` + textAfterCursor;
             setText(newText);
+            scheduleTextareaResize(textareaRef.current);
             setShowCommands(false);
 
             // Focus and set cursor position after command
@@ -427,9 +442,9 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                 }
             }, 0);
         }
-    }, [text]);
+    }, [scheduleTextareaResize, text]);
 
-    const handleKeyDown = (e: React.KeyboardEvent) => {
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         // Handle command popup navigation
         if (showCommands && filteredCommands.length > 0) {
             if (e.key === 'ArrowDown') {
@@ -458,6 +473,28 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
             }
         }
 
+        // Handle multiline insertion explicitly to keep caret rendering in sync
+        // (prevents occasional visual cursor drift after Shift+Enter in controlled textarea).
+        if (e.key === 'Enter' && e.shiftKey) {
+            e.preventDefault();
+            const textarea = e.currentTarget;
+            const start = textarea.selectionStart;
+            const end = textarea.selectionEnd;
+            const nextText = `${text.slice(0, start)}\n${text.slice(end)}`;
+
+            setText(nextText);
+            setShowCommands(false);
+
+            requestAnimationFrame(() => {
+                if (!textareaRef.current) return;
+                const nextPos = start + 1;
+                textareaRef.current.focus();
+                textareaRef.current.setSelectionRange(nextPos, nextPos);
+                resizeTextarea(textareaRef.current);
+            });
+            return;
+        }
+
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             if (isLocalOnly && attachments.length > 0) {
@@ -473,6 +510,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                 setText('');
                 setAttachments([]);
                 setAttachmentError(null);
+                scheduleTextareaResize(textareaRef.current);
             }
         }
     };
@@ -559,6 +597,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                     setText('');
                                     setAttachments([]);
                                     setAttachmentError(null);
+                                    scheduleTextareaResize(textareaRef.current);
                                 }
                             }}
                             disabled={(!text.trim() && attachments.length === 0 && !loading) || disabled}

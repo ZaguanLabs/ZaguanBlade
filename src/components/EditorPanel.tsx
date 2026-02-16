@@ -27,9 +27,7 @@ const WelcomePage: React.FC<{ onOpenSettings?: () => void }> = ({ onOpenSettings
             }
 
             try {
-                // We import ApiConfig type dynamically or use 'any' if not strictly needed here, 
-                // but let's try to infer from response
-                const settings = await invoke<{ api_key: string }>('get_global_settings');
+                const settings = await invoke<{ api_key: string }>('get_remote_ai_settings');
                 setHasApiKey(!!settings.api_key && settings.api_key.length > 0);
             } catch (e) {
                 console.warn('Failed to check API key status:', e);
@@ -131,6 +129,13 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     const editorRef = useRef<CodeEditorHandle>(null);
     const pendingNavigation = useRef<{ path: string, line: number, col: number } | null>(null);
 
+    const pathsMatch = (a: string, b: string): boolean => {
+        if (a === b) return true;
+        const normA = a.replace(/\\/g, '/');
+        const normB = b.replace(/\\/g, '/');
+        return normA.endsWith(normB) || normB.endsWith(normA);
+    };
+
     // useEffect(() => {
     //     // Update editor context when active file changes
     //     setActiveFile(activeFile);
@@ -145,7 +150,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         const setupListeners = async () => {
             unlistenFileChanges = await listen<{ count: number, paths: string[] }>('file-changes-detected', (event) => {
                 // If the active file is in the changed paths, reload it
-                if (activeFile && event.payload.paths.some(p => p === activeFile)) {
+                if (activeFile && event.payload.paths.some(p => pathsMatch(p, activeFile))) {
                     console.log('[EDITOR] File changed on disk, reloading:', activeFile);
                     setReloadTrigger(prev => prev + 1);
                 }
@@ -155,7 +160,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             // The fs_watcher has a 250ms debounce that can drop events during rapid multi-edit sequences,
             // so this provides a reliable, direct notification when a tool modifies a file.
             unlistenChangeApplied = await listen<{ change_id: string; file_path: string }>('change-applied', (event) => {
-                if (activeFile && event.payload.file_path === activeFile) {
+                if (activeFile && pathsMatch(event.payload.file_path, activeFile)) {
                     console.log('[EDITOR] Tool change applied to active file, reloading:', activeFile);
                     setReloadTrigger(prev => prev + 1);
                 }
@@ -181,12 +186,12 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 const bladeEvent = event.payload;
                 if (bladeEvent.type === 'File') {
                     const fileEvent = bladeEvent.payload;
-                    if (fileEvent.type === 'Content' && fileEvent.payload.path === activeFile) {
+                    if (fileEvent.type === 'Content' && pathsMatch(fileEvent.payload.path, activeFile)) {
                         console.log('[EDITOR] Received content for:', activeFile);
                         setContent(fileEvent.payload.data);
                         setLoading(false);
                         setError(null);
-                    } else if (fileEvent.type === 'Written' && fileEvent.payload.path === activeFile) {
+                    } else if (fileEvent.type === 'Written' && pathsMatch(fileEvent.payload.path, activeFile)) {
                         console.log('[EDITOR] Confirmed written:', activeFile);
                         // Optional: Show toast
                     }

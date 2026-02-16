@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { ModelInfo } from '../types/chat';
 import { ChevronDown, Check, Box, Cpu, Sparkles, BrainCircuit } from 'lucide-react';
 
@@ -13,10 +13,19 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
     const [isOpen, setIsOpen] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
     const dropdownRef = useRef<HTMLDivElement>(null);
-    const selectedModel = models.find(m => m.id === selectedId) || null;
-    const cloudModels = models.filter(model => model.provider !== 'ollama' && model.provider !== 'openai-compat');
-    const ollamaModels = models.filter(model => model.provider === 'ollama');
-    const openaiCompatModels = models.filter(model => model.provider === 'openai-compat');
+    const selectedModel = useMemo(() => models.find(m => m.id === selectedId) || null, [models, selectedId]);
+    const cloudModels = useMemo(
+        () => models.filter(model => model.provider !== 'ollama' && model.provider !== 'openai-compat'),
+        [models]
+    );
+    const ollamaModels = useMemo(
+        () => models.filter(model => model.provider === 'ollama'),
+        [models]
+    );
+    const openaiCompatModels = useMemo(
+        () => models.filter(model => model.provider === 'openai-compat'),
+        [models]
+    );
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
@@ -36,13 +45,12 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
     // Scroll to selected model when dropdown opens
     useEffect(() => {
         if (isOpen && dropdownRef.current && selectedId) {
-            // Wait for the dropdown to render
-            setTimeout(() => {
+            requestAnimationFrame(() => {
                 const selectedButton = dropdownRef.current?.querySelector(`[data-model-id="${selectedId}"]`);
                 if (selectedButton) {
-                    selectedButton.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    selectedButton.scrollIntoView({ behavior: 'auto', block: 'nearest' });
                 }
-            }, 50);
+            });
         }
     }, [isOpen, selectedId]);
 

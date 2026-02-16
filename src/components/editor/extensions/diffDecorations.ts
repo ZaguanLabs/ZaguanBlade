@@ -308,9 +308,12 @@ const diffDecorationsPlugin = EditorView.decorations.compute(
             pairedAddedIndices.add(idx + 1);
         }
 
-        // We need to collect all decorations with their positions, then sort by position
-        // because CM6 requires decorations to be added in document order.
-        const decos: { from: number; to: number; deco: Decoration }[] = [];
+        // Use each decoration's actual startSide and sort by (from, startSide, to).
+        // This avoids relying on hardcoded startSide guesses across CM versions.
+        const getStartSide = (deco: Decoration): number =>
+            (deco as unknown as { startSide?: number }).startSide ?? 0;
+
+        const decos: { from: number; to: number; startSide: number; deco: Decoration }[] = [];
 
         for (let i = 0; i < diffLines.length; i++) {
             const dl = diffLines[i];
@@ -319,7 +322,12 @@ const diffDecorationsPlugin = EditorView.decorations.compute(
                 const line = doc.line(dl.newLineNum);
 
                 // Line-level decoration (green background)
-                decos.push({ from: line.from, to: line.from, deco: addedLineDecoration });
+                decos.push({
+                    from: line.from,
+                    to: line.from,
+                    startSide: getStartSide(addedLineDecoration),
+                    deco: addedLineDecoration,
+                });
 
                 // Character-level highlights for paired lines
                 if (pairedAddedIndices.has(i)) {
@@ -329,10 +337,12 @@ const diffDecorationsPlugin = EditorView.decorations.compute(
                         const from = line.from + span.offset;
                         const to = Math.min(line.from + span.offset + span.length, line.to);
                         if (from < to && from >= line.from && to <= line.to) {
+                            const mark = Decoration.mark({ class: "cm-diff-char-added" });
                             decos.push({
                                 from,
                                 to,
-                                deco: Decoration.mark({ class: "cm-diff-char-added" }),
+                                startSide: getStartSide(mark),
+                                deco: mark,
                             });
                         }
                     }
@@ -377,7 +387,9 @@ const diffDecorationsPlugin = EditorView.decorations.compute(
                         block: true,
                         side: -1, // Place before the line
                     }),
+                    startSide: 0,
                 });
+                decos[decos.length - 1].startSide = getStartSide(decos[decos.length - 1].deco);
             } else if (dl.type === 'gap') {
                 // Find the position for the gap widget
                 let gapBeforeLine: number | null = null;
@@ -400,12 +412,14 @@ const diffDecorationsPlugin = EditorView.decorations.compute(
                         block: true,
                         side: -1,
                     }),
+                    startSide: 0,
                 });
+                decos[decos.length - 1].startSide = getStartSide(decos[decos.length - 1].deco);
             }
         }
 
-        // Sort by position (required by CM6)
-        decos.sort((a, b) => a.from - b.from || a.to - b.to);
+        // Sort by (from, startSide, to) as required by CM6's RangeSetBuilder
+        decos.sort((a, b) => a.from - b.from || a.startSide - b.startSide || a.to - b.to);
 
         for (const d of decos) {
             builder.add(d.from, d.to, d.deco);

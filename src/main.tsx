@@ -15,43 +15,30 @@ import "@fontsource/fira-code/700.css"; // Bold
 // Wrapper to handle window visibility
 const AppWrapper = () => {
     useEffect(() => {
-        // Show window after React has hydrated and initial render is complete
-        const showWindow = async () => {
-            console.log('[WINDOW] Attempting to show window...');
-            try {
-                // Check if we're in Tauri environment
-                if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
-                    const appWindow = getCurrentWindow();
-                    await appWindow.show();
-                    console.log('[WINDOW] Window shown successfully');
-                } else {
-                    console.log('[WINDOW] Not in Tauri environment, skipping window.show()');
-                }
+        const hideLoadingScreen = () => {
+            const loadingScreen = document.getElementById('loading-screen');
+            if (!loadingScreen) return;
 
-                // Remove loading screen after window is shown
-                setTimeout(() => {
-                    const loadingScreen = document.getElementById('loading-screen');
-                    if (loadingScreen) {
-                        loadingScreen.classList.add('loaded');
-                        setTimeout(() => loadingScreen.remove(), 300);
-                    }
-                }, 100);
-            } catch (err) {
-                console.error('[WINDOW] Failed to show window:', err);
-                // Remove loading screen anyway to prevent permanent black screen
-                const loadingScreen = document.getElementById('loading-screen');
-                if (loadingScreen) {
-                    loadingScreen.classList.add('loaded');
-                    setTimeout(() => loadingScreen.remove(), 300);
-                }
-            }
+            loadingScreen.classList.add('loaded');
+            const remove = () => loadingScreen.remove();
+            loadingScreen.addEventListener('transitionend', remove, { once: true });
+            window.setTimeout(remove, 220);
         };
 
-        // Small delay to ensure first paint is complete
+        // Show window after first frame to reduce black/white flashes on startup
         requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-                showWindow();
-            });
+            void (async () => {
+                try {
+                    if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+                        const appWindow = getCurrentWindow();
+                        await appWindow.show();
+                    }
+                } catch (err) {
+                    console.error('[WINDOW] Failed to show window:', err);
+                } finally {
+                    hideLoadingScreen();
+                }
+            })();
         });
     }, []);
 

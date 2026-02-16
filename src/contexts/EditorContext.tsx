@@ -5,6 +5,7 @@ import type { BladeEventEnvelope, EditorEvent } from '../types/blade';
 
 interface EditorState {
     activeFile: string | null;
+    openFiles: string[];
     cursorLine: number | null;
     cursorColumn: number | null;
     selectionStartLine: number | null;
@@ -14,6 +15,7 @@ interface EditorState {
 interface EditorContextType {
     editorState: EditorState;
     setActiveFile: (file: string | null) => void;
+    setOpenFiles: (files: string[]) => void;
     setCursorPosition: (line: number, column: number) => void;
     setSelection: (startLine: number, endLine: number) => void;
     clearSelection: () => void;
@@ -24,6 +26,7 @@ const EditorContext = createContext<EditorContextType | undefined>(undefined);
 export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [editorState, setEditorState] = useState<EditorState>({
         activeFile: null,
+        openFiles: [],
         cursorLine: null,
         cursorColumn: null,
         selectionStartLine: null,
@@ -68,13 +71,14 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                         selectionEndLine: editorEvent.payload.end
                     }));
                 } else if (editorEvent.type === 'StateSnapshot') {
-                    setEditorState({
+                    setEditorState(prev => ({
                         activeFile: editorEvent.payload.active_file ?? null,
+                        openFiles: editorEvent.payload.open_files ?? prev.openFiles,
                         cursorLine: editorEvent.payload.cursor_line ?? null,
                         cursorColumn: editorEvent.payload.cursor_column ?? null,
                         selectionStartLine: editorEvent.payload.selection_start ?? null,
                         selectionEndLine: editorEvent.payload.selection_end ?? null,
-                    });
+                    }));
                 }
             });
         };
@@ -128,6 +132,10 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }, 100);
     }, []);
 
+    const setOpenFiles = useCallback((files: string[]) => {
+        setEditorState(prev => ({ ...prev, openFiles: files }));
+    }, []);
+
     const clearSelection = useCallback(() => {
         setEditorState(prev => ({
             ...prev,
@@ -142,6 +150,7 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         <EditorContext.Provider value={{
             editorState,
             setActiveFile,
+            setOpenFiles,
             setCursorPosition,
             setSelection,
             clearSelection

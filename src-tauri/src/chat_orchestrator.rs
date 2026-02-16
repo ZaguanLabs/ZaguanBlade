@@ -1,38 +1,13 @@
 use crate::app_state::AppState;
 use crate::chat_manager::DrainResult;
-use crate::models::registry::get_models;
 use crate::project_settings;
 use crate::utils::{extract_root_command, is_cwd_outside_workspace, parse_command};
 use crate::{blade_protocol, local_artifacts};
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 async fn load_available_models(state: &State<'_, AppState>) -> Vec<crate::models::registry::ModelInfo> {
-    let (blade_url, api_key, ollama_enabled, ollama_url, ollama_cloud_enabled, ollama_cloud_api_key, openai_compat_enabled, openai_compat_url) = {
-        let config = state.config.lock().unwrap();
-        (
-            config.blade_url.clone(),
-            config.api_key.clone(),
-            config.ollama_enabled,
-            config.ollama_url.clone(),
-            config.ollama_cloud_enabled,
-            config.ollama_cloud_api_key.clone(),
-            config.openai_compat_enabled,
-            config.openai_compat_url.clone(),
-        )
-    };
-
-    let mut models = get_models(&blade_url, &api_key).await;
-    if ollama_enabled {
-        let mut ollama_models = crate::models::ollama::get_models(&ollama_url, ollama_cloud_enabled, &ollama_cloud_api_key).await;
-        models.append(&mut ollama_models);
-    }
-
-    if openai_compat_enabled {
-        let mut openai_compat_models = crate::models::openai_compat::get_models(&openai_compat_url).await;
-        models.append(&mut openai_compat_models);
-    }
-
-    models
+    let config = { state.config.lock().unwrap().clone() };
+    crate::models::catalog::list_all_models(&config).await
 }
 
 pub async fn handle_send_message<R: Runtime>(
@@ -113,26 +88,7 @@ pub async fn handle_send_message<R: Runtime>(
         let mut selected_model = *state.selected_model_index.lock().unwrap();
 
         if let Some(ref id) = model_id {
-            // Smart matching logic:
-            // 1. Try exact match on unique ID (composite or raw)
-            // 2. Try exact match on API ID (raw)
-            // 3. Try case-insensitive matches
-            let matched_idx = models
-                .iter()
-                .position(|m| m.id == *id)
-                .or_else(|| models.iter().position(|m| m.api_id.as_deref() == Some(id)))
-                .or_else(|| {
-                    let id_lower = id.to_lowercase();
-                    models
-                        .iter()
-                        .position(|m| m.id.to_lowercase() == id_lower)
-                        .or_else(|| {
-                            models.iter().position(|m| {
-                                m.api_id.as_ref().map(|s| s.to_lowercase()).as_deref()
-                                    == Some(&id_lower)
-                            })
-                        })
-                });
+            let matched_idx = crate::models::catalog::resolve_model_index(&models, id);
 
             if let Some(idx) = matched_idx {
                 eprintln!(
@@ -201,10 +157,6 @@ pub async fn handle_send_message<R: Runtime>(
 
     tauri::async_runtime::spawn(async move {
         let mut last_session_id: Option<String> = None;
-        
-        // Fetch models once at the start instead of every iteration
-        let state = app_handle.state::<AppState>();
-        let models = load_available_models(&state).await;
 
         loop {
             // Check if we're actually streaming before processing
@@ -236,9 +188,7 @@ pub async fn handle_send_message<R: Runtime>(
             let (result, is_streaming, session_id) = {
                 let mut mgr = state.chat_manager.lock().unwrap();
                 let mut conversation = state.conversation.lock().unwrap();
-                let selected_model_idx = *state.selected_model_index.lock().unwrap();
-
-                let res = mgr.drain_events(&mut conversation, &models, selected_model_idx);
+                let res = mgr.drain_events(&mut conversation);
                 (res, mgr.streaming, mgr.session_id.clone())
             };
 

@@ -94,7 +94,7 @@ impl WsConnectionManager {
 
         let client = BladeWsClient::new(blade_url, api_key);
         
-        match client.connect().await {
+        match client.connect(None).await {
             Ok(event_rx) => {
                 // Store the client
                 {

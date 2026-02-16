@@ -219,7 +219,8 @@ impl BladeWsClient {
     }
 
     /// Connect to the WebSocket server and authenticate with retry logic
-    pub async fn connect(&self) -> Result<mpsc::UnboundedReceiver<BladeWsEvent>, String> {
+    /// If `workspace_path` is provided, it overrides `working_dir` in the environment info.
+    pub async fn connect(&self, workspace_path: Option<String>) -> Result<mpsc::UnboundedReceiver<BladeWsEvent>, String> {
         // Convert HTTP URL to WebSocket URL
         let ws_url = self
             .base_url
@@ -247,7 +248,7 @@ impl BladeWsClient {
 
             match connect_async_with_config(&url, Some(ws_config), false).await {
                 Ok((stream, _)) => {
-                    eprintln!("[BLADE WS] Connected successfully");
+                    // eprintln!("[BLADE WS] Connected successfully");
                     ws_stream = stream;
                     break;
                 }
@@ -324,12 +325,12 @@ impl BladeWsClient {
                         );
                     }
                     WsMessage::Ping => {
-                        if let Err(e) = write.send(Message::Ping(Vec::new().into())).await {
-                            eprintln!("[BLADE WS] Ping error: {}", e);
+                        if let Err(_e) = write.send(Message::Ping(Vec::new().into())).await {
+                            // eprintln!("[BLADE WS] Ping error: {}", _e);
                             break;
                         }
-                        if let Err(e) = futures_util::SinkExt::flush(&mut write).await {
-                            eprintln!("[BLADE WS] Ping flush error: {}", e);
+                        if let Err(_e) = futures_util::SinkExt::flush(&mut write).await {
+                            // eprintln!("[BLADE WS] Ping flush error: {}", _e);
                             break;
                         }
                     }
@@ -365,9 +366,14 @@ impl BladeWsClient {
 
         tokio::spawn(async move {
             // Collect environment information for the system prompt
-            let environment = EnvironmentInfo::collect();
-            eprintln!("[BLADE WS] Environment: os={}, arch={:?}, shell={:?}", 
-                environment.os, environment.arch, environment.shell);
+            let mut environment = EnvironmentInfo::collect();
+            // Override working_dir with the actual workspace path if available.
+            // env::current_dir() returns the AppImage mount point, not the user's workspace.
+            if let Some(ref ws_path) = workspace_path {
+                environment.working_dir = Some(ws_path.clone());
+            }
+            // eprintln!("[BLADE WS] Environment: os={}, arch={:?}, shell={:?}",
+            //     environment.os, environment.arch, environment.shell);
             
             // Send authentication message
             let auth_msg = WsBaseMessage {
@@ -386,10 +392,10 @@ impl BladeWsClient {
             };
 
             let auth_json = serde_json::to_string(&auth_msg).unwrap();
-            eprintln!("[BLADE WS] Sending authentication");
+            // eprintln!("[BLADE WS] Sending authentication");
 
-            if let Err(e) = msg_tx_clone.send(WsMessage::Send(auth_json)) {
-                eprintln!("[BLADE WS] Failed to send auth: {}", e);
+            if let Err(_e) = msg_tx_clone.send(WsMessage::Send(auth_json)) {
+                // eprintln!("[BLADE WS] Failed to send auth: {}", _e);
                 let _ = event_tx_clone.send(BladeWsEvent::Error {
                     error_type: "authentication_error".to_string(),
                     code: "auth_failed".to_string(),
@@ -408,16 +414,16 @@ impl BladeWsClient {
                 match msg_result {
                     Ok(Message::Text(text)) => {
                         if text.len() > 500 {
-                            eprintln!("[BLADE WS] Received: {}... ({} bytes)", &text[..200], text.len());
+                            // eprintln!("[BLADE WS] Received: {}... ({} bytes)", &text[..200], text.len());
                         } else {
-                            eprintln!("[BLADE WS] Received: {}", text);
+                            // eprintln!("[BLADE WS] Received: {}", text);
                         }
-                        if let Err(e) = Self::parse_message(&text, &event_tx_clone) {
-                            eprintln!("[BLADE WS] Parse error: {}", e);
+                        if let Err(_e) = Self::parse_message(&text, &event_tx_clone) {
+                            // eprintln!("[BLADE WS] Parse error: {}", _e);
                         }
                     }
                     Ok(Message::Close(_)) => {
-                        eprintln!("[BLADE WS] Connection closed by server");
+                        // eprintln!("[BLADE WS] Connection closed by server");
                         let _ = event_tx_clone.send(BladeWsEvent::Disconnected);
                         break;
                     }
@@ -425,7 +431,7 @@ impl BladeWsClient {
                         // Pong is handled automatically by tungstenite
                     }
                     Err(e) => {
-                        eprintln!("[BLADE WS] Read error: {}", e);
+                        // eprintln!("[BLADE WS] Read error: {}", e);
                         let msg = e.to_string();
                         
                         // Handle specific error types with appropriate recovery hints
@@ -434,7 +440,7 @@ impl BladeWsClient {
                             let _ = event_tx_clone.send(BladeWsEvent::Disconnected);
                         } else if msg.contains("Space limit exceeded") || msg.contains("Message too long") {
                             // Message size limit exceeded - tell the model to use smaller responses
-                            eprintln!("[BLADE WS] Message size limit exceeded, sending recoverable error");
+                            // eprintln!("[BLADE WS] Message size limit exceeded, sending recoverable error");
                             let _ = event_tx_clone.send(BladeWsEvent::Error {
                                 error_type: "message_too_large".to_string(),
                                 code: "size_limit_exceeded".to_string(),
@@ -650,7 +656,7 @@ impl BladeWsClient {
                     .unwrap_or("unknown")
                     .to_string();
 
-                eprintln!("[BLADE WS] Authenticated as {}", user_id);
+                // eprintln!("[BLADE WS] Authenticated as {}", user_id);
                 let _ = tx.send(BladeWsEvent::Connected {
                     user_id,
                     server_version,
@@ -670,7 +676,7 @@ impl BladeWsClient {
                     .unwrap_or("")
                     .to_string();
 
-                eprintln!("[BLADE WS] Session created: {}", session_id);
+                // eprintln!("[BLADE WS] Session created: {}", session_id);
                 let _ = tx.send(BladeWsEvent::Session {
                     session_id,
                     model_id,
@@ -704,12 +710,12 @@ impl BladeWsClient {
                 // This ensures ChatManager's to_string() produces clean JSON, not an escaped string
                 let raw_args = msg.payload.get("arguments");
                 let arguments = if let Some(str_args) = raw_args.and_then(|v| v.as_str()) {
-                    let preview: String = str_args.chars().take(200).collect();
-                    eprintln!("[BLADE WS] Parsing string arguments ({} bytes): {}...", str_args.len(), preview);
+                    let _preview: String = str_args.chars().take(200).collect();
+                    // eprintln!("[BLADE WS] Parsing string arguments ({} bytes): {}...", str_args.len(), _preview);
                     match serde_json::from_str::<Value>(str_args) {
                         Ok(v) => v,
-                        Err(e) => {
-                            eprintln!("[BLADE WS] Failed to parse arguments as JSON: {}", e);
+                        Err(_e) => {
+                            // eprintln!("[BLADE WS] Failed to parse arguments as JSON: {}", _e);
                             Value::String(str_args.to_string())
                         }
                     }
@@ -717,7 +723,7 @@ impl BladeWsClient {
                     raw_args.cloned().unwrap_or(Value::Null)
                 };
 
-                eprintln!("[BLADE WS] Tool call: {} ({})", name, id);
+                // eprintln!("[BLADE WS] Tool call: {} ({})", name, id);
                 let _ = tx.send(BladeWsEvent::ToolCall {
                     id,
                     name,
@@ -729,17 +735,18 @@ impl BladeWsClient {
                 if let Some(todos_value) = msg.payload.get("todos") {
                     match serde_json::from_value::<Vec<TodoItem>>(todos_value.clone()) {
                         Ok(todos) => {
-                            eprintln!("[BLADE WS] Todo updated: {} items", todos.len());
+                            // eprintln!("[BLADE WS] Todo updated: {} items", todos.len());
                             match tx.send(BladeWsEvent::TodoUpdated { todos }) {
-                                Ok(_) => eprintln!("[BLADE WS] TodoUpdated event sent to channel"),
+                                Ok(_) => {}
+                                // eprintln!("[BLADE WS] TodoUpdated event sent to channel"),
                                 Err(e) => eprintln!(
                                     "[BLADE WS] Failed to send TodoUpdated to channel: {}",
                                     e
                                 ),
                             }
                         }
-                        Err(e) => {
-                            eprintln!("[BLADE WS] Failed to parse todos: {}", e);
+                        Err(_e) => {
+                            // eprintln!("[BLADE WS] Failed to parse todos: {}", _e);
                         }
                     }
                 }
@@ -753,7 +760,7 @@ impl BladeWsClient {
                     .to_string();
                 let recoverable = msg.payload.get("recoverable").and_then(|v| v.as_bool());
 
-                eprintln!("[BLADE WS] Chat done: {} (recoverable: {:?})", finish_reason, recoverable);
+                // eprintln!("[BLADE WS] Chat done: {} (recoverable: {:?})", finish_reason, recoverable);
                 let _ = tx.send(BladeWsEvent::ChatDone { finish_reason, recoverable });
             }
             "error" => {
@@ -784,8 +791,8 @@ impl BladeWsClient {
                 let recoverable = msg.payload.get("recoverable").and_then(|v| v.as_bool());
                 let recovery_hint = msg.payload.get("recovery_hint").and_then(|v| v.as_str()).map(|s| s.to_string());
 
-                eprintln!("[BLADE WS] Error: {} ({}) - {} (tokens: {:?}/{:?}, recoverable: {:?})", 
-                    error_type, code, message, token_count, max_tokens, recoverable);
+                // eprintln!("[BLADE WS] Error: {} ({}) - {} (tokens: {:?}/{:?}, recoverable: {:?})",
+                //     error_type, code, message, token_count, max_tokens, recoverable);
                 let _ = tx.send(BladeWsEvent::Error { 
                     error_type,
                     code, 
@@ -830,7 +837,7 @@ impl BladeWsClient {
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0) as u8;
 
-                eprintln!("[BLADE WS] Progress: {} ({}%)", message, percent);
+                // eprintln!("[BLADE WS] Progress: {} ({}%)", message, percent);
                 let _ = tx.send(BladeWsEvent::Progress {
                     message,
                     stage,
@@ -930,8 +937,8 @@ impl BladeWsClient {
                                         .and_then(|v| v.as_str())
                                         .unwrap_or("")
                                         .to_string(),
-                                    Err(e) => {
-                                        eprintln!("[BLADE WS] Failed to parse decoded context payload: {}", e);
+                                    Err(_e) => {
+                                        // eprintln!("[BLADE WS] Failed to parse decoded context payload: {}", _e);
                                         "".to_string()
                                     }
                                 },
@@ -944,8 +951,8 @@ impl BladeWsClient {
                                 }
                             }
                         }
-                        Err(e) => {
-                            eprintln!("[BLADE WS] Failed to decode Base64 context payload: {}", e);
+                        Err(_e) => {
+                            // eprintln!("[BLADE WS] Failed to decode Base64 context payload: {}", _e);
                             "".to_string()
                         }
                     }
@@ -968,7 +975,7 @@ impl BladeWsClient {
                 });
             }
             _ => {
-                eprintln!("[BLADE WS] Unknown message type: {}", msg.msg_type);
+                // eprintln!("[BLADE WS] Unknown message type: {}", msg.msg_type);
             }
         }
 

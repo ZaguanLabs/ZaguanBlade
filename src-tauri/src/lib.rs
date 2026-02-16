@@ -35,6 +35,7 @@ pub mod project_settings;
 pub mod project_state;
 pub mod protocol;
 pub mod protocol_dispatcher;
+pub mod providers;
 pub mod reasoning_parser;
 pub mod semantic_patch;
 pub mod symbol_index;
@@ -198,12 +199,14 @@ pub fn run() {
             commands::screenshot::capture_window_region,
             commands::screenshot::capture_screen_region,
             // Settings
-            commands::settings::get_global_settings,
-            commands::settings::save_global_settings,
-            commands::settings::test_ollama_connection,
-            commands::settings::refresh_ollama_models,
-            commands::settings::test_openai_compat_connection,
-            commands::settings::refresh_openai_compat_models,
+            commands::settings_remote::get_remote_ai_settings,
+            commands::settings_remote::save_remote_ai_settings,
+            commands::settings_local_ai::get_local_ai_settings,
+            commands::settings_local_ai::save_local_ai_settings,
+            commands::settings_local_ai::test_local_ollama_connection,
+            commands::settings_local_ai::refresh_local_ollama_models,
+            commands::settings_local_ai::test_local_openai_compat_connection,
+            commands::settings_local_ai::refresh_local_openai_compat_models,
             // Chat
             commands::chat::send_message,
             commands::chat::list_models,
@@ -215,6 +218,7 @@ pub fn run() {
             commands::chat::save_conversation,
             commands::chat::set_selected_model,
             commands::chat::get_selected_model,
+            commands::chat::get_chat_status,
             // Tools & Changes
             commands::tools::submit_command_result,
             commands::tools::approve_tool_decision,

@@ -2,7 +2,6 @@ use crate::app_state::AppState;
 use crate::chat_orchestrator::handle_send_message;
 use crate::conversation::ConversationHistory;
 use crate::conversation_store;
-use crate::models::registry::get_models;
 use tauri::{AppHandle, Emitter, Runtime, State, Window};
 
 #[tauri::command]
@@ -41,31 +40,8 @@ pub async fn send_message<R: Runtime>(
 pub async fn list_models(
     state: State<'_, AppState>,
 ) -> Result<Vec<crate::models::registry::ModelInfo>, String> {
-    let (blade_url, api_key, ollama_enabled, ollama_url, ollama_cloud_enabled, ollama_cloud_api_key, openai_compat_enabled, openai_compat_url) = {
-        let config = state.config.lock().unwrap();
-        (
-            config.blade_url.clone(),
-            config.api_key.clone(),
-            config.ollama_enabled,
-            config.ollama_url.clone(),
-            config.ollama_cloud_enabled,
-            config.ollama_cloud_api_key.clone(),
-            config.openai_compat_enabled,
-            config.openai_compat_url.clone(),
-        )
-    };
-
-    let mut models = crate::models::registry::get_models(&blade_url, &api_key).await;
-    if ollama_enabled {
-        let mut ollama_models = crate::models::ollama::get_models(&ollama_url, ollama_cloud_enabled, &ollama_cloud_api_key).await;
-        models.append(&mut ollama_models);
-    }
-    if openai_compat_enabled {
-        let mut openai_compat_models = crate::models::openai_compat::get_models(&openai_compat_url).await;
-        models.append(&mut openai_compat_models);
-    }
-
-    Ok(models)
+    let config = { state.config.lock().unwrap().clone() };
+    Ok(crate::models::catalog::list_all_models(&config).await)
 }
 
 #[tauri::command]
@@ -207,32 +183,9 @@ pub async fn set_selected_model(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     // Update the selected model index (in-memory only)
-    let (blade_url, api_key) = {
-        let config = state.config.lock().unwrap();
-        (config.blade_url.clone(), config.api_key.clone())
-    };
-    let models = get_models(&blade_url, &api_key).await;
-
-    // Use smart matching logic identical to handle_send_message
-    let matched_idx = models
-        .iter()
-        .position(|m| m.id == model_id)
-        .or_else(|| {
-            models
-                .iter()
-                .position(|m| m.api_id.as_deref() == Some(&model_id))
-        })
-        .or_else(|| {
-            let id_lower = model_id.to_lowercase();
-            models
-                .iter()
-                .position(|m| m.id.to_lowercase() == id_lower)
-                .or_else(|| {
-                    models.iter().position(|m| {
-                        m.api_id.as_ref().map(|s| s.to_lowercase()).as_deref() == Some(&id_lower)
-                    })
-                })
-        });
+    let config = { state.config.lock().unwrap().clone() };
+    let models = crate::models::catalog::list_all_models(&config).await;
+    let matched_idx = crate::models::catalog::resolve_model_index(&models, &model_id);
 
     if let Some(idx) = matched_idx {
         *state.selected_model_index.lock().unwrap() = idx;
@@ -251,4 +204,12 @@ pub fn get_selected_model(_state: State<'_, AppState>) -> Option<String> {
     // Model is now stored in project state only, not main config
     // Return None to let the frontend use project state or default
     None
+}
+
+/// Returns whether the backend is currently streaming a response.
+/// Used by the frontend to restore `loading` state after a UI reload.
+#[tauri::command]
+pub fn get_chat_status(state: State<'_, AppState>) -> bool {
+    let mgr = state.chat_manager.lock().unwrap();
+    mgr.streaming || mgr.rx.is_some()
 }

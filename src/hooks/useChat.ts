@@ -29,6 +29,29 @@ export function useChat() {
     // Active todo list state — lifted out of messages for persistent TaskPanel
     const [activeTodos, setActiveTodos] = useState<import('../types/events').TodoItem[]>([]);
 
+    // Reset all streaming infrastructure — must be called when switching conversations
+    const resetStreamingState = useCallback(() => {
+        if (messageBufferRef.current) {
+            messageBufferRef.current.clearAll();
+        }
+        accumulatedContentRef.current = { id: '', content: '' };
+        accumulatedReasoningRef.current = { id: '', content: '' };
+        blocksRef.current.clear();
+        pendingUpdatesRef.current.clear();
+        if (flushScheduledRef.current) {
+            clearTimeout(flushScheduledRef.current);
+            flushScheduledRef.current = null;
+        }
+        if (toolActivityFlushRef.current !== null) {
+            clearTimeout(toolActivityFlushRef.current);
+            toolActivityFlushRef.current = null;
+        }
+        pendingToolActivityRef.current = null;
+        setToolActivity(null);
+        setLoading(false);
+        setPendingActions(null);
+    }, []);
+
     // v1.1: Message buffer and accumulation ref for atomic updates
     const messageBufferRef = useRef<MessageBuffer | null>(null);
     const accumulatedContentRef = useRef<{ id: string; content: string }>({ id: '', content: '' });
@@ -189,15 +212,22 @@ export function useChat() {
                     return;
                 }
 
-                const [history, modelList] = await Promise.all([
+                const [history, modelList, isStreaming] = await Promise.all([
                     invoke<ChatMessage[]>('get_conversation'),
                     invoke<ModelInfo[]>('list_models'),
+                    invoke<boolean>('get_chat_status'),
                 ]);
 
                 console.log('Loaded conversation:', history);
                 // Reconstruct blocks for historical messages
                 setMessages(ensureMessagesHaveBlocks(history));
                 setModels(modelList);
+
+                // Restore loading state if backend is still streaming (e.g. after UI reload)
+                if (isStreaming) {
+                    console.log('[useChat] Backend is still streaming — restoring loading state');
+                    setLoading(true);
+                }
 
                 // Set a default model - project state will override this if available
                 // This prevents the model from being undefined before project state loads
@@ -264,11 +294,12 @@ export function useChat() {
                     } else {
                         if (accumulatedContentRef.current.id !== id) {
                             accumulatedContentRef.current = { id, content: '' };
-                            // New content stream for this message - clear stale text blocks from blocksRef
-                            // Keep only non-text blocks (tool_call, command_execution, etc.)
+                            // New content stream for this message - clear stale text blocks from blocksRef.
+                            // IMPORTANT: keep reasoning blocks so chain-of-thought summary remains visible
+                            // when the assistant transitions from reasoning to final answer.
                             const existingBlocks = blocksRef.current.get(id) || [];
                             if (existingBlocks.length > 0) {
-                                const nonTextBlocks = existingBlocks.filter(b => b.type !== 'text' && b.type !== 'reasoning');
+                                const nonTextBlocks = existingBlocks.filter(b => b.type !== 'text');
                                 blocksRef.current.set(id, nonTextBlocks);
                             }
                         }
@@ -350,6 +381,36 @@ export function useChat() {
             const u2 = await listen('chat-done', () => {
                 setLoading(false);
                 setPendingActions(null); // Clear any hanging dialogs
+
+                // Auto-complete lingering todos when chat finishes.
+                // Models sometimes forget to send a final todo_write marking the last task as completed.
+                // Wait briefly to allow any in-flight todo_updated events to arrive first.
+                setTimeout(() => {
+                    setActiveTodos(prev => {
+                        if (prev.length === 0) return prev;
+                        const hasIncomplete = prev.some(t => t.status !== 'completed');
+                        if (!hasIncomplete) return prev; // Already all completed, normal flow handles it
+                        // Mark all remaining items as completed
+                        const completed = prev.map(t => ({ ...t, status: 'completed' as const }));
+                        // Trigger the completion flow (clear panel + insert summary) after brief display
+                        setTimeout(() => {
+                            setActiveTodos([]);
+                            const summaryId = `plan-summary-${Date.now()}`;
+                            const summaryMessage: ChatMessage = {
+                                id: summaryId,
+                                role: 'Assistant',
+                                content: '',
+                                blocks: [{ type: 'plan_summary' as const, id: summaryId }],
+                                planSummary: {
+                                    todos: [...completed],
+                                    completedAt: Date.now(),
+                                },
+                            };
+                            setMessages(prev => [...prev, summaryMessage]);
+                        }, 1500);
+                        return completed;
+                    });
+                }, 500);
             });
             unlistenDone = u2;
 
@@ -641,9 +702,33 @@ export function useChat() {
                                                 : (accumulatedContentRef.current.id === message_id
                                                     ? accumulatedContentRef.current.content
                                                     : msg.content);
+                                            
                                             // Check if block already exists (idempotency safety)
                                             if (!newBlocks.some(b => b.type === 'tool_call' && b.id === tool_call_id)) {
-                                                newBlocks.push({ type: 'tool_call', id: tool_call_id });
+                                                // Find the correct insertion position for the tool_call block
+                                                // Insert after the text block that contains contentBefore length
+                                                let insertIdx = newBlocks.length; // Default: append to end
+                                                
+                                                if (contentBefore && contentBefore.length > 0) {
+                                                    // Find the text block that contains the contentBefore length
+                                                    let charsProcessed = 0;
+                                                    for (let i = 0; i < newBlocks.length; i++) {
+                                                        const block = newBlocks[i];
+                                                        if (block.type === 'text' && block.content) {
+                                                            const blockEnd = charsProcessed + block.content.length;
+                                                            if (blockEnd >= contentBefore.length) {
+                                                                // Found the text block that contains contentBefore
+                                                                // Insert the tool_call block after this text block
+                                                                insertIdx = i + 1;
+                                                                break;
+                                                            }
+                                                            charsProcessed = blockEnd;
+                                                        }
+                                                    }
+                                                }
+                                                
+                                                // Insert the tool_call block at the correct position
+                                                newBlocks.splice(insertIdx, 0, { type: 'tool_call', id: tool_call_id });
                                             }
 
                                             blocksRef.current.set(message_id, newBlocks);
@@ -736,7 +821,9 @@ export function useChat() {
             const activeFile = editorState.activeFile;
             // activeFile might be null/undefined, ensure we pass string or null
             const safeActiveFile = activeFile || null;
-            const openFiles = activeFile ? [activeFile] : [];
+            const openFiles = editorState.openFiles.length > 0
+                ? editorState.openFiles
+                : (activeFile ? [activeFile] : []);
 
             // Dispatch via Blade Protocol
             await BladeDispatcher.chat({
@@ -768,6 +855,7 @@ export function useChat() {
         }
     }, [
         editorState.activeFile,
+        editorState.openFiles,
         editorState.cursorLine,
         editorState.cursorColumn,
         editorState.selectionStartLine,
@@ -846,14 +934,13 @@ export function useChat() {
                 type: 'NewConversation',
                 payload: { model: selectedModelIdRef.current }
             });
+            resetStreamingState();
             setMessages([]);
-            setLoading(false);
-            setPendingActions(null);
             setActiveTodos([]);
         } catch (e) {
             console.error('Failed to start new conversation:', e);
         }
-    }, []);
+    }, [resetStreamingState]);
 
     const undoTool = useCallback(async (toolCallId: string) => {
         try {
@@ -883,6 +970,11 @@ export function useChat() {
         newConversation,
         undoTool,
         setConversation: setMessages,
+        loadConversation: useCallback((msgs: ChatMessage[]) => {
+            resetStreamingState();
+            setMessages(msgs);
+            setActiveTodos([]);
+        }, [resetStreamingState]),
         toolActivity,
         activeTodos,
         setActiveTodos,
