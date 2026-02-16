@@ -208,11 +208,13 @@ impl ChatManager {
         self.active_model_id = model_id.clone();
 
         // Local runtimes already emit clean Chunk / ReasoningChunk segments.
-        // Zaguan and known OpenAI text models should bypass shared reasoning parsing.
+        // Zaguan and known OpenAI text models should bypass XML tool fallback parsing.
         self.stream_plain_text = matches!(provider, ProviderId::OpenAiCompat | ProviderId::Zaguan)
             || model_id.contains("openai")
             || model_id.contains("gpt-5.2")
             || model_id.contains("codex");
+        // Enable reasoning tag parsing for local models that use <think>/<thinking> tags.
+        // Zaguan/OpenAI providers emit separate ReasoningChunk events, so no tag parsing needed.
         self.stream_parse_reasoning = supports_reasoning_tags(&model_id) && !self.stream_plain_text;
 
         let qwen_like = model_id.contains("qwen") || model_id.contains("mercury");
@@ -357,7 +359,7 @@ impl ChatManager {
 
         // Close any existing WebSocket connection before starting a new one
         if let Some(old_client) = self.ws_client.take() {
-            eprintln!("[CHAT MGR] Closing previous WebSocket connection");
+            // eprintln!("[CHAT MGR] Closing previous WebSocket connection");
             let old_client_clone = old_client.clone();
             tokio::spawn(async move {
                 old_client_clone.close().await;
@@ -367,16 +369,16 @@ impl ChatManager {
         // Create new WebSocket client for this conversation
         let blade_url = api_config.blade_url.clone();
         let api_key = api_config.api_key.clone();
-        eprintln!("[BLADE WS] Connecting to: {}", blade_url);
-        eprintln!("[BLADE WS] Sending message: {}", user_message);
-        eprintln!("[BLADE WS] API key present: {}", !api_key.is_empty());
+        // eprintln!("[BLADE WS] Connecting to: {}", blade_url);
+        // eprintln!("[BLADE WS] Sending message: {}", user_message);
+        // eprintln!("[BLADE WS] API key present: {}", !api_key.is_empty());
 
         let ws_client = Arc::new(BladeWsClient::new(blade_url.clone(), api_key.clone()));
         self.ws_client = Some(ws_client.clone());
         let session_id = self.session_id.clone();
         let model_id = model_id.to_string();
         
-        eprintln!("[CHAT MGR] Starting stream with session_id: {:?}", session_id);
+        // eprintln!("[CHAT MGR] Starting stream with session_id: {:?}", session_id);
 
         // RFC-002: Clone conversation messages for local storage mode context retrieval
         // Convert to BladeMessage format that zcoderd expects
@@ -442,10 +444,10 @@ impl ChatManager {
 
         // Spawn async task to connect and handle events
         let task = tokio::spawn(async move {
-            eprintln!("[CHAT MGR] Connecting to WebSocket");
+            // eprintln!("[CHAT MGR] Connecting to WebSocket");
             match ws_client.connect(ws_workspace_path).await {
                 Ok(mut ws_rx) => {
-                    eprintln!("[CHAT MGR] WebSocket connected, waiting for authenticated");
+                    // eprintln!("[CHAT MGR] WebSocket connected, waiting for authenticated");
 
                     // Wait for authentication
                     let mut authenticated = false;
@@ -461,7 +463,7 @@ impl ChatManager {
                         );
                         match event {
                             crate::blade_ws_client::BladeWsEvent::Connected { .. } => {
-                                eprintln!("[CHAT MGR] Authenticated, sending chat message with session_id: {:?}", session_id);
+                                // eprintln!("[CHAT MGR] Authenticated, sending chat message with session_id: {:?}", session_id);
                                 authenticated = true;
 
                                 // Send chat message with storage mode (RFC-002)
@@ -476,20 +478,20 @@ impl ChatManager {
                                     )
                                     .await
                                 {
-                                    eprintln!("[CHAT MGR] Failed to send message: {}", e);
+                                    // eprintln!("[CHAT MGR] Failed to send message: {}", e);
                                     let _ = tx.send(ChatEvent::Error(e));
                                     break;
                                 }
-                                eprintln!("[CHAT MGR] Message sent successfully");
+                                // eprintln!("[CHAT MGR] Message sent successfully");
                             }
                             crate::blade_ws_client::BladeWsEvent::Session {
                                 session_id,
                                 model_id,
                             } => {
-                                eprintln!(
-                                    "[CHAT MGR] Session event: session_id={}, model={}",
-                                    session_id, model_id
-                                );
+                                // eprintln!(
+                                //     "[CHAT MGR] Session event: session_id={}, model={}",
+                                //     session_id, model_id
+                                // );
                                 ws_client.set_session_id(session_id.clone()).await;
                                 let _ = tx.send(ChatEvent::Session {
                                     session_id: session_id.clone(),
@@ -498,11 +500,11 @@ impl ChatManager {
                                 let _ = session_tx.send(session_id);
                             }
                             crate::blade_ws_client::BladeWsEvent::TextChunk(text) => {
-                                eprintln!("[CHAT MGR] Text chunk: {}", text);
+                                // eprintln!("[CHAT MGR] Text chunk: {}", text);
                                 if last_reasoning_chunk.as_deref() == Some(text.as_str()) {
-                                    eprintln!(
-                                        "[CHAT MGR] Skipping duplicate text chunk (already emitted as reasoning)"
-                                    );
+                                    // eprintln!(
+                                    //     "[CHAT MGR] Skipping duplicate text chunk (already emitted as reasoning)"
+                                    // );
                                     last_reasoning_chunk = None;
                                     continue;
                                 }
@@ -511,7 +513,7 @@ impl ChatManager {
                                 let _ = tx.send_chunk(text);
                             }
                             crate::blade_ws_client::BladeWsEvent::ReasoningChunk(text) => {
-                                eprintln!("[CHAT MGR] Reasoning chunk: {}", text);
+                                // eprintln!("[CHAT MGR] Reasoning chunk: {}", text);
                                 last_reasoning_chunk = Some(text.clone());
                                 saw_content = true;
                                 let _ = tx.send_reasoning_chunk(text);
@@ -521,7 +523,7 @@ impl ChatManager {
                                 name,
                                 arguments,
                             } => {
-                                eprintln!("[CHAT MGR] Tool call: {}", name);
+                                // eprintln!("[CHAT MGR] Tool call: {}", name);
                                 saw_content = true;
                                 let tool_call = ToolCall {
                                     id,
@@ -536,18 +538,18 @@ impl ChatManager {
                                 let _ = tx.send(ChatEvent::ToolCalls(vec![tool_call]));
                             }
                             crate::blade_ws_client::BladeWsEvent::ToolResultAck {
-                                pending_count,
+                                pending_count: _pending_count,
                             } => {
                                 // zcoderd acknowledged our tool result but is waiting for more
                                 // This is informational - keep connection alive and wait for real response
-                                eprintln!(
-                                    "[CHAT MGR] Tool result acknowledged, {} more pending",
-                                    pending_count
-                                );
+                                // eprintln!(
+                                //     "[CHAT MGR] Tool result acknowledged, {} more pending",
+                                //     pending_count
+                                // );
                                 // Continue listening - don't close connection or emit Done
                             }
                             crate::blade_ws_client::BladeWsEvent::TodoUpdated { todos } => {
-                                eprintln!("[CHAT MGR] Todo updated: {} items", todos.len());
+                                // eprintln!("[CHAT MGR] Todo updated: {} items", todos.len());
                                 // Convert to protocol TodoItem
                                 let protocol_todos: Vec<crate::protocol::TodoItem> = todos
                                     .into_iter()
@@ -560,7 +562,7 @@ impl ChatManager {
                                 let _ = tx.send(ChatEvent::TodoUpdated(protocol_todos));
                             }
                             crate::blade_ws_client::BladeWsEvent::ChatDone { finish_reason, recoverable } => {
-                                eprintln!("[CHAT MGR] Chat done: {} (recoverable: {:?})", finish_reason, recoverable);
+                                // eprintln!("[CHAT MGR] Chat done: {} (recoverable: {:?})", finish_reason, recoverable);
                                 saw_chat_done = true;
                                 
                                 // RFC: Context Length Recovery - check for context_length_exceeded finish reason
@@ -579,8 +581,8 @@ impl ChatManager {
                                 // Don't break - keep connection alive for tool results
                                 // The connection will close when the user sends a new message
                             }
-                            crate::blade_ws_client::BladeWsEvent::Error { error_type, code, message, token_count, max_tokens, excess, recoverable, recovery_hint } => {
-                                eprintln!("[CHAT MGR] Error: {} ({}) - {} (tokens: {:?}/{:?})", error_type, code, message, token_count, max_tokens);
+                            crate::blade_ws_client::BladeWsEvent::Error { error_type, code: _code, message, token_count, max_tokens, excess, recoverable, recovery_hint } => {
+                                // eprintln!("[CHAT MGR] Error: {} ({}) - {} (tokens: {:?}/{:?})", error_type, code, message, token_count, max_tokens);
                                 
                                 // RFC: Error Handling - use error_type for logic, message for display
                                 match error_type.as_str() {
@@ -634,7 +636,7 @@ impl ChatManager {
                                 }
                             }
                             crate::blade_ws_client::BladeWsEvent::Disconnected => {
-                                eprintln!("[CHAT MGR] Disconnected - session will be restored from database on reconnect");
+                                // eprintln!("[CHAT MGR] Disconnected - session will be restored from database on reconnect");
                                 if authenticated && (saw_chat_done || saw_content) {
                                     let _ = tx.send(ChatEvent::Done);
                                 } else {
@@ -650,7 +652,7 @@ impl ChatManager {
                                 stage,
                                 percent,
                             } => {
-                                eprintln!("[CHAT MGR] Progress: {} ({}%)", message, percent);
+                                // eprintln!("[CHAT MGR] Progress: {} ({}%)", message, percent);
                                 let _ = tx.send(ChatEvent::Progress {
                                     message,
                                     stage,
@@ -658,10 +660,10 @@ impl ChatManager {
                                 });
                             }
                             crate::blade_ws_client::BladeWsEvent::Research { content } => {
-                                eprintln!(
-                                    "[CHAT MGR] Research result received ({} chars)",
-                                    content.len()
-                                );
+                                // eprintln!(
+                                //     "[CHAT MGR] Research result received ({} chars)",
+                                //     content.len()
+                                // );
                                 saw_content = true;
                                 
                                 // Simple base name - timestamp will be added automatically when saving
@@ -757,22 +759,22 @@ impl ChatManager {
                             continue;
                         }
                     }
-                    eprintln!("[CHAT MGR] Event loop ended");
+                    // eprintln!("[CHAT MGR] Event loop ended");
                 }
                 Err(e) => {
-                    eprintln!("[CHAT MGR] WebSocket connection failed: {}", e);
+                    // eprintln!("[CHAT MGR] WebSocket connection failed: {}", e);
                     let _ = tx.send(ChatEvent::Error(e));
                 }
             }
             
-            eprintln!("[CHAT MGR] Async task completed, keeping WebSocket open for tool results");
+            // eprintln!("[CHAT MGR] Async task completed, keeping WebSocket open for tool results");
             // Don't close the connection here - it will be reused for tool results
             // Connection will be closed when a new message starts or conversation ends
         });
 
         // Try to receive session_id (non-blocking)
         if let Ok(new_session_id) = session_rx.try_recv() {
-            eprintln!("[CHAT MGR] Captured session_id: {}", new_session_id);
+            // eprintln!("[CHAT MGR] Captured session_id: {}", new_session_id);
             self.session_id = Some(new_session_id);
         }
 
@@ -1649,7 +1651,7 @@ impl ChatManager {
 
         // Send tool results through the existing WebSocket connection
         // No need to create a new connection - reuse the one from start_stream
-        eprintln!("[CHAT MGR] Sending {} tool results through existing connection", results.len());
+        // eprintln!("[CHAT MGR] Sending {} tool results through existing connection", results.len());
         
         tokio::spawn(async move {
             // Send ALL results sequentially
@@ -1683,13 +1685,14 @@ impl ChatManager {
                     )
                     .await
                 {
-                    eprintln!(
-                        "[CHAT MGR] Failed to send tool result {}: {}",
-                        call.id, e
-                    );
+                    // eprintln!(
+                    //     "[CHAT MGR] Failed to send tool result {}: {}",
+                    //     call.id, e
+                    // );
+                    let _ = e;
                 }
             }
-            eprintln!("[CHAT MGR] All {} tool results sent", results.len());
+            // eprintln!("[CHAT MGR] All {} tool results sent", results.len());
         });
 
         // The existing rx from start_stream will continue to receive events
@@ -1895,7 +1898,7 @@ impl ChatManager {
 
                 ProviderEvent::Session { session_id, model } => {
                     flush_batch!();
-                    eprintln!("[CHAT MGR] Storing session_id: {}", session_id);
+                    // eprintln!("[CHAT MGR] Storing session_id: {}", session_id);
                     self.session_id = Some(session_id);
                     let _ = model;
                 }
@@ -1961,7 +1964,7 @@ impl ChatManager {
                 }
                 ProviderEvent::TodoUpdated(todos) => {
                     flush_batch!();
-                    eprintln!("[DRAIN] Todo updated: {} items", todos.len());
+                    // eprintln!("[DRAIN] Todo updated: {} items", todos.len());
                     self.pending_results
                         .push_back(DrainResult::TodoUpdated(todos));
                 }
@@ -1973,7 +1976,7 @@ impl ChatManager {
                     // - boundary where the model is yielding to tools and will send more ToolCall events
                     // We decide whether to clear rx / emit MessageCompleted later, once we know if
                     // there are accumulated tool calls.
-                    eprintln!("[DRAIN] ProviderEvent::Done received");
+                    // eprintln!("[DRAIN] ProviderEvent::Done received");
 
                     // Detect dropped tool calls: tool_progress was seen but tool_call never arrived
                     if !self.pending_tool_progress.is_empty() && self.accumulated_tool_calls.is_empty() {
@@ -1985,7 +1988,7 @@ impl ChatManager {
                             dropped.len(),
                             tool_names.join(", ")
                         );
-                        eprintln!("[DRAIN] Dropped tool calls detected: {:?}", dropped);
+                        // eprintln!("[DRAIN] Dropped tool calls detected: {:?}", dropped);
                         self.pending_results.push_back(DrainResult::MessageTooLarge {
                             message: format!("Tool call(s) dropped: {}", tool_names.join(", ")),
                             recovery_hint: hint,
@@ -2037,7 +2040,7 @@ impl ChatManager {
                         }
                     }
 
-                    eprintln!("[DRAIN] chat_done received");
+                    // eprintln!("[DRAIN] chat_done received");
                     done = true;
                 }
                 ProviderEvent::Error(e) => {
@@ -2063,8 +2066,8 @@ impl ChatManager {
                 } => {
                     flush_batch!();
                     // RFC: Context Length Recovery - emit the event to frontend
-                    eprintln!("[DRAIN] Context length exceeded: {} (tokens: {:?}/{:?}, recoverable: {})",
-                        message, token_count, max_tokens, recoverable);
+                    // eprintln!("[DRAIN] Context length exceeded: {} (tokens: {:?}/{:?}, recoverable: {})",
+                    //     message, token_count, max_tokens, recoverable);
                     self.pending_results.push_back(DrainResult::ContextLengthExceeded {
                         message,
                         token_count,
@@ -2081,7 +2084,7 @@ impl ChatManager {
                 } => {
                     flush_batch!();
                     // Message size limit exceeded - emit the event to frontend
-                    eprintln!("[DRAIN] Message too large: {} (hint: {})", message, recovery_hint);
+                    // eprintln!("[DRAIN] Message too large: {} (hint: {})", message, recovery_hint);
                     self.pending_results.push_back(DrainResult::MessageTooLarge {
                         message,
                         recovery_hint,
@@ -2095,13 +2098,13 @@ impl ChatManager {
 
         if done {
             let tool_calls = if !self.accumulated_tool_calls.is_empty() {
-                eprintln!(
-                    "[DRAIN] Found {} accumulated tool calls",
-                    self.accumulated_tool_calls.len()
-                );
+                // eprintln!(
+                //     "[DRAIN] Found {} accumulated tool calls",
+                //     self.accumulated_tool_calls.len()
+                // );
                 Some(self.accumulated_tool_calls.clone())
             } else {
-                eprintln!("[DRAIN] No accumulated tool calls");
+                // eprintln!("[DRAIN] No accumulated tool calls");
                 None
             };
             self.accumulated_tool_calls.clear();
@@ -2111,7 +2114,7 @@ impl ChatManager {
             let should_complete_turn = tool_calls.is_none() && error_msg.is_none();
             // If channel was closed but tool calls are pending, we keep rx until follow-up streams/tools resolve.
             if should_complete_turn {
-                eprintln!("[DRAIN] Turn complete: clearing rx + emitting MessageCompleted");
+                // eprintln!("[DRAIN] Turn complete: clearing rx + emitting MessageCompleted");
                 self.rx = None;
                 self.streaming = false; // Disable streaming to deactivate Stop button
 
@@ -2124,13 +2127,13 @@ impl ChatManager {
                         .push_back(DrainResult::MessageCompleted(id));
                 }
             } else {
-                eprintln!("[DRAIN] Done received but tool calls pending: keeping rx open");
+                // eprintln!("[DRAIN] Done received but tool calls pending: keeping rx open");
             }
 
-            eprintln!(
-                "[DRAIN] Calling finalize_turn with tool_calls: {:?}",
-                tool_calls.as_ref().map(|c| c.len())
-            );
+            // eprintln!(
+            //     "[DRAIN] Calling finalize_turn with tool_calls: {:?}",
+            //     tool_calls.as_ref().map(|c| c.len())
+            // );
             self.finalize_turn(
                 conversation,
                 tool_calls.clone(),

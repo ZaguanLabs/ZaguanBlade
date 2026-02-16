@@ -177,47 +177,38 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
         }
     };
 
+    // Helper to start inline new item creation in a folder
+    const startNewItem = useCallback((folderPath: string, isDir: boolean) => {
+        setNewItem({ parentPath: folderPath, isDir, name: '' });
+        // Expand the folder to show the new item input
+        const item = treeRef.current?.getItemInstance(folderPath);
+        if (item && !item.isExpanded()) {
+            item.expand();
+        }
+    }, []);
+
     // Context menu builder for files/folders
     const getFileContextMenu = useCallback((itemId: string, isFolder: boolean, itemName: string): ContextMenuItem[] => {
         const parentPath = isFolder ? itemId : itemId.substring(0, itemId.lastIndexOf('/'));
+        const targetFolder = isFolder ? itemId : parentPath;
 
-        const items: ContextMenuItem[] = [];
-
-        if (isFolder) {
-            items.push(
-                {
-                    id: 'new-file',
-                    label: 'New File',
-                    icon: <FilePlus className="w-4 h-4" />,
-                    shortcut: 'Ctrl+N',
-                    onClick: () => {
-                        // Start inline new file creation
-                        setNewItem({ parentPath: itemId, isDir: false, name: '' });
-                        // Expand the folder to show the new item input
-                        const item = treeRef.current?.getItemInstance(itemId);
-                        if (item && !item.isExpanded()) {
-                            item.expand();
-                        }
-                    }
-                },
-                {
-                    id: 'new-folder',
-                    label: 'New Folder',
-                    icon: <FolderPlus className="w-4 h-4" />,
-                    shortcut: 'Ctrl+Shift+N',
-                    onClick: () => {
-                        // Start inline new folder creation
-                        setNewItem({ parentPath: itemId, isDir: true, name: '' });
-                        // Expand the folder to show the new item input
-                        const item = treeRef.current?.getItemInstance(itemId);
-                        if (item && !item.isExpanded()) {
-                            item.expand();
-                        }
-                    }
-                },
-                { id: 'div-1', label: '', divider: true }
-            );
-        }
+        const items: ContextMenuItem[] = [
+            {
+                id: 'new-file',
+                label: 'New File',
+                icon: <FilePlus className="w-4 h-4" />,
+                shortcut: 'Ctrl+N',
+                onClick: () => startNewItem(targetFolder, false)
+            },
+            {
+                id: 'new-folder',
+                label: 'New Folder',
+                icon: <FolderPlus className="w-4 h-4" />,
+                shortcut: 'Ctrl+Shift+N',
+                onClick: () => startNewItem(targetFolder, true)
+            },
+            { id: 'div-1', label: '', divider: true }
+        ];
 
         // Cut, Copy, Paste
         items.push(
@@ -311,7 +302,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
         );
 
         return items;
-    }, [clipboard]);
+    }, [clipboard, startNewItem]);
 
     // Context menu for item right-click
     const handleContextMenu = useCallback((e: React.MouseEvent, itemId: string, isFolder: boolean, itemName: string) => {
@@ -338,20 +329,14 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                 label: 'New File',
                 icon: <FilePlus className="w-4 h-4" />,
                 shortcut: 'Ctrl+N',
-                onClick: () => {
-                    // Start inline new file creation at workspace root
-                    setNewItem({ parentPath: workspaceRoot, isDir: false, name: '' });
-                }
+                onClick: () => startNewItem(workspaceRoot, false)
             },
             {
                 id: 'new-folder',
                 label: 'New Folder',
                 icon: <FolderPlus className="w-4 h-4" />,
                 shortcut: 'Ctrl+Shift+N',
-                onClick: () => {
-                    // Start inline new folder creation at workspace root
-                    setNewItem({ parentPath: workspaceRoot, isDir: true, name: '' });
-                }
+                onClick: () => startNewItem(workspaceRoot, true)
             },
             { id: 'div-1', label: '', divider: true },
             {
@@ -367,7 +352,28 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
         ];
 
         showMenu({ x: e.clientX, y: e.clientY }, items);
-    }, [showMenu, clipboard, getWorkspaceRoot]);
+    }, [showMenu, clipboard, getWorkspaceRoot, startNewItem]);
+
+    // Keyboard shortcuts: Ctrl+N (new file), Ctrl+Shift+N (new folder)
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            // Skip if an input/textarea is focused
+            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+            if (e.ctrlKey && e.key === 'n' && !e.shiftKey) {
+                e.preventDefault();
+                const root = getWorkspaceRoot();
+                if (root) startNewItem(root, false);
+            } else if (e.ctrlKey && e.shiftKey && e.key === 'N') {
+                e.preventDefault();
+                const root = getWorkspaceRoot();
+                if (root) startNewItem(root, true);
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [getWorkspaceRoot, startNewItem]);
 
     const tree = useTree<NodeData>({
         rootItemId: 'root',

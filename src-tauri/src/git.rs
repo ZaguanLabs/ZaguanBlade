@@ -222,6 +222,82 @@ fn run_git(root: &str, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+fn is_conventional_commit_subject(line: &str) -> bool {
+    let trimmed = line.trim();
+    let Some((prefix, _)) = trimmed.split_once(':') else {
+        return false;
+    };
+
+    let prefix = prefix.trim();
+    if prefix.is_empty() || prefix.contains(' ') {
+        return false;
+    }
+
+    let base = if let Some(open) = prefix.find('(') {
+        if open == 0 || !prefix.ends_with(')') {
+            return false;
+        }
+        &prefix[..open]
+    } else {
+        prefix
+    };
+
+    const TYPES: &[&str] = &[
+        "feat", "fix", "refactor", "docs", "style", "test", "chore", "perf", "build", "ci",
+        "revert",
+    ];
+
+    TYPES.iter().any(|t| base.eq_ignore_ascii_case(t))
+}
+
+fn extract_commit_message(raw: &str) -> String {
+    let mut normalized = raw.replace("\r\n", "\n").replace('\r', "\n").trim().to_string();
+    if normalized.is_empty() {
+        return String::new();
+    }
+
+    // If model wrapped output in a code fence, prefer fenced content.
+    if let Some(start) = normalized.find("```") {
+        let after_start = &normalized[start + 3..];
+        let fence_content = if let Some(first_newline) = after_start.find('\n') {
+            &after_start[first_newline + 1..]
+        } else {
+            after_start
+        };
+
+        if let Some(end) = fence_content.find("```") {
+            normalized = fence_content[..end].trim().to_string();
+        }
+    }
+
+    let lines: Vec<&str> = normalized.lines().map(str::trim_end).collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    let start_idx = lines
+        .iter()
+        .position(|line| is_conventional_commit_subject(line.trim()))
+        .or_else(|| lines.iter().position(|line| !line.trim().is_empty()))
+        .unwrap_or(0);
+
+    let mut selected: Vec<&str> = lines[start_idx..].to_vec();
+    while selected.first().is_some_and(|line| line.trim().is_empty()) {
+        selected.remove(0);
+    }
+    while selected.last().is_some_and(|line| line.trim().is_empty()) {
+        selected.pop();
+    }
+
+    selected
+        .join("\n")
+        .trim()
+        .trim_matches('`')
+        .trim_matches('"')
+        .trim()
+        .to_string()
+}
+
 struct CommitContext {
     files: Vec<String>,
     diff: String,
@@ -844,10 +920,12 @@ pub async fn git_generate_commit_message_ai(
     };
 
     let prompt = format!(
-        r#"Generate a Git commit message for these changes. Use Conventional Commits: type(scope): description
+        r#"Generate a Git commit message for these changes.
+Use Conventional Commits format: type(scope): description
 
-Types: feat, fix, refactor, docs, style, test, chore, perf
-Keep under 72 chars. Imperative mood. No period at end.
+Allowed types: feat, fix, refactor, docs, style, test, chore, perf
+Subject requirements: <=72 chars, imperative mood, no period at end.
+You may include an optional body after a blank line for key details.
 Match the style of recent commits if possible.
 
 {branch}FILES ({stage}):
@@ -856,7 +934,7 @@ Match the style of recent commits if possible.
 DIFF:
 {diff}
 
-Respond with ONLY the commit message, nothing else."#,
+Respond with ONLY the commit message text (subject + optional body), nothing else."#,
         branch = branch_section,
         stage = if ctx.staged { "staged" } else { "unstaged" },
         files = file_list,
@@ -906,12 +984,16 @@ Respond with ONLY the commit message, nothing else."#,
         .await
         .map_err(|e| format!("Failed to send message: {}", e))?;
 
-    // Collect response
+    // Collect response (some models stream answer via reasoning_chunk).
     let mut content = String::new();
+    let mut reasoning = String::new();
     while let Some(event) = ws_rx.recv().await {
         match event {
             crate::blade_ws_client::BladeWsEvent::TextChunk(chunk) => {
                 content.push_str(&chunk);
+            }
+            crate::blade_ws_client::BladeWsEvent::ReasoningChunk(chunk) => {
+                reasoning.push_str(&chunk);
             }
             crate::blade_ws_client::BladeWsEvent::ChatDone { .. } => break,
             crate::blade_ws_client::BladeWsEvent::Error { message, .. } => {
@@ -922,11 +1004,21 @@ Respond with ONLY the commit message, nothing else."#,
         }
     }
 
-    let message = content.lines().next().unwrap_or("").trim();
+    // Prefer final assistant text, but fall back to reasoning stream when providers
+    // emit the completion there. Then extract the last non-empty line because some
+    // models include analysis before the final commit message.
+    let raw = if content.trim().is_empty() {
+        reasoning.as_str()
+    } else {
+        content.as_str()
+    };
+
+    let message = extract_commit_message(raw);
+
     if message.is_empty() {
         Err("AI returned empty response".to_string())
     } else {
-        Ok(message.to_string())
+        Ok(message)
     }
 }
 

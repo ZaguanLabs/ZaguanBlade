@@ -29,6 +29,29 @@ export function useChat() {
     // Active todo list state — lifted out of messages for persistent TaskPanel
     const [activeTodos, setActiveTodos] = useState<import('../types/events').TodoItem[]>([]);
 
+    // Reset all streaming infrastructure — must be called when switching conversations
+    const resetStreamingState = useCallback(() => {
+        if (messageBufferRef.current) {
+            messageBufferRef.current.clearAll();
+        }
+        accumulatedContentRef.current = { id: '', content: '' };
+        accumulatedReasoningRef.current = { id: '', content: '' };
+        blocksRef.current.clear();
+        pendingUpdatesRef.current.clear();
+        if (flushScheduledRef.current) {
+            clearTimeout(flushScheduledRef.current);
+            flushScheduledRef.current = null;
+        }
+        if (toolActivityFlushRef.current !== null) {
+            clearTimeout(toolActivityFlushRef.current);
+            toolActivityFlushRef.current = null;
+        }
+        pendingToolActivityRef.current = null;
+        setToolActivity(null);
+        setLoading(false);
+        setPendingActions(null);
+    }, []);
+
     // v1.1: Message buffer and accumulation ref for atomic updates
     const messageBufferRef = useRef<MessageBuffer | null>(null);
     const accumulatedContentRef = useRef<{ id: string; content: string }>({ id: '', content: '' });
@@ -189,15 +212,22 @@ export function useChat() {
                     return;
                 }
 
-                const [history, modelList] = await Promise.all([
+                const [history, modelList, isStreaming] = await Promise.all([
                     invoke<ChatMessage[]>('get_conversation'),
                     invoke<ModelInfo[]>('list_models'),
+                    invoke<boolean>('get_chat_status'),
                 ]);
 
                 console.log('Loaded conversation:', history);
                 // Reconstruct blocks for historical messages
                 setMessages(ensureMessagesHaveBlocks(history));
                 setModels(modelList);
+
+                // Restore loading state if backend is still streaming (e.g. after UI reload)
+                if (isStreaming) {
+                    console.log('[useChat] Backend is still streaming — restoring loading state');
+                    setLoading(true);
+                }
 
                 // Set a default model - project state will override this if available
                 // This prevents the model from being undefined before project state loads
@@ -791,7 +821,9 @@ export function useChat() {
             const activeFile = editorState.activeFile;
             // activeFile might be null/undefined, ensure we pass string or null
             const safeActiveFile = activeFile || null;
-            const openFiles = activeFile ? [activeFile] : [];
+            const openFiles = editorState.openFiles.length > 0
+                ? editorState.openFiles
+                : (activeFile ? [activeFile] : []);
 
             // Dispatch via Blade Protocol
             await BladeDispatcher.chat({
@@ -823,6 +855,7 @@ export function useChat() {
         }
     }, [
         editorState.activeFile,
+        editorState.openFiles,
         editorState.cursorLine,
         editorState.cursorColumn,
         editorState.selectionStartLine,
@@ -901,14 +934,13 @@ export function useChat() {
                 type: 'NewConversation',
                 payload: { model: selectedModelIdRef.current }
             });
+            resetStreamingState();
             setMessages([]);
-            setLoading(false);
-            setPendingActions(null);
             setActiveTodos([]);
         } catch (e) {
             console.error('Failed to start new conversation:', e);
         }
-    }, []);
+    }, [resetStreamingState]);
 
     const undoTool = useCallback(async (toolCallId: string) => {
         try {
@@ -938,6 +970,11 @@ export function useChat() {
         newConversation,
         undoTool,
         setConversation: setMessages,
+        loadConversation: useCallback((msgs: ChatMessage[]) => {
+            resetStreamingState();
+            setMessages(msgs);
+            setActiveTodos([]);
+        }, [resetStreamingState]),
         toolActivity,
         activeTodos,
         setActiveTodos,

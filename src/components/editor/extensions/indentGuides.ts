@@ -24,14 +24,20 @@ const indentGuidePlugin = ViewPlugin.fromClass(
         buildDecorations(view: EditorView): DecorationSet {
             const builder = new RangeSetBuilder<Decoration>();
             const tabSize = view.state.tabSize;
+            const marks: { from: number; to: number }[] = [];
+            const visibleRanges = [...view.visibleRanges].sort(
+                (a, b) => a.from - b.from || a.to - b.to
+            );
 
-            for (const { from, to } of view.visibleRanges) {
-                for (let pos = from; pos < to; ) {
+            let maxProcessed = -1;
+            for (const { from, to } of visibleRanges) {
+                for (let pos = Math.max(from, maxProcessed + 1); pos < to; ) {
                     const line = view.state.doc.lineAt(pos);
                     const text = line.text;
                     
                     // Quick check: skip empty lines
                     if (text.length === 0) {
+                        maxProcessed = line.to;
                         pos = line.to + 1;
                         continue;
                     }
@@ -39,6 +45,7 @@ const indentGuidePlugin = ViewPlugin.fromClass(
                     // Count leading whitespace using regex for speed
                     const match = text.match(/^[\t ]*/);
                     if (!match || match[0].length === 0) {
+                        maxProcessed = line.to;
                         pos = line.to + 1;
                         continue;
                     }
@@ -67,21 +74,27 @@ const indentGuidePlugin = ViewPlugin.fromClass(
                                 } else if (char === "\t") {
                                     charIndent += tabSize - (charIndent % tabSize);
                                 }
-                                
+
                                 if (charIndent === level) {
-                                    builder.add(
-                                        line.from + i,
-                                        line.from + i + 1,
-                                        indentGuide
-                                    );
+                                    marks.push({
+                                        from: line.from + i,
+                                        to: line.from + i + 1,
+                                    });
                                     break;
                                 }
                             }
                         }
                     }
 
+                    maxProcessed = line.to;
                     pos = line.to + 1;
                 }
+            }
+
+            // CM6 requires add() calls to be sorted by position.
+            marks.sort((a, b) => a.from - b.from || a.to - b.to);
+            for (const m of marks) {
+                builder.add(m.from, m.to, indentGuide);
             }
 
             return builder.finish();

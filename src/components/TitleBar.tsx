@@ -147,7 +147,10 @@ export const TitleBar: React.FC = () => {
                                 style={{ boxShadow: '0 8px 30px rgba(0, 0, 0, 0.4)' }}
                             >
                                 <button
-                                    onClick={() => { setFileMenuOpen(false); }}
+                                    onClick={() => {
+                                        setFileMenuOpen(false);
+                                        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, bubbles: true }));
+                                    }}
                                     className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] transition-colors"
                                 >
                                     <span>New File</span>

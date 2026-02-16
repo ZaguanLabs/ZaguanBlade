@@ -205,3 +205,11 @@ pub fn get_selected_model(_state: State<'_, AppState>) -> Option<String> {
     // Return None to let the frontend use project state or default
     None
 }
+
+/// Returns whether the backend is currently streaming a response.
+/// Used by the frontend to restore `loading` state after a UI reload.
+#[tauri::command]
+pub fn get_chat_status(state: State<'_, AppState>) -> bool {
+    let mgr = state.chat_manager.lock().unwrap();
+    mgr.streaming || mgr.rx.is_some()
+}

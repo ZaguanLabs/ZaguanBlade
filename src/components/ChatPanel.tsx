@@ -120,6 +120,22 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         container.scrollTop = container.scrollHeight;
     }, []);
 
+    // Scroll to bottom when a different conversation is loaded (or on initial mount).
+    // Detect conversation change by tracking the first message's ID.
+    const prevFirstMsgIdRef = useRef<string | undefined>(undefined);
+    useEffect(() => {
+        const firstId = messages[0]?.id;
+        if (messages.length > 0 && firstId !== prevFirstMsgIdRef.current) {
+            prevFirstMsgIdRef.current = firstId;
+            // Reset "at bottom" tracking so streaming auto-scroll works for the new conversation
+            isUserAtBottomRef.current = true;
+            prevMessageCountRef.current = messages.length;
+            // Delay to ensure DOM has rendered the loaded messages
+            const timer = setTimeout(scrollToBottom, 50);
+            return () => clearTimeout(timer);
+        }
+    }, [messages, scrollToBottom]);
+
     // Scroll when a new message is appended (or user sends a message)
     useEffect(() => {
         const currentCount = messages.length;

@@ -117,12 +117,19 @@ const AppLayoutInner: React.FC = () => {
         return remaining.length > 0 ? remaining[remaining.length - 1].id : null;
     };
 
-    // Sync active tab to EditorContext
-    const { setActiveFile } = useEditor();
+    // Sync active tab and open file paths to EditorContext
+    const { setActiveFile, setOpenFiles } = useEditor();
     useEffect(() => {
         const activeTab = tabs.find(t => t.id === activeTabId);
         setActiveFile(activeTab?.path || null);
     }, [activeTabId, tabs, setActiveFile]);
+
+    useEffect(() => {
+        const filePaths = tabs
+            .filter(t => t.type === 'file' && t.path)
+            .map(t => t.path!);
+        setOpenFiles(filePaths);
+    }, [tabs, setOpenFiles]);
 
     // Listen for backend tab events when tabs_backend_authority is enabled
     useEffect(() => {
@@ -1098,7 +1105,7 @@ const AppLayoutInner: React.FC = () => {
                                 approveToolDecision={chat.approveToolDecision}
 
                                 projectId={projectId || "default-project"}
-                                onLoadConversation={chat.setConversation}
+                                onLoadConversation={chat.loadConversation}
                                 researchProgress={researchProgress}
                                 onNewConversation={chat.newConversation}
                                 onUndoTool={chat.undoTool}

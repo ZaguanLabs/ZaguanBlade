@@ -218,6 +218,7 @@ pub fn run() {
             commands::chat::save_conversation,
             commands::chat::set_selected_model,
             commands::chat::get_selected_model,
+            commands::chat::get_chat_status,
             // Tools & Changes
             commands::tools::submit_command_result,
             commands::tools::approve_tool_decision,
