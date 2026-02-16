@@ -663,13 +663,22 @@ export function useChat() {
                             const existingIdx = prev.findIndex(msg => msg.id === message_id);
 
                             if (existingIdx === -1) {
-                                // Create new message for tool if missing
+                                // Create new message for tool if missing.
+                                // Keep any live streamed blocks (reasoning/text) so timeline order is preserved
+                                // even when ToolUpdate arrives before a batched message flush.
+                                const liveBlocks = blocksRef.current.get(message_id) || [];
+                                const newBlocks = [...liveBlocks];
+                                if (tool_call && !newBlocks.some(b => b.type === 'tool_call' && b.id === tool_call_id)) {
+                                    newBlocks.push({ type: 'tool_call', id: tool_call_id });
+                                }
+                                blocksRef.current.set(message_id, newBlocks);
+
                                 const newMsg: ChatMessage = {
                                     id: message_id,
                                     role: 'Assistant',
                                     content: '',
                                     tool_calls: tool_call ? [{ ...tool_call, status: status as any, result }] : [],
-                                    blocks: tool_call ? [{ type: 'tool_call', id: tool_call_id }] : []
+                                    blocks: newBlocks
                                 };
                                 // Insert after the last user message to maintain conversation flow
                                 const lastUserIdx = prev.map(m => m.role).lastIndexOf('User');
@@ -705,30 +714,10 @@ export function useChat() {
                                             
                                             // Check if block already exists (idempotency safety)
                                             if (!newBlocks.some(b => b.type === 'tool_call' && b.id === tool_call_id)) {
-                                                // Find the correct insertion position for the tool_call block
-                                                // Insert after the text block that contains contentBefore length
-                                                let insertIdx = newBlocks.length; // Default: append to end
-                                                
-                                                if (contentBefore && contentBefore.length > 0) {
-                                                    // Find the text block that contains the contentBefore length
-                                                    let charsProcessed = 0;
-                                                    for (let i = 0; i < newBlocks.length; i++) {
-                                                        const block = newBlocks[i];
-                                                        if (block.type === 'text' && block.content) {
-                                                            const blockEnd = charsProcessed + block.content.length;
-                                                            if (blockEnd >= contentBefore.length) {
-                                                                // Found the text block that contains contentBefore
-                                                                // Insert the tool_call block after this text block
-                                                                insertIdx = i + 1;
-                                                                break;
-                                                            }
-                                                            charsProcessed = blockEnd;
-                                                        }
-                                                    }
-                                                }
-                                                
-                                                // Insert the tool_call block at the correct position
-                                                newBlocks.splice(insertIdx, 0, { type: 'tool_call', id: tool_call_id });
+                                                // Preserve natural stream order: ToolUpdate arrives in sequence,
+                                                // so append the tool block at the end of current live blocks.
+                                                // This keeps reasoning/tool/text chronology intact.
+                                                newBlocks.push({ type: 'tool_call', id: tool_call_id });
                                             }
 
                                             blocksRef.current.set(message_id, newBlocks);

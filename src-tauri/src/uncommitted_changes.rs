@@ -49,6 +49,19 @@ impl UncommittedChangeTracker {
         result
     }
 
+    pub fn replace_all(&self, incoming: Vec<UncommittedChange>) {
+        let mut changes = self.changes.lock().unwrap();
+        changes.clear();
+        for change in incoming {
+            changes.insert(change.id.clone(), change);
+        }
+    }
+
+    pub fn clear(&self) {
+        let mut changes = self.changes.lock().unwrap();
+        changes.clear();
+    }
+
     pub fn accept(&self, id: &str) -> Option<UncommittedChange> {
         let mut changes = self.changes.lock().unwrap();
         changes.remove(id)

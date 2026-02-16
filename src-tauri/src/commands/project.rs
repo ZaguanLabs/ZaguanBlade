@@ -16,20 +16,40 @@ pub fn get_current_workspace(state: State<'_, AppState>) -> Option<String> {
 }
 
 #[tauri::command]
-pub fn load_project_state(project_path: String) -> Option<project_state::ProjectState> {
-    project_state::load_project_state(&project_path)
+pub fn load_project_state(
+    state: State<'_, AppState>,
+    project_path: String,
+) -> Option<project_state::ProjectState> {
+    let loaded = project_state::load_project_state(&project_path);
+
+    if let Some(ref project_state) = loaded {
+        state
+            .uncommitted_changes
+            .replace_all(project_state.uncommitted_changes.clone());
+    } else {
+        state.uncommitted_changes.clear();
+    }
+
+    loaded
 }
 
 #[tauri::command]
-pub fn save_project_state(state_data: project_state::ProjectState) -> Result<(), String> {
+pub fn save_project_state(
+    state: State<'_, AppState>,
+    mut state_data: project_state::ProjectState,
+) -> Result<(), String> {
+    state_data.uncommitted_changes = state.uncommitted_changes.get_all();
     project_state::save_project_state(&state_data)
 }
 
 #[tauri::command]
 pub fn graceful_shutdown_with_state(
     app_handle: tauri::AppHandle,
-    state_data: project_state::ProjectState,
+    state: State<'_, AppState>,
+    mut state_data: project_state::ProjectState,
 ) -> Result<(), String> {
+    state_data.uncommitted_changes = state.uncommitted_changes.get_all();
+
     if let Err(e) = project_state::save_project_state(&state_data) {
         println!("[Backend] Failed to save state during shutdown: {}", e);
         // We continue to exit even if save fails, to prevent hanging

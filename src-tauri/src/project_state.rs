@@ -5,6 +5,8 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
+use crate::uncommitted_changes::UncommittedChange;
+
 /// Per-project state that persists across sessions
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProjectState {
@@ -34,6 +36,10 @@ pub struct ProjectState {
 
     /// Explorer panel width in pixels
     pub explorer_width: Option<u32>,
+
+    /// Pending AI file edits awaiting accept/reject
+    #[serde(default)]
+    pub uncommitted_changes: Vec<UncommittedChange>,
 }
 
 /// State for a single editor tab
@@ -196,6 +202,7 @@ mod tests {
             terminal_height: Some(300),
             chat_panel_width: Some(400),
             explorer_width: Some(256),
+            uncommitted_changes: Vec::new(),
         };
 
         let json = serde_json::to_string(&state).unwrap();

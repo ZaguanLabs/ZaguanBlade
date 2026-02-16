@@ -222,32 +222,50 @@ fn run_git(root: &str, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn is_conventional_commit_subject(line: &str) -> bool {
-    let trimmed = line.trim();
-    let Some((prefix, _)) = trimmed.split_once(':') else {
-        return false;
-    };
-
-    let prefix = prefix.trim();
-    if prefix.is_empty() || prefix.contains(' ') {
-        return false;
-    }
-
-    let base = if let Some(open) = prefix.find('(') {
-        if open == 0 || !prefix.ends_with(')') {
-            return false;
-        }
-        &prefix[..open]
-    } else {
-        prefix
-    };
-
-    const TYPES: &[&str] = &[
+fn find_subject_start_in_line(line: &str) -> Option<usize> {
+    const TYPES: [&str; 11] = [
         "feat", "fix", "refactor", "docs", "style", "test", "chore", "perf", "build", "ci",
         "revert",
     ];
 
-    TYPES.iter().any(|t| base.eq_ignore_ascii_case(t))
+    let lowercase = line.to_ascii_lowercase();
+    let mut best: Option<usize> = None;
+
+    for typ in TYPES {
+        for marker in [format!("{}:", typ), format!("{}(", typ)] {
+            let mut search_from = 0usize;
+            while let Some(rel_idx) = lowercase[search_from..].find(&marker) {
+                let idx = search_from + rel_idx;
+
+                // Prefer starts that look like token boundaries.
+                let boundary_ok = if idx == 0 {
+                    true
+                } else {
+                    let prev = lowercase[..idx].chars().next_back().unwrap_or(' ');
+                    !prev.is_ascii_alphanumeric() && prev != '_' && prev != '-'
+                };
+
+                if boundary_ok {
+                    best = Some(best.map_or(idx, |current| current.min(idx)));
+                    break;
+                }
+
+                search_from = idx + marker.len();
+            }
+        }
+    }
+
+    best
+}
+
+fn find_last_subject_occurrence(lines: &[&str]) -> Option<(usize, usize)> {
+    let mut last: Option<(usize, usize)> = None;
+    for (line_idx, line) in lines.iter().enumerate() {
+        if let Some(col_idx) = find_subject_start_in_line(line) {
+            last = Some((line_idx, col_idx));
+        }
+    }
+    last
 }
 
 fn extract_commit_message(raw: &str) -> String {
@@ -275,13 +293,30 @@ fn extract_commit_message(raw: &str) -> String {
         return String::new();
     }
 
-    let start_idx = lines
-        .iter()
-        .position(|line| is_conventional_commit_subject(line.trim()))
-        .or_else(|| lines.iter().position(|line| !line.trim().is_empty()))
-        .unwrap_or(0);
+    let mut selected: Vec<String> = if let Some((line_idx, col_idx)) = find_last_subject_occurrence(&lines) {
+        let mut out: Vec<String> = Vec::with_capacity(lines.len().saturating_sub(line_idx));
+        out.push(lines[line_idx][col_idx..].trim_start().to_string());
+        out.extend(lines.iter().skip(line_idx + 1).map(|line| line.to_string()));
+        out
+    } else {
+        // Fallback: if no recognizable conventional subject was found,
+        // use only the trailing paragraph (avoid taking the entire reasoning transcript).
+        let end = lines.iter().rposition(|line| !line.trim().is_empty());
+        let Some(end_idx) = end else {
+            return String::new();
+        };
 
-    let mut selected: Vec<&str> = lines[start_idx..].to_vec();
+        let mut start_idx = end_idx;
+        while start_idx > 0 && !lines[start_idx - 1].trim().is_empty() {
+            start_idx -= 1;
+        }
+
+        lines[start_idx..=end_idx]
+            .iter()
+            .map(|line| line.to_string())
+            .collect()
+    };
+
     while selected.first().is_some_and(|line| line.trim().is_empty()) {
         selected.remove(0);
     }
@@ -934,7 +969,8 @@ Match the style of recent commits if possible.
 DIFF:
 {diff}
 
-Respond with ONLY the commit message text (subject + optional body), nothing else."#,
+Respond with ONLY the final commit message text (subject + optional body).
+Do NOT include analysis, reasoning, explanations, or multiple options."#,
         branch = branch_section,
         stage = if ctx.staged { "staged" } else { "unstaged" },
         files = file_list,

@@ -336,6 +336,10 @@ const AppLayoutInner: React.FC = () => {
                 state.active_terminal_id || undefined
             );
         }
+
+        // Project state load can restore pending uncommitted AI changes in backend state.
+        // Notify all hook instances to refresh and show accept/reject prompts after startup.
+        window.dispatchEvent(new CustomEvent('uncommitted-changes-updated'));
     }, [setSelectedModelId]);
 
     // Get terminal state for persistence
