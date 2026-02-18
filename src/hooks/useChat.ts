@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { listen, emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { BladeDispatcher } from '../services/blade';
-import type { ChatMessage, ImageAttachment, ModelInfo, ToolCall } from '../types/chat';
+import type { ChatMessage, ImageAttachment, ModelInfo, ToolActivityState, ToolCall, StreamingState } from '../types/chat';
 import type { Change } from '../types/change';
 import { EventNames, type RequestConfirmationPayload, type StructuredAction, type ChangeAppliedPayload, type AllEditsAppliedPayload, type ToolExecutionCompletedPayload } from '../types/events';
 import { useEditor } from '../contexts/EditorContext';
@@ -19,12 +19,9 @@ export function useChat() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     
-    // Tool activity state for streaming progress display
-    const [toolActivity, setToolActivity] = useState<{ toolName: string; filePath: string; action: string } | null>(null);
-    // Throttle tool activity updates to avoid re-render storms during rapid search operations
-    const pendingToolActivityRef = useRef<{ toolName: string; filePath: string; action: string } | null>(null);
-    const toolActivityFlushRef = useRef<number | null>(null);
-    const TOOL_ACTIVITY_THROTTLE_MS = 250; // Max 4 updates/sec
+    // Tool activity state for per-tool-call streaming progress display
+    const [toolActivity, setToolActivity] = useState<ToolActivityState | null>(null);
+    const toolChunkCountsRef = useRef<Map<string, { chunkCount: number; startedAt: number; lastChunkAt: number }>>(new Map());
 
     // Active todo list state — lifted out of messages for persistent TaskPanel
     const [activeTodos, setActiveTodos] = useState<import('../types/events').TodoItem[]>([]);
@@ -38,15 +35,12 @@ export function useChat() {
         accumulatedReasoningRef.current = { id: '', content: '' };
         blocksRef.current.clear();
         pendingUpdatesRef.current.clear();
+        streamingStatesRef.current.clear();
         if (flushScheduledRef.current) {
             clearTimeout(flushScheduledRef.current);
             flushScheduledRef.current = null;
         }
-        if (toolActivityFlushRef.current !== null) {
-            clearTimeout(toolActivityFlushRef.current);
-            toolActivityFlushRef.current = null;
-        }
-        pendingToolActivityRef.current = null;
+        toolChunkCountsRef.current.clear();
         setToolActivity(null);
         setLoading(false);
         setPendingActions(null);
@@ -59,9 +53,10 @@ export function useChat() {
 
     // v1.2: Batched rendering - buffer updates and flush at intervals
     // This prevents re-rendering on every single streaming chunk
-    const pendingUpdatesRef = useRef<Map<string, { content: string; reasoning: string; blocks: import('../types/chat').MessageBlock[] }>>(new Map());
+    const pendingUpdatesRef = useRef<Map<string, { content: string; reasoning: string; blocks: import('../types/chat').MessageBlock[]; streaming?: StreamingState }>>(new Map());
     const flushScheduledRef = useRef<number | null>(null);
     const FLUSH_INTERVAL_MS = 50; // 20fps - smooth enough for human perception
+    const streamingStatesRef = useRef<Map<string, StreamingState>>(new Map());
 
     // Flush pending updates to state
     const flushPendingUpdates = useCallback(() => {
@@ -78,7 +73,11 @@ export function useChat() {
                 if (idx !== -1) {
                     // Update existing message
                     const msg = updated[idx];
-                    if (msg.content !== update.content || msg.reasoning !== update.reasoning) {
+                    const streamingChanged =
+                        (msg.streaming?.seq ?? null) !== (update.streaming?.seq ?? null)
+                        || (msg.streaming?.endTime ?? null) !== (update.streaming?.endTime ?? null);
+
+                    if (msg.content !== update.content || msg.reasoning !== update.reasoning || streamingChanged) {
                         if (!changed) {
                             updated = [...prev];
                             changed = true;
@@ -110,6 +109,7 @@ export function useChat() {
                             content: update.content,
                             reasoning: update.reasoning,
                             blocks: mergedBlocks,
+                            streaming: update.streaming,
                         };
                     }
                 } else {
@@ -124,6 +124,7 @@ export function useChat() {
                         content: update.content,
                         reasoning: update.reasoning,
                         blocks: update.blocks,
+                        streaming: update.streaming,
                     } as ChatMessage;
                     
                     // Find the correct insertion point - after the last user message
@@ -154,8 +155,14 @@ export function useChat() {
     }, [flushPendingUpdates]);
 
     // Queue an update for batched rendering
-    const queueMessageUpdate = useCallback((id: string, content: string, reasoning: string, blocks: import('../types/chat').MessageBlock[]) => {
-        pendingUpdatesRef.current.set(id, { content, reasoning, blocks });
+    const queueMessageUpdate = useCallback((
+        id: string,
+        content: string,
+        reasoning: string,
+        blocks: import('../types/chat').MessageBlock[],
+        streaming?: StreamingState,
+    ) => {
+        pendingUpdatesRef.current.set(id, { content, reasoning, blocks, streaming });
         scheduleFlush();
     }, [scheduleFlush]);
 
@@ -273,10 +280,19 @@ export function useChat() {
         // v1.2: Use batched rendering - accumulate in refs, queue updates at intervals
         if (!messageBufferRef.current) {
             messageBufferRef.current = new MessageBuffer(
-                (id, chunk, is_final, type) => {
+                (id, seq, chunk, is_final, type) => {
                     // NOTE: Do NOT call setLoading(true) here. Loading is set in dispatchToBackend.
                     // Calling it on every chunk creates a race condition: if a chunk flushes after
                     // chat-done/MessageCompleted sets loading=false, it re-sets loading=true permanently.
+
+                    const now = Date.now();
+                    const prevStreaming = streamingStatesRef.current.get(id);
+                    const streaming: StreamingState = {
+                        seq: Math.max(seq, prevStreaming?.seq ?? 0),
+                        startTime: prevStreaming?.startTime ?? now,
+                        lastSeqAt: now,
+                    };
+                    streamingStatesRef.current.set(id, streaming);
 
                     // Accumulate content/reasoning in refs (no re-render)
                     // When ID changes, this indicates a new message stream - clear stale blocks
@@ -350,10 +366,33 @@ export function useChat() {
                         id,
                         accumulatedContentRef.current.id === id ? accumulatedContentRef.current.content : '',
                         accumulatedReasoningRef.current.id === id ? accumulatedReasoningRef.current.content : '',
-                        blocks
+                        blocks,
+                        streaming,
                     );
                 },
                 (id) => {
+                    const prevStreaming = streamingStatesRef.current.get(id);
+                    const streaming = prevStreaming
+                        ? { ...prevStreaming, endTime: Date.now() }
+                        : undefined;
+                    if (streaming) {
+                        streamingStatesRef.current.set(id, streaming);
+                    }
+
+                    const existingMsg = messagesRef.current.find(m => m.id === id);
+                    const blocks = blocksRef.current.get(id) || existingMsg?.blocks || [];
+
+                    queueMessageUpdate(
+                        id,
+                        accumulatedContentRef.current.id === id
+                            ? accumulatedContentRef.current.content
+                            : (existingMsg?.content || ''),
+                        accumulatedReasoningRef.current.id === id
+                            ? accumulatedReasoningRef.current.content
+                            : (existingMsg?.reasoning || ''),
+                        blocks,
+                        streaming,
+                    );
                     // Message completed - flush immediately and cleanup
                     flushPendingUpdates();
                     blocksRef.current.delete(id);
@@ -640,24 +679,16 @@ export function useChat() {
                         }
 
                         setLoading(false);
+                        toolChunkCountsRef.current.clear();
                         setToolActivity(null);
-                        pendingToolActivityRef.current = null;
-                        if (toolActivityFlushRef.current !== null) {
-                            clearTimeout(toolActivityFlushRef.current);
-                            toolActivityFlushRef.current = null;
-                        }
                         // Buffer will auto-clear on is_final, but this provides explicit confirmation
                     } else if (chatEvent.type === 'ToolUpdate') {
                         const { message_id, tool_call_id, status, result, tool_call } = chatEvent.payload;
                         console.log(`[v1.1 Chat] ToolUpdate: msg=${message_id} tool=${tool_call_id} status=${status}`);
 
                         // Clear the tool activity preview — the real ToolCallDisplay takes over
+                        toolChunkCountsRef.current.delete(tool_call_id);
                         setToolActivity(null);
-                        pendingToolActivityRef.current = null;
-                        if (toolActivityFlushRef.current !== null) {
-                            clearTimeout(toolActivityFlushRef.current);
-                            toolActivityFlushRef.current = null;
-                        }
 
                         setMessages(prev => {
                             const existingIdx = prev.findIndex(msg => msg.id === message_id);
@@ -738,34 +769,49 @@ export function useChat() {
                             });
                         });
                     } else if (chatEvent.type === 'ToolActivity') {
-                        // Handle tool activity events (including streaming progress)
-                        const { tool_name, file_path, action } = chatEvent.payload;
-                        
-                        const activity = { toolName: tool_name, filePath: file_path, action };
-                        pendingToolActivityRef.current = activity;
+                        // Handle tool activity events with live per-tool-call chunk counting.
+                        const { tool_name, file_path, action, tool_call_id } = chatEvent.payload;
+                        const key = tool_call_id || `${tool_name}:${file_path}`;
+                        const now = Date.now();
 
-                        // Throttle: only flush to React state at most every TOOL_ACTIVITY_THROTTLE_MS
-                        if (toolActivityFlushRef.current === null) {
-                            setToolActivity(activity); // First event goes through immediately
-                            toolActivityFlushRef.current = window.setTimeout(() => {
-                                toolActivityFlushRef.current = null;
-                                // Flush the latest buffered activity
-                                if (pendingToolActivityRef.current) {
-                                    setToolActivity(pendingToolActivityRef.current);
-                                }
-                            }, TOOL_ACTIVITY_THROTTLE_MS);
+                        let tracked = toolChunkCountsRef.current.get(key);
+                        if (!tracked) {
+                            tracked = { chunkCount: 0, startedAt: now, lastChunkAt: now };
                         }
-                        
-                        // Clear tool activity after a short delay if action is not "streaming"
-                        // For streaming, it will be cleared when the actual tool call arrives
+
+                        if (action === 'streaming') {
+                            tracked = {
+                                chunkCount: tracked.chunkCount + 1,
+                                startedAt: tracked.startedAt,
+                                lastChunkAt: now,
+                            };
+                            toolChunkCountsRef.current.set(key, tracked);
+                        } else {
+                            tracked = {
+                                chunkCount: tracked.chunkCount,
+                                startedAt: tracked.startedAt,
+                                lastChunkAt: now,
+                            };
+                        }
+
+                        const activity: ToolActivityState = {
+                            toolName: tool_name,
+                            filePath: file_path,
+                            action,
+                            toolCallId: tool_call_id,
+                            chunkCount: tracked.chunkCount,
+                            startedAt: tracked.startedAt,
+                            lastChunkAt: tracked.lastChunkAt,
+                        };
+                        setToolActivity(activity);
+
                         if (action !== 'streaming') {
+                            toolChunkCountsRef.current.delete(key);
                             setTimeout(() => {
                                 setToolActivity(prev => {
-                                    // Only clear if it's still the same activity
-                                    if (prev?.toolName === tool_name && prev?.filePath === file_path) {
-                                        return null;
-                                    }
-                                    return prev;
+                                    if (!prev) return prev;
+                                    const prevKey = prev.toolCallId || `${prev.toolName}:${prev.filePath}`;
+                                    return prevKey === key ? null : prev;
                                 });
                             }, 2000);
                         }

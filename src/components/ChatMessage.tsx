@@ -205,6 +205,12 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     }
 
     const hasReasoning = !!message.reasoning || message.blocks?.some(b => b.type === 'reasoning');
+    const stream = message.streaming;
+    const hasChunkCounter = isAssistant && !!stream && stream.seq > 0;
+    const streamAgeMs = stream ? Date.now() - stream.lastSeqAt : 0;
+    const streamElapsedSec = stream
+        ? ((stream.endTime ?? Date.now()) - stream.startTime) / 1000
+        : 0;
 
     // Determine content split for rendering tool calls in the middle
     const toolCalls = (message.tool_calls || []).filter(
@@ -642,6 +648,18 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                         );
                     })()
                 )}
+
+                {hasChunkCounter && (
+                    <div className="mt-2 text-[10px] font-mono text-zinc-500">
+                        <span>{stream!.seq} chunks</span>
+                        <span className="mx-1.5">·</span>
+                        <span>
+                            {stream!.endTime
+                                ? `${streamElapsedSec.toFixed(1)}s`
+                                : (isActive && streamAgeMs > 5000 ? 'waiting...' : 'streaming...')}
+                        </span>
+                    </div>
+                )}
             </div>
         </div>
     );
@@ -659,6 +677,8 @@ export const ChatMessage = React.memo(ChatMessageComponent, (prevProps, nextProp
     if (prevMsg.id !== nextMsg.id) return false;
     if (prevMsg.content !== nextMsg.content) return false;
     if (prevMsg.reasoning !== nextMsg.reasoning) return false;
+    if ((prevMsg.streaming?.seq ?? null) !== (nextMsg.streaming?.seq ?? null)) return false;
+    if ((prevMsg.streaming?.endTime ?? null) !== (nextMsg.streaming?.endTime ?? null)) return false;
     if (prevMsg.tool_calls?.length !== nextMsg.tool_calls?.length) return false;
     if (prevMsg.blocks?.length !== nextMsg.blocks?.length) return false;
     

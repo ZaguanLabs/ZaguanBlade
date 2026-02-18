@@ -23,16 +23,16 @@ export interface TerminalChunk {
 
 export class EventBuffer<T> {
     private chunks: Map<number, BufferedChunk<T>>;
-    private nextSeq: number;
-    private onApply: (data: T, is_final?: boolean) => void;
+    private nextSeq: number | null;
+    private onApply: (data: T, is_final?: boolean, seq?: number) => void;
     private onComplete?: () => void;
 
     constructor(
-        onApply: (data: T, is_final?: boolean) => void,
+        onApply: (data: T, is_final?: boolean, seq?: number) => void,
         onComplete?: () => void
     ) {
         this.chunks = new Map();
-        this.nextSeq = 0;
+        this.nextSeq = null;
         this.onApply = onApply;
         this.onComplete = onComplete;
     }
@@ -41,20 +41,25 @@ export class EventBuffer<T> {
      * Add a chunk to the buffer and apply all sequential chunks
      */
     add(seq: number, data: T, is_final?: boolean): void {
+        if (this.nextSeq === null) {
+            this.nextSeq = seq;
+        }
+
         // CRITICAL FIX: If we receive seq 0 but nextSeq > 0, this is a new stream
         // Reset the buffer to avoid dropping chunks from the new stream
-        if (seq === 0 && this.nextSeq > 0) {
+        if (this.nextSeq !== null && seq === 0 && this.nextSeq > 0) {
             console.log(`[EventBuffer] New stream detected (seq=0, nextSeq=${this.nextSeq}), resetting buffer`);
             this.clear();
+            this.nextSeq = seq;
         }
 
         // Store the chunk
         this.chunks.set(seq, { seq, data, is_final });
 
         // Apply all sequential chunks starting from nextSeq
-        while (this.chunks.has(this.nextSeq)) {
+        while (this.nextSeq !== null && this.chunks.has(this.nextSeq)) {
             const chunk = this.chunks.get(this.nextSeq)!;
-            this.onApply(chunk.data, chunk.is_final);
+            this.onApply(chunk.data, chunk.is_final, chunk.seq);
             this.chunks.delete(this.nextSeq);
             this.nextSeq++;
 
@@ -72,7 +77,7 @@ export class EventBuffer<T> {
      */
     clear(): void {
         this.chunks.clear();
-        this.nextSeq = 0;
+        this.nextSeq = null;
     }
 
     /**
@@ -86,7 +91,7 @@ export class EventBuffer<T> {
      * Get the next expected sequence number
      */
     getNextSeq(): number {
-        return this.nextSeq;
+        return this.nextSeq ?? -1;
     }
 }
 
@@ -95,11 +100,11 @@ export class EventBuffer<T> {
  */
 export class BufferManager<T> {
     private buffers: Map<string, EventBuffer<T>>;
-    private onApply: (id: string, data: T, is_final?: boolean) => void;
+    private onApply: (id: string, data: T, is_final?: boolean, seq?: number) => void;
     private onComplete?: (id: string) => void;
 
     constructor(
-        onApply: (id: string, data: T, is_final?: boolean) => void,
+        onApply: (id: string, data: T, is_final?: boolean, seq?: number) => void,
         onComplete?: (id: string) => void
     ) {
         this.buffers = new Map();
@@ -115,7 +120,7 @@ export class BufferManager<T> {
             this.buffers.set(
                 id,
                 new EventBuffer<T>(
-                    (data, is_final) => this.onApply(id, data, is_final),
+                    (data, is_final, seq) => this.onApply(id, data, is_final, seq),
                     () => {
                         if (this.onComplete) {
                             this.onComplete(id);
@@ -169,11 +174,11 @@ export class BufferManager<T> {
  */
 export class MessageBuffer extends BufferManager<MessageChunk> {
     constructor(
-        onChunk: (id: string, chunk: string, is_final: boolean, type: 'content' | 'reasoning') => void,
+        onChunk: (id: string, seq: number, chunk: string, is_final: boolean, type: 'content' | 'reasoning') => void,
         onComplete?: (id: string) => void
     ) {
         super(
-            (id, data, is_final) => onChunk(id, data.chunk, is_final ?? false, data.type || 'content'),
+            (id, data, is_final, seq) => onChunk(id, seq ?? 0, data.chunk, is_final ?? false, data.type || 'content'),
             onComplete
         );
     }

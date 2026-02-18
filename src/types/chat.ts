@@ -34,6 +34,24 @@ export interface ChatMessage {
         completedAt: number;
     };
     researchActivities?: ResearchActivity[];
+    streaming?: StreamingState;
+}
+
+export interface StreamingState {
+    seq: number;
+    startTime: number;
+    lastSeqAt: number;
+    endTime?: number;
+}
+
+export interface ToolActivityState {
+    toolName: string;
+    filePath: string;
+    action: string;
+    toolCallId?: string;
+    chunkCount: number;
+    startedAt: number;
+    lastChunkAt: number;
 }
 
 export interface ResearchActivity {

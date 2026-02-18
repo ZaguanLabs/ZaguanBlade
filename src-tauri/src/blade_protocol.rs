@@ -322,6 +322,8 @@ pub enum ChatEvent {
         tool_name: String,
         file_path: String,
         action: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tool_call_id: Option<String>,
     },
 }
 
@@ -330,6 +332,8 @@ pub struct ToolActivityPayload {
     pub tool_name: String,
     pub file_path: String,
     pub action: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

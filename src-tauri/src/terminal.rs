@@ -8,6 +8,27 @@ use std::{
 };
 use tauri::{Emitter, Runtime};
 
+/// Strip AppImage-specific environment variables from a CommandBuilder.
+///
+/// When running as an AppImage, the runtime injects several env vars that leak
+/// into child processes and cause subtle bugs:
+///
+/// - **ARGV0**: zsh uses `$ARGV0` as `argv[0]` for every external command it
+///   spawns. This causes commands like `rm -i` to display the AppImage path
+///   instead of their own name in prompts/output.
+/// - **APPIMAGE**: Absolute path to the AppImage file.
+/// - **APPDIR**: Path to the SquashFS mount point.
+/// - **OWD**: Original working directory before AppImage changed CWD.
+///
+/// These are only meaningful inside the AppImage's own AppRun script and should
+/// not propagate into user-facing terminals or command execution.
+fn strip_appimage_env(cmd: &mut CommandBuilder) {
+    cmd.env_remove("ARGV0");
+    cmd.env_remove("APPIMAGE");
+    cmd.env_remove("APPDIR");
+    cmd.env_remove("OWD");
+}
+
 // Helper struct to hold the PTY state
 pub struct PtyState {
     pub writer: Box<dyn Write + Send>,
@@ -87,6 +108,8 @@ pub fn create_terminal<R: Runtime>(
     } else {
         cmd.env("LC_ALL", &lang);
     }
+
+    strip_appimage_env(&mut cmd);
 
     // Ensure shells emit OSC 7 working-directory updates so the UI can track cwd changes.
     if is_interactive {
@@ -688,6 +711,8 @@ pub fn execute_command_in_terminal<R: Runtime>(
     } else {
         cmd.env("LC_ALL", &lang);
     }
+
+    strip_appimage_env(&mut cmd);
 
     let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;

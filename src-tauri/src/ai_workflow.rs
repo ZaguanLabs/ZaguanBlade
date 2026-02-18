@@ -924,6 +924,10 @@ pub fn run_command_in_workspace(
         .arg("-lc")
         .arg(command)
         .current_dir(&dir)
+        .env_remove("ARGV0")
+        .env_remove("APPIMAGE")
+        .env_remove("APPDIR")
+        .env_remove("OWD")
         .output();
 
     match output {

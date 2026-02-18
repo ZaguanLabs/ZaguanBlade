@@ -43,6 +43,7 @@ pub enum DrainResult {
         tool_name: String,
         file_path: String,
         action: String,
+        tool_call_id: Option<String>,
     },
     TodoUpdated(Vec<crate::protocol::TodoItem>),
     MessageCompleted(String), // Message ID for completed message
@@ -245,13 +246,6 @@ impl ChatManager {
 
         let selected = resolve_model_selection(models, selected_model);
         self.update_stream_profile(selected.provider, &selected.model_id_for_request);
-
-        if let Some(m) = models.get(selected_model) {
-            eprintln!(
-                "[CHAT MGR] Model selection: display_id={}, provider={:?}, api_id={:?}, sending={}",
-                m.id, selected.provider, m.api_id, selected.model_id_for_request
-            );
-        }
 
         match selected.provider {
             ProviderId::Ollama => OllamaRuntime
@@ -457,10 +451,6 @@ impl ChatManager {
                     // Keep the latest reasoning chunk so we can skip an immediate duplicate text chunk.
                     let mut last_reasoning_chunk: Option<String> = None;
                     while let Some(event) = ws_rx.recv().await {
-                        eprintln!(
-                            "[CHAT MGR] Received event: {:?}",
-                            std::mem::discriminant(&event)
-                        );
                         match event {
                             crate::blade_ws_client::BladeWsEvent::Connected { .. } => {
                                 // eprintln!("[CHAT MGR] Authenticated, sending chat message with session_id: {:?}", session_id);
@@ -679,10 +669,6 @@ impl ChatManager {
                                 file_path,
                                 action,
                             } => {
-                                eprintln!(
-                                    "[CHAT MGR] Tool Activity: {} on {} ({})",
-                                    tool_name, file_path, action
-                                );
                                 let _ = tx.send_tool_activity(ToolActivityPayload {
                                     tool_name,
                                     file_path,
@@ -695,10 +681,6 @@ impl ChatManager {
                                 tool_name,
                                 file_path,
                             } => {
-                                eprintln!(
-                                    "[CHAT MGR] Tool Progress: {} ({}) -> {:?}",
-                                    tool_name, tool_call_id, file_path
-                                );
                                 // Emit as ToolActivity with "streaming" action for UI display
                                 if let Some(path) = file_path {
                                     let _ = tx.send_tool_activity(ToolActivityPayload {
@@ -714,55 +696,30 @@ impl ChatManager {
                                 session_id: req_session_id,
                             } => {
                                 let t0 = std::time::Instant::now();
-                                eprintln!(
-                                    "[CHAT MGR] T+{:?} GetConversationContext event received",
-                                    t0.elapsed()
-                                );
-                                eprintln!(
-                                    "[CHAT MGR] T+{:?} session_id={}, message_count={}",
-                                    t0.elapsed(),
-                                    req_session_id,
-                                    conversation_messages.len()
-                                );
 
                                 // RFC-002: Send conversation context back to server
                                 // Use the pre-cloned conversation messages in BladeMessage format
 
-                                eprintln!(
-                                    "[CHAT MGR] T+{:?} Calling send_conversation_context with {} messages...",
-                                    t0.elapsed(),
-                                    conversation_messages.len()
-                                );
-                                let result = ws_client
+                                if let Err(e) = ws_client
                                     .send_conversation_context(
-                                        request_id.clone(),
-                                        req_session_id.clone(),
+                                        request_id,
+                                        req_session_id,
                                         conversation_messages.clone(),
                                     )
-                                    .await;
-                                eprintln!(
-                                    "[CHAT MGR] T+{:?} send_conversation_context returned: {:?}",
-                                    t0.elapsed(),
-                                    result.is_ok()
-                                );
-
-                                if let Err(e) = result {
-                                    eprintln!(
-                                        "[CHAT MGR] Failed to send conversation context: {}",
+                                    .await
+                                {
+                                    let _ = tx.send(ChatEvent::Error(format!(
+                                        "Failed to send conversation context: {}",
                                         e
-                                    );
+                                    )));
+                                    break;
                                 }
+                                let _ = t0;
                             }
                         }
-
-                        if !authenticated {
-                            continue;
-                        }
                     }
-                    // eprintln!("[CHAT MGR] Event loop ended");
-                }
+                },
                 Err(e) => {
-                    // eprintln!("[CHAT MGR] WebSocket connection failed: {}", e);
                     let _ = tx.send(ChatEvent::Error(e));
                 }
             }
@@ -1633,11 +1590,6 @@ impl ChatManager {
             .clone()
             .ok_or_else(|| "No session ID available".to_string())?;
 
-        eprintln!(
-            "[CHAT MGR] Sending {} tool results via WebSocket",
-            batch.file_results.len()
-        );
-
         // Reuse existing WebSocket client from start_stream
         let ws_client = self
             .ws_client
@@ -1867,6 +1819,7 @@ impl ChatManager {
                         tool_name: payload.tool_name,
                         file_path: payload.file_path,
                         action: payload.action,
+                        tool_call_id: payload.tool_call_id,
                     });
                 }
                 ProviderEvent::ReasoningChunk(s) => {
@@ -1978,22 +1931,12 @@ impl ChatManager {
                     // there are accumulated tool calls.
                     // eprintln!("[DRAIN] ProviderEvent::Done received");
 
-                    // Detect dropped tool calls: tool_progress was seen but tool_call never arrived
-                    if !self.pending_tool_progress.is_empty() && self.accumulated_tool_calls.is_empty() {
-                        let dropped: Vec<(String, String)> = self.pending_tool_progress.drain().collect();
-                        let tool_names: Vec<&str> = dropped.iter().map(|(_, name)| name.as_str()).collect();
-                        let hint = format!(
-                            "The server was unable to deliver {} tool call(s) ({}) — likely because the response was too large. \
-                             Please ask the model to retry with smaller, incremental changes.",
-                            dropped.len(),
-                            tool_names.join(", ")
-                        );
-                        // eprintln!("[DRAIN] Dropped tool calls detected: {:?}", dropped);
-                        self.pending_results.push_back(DrainResult::MessageTooLarge {
-                            message: format!("Tool call(s) dropped: {}", tool_names.join(", ")),
-                            recovery_hint: hint,
-                        });
-                    }
+                    // NOTE: Do not infer MessageTooLarge from pending tool-progress alone.
+                    // Some providers emit optimistic ToolProgress streaming updates without a
+                    // corresponding ToolCalls payload in edge cases (or empty follow-up turns),
+                    // which caused false "Tool call(s) dropped" errors in the UI.
+                    // We only surface size-limit failures when the provider emits
+                    // ProviderEvent::MessageTooLarge explicitly.
                     self.pending_tool_progress.clear();
 
                     // Ensure progress is cleared on done
@@ -2165,10 +2108,6 @@ impl ChatManager {
             .pending_results
             .pop_front()
             .unwrap_or(DrainResult::None);
-        eprintln!(
-            "[DRAIN] Returning result: {:?}",
-            std::mem::discriminant(&result)
-        );
         result
     }
 

@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { Check, X, Settings, Key, Loader2 } from 'lucide-react';
 import { useCommandExecution } from '../hooks/useCommandExecution';
 import { useHistory } from '../hooks/useHistory';
-import type { ChatMessage as ChatMessageType, ImageAttachment, ModelInfo } from '../types/chat';
+import type { ChatMessage as ChatMessageType, ImageAttachment, ModelInfo, ToolActivityState } from '../types/chat';
 
 import type { StructuredAction, TodoItem } from '../types/events';
 import type { RemoteAiConfig } from '../types/settings';
@@ -44,7 +44,7 @@ interface ChatPanelProps {
     uncommittedChanges: UncommittedChange[];
     onAcceptAllChanges: () => void;
     onRejectAllChanges: () => void;
-    toolActivity?: { toolName: string; filePath: string; action: string } | null;
+    toolActivity?: ToolActivityState | null;
     activeTodos: TodoItem[];
     setActiveTodos: React.Dispatch<React.SetStateAction<TodoItem[]>>;
 }
@@ -365,12 +365,29 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                                 'multi_replace_file_content': 'Multi-Edit File',
                                 'write_to_file': 'Writing to File',
                             };
+                            const writingTools = new Set([
+                                'write_file',
+                                'apply_patch',
+                                'create_file',
+                                'edit_file',
+                                'delete_file',
+                                'multi_edit',
+                                'replace_file_content',
+                                'multi_replace_file_content',
+                                'write_to_file',
+                            ]);
+                            const isWriteTool = writingTools.has(toolActivity.toolName);
+                            const isStreaming = toolActivity.action === 'streaming';
+                            if (!isWriteTool || !isStreaming) {
+                                return null;
+                            }
+
                             const prettyName = prettyToolNames[toolActivity.toolName] || toolActivity.toolName;
                             const displayPath = toolActivity.filePath.split('/').pop() || toolActivity.filePath;
                             return (
                                 <div className="px-4">
                                     <div className="flex items-center gap-2 py-1 text-[11px] text-zinc-500">
-                                        <Loader2 className="w-3.5 h-3.5 text-blue-400 animate-spin" />
+                                        <Loader2 className="w-3.5 h-3.5 text-emerald-400 animate-spin" />
                                         <span className="font-medium text-zinc-400">
                                             {prettyName}
                                         </span>
@@ -382,7 +399,11 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                                                 {displayPath}
                                             </span>
                                         )}
-                                        <span className="text-[9px] text-blue-400 animate-pulse">running...</span>
+                                        {toolActivity.chunkCount > 0 && (
+                                            <span className="text-[10px] font-medium text-emerald-400">
+                                                {toolActivity.chunkCount} chunks
+                                            </span>
+                                        )}
                                     </div>
                                 </div>
                             );

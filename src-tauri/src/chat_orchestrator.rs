@@ -431,6 +431,7 @@ pub async fn handle_send_message<R: Runtime>(
                 tool_name,
                 file_path,
                 action,
+                tool_call_id,
             } = result
             {
                 let _ = window.emit(
@@ -447,6 +448,7 @@ pub async fn handle_send_message<R: Runtime>(
                                 tool_name,
                                 file_path,
                                 action,
+                                tool_call_id,
                             },
                         ),
                     },

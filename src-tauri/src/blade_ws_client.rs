@@ -233,12 +233,7 @@ impl BladeWsClient {
         let ws_stream;
 
         loop {
-            eprintln!(
-                "[BLADE WS] Connecting to {} (attempt {}/{})",
-                url,
-                retry_count + 1,
-                max_retries + 1
-            );
+            // Intentionally quiet: avoid high-frequency websocket connect logs.
 
             // Configure WebSocket with larger message size limit (64MB instead of default 16MB)
             // This prevents "Space limit exceeded" errors for large tool results
@@ -265,10 +260,7 @@ impl BladeWsClient {
                     let delay_ms = 500 * (1 << (retry_count - 1));
                     let delay = std::time::Duration::from_millis(delay_ms);
 
-                    eprintln!(
-                        "[BLADE WS] Connection failed: {}. Retrying in {:?}... ({}/{})",
-                        e, delay, retry_count, max_retries
-                    );
+                    let _ = (&e, &delay, retry_count, max_retries);
 
                     tokio::time::sleep(delay).await;
                 }
@@ -418,7 +410,7 @@ impl BladeWsClient {
                         } else {
                             // eprintln!("[BLADE WS] Received: {}", text);
                         }
-                        if let Err(_e) = Self::parse_message(&text, &event_tx_clone) {
+                        if let Err(_e) = Self::parse_message(text.as_ref(), &event_tx_clone) {
                             // eprintln!("[BLADE WS] Parse error: {}", _e);
                         }
                     }
@@ -812,10 +804,7 @@ impl BladeWsClient {
                     .and_then(|v| v.as_i64())
                     .unwrap_or(0);
 
-                eprintln!(
-                    "[BLADE WS] Tool result acknowledged, waiting for {} more result(s)",
-                    pending_count
-                );
+                let _ = pending_count;
                 let _ = tx.send(BladeWsEvent::ToolResultAck { pending_count });
             }
             "progress" => {
@@ -852,10 +841,6 @@ impl BladeWsClient {
                     .unwrap_or("")
                     .to_string();
 
-                eprintln!(
-                    "[BLADE WS] Research result received ({} chars)",
-                    content.len()
-                );
                 let _ = tx.send(BladeWsEvent::Research { content });
             }
             "tool_activity" => {
@@ -878,10 +863,6 @@ impl BladeWsClient {
                     .unwrap_or("processing")
                     .to_string();
 
-                eprintln!(
-                    "[BLADE WS] Tool Activity: {} on {} ({})",
-                    tool_name, file_path, action
-                );
                 let _ = tx.send(BladeWsEvent::ToolActivity {
                     tool_name,
                     file_path,
@@ -912,10 +893,6 @@ impl BladeWsClient {
                 // partial_arguments is incomplete JSON like: '{"path": "/home/stig/dev/ai/z'
                 let file_path = Self::extract_file_path_from_partial_args(partial_arguments);
 
-                eprintln!(
-                    "[BLADE WS] Tool Progress: {} ({}) -> {:?}",
-                    tool_name, tool_call_id, file_path
-                );
                 let _ = tx.send(BladeWsEvent::ToolProgress {
                     tool_call_id,
                     tool_name,
@@ -938,21 +915,15 @@ impl BladeWsClient {
                                         .unwrap_or("")
                                         .to_string(),
                                     Err(_e) => {
-                                        // eprintln!("[BLADE WS] Failed to parse decoded context payload: {}", _e);
                                         "".to_string()
                                     }
                                 },
-                                Err(e) => {
-                                    eprintln!(
-                                        "[BLADE WS] Failed to decode context payload as UTF-8: {}",
-                                        e
-                                    );
+                                Err(_e) => {
                                     "".to_string()
                                 }
                             }
                         }
                         Err(_e) => {
-                            // eprintln!("[BLADE WS] Failed to decode Base64 context payload: {}", _e);
                             "".to_string()
                         }
                     }
@@ -965,17 +936,13 @@ impl BladeWsClient {
                         .to_string()
                 };
 
-                eprintln!(
-                    "[BLADE WS] Server requesting conversation context for session: {}",
-                    session_id
-                );
                 let _ = tx.send(BladeWsEvent::GetConversationContext {
                     request_id: msg.id.clone(),
                     session_id,
                 });
             }
             _ => {
-                // eprintln!("[BLADE WS] Unknown message type: {}", msg.msg_type);
+                // Intentionally ignore unknown message types.
             }
         }
 
