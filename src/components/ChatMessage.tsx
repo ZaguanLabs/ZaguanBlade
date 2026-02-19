@@ -27,17 +27,11 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
     const hadContentRef = useRef(hasContent);
 
     // Strip [THINKING] and [/THINKING] tags from content
-    // DEBUG: Log raw reasoning content to see what's being received
-    console.log(`[ReasoningBlock] Raw content (len=${content.length}): "${content.slice(0, 100)}..."`);
-    
     const cleanContent = content
         .replace(/\[THINKING\]/gi, '')
         .replace(/\[\/THINKING\]/gi, '')
         .trim();
-    
-    console.log(`[ReasoningBlock] Clean content (len=${cleanContent.length}): "${cleanContent.slice(0, 100)}..."`);
-    
-    // DEBUG: Use raw content if clean content is empty to see what's being suppressed
+
     const displayContent = cleanContent || content;
 
     // Auto-expand when streaming starts, auto-collapse when content arrives
@@ -179,6 +173,12 @@ interface ChatMessageProps {
     isActive?: boolean; // Is this the currently streaming message?
     onUndoTool?: (toolCallId: string) => void;
 }
+
+const StreamingTextPreview: React.FC<{ content: string }> = ({ content }) => (
+    <div className="text-[12px] font-medium text-zinc-300 leading-relaxed whitespace-pre-wrap break-words">
+        {content}
+    </div>
+);
 
 const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     message,
@@ -398,17 +398,6 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                 */}
 
                 {/* Render Interleaved Blocks if available, else Legacy Fallback */}
-                {(() => {
-                    // DEBUG: Log block structure
-                    if (message.blocks && message.blocks.length > 0) {
-                        const reasoningBlocks = message.blocks.filter(b => b.type === 'reasoning');
-                        if (reasoningBlocks.length > 1) {
-                            console.log(`[ChatMessage] Multiple reasoning blocks detected: ${reasoningBlocks.length} blocks`, 
-                                reasoningBlocks.map((b, i) => `Block ${i}: ${b.content.slice(0, 50)}...`));
-                        }
-                    }
-                    return null;
-                })()}
                 {message.blocks && message.blocks.length > 0 ? (
                     <>
                         {(() => {
@@ -418,7 +407,6 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                             }, -1);
                             
                             return message.blocks!.map((block, idx) => {
-                                console.log(`[ChatMessage] Processing block ${idx}: type=${block.type}, id=${block.id}`);
                                 if (block.type === 'reasoning') {
                                     // Only the last reasoning block is active
                                     const isReasoningActive = isActive && idx === lastReasoningIdx;
@@ -433,7 +421,11 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 } else if (block.type === 'text') {
                                 return (
                                     <div key={block.id || `text-${idx}`} className="mb-2 select-text">
-                                        <MarkdownRenderer content={block.content} />
+                                        {isActive ? (
+                                            <StreamingTextPreview content={block.content} />
+                                        ) : (
+                                            <MarkdownRenderer content={block.content} />
+                                        )}
                                     </div>
                                 );
                             } else if (block.type === 'tool_call') {
@@ -586,7 +578,11 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 )}
                                 {initialText && (
                                     <div className="mb-2 select-text">
-                                        <MarkdownRenderer content={initialText} />
+                                        {isActive ? (
+                                            <StreamingTextPreview content={initialText} />
+                                        ) : (
+                                            <MarkdownRenderer content={initialText} />
+                                        )}
                                     </div>
                                 )}
                                 {pendingActions && pendingActions.length > 0 && onApproveCommand && onSkipCommand && (
@@ -627,7 +623,11 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 )}
                                 {finalText && (
                                     <div className="select-text">
-                                        <MarkdownRenderer content={finalText} />
+                                        {isActive ? (
+                                            <StreamingTextPreview content={finalText} />
+                                        ) : (
+                                            <MarkdownRenderer content={finalText} />
+                                        )}
                                     </div>
                                 )}
                                 {message.commandExecutions && message.commandExecutions.length > 0 && (

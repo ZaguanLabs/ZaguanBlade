@@ -1,6 +1,6 @@
 // use eframe::egui; // Removed
 use std::path::PathBuf;
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 
 use crate::agentic_loop::AgenticLoop;
 use crate::ai_workflow::get_tool_definitions;
@@ -167,6 +167,7 @@ pub struct ChatManager {
     stream_parse_reasoning: bool,
     stream_xml_tool_fallback: bool,
     stream_auto_start_loop_on_tools: bool,
+    ws_conversation_messages: Arc<Mutex<Vec<serde_json::Value>>>,
 }
 
 fn supports_reasoning_tags(model_id: &str) -> bool {
@@ -200,6 +201,60 @@ impl ChatManager {
             stream_parse_reasoning: false,
             stream_xml_tool_fallback: false,
             stream_auto_start_loop_on_tools: false,
+            ws_conversation_messages: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn to_blade_conversation_messages(
+        conversation: &ConversationHistory,
+    ) -> Vec<serde_json::Value> {
+        conversation
+            .get_messages()
+            .iter()
+            .map(|msg| {
+                let role = match msg.role {
+                    ChatRole::User => "user",
+                    ChatRole::Assistant => "assistant",
+                    ChatRole::System => "system",
+                    ChatRole::Tool => "tool",
+                };
+                let mut blade_msg = serde_json::json!({
+                    "role": role,
+                    "content": msg.content,
+                });
+                if let Some(ref reasoning) = msg.reasoning {
+                    blade_msg["reasoning"] = serde_json::json!(reasoning);
+                }
+                if let Some(ref tool_call_id) = msg.tool_call_id {
+                    blade_msg["tool_call_id"] = serde_json::json!(tool_call_id);
+                }
+                if let Some(ref tool_calls) = msg.tool_calls {
+                    let tc_json: Vec<serde_json::Value> = tool_calls
+                        .iter()
+                        .map(|tc| {
+                            serde_json::json!({
+                                "id": tc.id,
+                                "type": tc.typ,
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments
+                                }
+                            })
+                        })
+                        .collect();
+                    blade_msg["tool_calls"] = serde_json::json!(tc_json);
+                }
+                if let Some(ref images) = msg.images {
+                    blade_msg["images"] = serde_json::json!(images);
+                }
+                blade_msg
+            })
+            .collect()
+    }
+
+    fn sync_ws_conversation_messages(&self, conversation: &ConversationHistory) {
+        if let Ok(mut guard) = self.ws_conversation_messages.lock() {
+            *guard = Self::to_blade_conversation_messages(conversation);
         }
     }
 
@@ -374,51 +429,9 @@ impl ChatManager {
         
         // eprintln!("[CHAT MGR] Starting stream with session_id: {:?}", session_id);
 
-        // RFC-002: Clone conversation messages for local storage mode context retrieval
-        // Convert to BladeMessage format that zcoderd expects
-        let conversation_messages: Vec<serde_json::Value> = conversation
-            .get_messages()
-            .iter()
-            .map(|msg| {
-                let role = match msg.role {
-                    ChatRole::User => "user",
-                    ChatRole::Assistant => "assistant",
-                    ChatRole::System => "system",
-                    ChatRole::Tool => "tool",
-                };
-                let mut blade_msg = serde_json::json!({
-                    "role": role,
-                    "content": msg.content,
-                });
-                if let Some(ref reasoning) = msg.reasoning {
-                    blade_msg["reasoning"] = serde_json::json!(reasoning);
-                }
-                if let Some(ref tool_call_id) = msg.tool_call_id {
-                    blade_msg["tool_call_id"] = serde_json::json!(tool_call_id);
-                }
-                if let Some(ref tool_calls) = msg.tool_calls {
-                    // Convert tool calls to the format zcoderd expects
-                    let tc_json: Vec<serde_json::Value> = tool_calls
-                        .iter()
-                        .map(|tc| {
-                            serde_json::json!({
-                                "id": tc.id,
-                                "type": tc.typ,
-                                "function": {
-                                    "name": tc.function.name,
-                                    "arguments": tc.function.arguments
-                                }
-                            })
-                        })
-                        .collect();
-                    blade_msg["tool_calls"] = serde_json::json!(tc_json);
-                }
-                if let Some(ref images) = msg.images {
-                    blade_msg["images"] = serde_json::json!(images);
-                }
-                blade_msg
-            })
-            .collect();
+        // RFC-002: Keep a live conversation snapshot for local mode context requests.
+        self.sync_ws_conversation_messages(conversation);
+        let ws_conversation_messages = self.ws_conversation_messages.clone();
 
         // Convert WebSocket events to ChatEvent channel
         let (tx, rx) = mpsc::channel();
@@ -697,14 +710,17 @@ impl ChatManager {
                             } => {
                                 let t0 = std::time::Instant::now();
 
-                                // RFC-002: Send conversation context back to server
-                                // Use the pre-cloned conversation messages in BladeMessage format
+                                // RFC-002: Send latest synchronized conversation context back to server.
+                                let context_messages = ws_conversation_messages
+                                    .lock()
+                                    .map(|msgs| msgs.clone())
+                                    .unwrap_or_default();
 
                                 if let Err(e) = ws_client
                                     .send_conversation_context(
                                         request_id,
                                         req_session_id,
-                                        conversation_messages.clone(),
+                                        context_messages,
                                     )
                                     .await
                                 {
@@ -1525,6 +1541,7 @@ impl ChatManager {
         // RFC: Large Tool Result Handling - truncate in local mode
         let updated_assistant = conversation.update_tool_call_status_with_truncation(&batch.file_results, is_local_mode);
         self.updated_assistant_message = updated_assistant;
+        self.sync_ws_conversation_messages(conversation);
 
         let selected = resolve_model_selection(models, selected_model);
         self.update_stream_profile(selected.provider, &selected.model_id_for_request);
@@ -1598,8 +1615,9 @@ impl ChatManager {
             .clone();
         let results = batch.file_results.clone(); // Clone for the task
         let is_local_mode_clone = is_local_mode; // Clone for async task
-        let _ = conversation;
         let _ = workspace;
+
+        self.sync_ws_conversation_messages(conversation);
 
         // Send tool results through the existing WebSocket connection
         // No need to create a new connection - reuse the one from start_stream
@@ -2245,6 +2263,8 @@ impl ChatManager {
                 last.content = "[no content]".to_string();
             }
         }
+
+        self.sync_ws_conversation_messages(conversation);
     }
 
     /// Request to stop the current streaming response

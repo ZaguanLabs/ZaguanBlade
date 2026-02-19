@@ -5,7 +5,7 @@
 Zaguán Blade is a high-performance AI code editor that takes a fundamentally different approach from VSCode forks. While others bolt AI onto existing editors, we built from the ground up with AI as the foundation—and Rust as the engine.
 
 > [!WARNING]
-> **Alpha Release (v0.2.1)**
+> **Alpha Release (v0.2.0)**
 > 
 > Zaguán Blade is in active alpha development. It's functional and good enough for basic daily work, but expect bugs and incomplete features.
 > 

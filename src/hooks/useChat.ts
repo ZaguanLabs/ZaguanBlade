@@ -55,7 +55,7 @@ export function useChat() {
     // This prevents re-rendering on every single streaming chunk
     const pendingUpdatesRef = useRef<Map<string, { content: string; reasoning: string; blocks: import('../types/chat').MessageBlock[]; streaming?: StreamingState }>>(new Map());
     const flushScheduledRef = useRef<number | null>(null);
-    const FLUSH_INTERVAL_MS = 50; // 20fps - smooth enough for human perception
+    const FLUSH_INTERVAL_MS = 80; // ~12.5fps - reduces render pressure while remaining responsive
     const streamingStatesRef = useRef<Map<string, StreamingState>>(new Map());
 
     // Flush pending updates to state
@@ -648,7 +648,6 @@ export function useChat() {
 
                     if (chatEvent.type === 'MessageDelta') {
                         const { id, seq, chunk, is_final } = chatEvent.payload;
-                        console.log(`[v1.1 Chat] MessageDelta: id=${id}, seq=${seq}, is_final=${is_final}, chunk_len=${chunk.length}`);
 
                         // Use buffer to handle out-of-order chunks
                         if (messageBufferRef.current) {
@@ -656,7 +655,6 @@ export function useChat() {
                         }
                     } else if (chatEvent.type === 'ReasoningDelta') {
                         const { id, seq, chunk, is_final } = chatEvent.payload;
-                        console.log(`[v1.1 Chat] ReasoningDelta: id=${id}, seq=${seq}, is_final=${is_final}, chunk_len=${chunk.length}, chunk="${chunk.slice(0, 50)}..."`);
 
                         if (messageBufferRef.current) {
                             messageBufferRef.current.addReasoningDelta(id, seq, chunk, is_final);
@@ -665,7 +663,6 @@ export function useChat() {
                         }
                     } else if (chatEvent.type === 'MessageCompleted') {
                         const { id } = chatEvent.payload;
-                        console.log(`[v1.1 Chat] MessageCompleted: id=${id}`);
 
                         // Clear buffer for this message to prevent memory leaks or sequence issues
                         if (messageBufferRef.current) {
@@ -684,7 +681,6 @@ export function useChat() {
                         // Buffer will auto-clear on is_final, but this provides explicit confirmation
                     } else if (chatEvent.type === 'ToolUpdate') {
                         const { message_id, tool_call_id, status, result, tool_call } = chatEvent.payload;
-                        console.log(`[v1.1 Chat] ToolUpdate: msg=${message_id} tool=${tool_call_id} status=${status}`);
 
                         // Clear the tool activity preview — the real ToolCallDisplay takes over
                         toolChunkCountsRef.current.delete(tool_call_id);
@@ -899,17 +895,14 @@ export function useChat() {
 
     // Queue processing effect
     useEffect(() => {
-        console.log('[TRIPWIRE] Queue effect - loading:', loading, 'queueLength:', messageQueue.length);
         if (!loading && messageQueue.length > 0) {
             const nextMessage = messageQueue[0];
-            console.log('[TRIPWIRE] Processing queued message:', nextMessage.text.substring(0, 50));
             setMessageQueue(prev => prev.slice(1));
             dispatchToBackend(nextMessage.text, nextMessage.attachments);
         }
     }, [loading, messageQueue, dispatchToBackend]);
 
     const sendMessage = useCallback((text: string, attachments?: ImageAttachment[]) => {
-        console.log('[TRIPWIRE] sendMessage called - loading:', loading, 'text:', text.substring(0, 50));
         // Optimistically add user message
         const userMsg: ChatMessage = {
             id: crypto.randomUUID(),
@@ -920,7 +913,6 @@ export function useChat() {
         setMessages(prev => [...prev, userMsg]);
 
         // Add to queue for processing
-        console.log('[TRIPWIRE] Adding message to queue');
         setMessageQueue(prev => [...prev, { text, attachments }]);
     }, [loading]);
     const stopGeneration = useCallback(async () => {
