@@ -90,6 +90,8 @@ pub fn approve_tool<R: Runtime>(approved: bool, window: Window<R>, state: State<
                                 call_id: cmd.call.id.clone(),
                                 command: cmd.command.clone(),
                                 cwd: cmd.cwd.clone(),
+                                blocking: cmd.blocking,
+                                wait_ms_before_async: cmd.wait_ms_before_async,
                             },
                         );
                     }
@@ -246,6 +248,8 @@ pub fn approve_single_command<R: Runtime>(
                                 call_id: cmd.call.id.clone(),
                                 command: cmd.command.clone(),
                                 cwd: cmd.cwd.clone(),
+                                blocking: cmd.blocking,
+                                wait_ms_before_async: cmd.wait_ms_before_async,
                             },
                         );
                     } else {

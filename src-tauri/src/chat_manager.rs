@@ -211,7 +211,37 @@ impl ChatManager {
         conversation
             .get_messages()
             .iter()
-            .map(|msg| {
+            .filter_map(|msg| {
+                let has_content = !msg.content.trim().is_empty();
+                let has_reasoning = msg
+                    .reasoning
+                    .as_ref()
+                    .map(|r| !r.trim().is_empty())
+                    .unwrap_or(false);
+                let has_tool_calls = msg
+                    .tool_calls
+                    .as_ref()
+                    .map(|calls| !calls.is_empty())
+                    .unwrap_or(false);
+                let has_images = msg
+                    .images
+                    .as_ref()
+                    .map(|images| !images.is_empty())
+                    .unwrap_or(false);
+
+                // Local mode context must not include empty assistant placeholders.
+                // They can be left behind on error turns and poison subsequent requests.
+                let should_keep = match msg.role {
+                    ChatRole::User => has_content || has_images,
+                    ChatRole::Assistant => has_content || has_reasoning || has_tool_calls,
+                    ChatRole::System => has_content,
+                    ChatRole::Tool => true,
+                };
+
+                if !should_keep {
+                    return None;
+                }
+
                 let role = match msg.role {
                     ChatRole::User => "user",
                     ChatRole::Assistant => "assistant",
@@ -247,7 +277,7 @@ impl ChatManager {
                 if let Some(ref images) = msg.images {
                     blade_msg["images"] = serde_json::json!(images);
                 }
-                blade_msg
+                Some(blade_msg)
             })
             .collect()
     }

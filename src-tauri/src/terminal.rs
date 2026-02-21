@@ -306,21 +306,54 @@ pub fn create_terminal<R: Runtime>(
                         // prefix such as "( echo '" may arrive before the sentinel text.
                         // Keep these short prefixes buffered so they can be stripped once
                         // the full sentinel token arrives, instead of leaking into xterm.
-                        let looks_like_sentinel_echo_prefix = (trimmed.starts_with("( echo '")
-                            || trimmed.starts_with("(echo '")
-                            || trimmed.starts_with("echo '")
-                            || trimmed.starts_with("( printf '")
-                            || trimmed.starts_with("printf '"))
-                            && trimmed.len() <= 48;
+                        // NOTE: don't use plain.trim() here for sentinel-prefix checks.
+                        // Whitespace-only chunks (e.g. user typing spaces) would become
+                        // "" and incorrectly match starts_with(""), causing delayed echo.
+                        let trimmed_non_ws = plain.trim();
+                        let looks_like_sentinel_echo_prefix =
+                            (trimmed.starts_with("( echo '")
+                                || trimmed.starts_with("(echo '")
+                                || trimmed.starts_with("echo '")
+                                || trimmed.starts_with("( printf '")
+                                || trimmed.starts_with("printf '")
+                                || plain.contains("( echo '")
+                                || plain.contains("(echo '")
+                                || plain.contains(" echo '")
+                                || plain.contains(" printf '")
+                                || plain.ends_with("( echo '")
+                                || plain.ends_with("(echo '")
+                                || plain.ends_with("echo '")
+                                || plain.ends_with("printf '"))
+                                && trimmed.len() <= 96;
+
+                        let could_be_sentinel_prefix = !trimmed_non_ws.is_empty()
+                            && "##BLADE_CMD_".starts_with(trimmed_non_ws);
+
+                        let tail: String = plain
+                            .chars()
+                            .rev()
+                            .take(12)
+                            .collect::<Vec<char>>()
+                            .into_iter()
+                            .rev()
+                            .collect();
+                        let tail_trimmed = tail.trim_start();
+                        let could_be_sentinel_tail = !tail_trimmed.is_empty()
+                            && "##BLADE_CMD_".starts_with(tail_trimmed);
+
                         let could_be_sentinel = plain.contains("##BLADE_CMD_")
                             || plain.contains("BLADE_CMD_")
-                            || "##BLADE_CMD_".starts_with(plain.trim())
-                            || plain.len() <= 12 && "##BLADE_CMD_".starts_with(
-                                   &plain[plain.len().saturating_sub(12)..])
-                            || looks_like_sentinel_echo_prefix
-                            || line_buffer.len() > 8192;
+                            || could_be_sentinel_prefix
+                            || could_be_sentinel_tail
+                            || looks_like_sentinel_echo_prefix;
 
-                        if !could_be_sentinel || line_buffer.len() > 8192 {
+                        // For potential sentinel echo lines, allow a much larger buffer before
+                        // force-flushing. Some models emit very long run_command payloads, and
+                        // the echoed wrapper can exceed 8KB before a newline arrives. Flushing
+                        // too early leaks tail fragments of the wrapper command into the UI.
+                        let force_flush_limit = if could_be_sentinel { 256 * 1024 } else { 8192 };
+
+                        if !could_be_sentinel || line_buffer.len() > force_flush_limit {
                             let flushed = std::mem::take(&mut line_buffer);
                             process_chunk(&flushed, &app_handle_clone, &id_clone, &seq_counter,
                                           &mut active_cmd, &mut cmd_output_buffer);
@@ -466,36 +499,62 @@ fn strip_ansi_escapes(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let bytes = input.as_bytes();
     let mut i = 0;
+    let mut segment_start = 0;
+
+    let flush_plain = |out: &mut String, src: &str, start: usize, end: usize| {
+        if end > start {
+            out.push_str(&src[start..end]);
+        }
+    };
+
     while i < bytes.len() {
         if bytes[i] == 0x1b {
+            // Flush bytes before escape as-is (UTF-8 preserved)
+            flush_plain(&mut out, input, segment_start, i);
+
             i += 1;
-            if i >= bytes.len() { break; }
+            if i >= bytes.len() {
+                break;
+            }
+
             if bytes[i] == b'[' {
                 // CSI sequence: skip until final byte (0x40-0x7E)
                 i += 1;
                 while i < bytes.len() && !(0x40..=0x7E).contains(&bytes[i]) {
                     i += 1;
                 }
-                if i < bytes.len() { i += 1; } // skip final byte
+                if i < bytes.len() {
+                    i += 1;
+                } // skip final byte
+                segment_start = i;
             } else if bytes[i] == b']' {
                 // OSC sequence: skip until ST (BEL or ESC\)
                 i += 1;
                 while i < bytes.len() {
-                    if bytes[i] == 0x07 { i += 1; break; }
+                    if bytes[i] == 0x07 {
+                        i += 1;
+                        break;
+                    }
                     if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
-                        i += 2; break;
+                        i += 2;
+                        break;
                     }
                     i += 1;
                 }
+                segment_start = i;
             } else {
                 // Simple two-byte escape
                 i += 1;
+                segment_start = i;
             }
         } else {
-            out.push(bytes[i] as char);
             i += 1;
         }
     }
+
+    // Flush trailing plain text segment
+    flush_plain(&mut out, input, segment_start, bytes.len());
+
     out
 }
 

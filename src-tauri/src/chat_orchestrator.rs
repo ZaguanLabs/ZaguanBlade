@@ -3,7 +3,53 @@ use crate::chat_manager::DrainResult;
 use crate::project_settings;
 use crate::utils::{extract_root_command, is_cwd_outside_workspace, parse_command};
 use crate::{blade_protocol, local_artifacts};
+use std::collections::HashSet;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
+
+fn infer_context_files_from_query(
+    state: &State<'_, AppState>,
+    query: &str,
+    limit: usize,
+) -> Vec<String> {
+    let mut files = Vec::new();
+    let mut seen = HashSet::new();
+
+    let service = state.language_service.clone();
+
+    if let Ok(results) = service.search_symbols(query, limit.saturating_mul(4)) {
+        for result in results {
+            let path = result.symbol.file_path;
+            if seen.insert(path.clone()) {
+                files.push(path);
+                if files.len() >= limit {
+                    return files;
+                }
+            }
+        }
+    }
+
+    let tokens: Vec<&str> = query
+        .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
+        .filter(|token| token.len() >= 4)
+        .take(8)
+        .collect();
+
+    for token in tokens {
+        if let Ok(results) = service.search_symbols(token, 4) {
+            for result in results {
+                let path = result.symbol.file_path;
+                if seen.insert(path.clone()) {
+                    files.push(path);
+                    if files.len() >= limit {
+                        return files;
+                    }
+                }
+            }
+        }
+    }
+
+    files
+}
 
 async fn load_available_models(state: &State<'_, AppState>) -> Vec<crate::models::registry::ModelInfo> {
     let config = { state.config.lock().unwrap().clone() };
@@ -30,22 +76,12 @@ pub async fn handle_send_message<R: Runtime>(
         active_file, cursor_line, cursor_column
     );
 
-    // Store editor state in AppState for tool execution
-    {
-        *state.active_file.lock().unwrap() = active_file.clone();
-        *state.open_files.lock().unwrap() = open_files.clone().unwrap_or_default();
-        *state.cursor_line.lock().unwrap() = cursor_line;
-        *state.cursor_column.lock().unwrap() = cursor_column;
-        *state.selection_start_line.lock().unwrap() = selection_start_line;
-        *state.selection_end_line.lock().unwrap() = selection_end_line;
-    }
-
     // Parse @commands and convert to tool calls
     let (actual_message, forced_tool) = parse_command(&message);
 
     // Check for pending error feedback from previous turn (e.g. message too large)
     // Prepend it as a system note so the model knows what happened
-    let actual_message = {
+    let mut actual_message = {
         let mut feedback = state.pending_error_feedback.lock().unwrap();
         if let Some(hint) = feedback.take() {
             eprintln!("[SEND MSG] Prepending error feedback to message: {}", hint);
@@ -54,6 +90,30 @@ pub async fn handle_send_message<R: Runtime>(
             actual_message
         }
     };
+
+    // If there is no editor context, infer likely relevant files from indexed symbols.
+    // This prevents the model from defaulting to generic project summaries.
+    let mut effective_open_files = open_files.clone().unwrap_or_default();
+    if active_file.is_none() && effective_open_files.is_empty() {
+        effective_open_files = infer_context_files_from_query(&state, &actual_message, 6);
+
+        if effective_open_files.is_empty() {
+            actual_message = format!(
+                "[SYSTEM NOTE: No file tabs are open. Infer relevant files from the workspace using tools and proceed with implementation. Do not summarize the project unless explicitly asked.]\n\n{}",
+                actual_message
+            );
+        }
+    }
+
+    // Store editor state in AppState for tool execution
+    {
+        *state.active_file.lock().unwrap() = active_file.clone();
+        *state.open_files.lock().unwrap() = effective_open_files.clone();
+        *state.cursor_line.lock().unwrap() = cursor_line;
+        *state.cursor_column.lock().unwrap() = cursor_column;
+        *state.selection_start_line.lock().unwrap() = selection_start_line;
+        *state.selection_end_line.lock().unwrap() = selection_end_line;
+    }
 
     // 1. Add User Message
     {
@@ -142,7 +202,7 @@ pub async fn handle_send_message<R: Runtime>(
             selected_model,
             ws,
             active_file.clone(),
-            open_files.clone(),
+            Some(effective_open_files.clone()),
             cursor_line,
             cursor_column,
             http,

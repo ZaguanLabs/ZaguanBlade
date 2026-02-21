@@ -1,9 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { emit, listen } from '@tauri-apps/api/event';
+import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { BladeDispatcher } from '../services/blade';
-import { BLADE_TERMINAL_ID } from '../constants/terminal';
-import type { BladeEventEnvelope, TerminalEvent } from '../types/blade';
 
 export interface CommandExecution {
     commandId: string;
@@ -17,8 +15,11 @@ export interface CommandExecution {
 
 type PendingCommand = {
     callId: string;
+    terminalId: string;
     command: string;
     cwd?: string;
+    blocking: boolean;
+    waitMsBeforeAsync?: number;
     started: boolean;
 };
 
@@ -29,8 +30,6 @@ const SENTINEL_END = '##';
 export function useCommandExecution() {
     const [executions, setExecutions] = useState<Map<string, CommandExecution>>(new Map());
     const pendingCommandsRef = useRef<Map<string, PendingCommand>>(new Map());
-    const bladeReadyRef = useRef(false);
-    const pendingInputQueueRef = useRef<(() => void)[]>([]);
 
     const handleCommandComplete = useCallback(async (callId: string, output: string, exitCode: number) => {
         console.log('[CMD EXEC] Complete:', { callId, exitCode, outputLength: output.length });
@@ -55,79 +54,74 @@ export function useCommandExecution() {
         }
     }, []);
 
-    const flushPendingInputs = useCallback(() => {
-        const queue = pendingInputQueueRef.current;
-        pendingInputQueueRef.current = [];
-        queue.forEach(fn => fn());
-    }, []);
-
-    const enqueueBladeInput = useCallback((fn: () => void) => {
-        if (bladeReadyRef.current) {
-            fn();
-            return;
-        }
-        pendingInputQueueRef.current.push(fn);
-    }, []);
-
     const escapeShellArg = useCallback((value: string) => {
         if (value.length === 0) return "''";
         return `'${value.replace(/'/g, `'"'"'`)}'`;
     }, []);
 
     const sendCommandToBlade = useCallback((pending: PendingCommand) => {
-        const { callId, command, cwd } = pending;
+        const { callId, terminalId, command, cwd, blocking, waitMsBeforeAsync } = pending;
 
         const parts: string[] = [];
         parts.push(`echo '${SENTINEL_START}${callId}${SENTINEL_END}'`);
         if (cwd) {
             parts.push(`cd ${escapeShellArg(cwd)}`);
         }
-        parts.push(command);
+        if (blocking) {
+            parts.push(command);
+        } else {
+            const waitMs = typeof waitMsBeforeAsync === 'number' ? Math.max(0, waitMsBeforeAsync) : 1000;
+            const waitSeconds = (waitMs / 1000).toString();
+            parts.push(`( ${command} ) & __blade_pid=$!`);
+            if (waitMs > 0) {
+                parts.push(`sleep ${waitSeconds}`);
+            }
+            parts.push(
+                `if kill -0 "$__blade_pid" 2>/dev/null; then disown "$__blade_pid" 2>/dev/null || true; echo '[run_command] detached pid='"$__blade_pid"; __blade_ec=0; else wait "$__blade_pid"; __blade_ec=$?; fi`
+            );
+        }
         parts.push(`__blade_ec=$?; echo '${SENTINEL_EXIT}${callId}:'"$__blade_ec"'${SENTINEL_END}'; exit $__blade_ec`);
 
-        const payload = `( ${parts.join('; ')} )\n`;
+        const payload = `( ${parts.join('; ')} )`;
 
-        enqueueBladeInput(() => {
-            BladeDispatcher.terminal({
-                type: 'Input',
-                payload: { id: BLADE_TERMINAL_ID, data: payload },
-            }).catch(async err => {
-                pendingCommandsRef.current.delete(callId);
-                await handleCommandComplete(callId, `Failed to send command to Blade terminal: ${String(err)}`, 1);
-            });
+        BladeDispatcher.terminal({
+            type: 'Spawn',
+            payload: {
+                id: terminalId,
+                command: payload,
+                interactive: true,
+            },
+        }).catch(async err => {
+            pendingCommandsRef.current.delete(callId);
+            await handleCommandComplete(callId, `Failed to start command terminal: ${String(err)}`, 1);
         });
-    }, [enqueueBladeInput, escapeShellArg, handleCommandComplete]);
+    }, [escapeShellArg, handleCommandComplete]);
 
     useEffect(() => {
         let unlistenStart: (() => void) | undefined;
         let unlistenExit: (() => void) | undefined;
-        let unlistenBlade: (() => void) | undefined;
         let unlistenCmdDetected: (() => void) | undefined;
         let unlistenCmdExitDetected: (() => void) | undefined;
 
         const setupListeners = async () => {
-            unlistenBlade = await listen<BladeEventEnvelope>('blade-event', (event) => {
-                const bladeEvent = event.payload.event;
-                if (bladeEvent.type !== 'Terminal') return;
-                const terminalEvent = bladeEvent.payload as TerminalEvent;
-                if (terminalEvent.type === 'Spawned' && terminalEvent.payload.id === BLADE_TERMINAL_ID) {
-                    bladeReadyRef.current = true;
-                    flushPendingInputs();
-                }
-            });
-
             unlistenStart = await listen<{
                 command_id: string;
                 call_id: string;
                 command: string;
                 cwd?: string;
+                blocking?: boolean;
+                wait_ms_before_async?: number;
             }>('command-execution-started', (event) => {
                 console.log('[CMD EXEC] Started:', event.payload);
 
+                const terminalId = `ai-cmd-${event.payload.call_id}`;
                 const pending: PendingCommand = {
                     callId: event.payload.call_id,
+                    terminalId,
                     command: event.payload.command,
                     cwd: event.payload.cwd,
+                    blocking: event.payload.blocking ?? true,
+                    waitMsBeforeAsync: event.payload.wait_ms_before_async,
                     started: false,
                 };
                 pendingCommandsRef.current.set(event.payload.call_id, pending);
@@ -144,9 +138,6 @@ export function useCommandExecution() {
                     return next;
                 });
 
-                emit('open-blade-terminal', { cwd: event.payload.cwd, focus: true })
-                    .catch((err: unknown) => console.error('[CMD EXEC] Failed to open Blade terminal:', err));
-
                 pending.started = true;
                 sendCommandToBlade(pending);
             });
@@ -156,7 +147,6 @@ export function useCommandExecution() {
             });
 
             unlistenCmdExitDetected = await listen<{ terminal_id: string; call_id: string; exit_code: number; output: string }>('blade-cmd-exited', (event) => {
-                if (event.payload.terminal_id !== BLADE_TERMINAL_ID) return;
                 const { call_id: callId, exit_code: exitCode, output } = event.payload;
                 if (!pendingCommandsRef.current.has(callId)) return;
                 pendingCommandsRef.current.delete(callId);
@@ -164,8 +154,17 @@ export function useCommandExecution() {
             });
 
             unlistenExit = await listen<{ id: string; exit_code: number }>('terminal-exit', (event) => {
-                if (event.payload.id === BLADE_TERMINAL_ID) {
-                    bladeReadyRef.current = false;
+                const terminalId = event.payload.id;
+                const pending = Array.from(pendingCommandsRef.current.values()).find(
+                    cmd => cmd.terminalId === terminalId,
+                );
+                if (pending) {
+                    pendingCommandsRef.current.delete(pending.callId);
+                    handleCommandComplete(
+                        pending.callId,
+                        `Command terminal exited before sentinel completion (exit ${event.payload.exit_code}).`,
+                        event.payload.exit_code,
+                    );
                 }
             });
         };
@@ -175,11 +174,10 @@ export function useCommandExecution() {
         return () => {
             if (unlistenStart) unlistenStart();
             if (unlistenExit) unlistenExit();
-            if (unlistenBlade) unlistenBlade();
             if (unlistenCmdDetected) unlistenCmdDetected();
             if (unlistenCmdExitDetected) unlistenCmdExitDetected();
         };
-    }, [flushPendingInputs, handleCommandComplete, sendCommandToBlade]);
+    }, [handleCommandComplete, sendCommandToBlade]);
 
     return {
         executions,

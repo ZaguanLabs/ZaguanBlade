@@ -23,6 +23,8 @@ pub struct PendingCommand {
     pub call: ToolCall,
     pub command: String,
     pub cwd: Option<String>,
+    pub blocking: bool,
+    pub wait_ms_before_async: Option<u64>,
 }
 
 fn normalize_json_string(input: &str) -> String {
@@ -307,7 +309,7 @@ impl AiWorkflow {
             // INTERCEPTION LOGIC
             if call.function.name == "run_command" {
                 match parse_run_command_args(&call.function.arguments) {
-                    Ok((command, cwd)) => {
+                    Ok((command, cwd, blocking, wait_ms_before_async)) => {
                         if let Some(err) = should_block_irrelevant_language_scan(
                             &command,
                             workspace_root,
@@ -320,6 +322,8 @@ impl AiWorkflow {
                             call: call.clone(),
                             command,
                             cwd,
+                            blocking,
+                            wait_ms_before_async,
                         })
                     }
                     Err(e) => file_results.push((call.clone(), tools::ToolResult::err(e))),
@@ -799,22 +803,48 @@ impl AiWorkflow {
     }
 }
 
-fn parse_run_command_args(raw_args: &str) -> Result<(String, Option<String>), String> {
+fn parse_run_command_args(raw_args: &str) -> Result<(String, Option<String>, bool, Option<u64>), String> {
     let v: serde_json::Value =
         serde_json::from_str(raw_args).map_err(|e| format!("invalid tool args json: {e}"))?;
     let obj = v
         .as_object()
         .ok_or_else(|| "invalid args: expected object".to_string())?;
+
     let command = obj
         .get("command")
+        .or_else(|| obj.get("Command"))
+        .or_else(|| obj.get("command_line"))
+        .or_else(|| obj.get("CommandLine"))
         .and_then(|v| v.as_str())
-        .ok_or_else(|| "missing required arg: command".to_string())?
+        .ok_or_else(|| "missing required arg: command/CommandLine".to_string())?
         .to_string();
+
     let cwd = obj
         .get("cwd")
+        .or_else(|| obj.get("Cwd"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    Ok((command, cwd))
+
+    let blocking = obj
+        .get("blocking")
+        .or_else(|| obj.get("Blocking"))
+        .and_then(|v| match v {
+            Value::Bool(b) => Some(*b),
+            Value::String(s) => s.parse::<bool>().ok(),
+            _ => None,
+        })
+        .unwrap_or(true);
+
+    let wait_ms_before_async = obj
+        .get("wait_ms_before_async")
+        .or_else(|| obj.get("WaitMsBeforeAsync"))
+        .and_then(|v| match v {
+            Value::Number(n) => n.as_u64(),
+            Value::String(s) => s.parse::<u64>().ok(),
+            _ => None,
+        });
+
+    Ok((command, cwd, blocking, wait_ms_before_async))
 }
 
 fn should_block_irrelevant_language_scan(

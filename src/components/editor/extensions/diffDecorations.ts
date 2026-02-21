@@ -31,65 +31,64 @@ export function parseUnifiedDiff(source: string): DiffLine[] {
         const patches = parsePatch(source);
         if (!patches || patches.length === 0) return [];
 
-        const patch = patches[0];
-        if (!patch) return [];
-
         const lines: DiffLine[] = [];
         let prevHunk: { oldStart: number; oldLines: number; newStart: number; newLines: number } | null = null;
 
-        for (const hunk of (patch as any).hunks || []) {
-            // Insert a gap separator between hunks
-            if (prevHunk) {
-                const gapNew = hunk.newStart - (prevHunk.newStart + prevHunk.newLines);
-                const gapOld = hunk.oldStart - (prevHunk.oldStart + prevHunk.oldLines);
-                const hidden = Math.max(gapNew, gapOld);
-                if (hidden > 0) {
-                    lines.push({
-                        oldLineNum: null,
-                        newLineNum: null,
-                        type: 'gap',
-                        content: '',
-                        hiddenCount: hidden,
-                    });
+        for (const patch of patches) {
+            for (const hunk of patch.hunks || []) {
+                // Insert a gap separator between hunks
+                if (prevHunk) {
+                    const gapNew = hunk.newStart - (prevHunk.newStart + prevHunk.newLines);
+                    const gapOld = hunk.oldStart - (prevHunk.oldStart + prevHunk.oldLines);
+                    const hidden = Math.max(gapNew, gapOld);
+                    if (hidden > 0) {
+                        lines.push({
+                            oldLineNum: null,
+                            newLineNum: null,
+                            type: 'gap',
+                            content: '',
+                            hiddenCount: hidden,
+                        });
+                    }
                 }
-            }
 
-            let oldLine = hunk.oldStart;
-            let newLine = hunk.newStart;
+                let oldLine = hunk.oldStart;
+                let newLine = hunk.newStart;
 
-            for (const raw of hunk.lines || []) {
-                const firstChar = (raw as string)[0];
-                const content = (raw as string).slice(1);
+                for (const raw of hunk.lines || []) {
+                    const firstChar = raw[0];
+                    const content = raw.slice(1);
 
-                if (firstChar === '-') {
-                    lines.push({
-                        oldLineNum: oldLine,
-                        newLineNum: null,
-                        type: 'removed',
-                        content,
-                    });
-                    oldLine++;
-                } else if (firstChar === '+') {
-                    lines.push({
-                        oldLineNum: null,
-                        newLineNum: newLine,
-                        type: 'added',
-                        content,
-                    });
-                    newLine++;
-                } else {
-                    lines.push({
-                        oldLineNum: oldLine,
-                        newLineNum: newLine,
-                        type: 'context',
-                        content,
-                    });
-                    oldLine++;
-                    newLine++;
+                    if (firstChar === '-') {
+                        lines.push({
+                            oldLineNum: oldLine,
+                            newLineNum: null,
+                            type: 'removed',
+                            content,
+                        });
+                        oldLine++;
+                    } else if (firstChar === '+') {
+                        lines.push({
+                            oldLineNum: null,
+                            newLineNum: newLine,
+                            type: 'added',
+                            content,
+                        });
+                        newLine++;
+                    } else {
+                        lines.push({
+                            oldLineNum: oldLine,
+                            newLineNum: newLine,
+                            type: 'context',
+                            content,
+                        });
+                        oldLine++;
+                        newLine++;
+                    }
                 }
-            }
 
-            prevHunk = hunk;
+                prevHunk = hunk;
+            }
         }
 
         return lines;

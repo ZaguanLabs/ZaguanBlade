@@ -319,6 +319,8 @@ pub struct CommandExecutionStartedPayload {
     pub call_id: String,
     pub command: String,
     pub cwd: Option<String>,
+    pub blocking: bool,
+    pub wait_ms_before_async: Option<u64>,
 }
 
 /// Payload for backend-error event

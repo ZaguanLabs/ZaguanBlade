@@ -15,13 +15,15 @@ export const GlobalChangeActions: React.FC<GlobalChangeActionsProps> = ({
   onRejectAll,
   disabled = false,
 }) => {
-  if (changes.length === 0) {
+  const fileCount = new Set(changes.map(c => c.file_path)).size;
+
+  // Global actions should only appear when there are changes in multiple files.
+  if (fileCount <= 1) {
     return null;
   }
 
   const totalAdded = changes.reduce((sum, c) => sum + c.added_lines, 0);
   const totalRemoved = changes.reduce((sum, c) => sum + c.removed_lines, 0);
-  const fileCount = new Set(changes.map(c => c.file_path)).size;
 
   return (
     <div className="flex items-center justify-end gap-2 px-3 py-1.5 text-xs">
