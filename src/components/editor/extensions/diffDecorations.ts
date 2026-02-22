@@ -59,6 +59,12 @@ export function parseUnifiedDiff(source: string): DiffLine[] {
                     const firstChar = raw[0];
                     const content = raw.slice(1);
 
+                    // Unified-diff metadata line. This is not a real source line and must not
+                    // advance old/new line counters; otherwise subsequent line mapping drifts.
+                    if (firstChar === '\\') {
+                        continue;
+                    }
+
                     if (firstChar === '-') {
                         lines.push({
                             oldLineNum: oldLine,

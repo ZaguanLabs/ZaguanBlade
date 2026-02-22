@@ -9,7 +9,7 @@ import { DocumentTabs } from './DocumentTabs';
 import { DocumentViewer } from './DocumentViewer';
 import { TitleBar } from './TitleBar';
 import { GitBranch, Settings, Clock } from 'lucide-react';
-import { EditorProvider, useEditor } from '../contexts/EditorContext';
+import { EditorProvider, useEditorActions } from '../contexts/EditorContext';
 import { useUncommittedChanges } from '../hooks/useUncommittedChanges';
 import { useChat } from '../hooks/useChat';
 import { StorageSetupModal } from './StorageSetupModal';
@@ -118,7 +118,7 @@ const AppLayoutInner: React.FC = () => {
     };
 
     // Sync active tab and open file paths to EditorContext
-    const { setActiveFile, setOpenFiles } = useEditor();
+    const { setActiveFile, setOpenFiles } = useEditorActions();
     useEffect(() => {
         const activeTab = tabs.find(t => t.id === activeTabId);
         setActiveFile(activeTab?.path || null);

@@ -5,14 +5,14 @@ import { BladeDispatcher } from '../services/blade';
 import type { ChatMessage, ImageAttachment, ModelInfo, ToolActivityState, ToolCall, StreamingState } from '../types/chat';
 import type { Change } from '../types/change';
 import { EventNames, type RequestConfirmationPayload, type StructuredAction, type ChangeAppliedPayload, type AllEditsAppliedPayload, type ToolExecutionCompletedPayload } from '../types/events';
-import { useEditor } from '../contexts/EditorContext';
+import { useEditorState } from '../contexts/EditorContext';
 import { MessageBuffer } from '../utils/eventBuffer';
 import type { BladeEventEnvelope } from '../types/blade';
 import { getOrCreateIdempotencyKey, IDEMPOTENT_OPERATIONS } from '../utils/idempotency';
 import { ensureMessagesHaveBlocks } from '../utils/messageBlocks';
 
 export function useChat() {
-    const { editorState } = useEditor();
+    const editorState = useEditorState();
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const messagesRef = useRef<ChatMessage[]>([]);
     const blocksRef = useRef<Map<string, import('../types/chat').MessageBlock[]>>(new Map());

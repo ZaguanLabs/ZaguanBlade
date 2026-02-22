@@ -29,6 +29,12 @@ impl UncommittedChangeTracker {
 
     pub fn track(&self, change: UncommittedChange) {
         let mut changes = self.changes.lock().unwrap();
+        let file_path = change.file_path.clone();
+
+        // Keep one canonical tracked change per file. If the same file is edited
+        // multiple times, we replace the previous entry with the newest cumulative
+        // representation rather than keeping multiple stale entries.
+        changes.retain(|_, existing| existing.file_path != file_path);
         changes.insert(change.id.clone(), change);
     }
 

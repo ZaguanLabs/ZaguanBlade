@@ -254,7 +254,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                             pushSuccess
                                                 ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/30 scale-[1.02]'
                                                 : busyAction === 'push'
-                                                    ? 'bg-green-600 text-white cursor-not-allowed'
+                                                    ? 'bg-slate-900 text-slate-100 border border-slate-700/70 cursor-not-allowed shadow-inner'
                                                     : 'bg-green-600 text-white hover:bg-green-500 hover:shadow-md hover:shadow-green-500/20'
                                         }`}
                                         disabled={busyAction === 'push' || pushSuccess}
@@ -270,19 +270,20 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                                 {status.ahead}
                                             </span>
                                         )}
-                                        {/* Animated progress bar overlay while pushing */}
+                                        {/* Animated left-to-right progress fill while pushing */}
                                         {busyAction === 'push' && (
-                                            <div className="absolute inset-0 overflow-hidden rounded-md">
+                                            <div className="absolute inset-0 overflow-hidden rounded-md pointer-events-none">
                                                 <div
-                                                    className="absolute inset-0 bg-gradient-to-r from-green-600 via-emerald-400 to-green-600"
+                                                    className="absolute inset-y-0 left-0 bg-gradient-to-r from-emerald-500/85 via-teal-400/85 to-cyan-400/85"
                                                     style={{
-                                                        backgroundSize: '200% 100%',
-                                                        animation: 'push-shimmer 1.2s ease-in-out infinite',
+                                                        width: '100%',
+                                                        transformOrigin: 'left center',
+                                                        animation: 'push-fill-sweep 1.2s ease-out infinite',
                                                     }}
                                                 />
                                             </div>
                                         )}
-                                        {/* Button content */}
+
                                         <span className="relative z-10 flex items-center gap-1.5">
                                             {pushSuccess ? (
                                                 <>
@@ -292,7 +293,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                             ) : busyAction === 'push' ? (
                                                 <>
                                                     <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round"><path d="M12 2a10 10 0 0 1 10 10" /></svg>
-                                                    Pushing...
+                                                    Pushing
                                                 </>
                                             ) : (
                                                 <>

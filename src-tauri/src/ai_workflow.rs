@@ -435,15 +435,39 @@ impl AiWorkflow {
 
                                     // Track as uncommitted change if we have a snapshot
                                     if let Some(snap_id) = &snapshot_id {
+                                        let existing = state.uncommitted_changes.get_by_path(&full_path);
+
+                                        // Preserve the earliest snapshot baseline for a file so
+                                        // repeated edits to the same file are represented as one
+                                        // cumulative diff (instead of only the most recent edit).
+                                        let (change_id, base_snapshot_id, base_content) =
+                                            if let Some(existing_change) = existing {
+                                                let baseline = state
+                                                    .history_service
+                                                    .get_snapshot_content(&existing_change.snapshot_id)
+                                                    .unwrap_or_else(|_| original_content.clone());
+                                                (
+                                                    existing_change.id,
+                                                    existing_change.snapshot_id,
+                                                    baseline,
+                                                )
+                                            } else {
+                                                (
+                                                    call.id.clone(),
+                                                    snap_id.clone(),
+                                                    original_content.clone(),
+                                                )
+                                            };
+
                                         // Read new content for diff
                                         let new_content = fs::read_to_string(&full_path).unwrap_or_default();
-                                        let diff = diffy::create_patch(&original_content, &new_content).to_string();
+                                        let diff = diffy::create_patch(&base_content, &new_content).to_string();
                                         let (added, removed) = crate::uncommitted_changes::count_diff_stats(&diff);
 
                                         let uncommitted = crate::uncommitted_changes::UncommittedChange {
-                                            id: call.id.clone(),
+                                            id: change_id,
                                             file_path: full_path.clone(),
-                                            snapshot_id: snap_id.clone(),
+                                            snapshot_id: base_snapshot_id,
                                             unified_diff: diff,
                                             added_lines: added,
                                             removed_lines: removed,
@@ -453,7 +477,7 @@ impl AiWorkflow {
                                                 .as_millis() as u64,
                                         };
                                         state.uncommitted_changes.track(uncommitted);
-                                        println!("[UNCOMMITTED] Tracking change {} for {}", call.id, change.path);
+                                        println!("[UNCOMMITTED] Tracking cumulative change for {}", change.path);
                                     }
 
                                     let abs_path_str = full_path.to_string_lossy().to_string();
