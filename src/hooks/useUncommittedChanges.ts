@@ -56,6 +56,7 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
     try {
       await invoke('accept_change', { id });
       await refresh();
+      window.dispatchEvent(new CustomEvent('uncommitted-changes-updated'));
       return true;
     } catch (error) {
       console.error('Failed to accept change:', error);
@@ -67,6 +68,7 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
     try {
       await invoke('accept_file_changes', { filePath });
       await refresh();
+      window.dispatchEvent(new CustomEvent('uncommitted-changes-updated'));
       return true;
     } catch (error) {
       console.error('Failed to accept file changes:', error);
@@ -91,6 +93,7 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
     try {
       await invoke('reject_change', { id });
       await refresh();
+      window.dispatchEvent(new CustomEvent('uncommitted-changes-updated'));
       return true;
     } catch (error) {
       console.error('Failed to reject change:', error);
@@ -102,6 +105,7 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
     try {
       await invoke('reject_file_changes', { filePath });
       await refresh();
+      window.dispatchEvent(new CustomEvent('uncommitted-changes-updated'));
       return true;
     } catch (error) {
       console.error('Failed to reject file changes:', error);
