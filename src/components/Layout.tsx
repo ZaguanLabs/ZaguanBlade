@@ -5,9 +5,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { ExplorerPanel } from './ExplorerPanel';
 import { EditorPanel } from './EditorPanel';
 import { TerminalPane, TerminalPaneHandle } from './TerminalPane';
-import { DocumentTabs } from './DocumentTabs';
 import { DocumentViewer } from './DocumentViewer';
-import { TitleBar } from './TitleBar';
+import { AppBar } from './AppBar';
 import { GitBranch, Settings, Clock } from 'lucide-react';
 import { EditorProvider, useEditorActions } from '../contexts/EditorContext';
 import { useUncommittedChanges } from '../hooks/useUncommittedChanges';
@@ -842,6 +841,19 @@ const AppLayoutInner: React.FC = () => {
         }
     }, [chat.loading]);
 
+    // Measure editor column width so AppBar can constrain the tab strip to it
+    const editorColumnRef = useRef<HTMLDivElement>(null);
+    const [editorColumnWidth, setEditorColumnWidth] = useState<number | undefined>(undefined);
+    useEffect(() => {
+        const el = editorColumnRef.current;
+        if (!el) return;
+        const ro = new ResizeObserver(entries => {
+            setEditorColumnWidth(entries[0].contentRect.width);
+        });
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, []);
+
     // Toggle sidebar function
     const toggleSidebar = (view: 'explorer' | 'git' | 'history') => {
         if (isSidebarOpen && activeSidebar === view) {
@@ -854,12 +866,43 @@ const AppLayoutInner: React.FC = () => {
 
     return (
         <div className="h-screen w-screen bg-[var(--bg-app)] overflow-hidden flex flex-col font-sans text-[var(--fg-primary)]">
-            {/* Custom Title Bar with Window Controls */}
-            <TitleBar />
+            {/* Unified App Bar: title bar + tab strip merged */}
+            <AppBar
+                tabs={tabs.map(t => ({
+                    id: t.id,
+                    title: t.title,
+                    isEphemeral: t.type === 'ephemeral',
+                    isDirty: false,
+                    hasVirtualChanges: false,
+                }))}
+                activeTabId={activeTabId}
+                onTabClick={setActiveTabId}
+                onTabClose={handleTabClose}
+                onReorder={(fromIndex, toIndex) => {
+                    setTabs(prev => {
+                        const newTabs = [...prev];
+                        const [movedTab] = newTabs.splice(fromIndex, 1);
+                        newTabs.splice(toIndex, 0, movedTab);
+                        return newTabs;
+                    });
+                }}
+                tabStripMaxWidth={editorColumnWidth}
+            />
 
-            <div className="flex-1 flex overflow-hidden">
-                {/* Activity Bar (Vertical) */}
-                <div className="w-[50px] bg-[var(--bg-panel)] border-r border-[var(--border-subtle)] flex flex-col items-center py-4 gap-6 z-50 shrink-0 relative">
+            <div
+                className="flex-1 flex overflow-hidden"
+                style={{ padding: 'var(--panel-gap)', gap: 'var(--panel-gap)' }}
+            >
+                {/* Activity Bar (Vertical) — floating pill */}
+                <div
+                    className="flex flex-col items-center py-4 gap-6 z-50 shrink-0 relative"
+                    style={{
+                        width: '46px',
+                        backgroundColor: 'var(--bg-panel)',
+                        borderRadius: 'var(--panel-radius)',
+                        boxShadow: 'var(--panel-shadow)',
+                    }}
+                >
                     <div
                         onClick={() => toggleSidebar('explorer')}
                         title="Explorer"
@@ -929,16 +972,22 @@ const AppLayoutInner: React.FC = () => {
                 </div>
 
                 {/* Content Area */}
-                <div className="flex-1 flex min-w-0 relative">
+                <div className="flex-1 flex min-w-0 relative" style={{ gap: 'var(--panel-gap)' }}>
 
-                    {/* Explorer / Sidebar (Floating) */}
-                    <div className={`
-                        absolute top-0 bottom-0 left-0 w-80 bg-[var(--bg-panel)] z-30 flex flex-col
-                        transition-transform duration-[var(--transition-base)] ease-out
-                        ${isSidebarOpen
-                            ? 'translate-x-0 border-r border-[var(--border-subtle)] shadow-[var(--shadow-lg)]'
-                            : '-translate-x-full border-r border-transparent shadow-none pointer-events-none'}
-                    `}>
+                    {/* Explorer / Sidebar (Floating overlay) */}
+                    <div
+                        className={`
+                            absolute top-0 bottom-0 left-0 w-80 bg-[var(--bg-panel)] z-30 flex flex-col
+                            transition-transform duration-[var(--transition-base)] ease-out
+                            ${isSidebarOpen
+                                ? 'translate-x-0'
+                                : '-translate-x-full pointer-events-none'}
+                        `}
+                        style={{
+                            borderRadius: `0 var(--panel-radius) var(--panel-radius) 0`,
+                            boxShadow: isSidebarOpen ? 'var(--panel-shadow)' : 'none',
+                        }}
+                    >
                         {activeSidebar === 'explorer' && (
                             <ExplorerPanel onFileSelect={handleFileSelect} activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
                         )}
@@ -970,31 +1019,16 @@ const AppLayoutInner: React.FC = () => {
                         )}
                     </div>
 
-                    {/* Editor & Terminal */}
-                    <div className="flex-1 flex flex-col min-w-0 bg-[var(--bg-app)] relative">
-                        {/* Document Tabs */}
-                        {tabs.length > 0 && (
-                            <DocumentTabs
-                                tabs={tabs.map(t => ({
-                                    id: t.id,
-                                    title: t.title,
-                                    isEphemeral: t.type === 'ephemeral',
-                                    isDirty: false,
-                                    hasVirtualChanges: false,
-                                }))}
-                                activeTabId={activeTabId}
-                                onTabClick={setActiveTabId}
-                                onTabClose={handleTabClose}
-                                onReorder={(fromIndex, toIndex) => {
-                                    setTabs(prev => {
-                                        const newTabs = [...prev];
-                                        const [movedTab] = newTabs.splice(fromIndex, 1);
-                                        newTabs.splice(toIndex, 0, movedTab);
-                                        return newTabs;
-                                    });
-                                }}
-                            />
-                        )}
+                    {/* Editor & Terminal — floating card */}
+                    <div
+                        ref={editorColumnRef}
+                        className="flex-1 flex flex-col min-w-0 relative overflow-hidden"
+                        style={{
+                            backgroundColor: 'var(--bg-editor)',
+                            borderRadius: 'var(--panel-radius)',
+                            boxShadow: 'var(--panel-shadow)',
+                        }}
+                    >
 
                         <div className="flex-1 overflow-hidden relative">
                             {(() => {
@@ -1056,23 +1090,33 @@ const AppLayoutInner: React.FC = () => {
                             })()}
                         </div>
 
-                        {/* Terminal Resizer */}
+                        {/* Terminal Drawer — floats over the editor from the bottom */}
                         <div
-                            className="relative h-3 -my-1 z-20 shrink-0 group flex items-center"
-                            style={{ cursor: 'row-resize' }}
-                            onMouseDown={handleMouseDown}
+                            className="absolute bottom-0 left-0 right-0 z-20 flex flex-col"
+                            style={{
+                                height: terminalHeight,
+                                backgroundColor: 'var(--term-bg)',
+                                borderRadius: `0 0 var(--panel-radius) var(--panel-radius)`,
+                                boxShadow: '0 -4px 24px rgba(0,0,0,0.5)',
+                                transform: terminalHeight > 0 ? 'translateY(0)' : 'translateY(100%)',
+                                transition: isDragging ? 'none' : 'transform var(--transition-base)',
+                            }}
                         >
+                            {/* Drag handle strip */}
                             <div
-                                className={`w-full h-[1px] transition-all duration-[var(--transition-fast)] ${isDragging
-                                    ? 'bg-[var(--accent-primary)] h-[2px]'
-                                    : 'bg-[var(--border-subtle)] group-hover:bg-[var(--accent-primary)] group-hover:h-[2px]'
+                                className="relative h-3 shrink-0 group flex items-center cursor-row-resize"
+                                onMouseDown={handleMouseDown}
+                            >
+                                <div
+                                    className={`w-full transition-all duration-[var(--transition-fast)] ${isDragging
+                                        ? 'h-[2px] bg-[var(--accent-primary)]'
+                                        : 'h-px bg-[var(--border-subtle)] group-hover:h-[2px] group-hover:bg-[var(--accent-primary)]'
                                     }`}
-                            />
-                        </div>
-
-                        {/* Terminal Pane */}
-                        <div style={{ height: terminalHeight }} className="bg-[var(--term-bg)]">
-                            <TerminalPane ref={terminalPaneRef} />
+                                />
+                            </div>
+                            <div className="flex-1 min-h-0">
+                                <TerminalPane ref={terminalPaneRef} />
+                            </div>
                         </div>
                     </div>
 
@@ -1090,10 +1134,15 @@ const AppLayoutInner: React.FC = () => {
                         />
                     </div>
 
-                    {/* AI Chat */}
+                    {/* AI Chat — floating card */}
                     <div
-                        style={{ width: chatPanelWidth }}
-                        className="min-w-[280px] max-w-[800px] border-l border-[var(--border-subtle)] bg-[var(--bg-panel)] flex flex-col shadow-xl z-30"
+                        style={{
+                            width: chatPanelWidth,
+                            backgroundColor: 'var(--bg-panel)',
+                            borderRadius: 'var(--panel-radius)',
+                            boxShadow: 'var(--panel-shadow)',
+                        }}
+                        className="min-w-[280px] max-w-[800px] flex flex-col z-30 overflow-hidden"
                     >
                         <Suspense fallback={<div className="flex-1 bg-[var(--bg-panel)] h-full w-full" />}>
                             <ChatPanel
@@ -1127,7 +1176,16 @@ const AppLayoutInner: React.FC = () => {
             </div>
 
             {/* Status Bar */}
-            <div className="h-6 bg-[var(--bg-panel)] border-t border-[var(--border-subtle)] text-[var(--fg-tertiary)] flex items-center px-3 text-[10px] font-mono justify-between select-none z-40">
+            <div
+                className="text-[var(--fg-tertiary)] flex items-center px-3 text-[10px] font-mono justify-between select-none z-40"
+                style={{
+                    height: '24px',
+                    backgroundColor: 'var(--bg-panel)',
+                    margin: '0 var(--panel-gap) var(--panel-gap)',
+                    borderRadius: 'calc(var(--panel-radius) / 2)',
+                    boxShadow: 'var(--panel-shadow)',
+                }}
+            >
                 <div className="flex items-center gap-1.5">
                     <span className="flex items-center gap-1.5 hover:text-[var(--fg-secondary)] cursor-pointer transition-colors duration-[var(--transition-fast)]">
                         <GitBranch className="w-3 h-3" />

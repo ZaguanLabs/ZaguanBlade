@@ -10,47 +10,66 @@ interface ConfirmationModalProps {
 
 export const ConfirmationModal: React.FC<ConfirmationModalProps> = ({ commands, onConfirm, onCancel }) => {
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-            <div className="bg-zinc-950 border border-red-500/30 rounded-sm max-w-lg w-full shadow-2xl overflow-hidden flex flex-col">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)' }}>
+            <div
+                className="glass-panel max-w-lg w-full shadow-2xl overflow-hidden flex flex-col"
+                style={{ borderRadius: 'var(--panel-radius)', boxShadow: 'var(--panel-shadow)' }}
+            >
                 {/* Header */}
-                <div className="bg-red-500/10 px-4 py-3 border-b border-red-500/20 flex items-center gap-3">
-                    <ShieldAlert className="w-5 h-5 text-red-500" />
-                    <h2 className="text-sm font-semibold text-red-100 uppercase tracking-wide">
+                <div
+                    className="px-4 py-3 flex items-center gap-3"
+                    style={{ backgroundColor: 'rgba(248,113,113,0.08)', borderBottom: '1px solid rgba(248,113,113,0.2)' }}
+                >
+                    <ShieldAlert className="w-5 h-5" style={{ color: 'var(--accent-error)' }} />
+                    <h2 className="text-sm font-semibold uppercase tracking-wide" style={{ color: 'var(--accent-error)' }}>
                         Execution Approval Required
                     </h2>
                 </div>
 
                 {/* Content */}
                 <div className="p-5 space-y-4">
-                    <p className="text-zinc-400 text-sm">
+                    <p className="text-sm" style={{ color: 'var(--fg-secondary)' }}>
                         The system is requesting to execute the following commands in your workspace:
                     </p>
 
-                    <div className="bg-black border border-zinc-800 p-3 rounded-sm font-mono text-xs text-zinc-300 max-h-60 overflow-y-auto whitespace-pre-wrap">
+                    <div
+                        className="p-3 font-mono text-xs max-h-60 overflow-y-auto whitespace-pre-wrap"
+                        style={{
+                            backgroundColor: 'var(--bg-app)',
+                            border: '1px solid var(--border-default)',
+                            borderRadius: 'calc(var(--panel-radius) / 2)',
+                            color: 'var(--fg-primary)',
+                        }}
+                    >
                         {commands.map((cmd, i) => (
-                            <div key={i} className="mb-2 last:mb-0 border-l-2 border-emerald-500/50 pl-2">
+                            <div key={i} className="mb-2 last:mb-0 pl-2" style={{ borderLeft: '2px solid var(--accent-secondary)' }}>
                                 {cmd}
                             </div>
                         ))}
                     </div>
 
-                    <div className="text-[11px] text-zinc-500 italic">
+                    <div className="text-[11px] italic" style={{ color: 'var(--fg-tertiary)' }}>
                         Review carefully. This action cannot be undone.
                     </div>
                 </div>
 
                 {/* Actions */}
-                <div className="p-4 bg-zinc-900/50 border-t border-zinc-900 flex justify-end gap-3">
+                <div
+                    className="p-4 flex justify-end gap-3"
+                    style={{ borderTop: '1px solid var(--border-subtle)' }}
+                >
                     <button
                         onClick={onCancel}
-                        className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-medium rounded-sm transition-colors flex items-center gap-2"
+                        className="px-4 py-2 text-xs font-medium rounded transition-colors flex items-center gap-2"
+                        style={{ backgroundColor: 'var(--bg-surface)', color: 'var(--fg-secondary)' }}
                     >
                         <X className="w-3.5 h-3.5" />
                         Deny
                     </button>
                     <button
                         onClick={onConfirm}
-                        className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-medium rounded-sm transition-colors flex items-center gap-2 shadow-[0_0_10px_rgba(220,38,38,0.3)]"
+                        className="px-4 py-2 text-white text-xs font-medium rounded transition-colors flex items-center gap-2"
+                        style={{ backgroundColor: 'var(--accent-error)', boxShadow: '0 0 12px rgba(248,113,113,0.3)' }}
                     >
                         <Check className="w-3.5 h-3.5" />
                         Authorize Execution

@@ -35,8 +35,8 @@ body {
 
 /* Scrollbar Styling */
 ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+    width: 6px;
+    height: 6px;
 }
 
 ::-webkit-scrollbar-track {
@@ -45,31 +45,28 @@ body {
 
 ::-webkit-scrollbar-thumb {
     background: var(--bg-surface-hover);
-    border-radius: 5px;
-    border: 2px solid var(--bg-app);
+    border-radius: 3px;
+    border: 1px solid var(--bg-app);
 }
 
 ::-webkit-scrollbar-corner {
     background: transparent;
 }
 
-/* Minimal tabs scrollbar - almost invisible */
+/* Firefox thin scrollbars */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--bg-surface-hover) transparent;
+}
+
+/* Tab strip scrollbar — completely hidden */
 .tabs-scrollbar::-webkit-scrollbar {
-    height: 2px;
+    height: 0;
+    width: 0;
 }
 
-.tabs-scrollbar::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-.tabs-scrollbar::-webkit-scrollbar-thumb {
-    background: rgba(120, 124, 153, 0.2);
-    border-radius: 0;
-    border: none;
-}
-
-.tabs-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: rgba(120, 124, 153, 0.3);
+.tabs-scrollbar {
+    scrollbar-width: none;
 }
 
 /* Enable text selection in chat messages and code blocks */
@@ -97,6 +94,14 @@ body {
 .markdown-content * {
     word-break: normal;
     overflow-wrap: normal;
+}
+
+/* Glass panel utility — used for modals, command palette, overlays */
+.glass-panel {
+    background: var(--glass-bg);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--glass-border);
 }
 
 /* Push button shimmer animation */

@@ -380,7 +380,17 @@ const EditorWithChangeBar: React.FC<EditorWithChangeBarProps> = ({
     };
 
     return (
-        <div className="flex flex-col h-full">
+        <div className="relative h-full">
+            <CodeEditor
+                ref={editorRef}
+                content={content}
+                onChange={setContent}
+                onSave={handleSave}
+                filename={activeFile}
+                highlightLines={highlightLines || undefined}
+                onNavigate={handleNavigate}
+                unifiedDiff={change?.unified_diff}
+            />
             {change && (
                 <FileChangeBar
                     change={change}
@@ -388,18 +398,6 @@ const EditorWithChangeBar: React.FC<EditorWithChangeBarProps> = ({
                     onReject={handleReject}
                 />
             )}
-            <div className="flex-1 min-h-0">
-                <CodeEditor
-                    ref={editorRef}
-                    content={content}
-                    onChange={setContent}
-                    onSave={handleSave}
-                    filename={activeFile}
-                    highlightLines={highlightLines || undefined}
-                    onNavigate={handleNavigate}
-                    unifiedDiff={change?.unified_diff}
-                />
-            </div>
         </div>
     );
 };
