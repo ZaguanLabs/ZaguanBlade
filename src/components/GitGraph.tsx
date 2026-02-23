@@ -38,10 +38,21 @@ function getCommitColor(entry: GitLogEntry, index: number): string {
     return GRAPH_COLORS[index % GRAPH_COLORS.length];
 }
 
-function getGravatarUrl(email: string, size = 32): string {
-    // Simple hash for gravatar - we'll use a deterministic color avatar instead
-    // since we can't do MD5 in the browser without a library
-    return `https://www.gravatar.com/avatar/?d=mp&s=${size}`;
+function getLocalAvatar(name: string, email: string, size = 32): string {
+    const initials = name
+        .split(' ')
+        .map(p => p[0] ?? '')
+        .join('')
+        .slice(0, 2)
+        .toUpperCase();
+    // Deterministic hue from email
+    let hash = 0;
+    for (let i = 0; i < email.length; i++) hash = (hash * 31 + email.charCodeAt(i)) >>> 0;
+    const hue = hash % 360;
+    const bg = `hsl(${hue},40%,28%)`;
+    const fg = `hsl(${hue},60%,80%)`;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><rect width="${size}" height="${size}" rx="${size / 2}" fill="${bg}"/><text x="50%" y="50%" dy="0.35em" text-anchor="middle" font-family="Inter,sans-serif" font-size="${Math.round(size * 0.42)}" fill="${fg}">${initials}</text></svg>`;
+    return `data:image/svg+xml;base64,${btoa(svg)}`;
 }
 
 interface CommitTooltipProps {
@@ -75,10 +86,9 @@ const CommitTooltip: React.FC<CommitTooltipProps> = ({ entry, remoteUrl, onCopy,
             {/* Author line */}
             <div className="flex items-center gap-2 mb-2">
                 <img
-                    src={getGravatarUrl(entry.authorEmail)}
+                    src={getLocalAvatar(entry.authorName, entry.authorEmail)}
                     alt=""
                     className="w-6 h-6 rounded-full bg-[var(--bg-surface)]"
-                    onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                 />
                 <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="font-semibold text-[var(--fg-primary)]">{entry.authorName}</span>

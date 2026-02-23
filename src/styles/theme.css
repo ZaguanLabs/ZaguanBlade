@@ -1,59 +1,94 @@
-/* Font Declarations */
+/* Font Declarations — all fonts served locally, no network requests */
+
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/InterVariable.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/InterVariable-Italic.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Variable.ttf') format('truetype');
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Italic-Variable.ttf') format('truetype');
+  font-weight: 100 800;
+  font-style: italic;
+  font-display: swap;
+}
+
 @font-face {
   font-family: 'Symbols Nerd Font Mono';
   src: url('/fonts/SymbolsNerdFontMono-Regular.ttf') format('truetype');
   font-weight: 400;
   font-style: normal;
+  font-display: block;
 }
 
 :root {
-  /* Tokyo Night-Inspired Soft Dark Theme */
-  
+  /* Zaguan Blade — Spatial Dark Theme */
+  /* OLED-black canvas, neutral grays, single electric-violet accent */
+
   /* Background Layers - Clear Luminance Hierarchy */
-  --bg-app: #1a1b26;           /* Main app background */
-  --bg-editor: #1f2335;        /* Editor background (slightly lighter for depth) */
-  --bg-panel: #16161e;         /* Sidebar/panel background (darkest) */
-  --bg-surface: #1f202e;       /* Interactive surfaces (buttons, inputs) */
-  --bg-surface-hover: #292a3a; /* Hover states */
-  --bg-selection: #515c7e4d;   /* Selection background */
-  --bg-active: #202330;        /* Active list items */
+  --bg-app: #10131a;           /* App canvas */
+  --bg-editor: #171b24;        /* Editor card surface (primary work area) */
+  --bg-panel: #141925;         /* Sidebar / chat cards */
+  --bg-surface: #202736;       /* Interactive surfaces (buttons, inputs) */
+  --bg-surface-hover: #2a3448; /* Hover states */
+  --bg-selection: #6366f133;   /* Selection background (violet tint) */
+  --bg-active: #263047;        /* Active list items */
 
-  /* Foreground - Soft Blues & Grays */
-  --fg-primary: #a9b1d6;       /* Primary text */
-  --fg-secondary: #787c99;     /* Secondary text / icons */
-  --fg-tertiary: #565f89;      /* Tertiary / disabled */
-  --fg-nav: #787c99;           /* Navigation icons */
-  --fg-bright: #c0caf5;        /* Bright text (cursor, highlights) */
+  /* Foreground - Neutral whites & grays (no blue tint) */
+  --fg-primary: #e2e2e8;       /* Primary text — high contrast */
+  --fg-secondary: #9aa3b5;     /* Secondary text / icons */
+  --fg-tertiary: #687186;      /* Tertiary / disabled */
+  --fg-nav: #8f98ad;           /* Navigation icons */
+  --fg-bright: #f0f0ff;        /* Bright text (cursor, highlights) */
 
-  /* Borders - Improved Contrast for Visual Separation */
-  --border-subtle: #1a1b2e;    /* Subtle borders (slightly brighter) */
-  --border-default: #2a2b3e;   /* Default borders (more visible) */
-  --border-focus: #3d59a1;     /* Focus state (blue) */
-  --border-active: #7aa2f7;    /* Active state (brighter blue) */
+  /* Borders */
+  --border-subtle: rgba(255, 255, 255, 0.05);    /* Subtle separator */
+  --border-default: rgba(255, 255, 255, 0.08);   /* Default border */
+  --border-focus: #7c6af7;     /* Focus state (matches accent) */
+  --border-active: #9d8fff;    /* Active state (lighter violet) */
 
-  /* Accents - Tokyo Night Palette */
-  --accent-primary: #7aa2f7;   /* Primary blue */
-  --accent-secondary: #73daca; /* Teal/cyan (success) */
-  --accent-warning: #e0af68;   /* Orange/yellow */
-  --accent-error: #f7768e;     /* Red/pink */
-  --accent-purple: #bb9af7;    /* Purple (variables) */
-  --accent-green: #9ece6a;     /* Green (strings) */
+  /* Accents — single electric violet + supporting palette */
+  --accent-primary: #7c6af7;   /* Electric violet — primary accent */
+  --accent-secondary: #2dd4bf; /* Teal (success / run) */
+  --accent-warning: #fbbf24;   /* Amber */
+  --accent-error: #f87171;     /* Soft red */
+  --accent-purple: #a78bfa;    /* Lighter violet (variables) */
+  --accent-green: #4ade80;     /* Neon mint (strings) */
 
   /* Typography */
   --font-family-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-family-mono: "Fira Code", "Symbols Nerd Font Mono", "Courier New", monospace;
+  --font-family-mono: "JetBrains Mono", "Fira Code", "Symbols Nerd Font Mono", "Courier New", monospace;
 
   /* Terminal Colors */
-  --term-bg: #16161e;
-  --term-fg: #787c99;
-  --term-selection: #515c7e4d;
-  --term-cursor: #c0caf5;
+  --term-bg: #101523;
+  --term-fg: #97a1b8;
+  --term-selection: #6366f133;
+  --term-cursor: #f0f0ff;
 
   /* Shadows - Multi-tier Z-axis System */
-  --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.5);
-  --shadow-lg: 0 10px 30px -5px rgba(0, 0, 0, 0.6);
-  --shadow-xl: 0 20px 50px -10px rgba(0, 0, 0, 0.7);
+  --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.6);
+  --shadow-lg: 0 10px 30px -5px rgba(0, 0, 0, 0.7);
+  --shadow-xl: 0 20px 50px -10px rgba(0, 0, 0, 0.8);
 
   /* Transitions - Consistent Timing */
   --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
@@ -62,11 +97,16 @@
   --transition-elastic: 400ms cubic-bezier(0.34, 1.56, 0.64, 1);
 
   /* Glass Effect */
-  --glass-bg: rgba(26, 27, 38, 0.85);
-  --glass-border: rgba(120, 124, 153, 0.1);
+  --glass-bg: rgba(13, 13, 15, 0.80);
+  --glass-border: rgba(139, 139, 153, 0.12);
+
+  /* Spatial Layout Tokens */
+  --panel-radius: 10px;
+  --panel-gap: 6px;
+  --panel-shadow: 0 8px 26px rgba(4, 8, 16, 0.46);
 }
 
 .dark {
-  --bg-app: #1a1b26;
-  --bg-panel: #16161e;
+  --bg-app: #10131a;
+  --bg-panel: #141925;
 }

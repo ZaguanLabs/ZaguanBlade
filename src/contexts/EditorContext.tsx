@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { EditorFacade, initEditorFacade, isBackendAuthoritative } from '../services/editorFacade';
 import type { BladeEventEnvelope, EditorEvent } from '../types/blade';
@@ -12,8 +12,7 @@ interface EditorState {
     selectionEndLine: number | null;
 }
 
-interface EditorContextType {
-    editorState: EditorState;
+interface EditorActionsType {
     setActiveFile: (file: string | null) => void;
     setOpenFiles: (files: string[]) => void;
     setCursorPosition: (line: number, column: number) => void;
@@ -21,7 +20,12 @@ interface EditorContextType {
     clearSelection: () => void;
 }
 
-const EditorContext = createContext<EditorContextType | undefined>(undefined);
+interface EditorContextType extends EditorActionsType {
+    editorState: EditorState;
+}
+
+const EditorStateContext = createContext<EditorState | undefined>(undefined);
+const EditorActionsContext = createContext<EditorActionsType | undefined>(undefined);
 
 export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [editorState, setEditorState] = useState<EditorState>({
@@ -146,24 +150,44 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
 
 
+    const actions = useMemo<EditorActionsType>(() => ({
+        setActiveFile,
+        setOpenFiles,
+        setCursorPosition,
+        setSelection,
+        clearSelection,
+    }), [setActiveFile, setOpenFiles, setCursorPosition, setSelection, clearSelection]);
+
     return (
-        <EditorContext.Provider value={{
-            editorState,
-            setActiveFile,
-            setOpenFiles,
-            setCursorPosition,
-            setSelection,
-            clearSelection
-        }}>
-            {children}
-        </EditorContext.Provider>
+        <EditorActionsContext.Provider value={actions}>
+            <EditorStateContext.Provider value={editorState}>
+                {children}
+            </EditorStateContext.Provider>
+        </EditorActionsContext.Provider>
     );
 };
 
-export const useEditor = () => {
-    const context = useContext(EditorContext);
+export const useEditorState = () => {
+    const context = useContext(EditorStateContext);
     if (!context) {
-        throw new Error('useEditor must be used within EditorProvider');
+        throw new Error('useEditorState must be used within EditorProvider');
     }
     return context;
+};
+
+export const useEditorActions = () => {
+    const context = useContext(EditorActionsContext);
+    if (!context) {
+        throw new Error('useEditorActions must be used within EditorProvider');
+    }
+    return context;
+};
+
+export const useEditor = () => {
+    const editorState = useEditorState();
+    const actions = useEditorActions();
+    return {
+        editorState,
+        ...actions,
+    } as EditorContextType;
 };

@@ -33,43 +33,44 @@ body {
     /* Desktop app feel */
 }
 
-/* Scrollbar Styling */
-::-webkit-scrollbar {
+/* Code editor scrollbar only (avoid styling whole app / terminal overlays) */
+.code-editor-scroll .cm-scroller {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--fg-secondary) 40%, transparent) transparent;
+}
+
+.code-editor-scroll .cm-scroller::-webkit-scrollbar {
     width: 10px;
     height: 10px;
 }
 
-::-webkit-scrollbar-track {
+.code-editor-scroll .cm-scroller::-webkit-scrollbar-track {
     background: transparent;
 }
 
-::-webkit-scrollbar-thumb {
-    background: var(--bg-surface-hover);
-    border-radius: 5px;
-    border: 2px solid var(--bg-app);
+.code-editor-scroll .cm-scroller::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--fg-secondary) 36%, transparent);
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
 }
 
-::-webkit-scrollbar-corner {
+.code-editor-scroll .cm-scroller:hover::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--fg-secondary) 56%, transparent);
+}
+
+.code-editor-scroll .cm-scroller::-webkit-scrollbar-corner {
     background: transparent;
 }
 
-/* Minimal tabs scrollbar - almost invisible */
+/* Tab strip scrollbar — completely hidden */
 .tabs-scrollbar::-webkit-scrollbar {
-    height: 2px;
+    height: 0;
+    width: 0;
 }
 
-.tabs-scrollbar::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-.tabs-scrollbar::-webkit-scrollbar-thumb {
-    background: rgba(120, 124, 153, 0.2);
-    border-radius: 0;
-    border: none;
-}
-
-.tabs-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: rgba(120, 124, 153, 0.3);
+.tabs-scrollbar {
+    scrollbar-width: none;
 }
 
 /* Enable text selection in chat messages and code blocks */
@@ -99,10 +100,34 @@ body {
     overflow-wrap: normal;
 }
 
+/* Glass panel utility — used for modals, command palette, overlays */
+.glass-panel {
+    background: var(--glass-bg);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--glass-border);
+}
+
 /* Push button shimmer animation */
 @keyframes push-shimmer {
     0% { background-position: 200% 0; }
     100% { background-position: -200% 0; }
+}
+
+/* Push in-progress fill animation (left -> right, repeat) */
+@keyframes push-fill-sweep {
+    0% {
+        transform: scaleX(0);
+        opacity: 0.35;
+    }
+    70% {
+        transform: scaleX(1);
+        opacity: 0.9;
+    }
+    100% {
+        transform: scaleX(1);
+        opacity: 0.25;
+    }
 }
 
 /* Push success checkmark pop */

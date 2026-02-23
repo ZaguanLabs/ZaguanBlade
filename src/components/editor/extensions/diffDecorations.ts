@@ -1,5 +1,5 @@
 import { StateField, StateEffect, RangeSetBuilder } from "@codemirror/state";
-import { EditorView, Decoration, WidgetType } from "@codemirror/view";
+import { EditorView, Decoration, DecorationSet, WidgetType, ViewPlugin, ViewUpdate } from "@codemirror/view";
 import { parsePatch } from "diff";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -58,6 +58,12 @@ export function parseUnifiedDiff(source: string): DiffLine[] {
                 for (const raw of hunk.lines || []) {
                     const firstChar = raw[0];
                     const content = raw.slice(1);
+
+                    // Unified-diff metadata line. This is not a real source line and must not
+                    // advance old/new line counters; otherwise subsequent line mapping drifts.
+                    if (firstChar === '\\') {
+                        continue;
+                    }
 
                     if (firstChar === '-') {
                         lines.push({
@@ -431,30 +437,30 @@ const diffDecorationsPlugin = EditorView.decorations.compute(
 // ─── Theme ───────────────────────────────────────────────────────────────────
 
 export const diffTheme = EditorView.baseTheme({
-    // Added line (full line background)
+    // Added line — indigo/violet aura (AI suggestion)
     ".cm-diff-added-line": {
-        backgroundColor: "rgba(46, 160, 67, 0.15)",
-        borderLeft: "3px solid rgba(46, 160, 67, 0.7)",
+        backgroundColor: "rgba(99, 102, 241, 0.08)",
+        borderLeft: "2px solid #6366f1",
     },
 
     // Character-level highlight within added lines
     ".cm-diff-char-added": {
-        backgroundColor: "rgba(46, 160, 67, 0.35)",
+        backgroundColor: "rgba(99, 102, 241, 0.28)",
         borderRadius: "2px",
     },
 
-    // Removed line widget (block widget inserted above)
+    // Removed line widget — near-invisible ghost
     ".cm-diff-removed-widget": {
         display: "flex",
         alignItems: "center",
-        backgroundColor: "rgba(248, 81, 73, 0.10)",
-        borderLeft: "3px solid rgba(248, 81, 73, 0.7)",
+        backgroundColor: "rgba(248, 81, 73, 0.06)",
+        borderLeft: "2px solid rgba(248, 81, 73, 0.45)",
         fontFamily: "inherit",
         fontSize: "inherit",
         lineHeight: "inherit",
         minHeight: "1.4em",
         padding: "0",
-        color: "rgba(200, 200, 200, 0.6)",
+        color: "rgba(200, 200, 200, 0.45)",
         userSelect: "none",
     },
 
@@ -464,7 +470,7 @@ export const diffTheme = EditorView.baseTheme({
         width: "3.5em",
         textAlign: "right",
         paddingRight: "8px",
-        color: "rgba(248, 81, 73, 0.4)",
+        color: "rgba(248, 81, 73, 0.3)",
         fontSize: "0.85em",
         flexShrink: "0",
         userSelect: "none",
@@ -475,7 +481,7 @@ export const diffTheme = EditorView.baseTheme({
         display: "inline-block",
         width: "1.5em",
         textAlign: "center",
-        color: "rgba(248, 81, 73, 0.6)",
+        color: "rgba(248, 81, 73, 0.45)",
         flexShrink: "0",
         userSelect: "none",
     },
@@ -484,7 +490,7 @@ export const diffTheme = EditorView.baseTheme({
     ".cm-diff-removed-code": {
         flex: "1",
         textDecoration: "line-through",
-        textDecorationColor: "rgba(248, 81, 73, 0.4)",
+        textDecorationColor: "rgba(248, 81, 73, 0.3)",
         whiteSpace: "pre",
         overflow: "hidden",
         paddingRight: "8px",
@@ -492,10 +498,10 @@ export const diffTheme = EditorView.baseTheme({
 
     // Character-level highlight within removed lines
     ".cm-diff-char-removed": {
-        backgroundColor: "rgba(248, 81, 73, 0.30)",
+        backgroundColor: "rgba(248, 81, 73, 0.22)",
         borderRadius: "2px",
         textDecoration: "line-through",
-        textDecorationColor: "rgba(248, 81, 73, 0.6)",
+        textDecorationColor: "rgba(248, 81, 73, 0.45)",
     },
 
     // Gap widget (collapsed unchanged region)
@@ -533,4 +539,79 @@ export function diffDecorations() {
         diffDecorationsPlugin,
         diffTheme
     ];
+}
+
+// ─── AI Glow (Phase 3) ───────────────────────────────────────────────────────
+
+export const triggerAiGlow = StateEffect.define<void>();
+export const clearAiGlow = StateEffect.define<void>();
+
+const glowMark = Decoration.mark({ class: "cm-ai-appeared" });
+
+export const aiGlowField = StateField.define<DecorationSet>({
+    create() {
+        return Decoration.none;
+    },
+
+    update(decos, tr) {
+        for (const effect of tr.effects) {
+            if (effect.is(triggerAiGlow)) {
+                // Mark all added lines from the current diff state
+                const diffState = tr.state.field(diffStateField, false);
+                if (!diffState) return Decoration.none;
+
+                const builder = new RangeSetBuilder<Decoration>();
+                const doc = tr.state.doc;
+                const pending: { from: number; to: number }[] = [];
+
+                for (const dl of diffState.lines) {
+                    if (dl.type === 'added' && dl.newLineNum != null && dl.newLineNum <= doc.lines) {
+                        const line = doc.line(dl.newLineNum);
+                        pending.push({ from: line.from, to: line.to });
+                    }
+                }
+
+                pending.sort((a, b) => a.from - b.from);
+                for (const { from, to } of pending) {
+                    if (from <= to) builder.add(from, to, glowMark);
+                }
+                return builder.finish();
+            }
+            if (effect.is(clearAiGlow)) {
+                return Decoration.none;
+            }
+        }
+        // Map decorations through document changes
+        return decos.map(tr.changes);
+    },
+
+    provide: f => EditorView.decorations.from(f),
+});
+
+export const aiGlowPlugin = ViewPlugin.fromClass(
+    class {
+        private timer: ReturnType<typeof setTimeout> | null = null;
+
+        update(update: ViewUpdate) {
+            for (const tr of update.transactions) {
+                for (const effect of tr.effects) {
+                    if (effect.is(triggerAiGlow)) {
+                        if (this.timer !== null) clearTimeout(this.timer);
+                        this.timer = setTimeout(() => {
+                            update.view.dispatch({ effects: clearAiGlow.of(undefined) });
+                            this.timer = null;
+                        }, 2100);
+                    }
+                }
+            }
+        }
+
+        destroy() {
+            if (this.timer !== null) clearTimeout(this.timer);
+        }
+    }
+);
+
+export function aiGlowDecorations() {
+    return [aiGlowField, aiGlowPlugin];
 }

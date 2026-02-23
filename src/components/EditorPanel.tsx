@@ -5,7 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import CodeEditor, { type CodeEditorHandle } from './CodeEditor';
 import { MarkdownEditor } from './MarkdownEditor';
 import { PdfViewer } from './PdfViewer';
-import { useEditor } from '../contexts/EditorContext';
+import { useEditorActions } from '../contexts/EditorContext';
 import { BladeDispatcher } from '../services/blade';
 import { BladeEvent, FileEvent } from '../types/blade';
 import { ArrowRight, Settings } from 'lucide-react';
@@ -125,7 +125,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     const [error, setError] = useState<string | null>(null);
     const [reloadTrigger, setReloadTrigger] = useState(0);
     const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
-    const { setActiveFile } = useEditor();
+    const { setActiveFile } = useEditorActions();
     const editorRef = useRef<CodeEditorHandle>(null);
     const pendingNavigation = useRef<{ path: string, line: number, col: number } | null>(null);
 
@@ -380,7 +380,17 @@ const EditorWithChangeBar: React.FC<EditorWithChangeBarProps> = ({
     };
 
     return (
-        <div className="flex flex-col h-full">
+        <div className="relative h-full">
+            <CodeEditor
+                ref={editorRef}
+                content={content}
+                onChange={setContent}
+                onSave={handleSave}
+                filename={activeFile}
+                highlightLines={highlightLines || undefined}
+                onNavigate={handleNavigate}
+                unifiedDiff={change?.unified_diff}
+            />
             {change && (
                 <FileChangeBar
                     change={change}
@@ -388,18 +398,6 @@ const EditorWithChangeBar: React.FC<EditorWithChangeBarProps> = ({
                     onReject={handleReject}
                 />
             )}
-            <div className="flex-1 min-h-0">
-                <CodeEditor
-                    ref={editorRef}
-                    content={content}
-                    onChange={setContent}
-                    onSave={handleSave}
-                    filename={activeFile}
-                    highlightLines={highlightLines || undefined}
-                    onNavigate={handleNavigate}
-                    unifiedDiff={change?.unified_diff}
-                />
-            </div>
         </div>
     );
 };

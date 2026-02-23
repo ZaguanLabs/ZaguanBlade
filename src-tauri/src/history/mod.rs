@@ -113,6 +113,25 @@ impl HistoryService {
         }
     }
 
+    pub fn get_snapshot_content(&self, entry_id: &str) -> Result<String, String> {
+        let entry = {
+            let index = self.index.lock().unwrap();
+            let mut found = None;
+            for entries in index.values() {
+                if let Some(e) = entries.iter().find(|e| e.id == entry_id) {
+                    found = Some(e.clone());
+                    break;
+                }
+            }
+            found
+        };
+
+        match entry {
+            Some(entry) => fs::read_to_string(&entry.snapshot_path).map_err(|e| e.to_string()),
+            None => Err("Snapshot not found".to_string()),
+        }
+    }
+
     pub fn undo_batch(&self, group_id: &str) -> Result<Vec<String>, String> {
         let index = self.index.lock().unwrap();
 

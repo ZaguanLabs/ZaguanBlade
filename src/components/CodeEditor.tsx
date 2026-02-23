@@ -25,10 +25,12 @@ import {
     diffStateField,
     setDiffState,
     parseUnifiedDiff,
+    aiGlowDecorations,
+    triggerAiGlow,
     zlpHoverTooltip,
 } from "./editor/extensions";
 import { zlpLinter } from "./editor/extensions/zlpLinter";
-import { useEditor } from "../contexts/EditorContext";
+import { useEditorActions } from "../contexts/EditorContext";
 import { useContextMenu, type ContextMenuItem } from "./ui/ContextMenu";
 import { Copy, Scissors, Clipboard, Undo2, Redo2, Search, Network } from "lucide-react";
 import { ZLPService } from "../services/zlp";
@@ -65,7 +67,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     const editorRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     const languageConf = useRef(new Compartment());
-    const { editorState, setCursorPosition, setSelection, clearSelection } = useEditor();
+    const { setCursorPosition, setSelection, clearSelection } = useEditorActions();
     const { showMenu } = useContextMenu();
 
     // Call Graph Inspector State
@@ -127,8 +129,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 history(),
                 // Bracket matching/closing only for code files
                 ...(isMarkdown ? [] : [bracketMatching(), closeBrackets()]),
-                autocompletion(),
-                highlightSelectionMatches(),
+                ...(isMarkdown ? [] : [autocompletion(), highlightSelectionMatches()]),
                 indentOnInput(),
 
                 // Custom Zaguan theme (includes syntax highlighting)
@@ -153,6 +154,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 lineHighlightField,
                 virtualBufferField,
                 diffDecorations(),
+                aiGlowDecorations(),
 
                 // Line wrapping (enabled for markdown and when explicitly requested)
                 ...(shouldWrap ? [EditorView.lineWrapping] : []),
@@ -201,6 +203,14 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                     }
 
                     if (update.selectionSet) {
+                        // Markdown typing can feel sluggish when we push context updates for
+                        // every keystroke-driven cursor movement. Keep cursor/selection sync for
+                        // explicit navigation/selection changes, and skip docChanged+selectionSet
+                        // updates while typing in markdown.
+                        if (isMarkdown && update.docChanged) {
+                            return;
+                        }
+
                         const { main } = update.state.selection;
                         const line = update.state.doc.lineAt(main.head);
                         
@@ -275,10 +285,13 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
         if (unifiedDiff) {
             const diffLines = parseUnifiedDiff(unifiedDiff);
             view.dispatch({
-                effects: setDiffState.of({
-                    lines: diffLines,
-                    originalContent: '' // We don't need this for decorations
-                })
+                effects: [
+                    setDiffState.of({
+                        lines: diffLines,
+                        originalContent: '' // We don't need this for decorations
+                    }),
+                    triggerAiGlow.of(undefined),
+                ]
             });
         } else {
             // Clear diff state when no diff
@@ -452,7 +465,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     }, [showMenu]);
 
     return (
-        <div className="h-full w-full relative" onContextMenu={handleContextMenu}>
+        <div className="code-editor-scroll h-full w-full relative" onContextMenu={handleContextMenu}>
             <div ref={editorRef} className="h-full w-full overflow-hidden text-base" />
 
             {inspectorData && filename && (

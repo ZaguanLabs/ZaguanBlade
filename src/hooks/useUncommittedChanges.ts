@@ -49,7 +49,19 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
   }, [refresh, options?.onFileChanged]);
 
   const getChangeForFile = useCallback((filePath: string): UncommittedChange | undefined => {
-    return changes.find(c => c.file_path === filePath || c.file_path.endsWith(filePath));
+    const matches = changes.filter(c => c.file_path === filePath || c.file_path.endsWith(filePath));
+    if (matches.length === 0) return undefined;
+
+    // Prefer the newest non-empty diff (covers repeated edits on same file where
+    // older/stale entries may still exist with path-format variants).
+    for (let i = matches.length - 1; i >= 0; i -= 1) {
+      if (matches[i].unified_diff.trim().length > 0) {
+        return matches[i];
+      }
+    }
+
+    // Fallback to the most recent entry if all are empty.
+    return matches[matches.length - 1];
   }, [changes]);
 
   const acceptChange = useCallback(async (id: string): Promise<boolean> => {

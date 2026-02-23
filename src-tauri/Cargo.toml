@@ -1,6 +1,6 @@
 [package]
 name = "zblade"
-version = "0.2.2-alpha"
+version = "0.3.0"
 description = "Zaguán Blade - A versatile AI code editor"
 authors = ["Zaguán Labs"]
 edition = "2021"
@@ -46,7 +46,8 @@ rusqlite = { version = "0.38", features = ["bundled"] }
 notify = "8"
 ignore = "0.4"
 diffy = "0.4"
-gix = { version = "0.79", default-features = false, features = ["status", "index", "worktree-mutation", "revision"] }
+gix = "0.51.0"
+bstr = "=1.9.1"
 
 # Tree-sitter for AST parsing (ZLP - Zaguán Language Protocol)
 tree-sitter = "0.26"

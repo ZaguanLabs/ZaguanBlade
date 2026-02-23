@@ -1554,6 +1554,25 @@ impl ChatManager {
             }
         }
 
+        // If every tool in this round failed, continuing the model often yields an
+        // empty response with no recovery. Surface the real tool failures directly.
+        if !batch.file_results.is_empty() && batch.file_results.iter().all(|(_, result)| !result.success) {
+            let mut details = Vec::new();
+            for (call, result) in batch.file_results.iter().take(3) {
+                let reason = result
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "unknown tool error".to_string());
+                details.push(format!("{}: {}", call.function.name, reason));
+            }
+            let suffix = if batch.file_results.len() > 3 { "; ..." } else { "" };
+            return Err(format!(
+                "All tool calls failed. {}{}",
+                details.join("; "),
+                suffix
+            ));
+        }
+
         // Store tool results in conversation history
         // RFC: Large Tool Result Handling - truncate in local mode
         for (_call, result) in batch.file_results.iter() {

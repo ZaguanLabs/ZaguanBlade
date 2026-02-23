@@ -519,7 +519,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
         <>
             <div className="shrink-0 border-t border-[var(--border-subtle)] bg-[var(--bg-app)]">
                 <div className="px-2 pt-3 pb-2">
-                    <div className="bg-[var(--bg-editor)] rounded-md border border-[var(--border-default)] shadow-[var(--shadow-lg)]">
+                    <div className="glass-panel rounded-md shadow-[var(--shadow-lg)]">
                     {/* Header */}
                     <div className="border-b border-[var(--border-subtle)]/50 px-2 py-1">
                         <div className="flex items-center justify-between gap-2">
