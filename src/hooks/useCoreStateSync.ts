@@ -83,10 +83,7 @@ export function useCoreStateSync(): CoreStateSyncResult {
 
     // Listen for editor state events to keep cache updated
     useEffect(() => {
-        let unlisten: UnlistenFn | undefined;
-
-        const setup = async () => {
-            unlisten = await listen<BladeEventEnvelope>('blade-event', (event) => {
+        const unlistenPromise = listen<BladeEventEnvelope>('blade-event', (event) => {
                 const bladeEvent = event.payload.event;
                 
                 if (bladeEvent.type === 'Editor') {
@@ -138,12 +135,11 @@ export function useCoreStateSync(): CoreStateSyncResult {
                     }
                 }
             });
-        };
-
-        setup();
 
         return () => {
-            if (unlisten) unlisten();
+            unlistenPromise
+                .then(unlisten => unlisten())
+                .catch(console.error);
         };
     }, []);
 

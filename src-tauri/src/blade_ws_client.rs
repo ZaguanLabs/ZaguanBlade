@@ -1,10 +1,22 @@
 use crate::environment::EnvironmentInfo;
 use futures_util::{SinkExt, StreamExt};
+use lazy_static::lazy_static;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio_tungstenite::{connect_async_with_config, tungstenite::protocol::{Message, WebSocketConfig}};
+
+lazy_static! {
+    static ref FILE_PATH_REGEXES: Vec<Regex> = vec![
+        Regex::new(r#""path"\s*:\s*"([^"]*)"#).unwrap(),
+        Regex::new(r#""file_path"\s*:\s*"([^"]*)"#).unwrap(),
+        Regex::new(r#""target_file"\s*:\s*"([^"]*)"#).unwrap(),
+        Regex::new(r#""absolute_path"\s*:\s*"([^"]*)"#).unwrap(),
+        Regex::new(r#""file"\s*:\s*"([^"]*)"#).unwrap(),
+    ];
+}
 
 /// WebSocket-based Blade Protocol v2 client
 pub struct BladeWsClient {
@@ -952,31 +964,20 @@ impl BladeWsClient {
     /// Extract file path from partial JSON arguments
     /// Handles incomplete JSON like: '{"path": "/home/stig/dev/ai/z'
     fn extract_file_path_from_partial_args(partial_args: &str) -> Option<String> {
-        // Try multiple common field names for file paths
-        let patterns = [
-            r#""path"\s*:\s*"([^"]*)"#,
-            r#""file_path"\s*:\s*"([^"]*)"#,
-            r#""target_file"\s*:\s*"([^"]*)"#,
-            r#""absolute_path"\s*:\s*"([^"]*)"#,
-            r#""file"\s*:\s*"([^"]*)"#,
-        ];
-
-        for pattern in patterns {
-            if let Ok(re) = regex::Regex::new(pattern) {
-                // Use the LAST match - partial_arguments accumulates repeated prefixes,
-                // so the last match has the longest/most complete path
-                let mut best: Option<String> = None;
-                for caps in re.captures_iter(partial_args) {
-                    if let Some(path) = caps.get(1) {
-                        let path_str = path.as_str();
-                        if !path_str.is_empty() && path_str.starts_with('/') {
-                            best = Some(path_str.to_string());
-                        }
+        for re in FILE_PATH_REGEXES.iter() {
+            // Use the LAST match - partial_arguments accumulates repeated prefixes,
+            // so the last match has the longest/most complete path
+            let mut best: Option<String> = None;
+            for caps in re.captures_iter(partial_args) {
+                if let Some(path) = caps.get(1) {
+                    let path_str = path.as_str();
+                    if !path_str.is_empty() && path_str.starts_with('/') {
+                        best = Some(path_str.to_string());
                     }
                 }
-                if best.is_some() {
-                    return best;
-                }
+            }
+            if best.is_some() {
+                return best;
             }
         }
 

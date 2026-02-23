@@ -4,7 +4,7 @@ mod tool_defs;
 use change_parser::parse_change_args;
 
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -92,8 +92,8 @@ pub struct PendingToolBatch {
 #[derive(Default)]
 pub struct AiWorkflow {
     pending: Option<PendingToolBatch>,
-    pub recent_history: Vec<(String, String)>, // (name, args)
-    recent_file_tool_cache: Vec<((String, String), tools::ToolResult)>,
+    pub recent_history: VecDeque<(String, String)>, // (name, args)
+    recent_file_tool_cache: VecDeque<((String, String), tools::ToolResult)>,
     last_assistant_content_fingerprint: Option<String>,
     stagnant_tool_turns: usize,
 }
@@ -102,8 +102,8 @@ impl AiWorkflow {
     pub fn new() -> Self {
         Self {
             pending: None,
-            recent_history: Vec::new(),
-            recent_file_tool_cache: Vec::new(),
+            recent_history: VecDeque::new(),
+            recent_file_tool_cache: VecDeque::new(),
             last_assistant_content_fingerprint: None,
             stagnant_tool_turns: 0,
         }
@@ -250,9 +250,9 @@ impl AiWorkflow {
                     .find(|(sig, res)| sig == &call_sig && res.success)
                 {
                     file_results.push((call.clone(), cached.clone()));
-                    self.recent_history.push(call_sig);
+                    self.recent_history.push_back(call_sig);
                     if self.recent_history.len() > 10 {
-                        self.recent_history.remove(0);
+                        self.recent_history.pop_front();
                     }
                     continue;
                 }
@@ -301,9 +301,9 @@ impl AiWorkflow {
             }
 
             *seen_in_batch.entry(call_sig.clone()).or_insert(0) += 1;
-            self.recent_history.push(call_sig.clone());
+            self.recent_history.push_back(call_sig.clone());
             if self.recent_history.len() > 10 {
-                self.recent_history.remove(0);
+                self.recent_history.pop_front();
             }
 
             // INTERCEPTION LOGIC
@@ -720,9 +720,9 @@ impl AiWorkflow {
                     && matches!(call.function.name.as_str(), "read_file" | "read_file_range")
                 {
                     self.recent_file_tool_cache
-                        .push((call_sig.clone(), res.clone()));
+                        .push_back((call_sig.clone(), res.clone()));
                     if self.recent_file_tool_cache.len() > 10 {
-                        self.recent_file_tool_cache.remove(0);
+                        self.recent_file_tool_cache.pop_front();
                     }
                 }
                 file_results.push((call.clone(), res));
@@ -758,7 +758,7 @@ impl AiWorkflow {
                         if res.success
                             && matches!(call.function.name.as_str(), "read_file" | "read_file_range")
                         {
-                            self.recent_file_tool_cache.push((
+                            self.recent_file_tool_cache.push_back((
                                 (
                                     call.function.name.clone(),
                                     normalize_json_string(&call.function.arguments),
@@ -766,7 +766,7 @@ impl AiWorkflow {
                                 res.clone(),
                             ));
                             if self.recent_file_tool_cache.len() > 10 {
-                                self.recent_file_tool_cache.remove(0);
+                                self.recent_file_tool_cache.pop_front();
                             }
                         }
                     }

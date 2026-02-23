@@ -144,11 +144,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     useEffect(() => {
         if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
 
-        let unlistenFileChanges: (() => void) | undefined;
-        let unlistenChangeApplied: (() => void) | undefined;
-
-        const setupListeners = async () => {
-            unlistenFileChanges = await listen<{ count: number, paths: string[] }>('file-changes-detected', (event) => {
+        const unlistenFileChangesPromise = listen<{ count: number, paths: string[] }>('file-changes-detected', (event) => {
                 // If the active file is in the changed paths, reload it
                 if (activeFile && event.payload.paths.some(p => pathsMatch(p, activeFile))) {
                     console.log('[EDITOR] File changed on disk, reloading:', activeFile);
@@ -159,19 +155,20 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             // Also listen for change-applied events from tool edits (apply_patch, edit_file, etc.)
             // The fs_watcher has a 250ms debounce that can drop events during rapid multi-edit sequences,
             // so this provides a reliable, direct notification when a tool modifies a file.
-            unlistenChangeApplied = await listen<{ change_id: string; file_path: string }>('change-applied', (event) => {
+            const unlistenChangeAppliedPromise = listen<{ change_id: string; file_path: string }>('change-applied', (event) => {
                 if (activeFile && pathsMatch(event.payload.file_path, activeFile)) {
                     console.log('[EDITOR] Tool change applied to active file, reloading:', activeFile);
                     setReloadTrigger(prev => prev + 1);
                 }
             });
-        };
-
-        setupListeners();
 
         return () => {
-            if (unlistenFileChanges) unlistenFileChanges();
-            if (unlistenChangeApplied) unlistenChangeApplied();
+            unlistenFileChangesPromise
+                .then(unlisten => unlisten())
+                .catch(console.error);
+            unlistenChangeAppliedPromise
+                .then(unlisten => unlisten())
+                .catch(console.error);
         };
     }, [activeFile]);
 
@@ -179,10 +176,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     useEffect(() => {
         if (!activeFile) return;
 
-        let unlistenSys: (() => void) | undefined;
-
-        const setupSysListener = async () => {
-            unlistenSys = await listen<BladeEvent>('sys-event', (event) => {
+        const unlistenSysPromise = listen<BladeEvent>('sys-event', (event) => {
                 const bladeEvent = event.payload;
                 if (bladeEvent.type === 'File') {
                     const fileEvent = bladeEvent.payload;
@@ -211,12 +205,11 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     }
                 }
             });
-        };
-
-        setupSysListener();
 
         return () => {
-            if (unlistenSys) unlistenSys();
+            unlistenSysPromise
+                .then(unlisten => unlisten())
+                .catch(console.error);
         };
     }, [activeFile, loading]);
 

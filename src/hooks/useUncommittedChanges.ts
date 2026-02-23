@@ -25,25 +25,21 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
   useEffect(() => {
     refresh();
 
-    let unlisten: (() => void) | undefined;
-
-    const setupListener = async () => {
-      unlisten = await listen<{ change_id: string; file_path: string }>('change-applied', (event) => {
-        refresh();
-        if (options?.onFileChanged && event.payload?.file_path) {
-          options.onFileChanged(event.payload.file_path);
-        }
-      });
-    };
+    const unlistenPromise = listen<{ change_id: string; file_path: string }>('change-applied', (event) => {
+      refresh();
+      if (options?.onFileChanged && event.payload?.file_path) {
+        options.onFileChanged(event.payload.file_path);
+      }
+    });
 
     // Listen for cross-instance refresh events
     const handleGlobalRefresh = () => refresh();
     window.addEventListener('uncommitted-changes-updated', handleGlobalRefresh);
 
-    setupListener();
-
     return () => {
-      if (unlisten) unlisten();
+      unlistenPromise
+        .then(unlisten => unlisten())
+        .catch(console.error);
       window.removeEventListener('uncommitted-changes-updated', handleGlobalRefresh);
     };
   }, [refresh, options?.onFileChanged]);

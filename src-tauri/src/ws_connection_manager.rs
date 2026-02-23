@@ -87,6 +87,16 @@ impl WsConnectionManager {
             *state = ConnectionState::Connecting;
         }
 
+        // Ensure any previous client is closed before opening a new connection.
+        // This prevents orphaned websocket tasks when reconnecting repeatedly.
+        let previous_client = {
+            let mut client_lock = self.client.lock().await;
+            client_lock.take()
+        };
+        if let Some(client) = previous_client {
+            client.close().await;
+        }
+
         let blade_url = self.blade_url.read().await.clone();
         let api_key = self.api_key.read().await.clone();
 
@@ -184,10 +194,15 @@ impl WsConnectionManager {
             let mut state = self.state.write().await;
             *state = ConnectionState::Disconnected;
         }
-        
-        // Drop the client - connection will close when dropped
-        let mut client_lock = self.client.lock().await;
-        *client_lock = None;
+
+        // Close the client first, then drop it.
+        let client_to_close = {
+            let mut client_lock = self.client.lock().await;
+            client_lock.take()
+        };
+        if let Some(client) = client_to_close {
+            client.close().await;
+        }
 
         // Clear subscribers
         let mut subscribers = self.event_subscribers.lock().await;

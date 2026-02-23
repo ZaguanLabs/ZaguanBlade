@@ -48,10 +48,7 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     // Listen for backend EditorEvent updates when backend authority is enabled
     useEffect(() => {
-        let unlisten: UnlistenFn | undefined;
-
-        const setup = async () => {
-            unlisten = await listen<BladeEventEnvelope>('blade-event', (event) => {
+        const unlistenPromise = listen<BladeEventEnvelope>('blade-event', (event) => {
                 const bladeEvent = event.payload.event;
                 if (bladeEvent.type !== 'Editor') return;
 
@@ -85,12 +82,25 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                     }));
                 }
             });
-        };
-
-        setup().catch(console.error);
 
         return () => {
-            if (unlisten) unlisten();
+            unlistenPromise
+                .then(unlisten => unlisten())
+                .catch(console.error);
+        };
+    }, []);
+
+    // Clear pending debounced sync calls on unmount
+    useEffect(() => {
+        return () => {
+            if (cursorDebounceRef.current) {
+                clearTimeout(cursorDebounceRef.current);
+                cursorDebounceRef.current = null;
+            }
+            if (selectionDebounceRef.current) {
+                clearTimeout(selectionDebounceRef.current);
+                selectionDebounceRef.current = null;
+            }
         };
     }, []);
 

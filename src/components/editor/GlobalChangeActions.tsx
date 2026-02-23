@@ -28,8 +28,8 @@ export const GlobalChangeActions: React.FC<GlobalChangeActionsProps> = ({
       <div className="flex items-center gap-1.5 text-[var(--fg-secondary)]">
         <FileCode className="w-3 h-3" />
         <span>{fileCount} file{fileCount !== 1 ? 's' : ''}</span>
-        <span className="text-green-500">+{totalAdded}</span>
-        <span className="text-red-500">-{totalRemoved}</span>
+        <span style={{ color: 'var(--accent-secondary)' }}>+{totalAdded}</span>
+        <span style={{ color: 'var(--accent-error)' }}>-{totalRemoved}</span>
       </div>
 
       <div className="w-px h-4 bg-[var(--border-primary)]" />
@@ -38,7 +38,8 @@ export const GlobalChangeActions: React.FC<GlobalChangeActionsProps> = ({
         <button
           onClick={onAcceptAll}
           disabled={disabled}
-          className="flex items-center gap-1 px-2 py-0.5 font-medium text-green-400 bg-green-500/10 hover:bg-green-500/20 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          className="flex items-center gap-1 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          style={{ color: 'var(--accent-secondary)' }}
           title="Accept all AI changes"
         >
           <Check className="w-3 h-3" />
@@ -47,7 +48,8 @@ export const GlobalChangeActions: React.FC<GlobalChangeActionsProps> = ({
         <button
           onClick={onRejectAll}
           disabled={disabled}
-          className="flex items-center gap-1 px-2 py-0.5 font-medium text-red-400 bg-red-500/10 hover:bg-red-500/20 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          className="flex items-center gap-1 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          style={{ color: 'var(--accent-error)' }}
           title="Reject all AI changes (revert to original)"
         >
           <X className="w-3 h-3" />
