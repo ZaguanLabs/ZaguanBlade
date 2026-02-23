@@ -534,9 +534,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
 
     // Listen for file system events to update tree dynamically
     React.useEffect(() => {
-        let unlisten: (() => void) | undefined;
-        const setup = async () => {
-            unlisten = await listen<any>('sys-event', (eventRaw) => {
+        const unlistenPromise = listen<any>('sys-event', (eventRaw) => {
                 let evt = eventRaw.payload;
                 if (evt.event) evt = evt.event;
 
@@ -567,9 +565,12 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                     });
                 }
             });
+
+        return () => {
+            unlistenPromise
+                .then(unlisten => unlisten())
+                .catch(console.error);
         };
-        setup();
-        return () => { if (unlisten) unlisten(); };
     }, [invalidateFolderChildren]);
 
     // Auto-expand and select active file in the tree

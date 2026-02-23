@@ -129,13 +129,9 @@ export const useGitStatus = () => {
     useEffect(() => {
         refresh();
 
-        let unlisten: (() => void) | undefined;
-        const setupListener = async () => {
-            unlisten = await listen('file-changes-detected', () => {
-                scheduleRefresh();
-            });
-        };
-        setupListener();
+        const unlistenPromise = listen('file-changes-detected', () => {
+            scheduleRefresh();
+        });
 
         const onVisibilityChange = () => {
             if (document.visibilityState === 'visible') {
@@ -151,7 +147,9 @@ export const useGitStatus = () => {
         window.addEventListener('focus', onFocus);
 
         return () => {
-            if (unlisten) unlisten();
+            unlistenPromise
+                .then(unlisten => unlisten())
+                .catch(console.error);
             document.removeEventListener('visibilitychange', onVisibilityChange);
             window.removeEventListener('focus', onFocus);
             if (debounceRef.current) {

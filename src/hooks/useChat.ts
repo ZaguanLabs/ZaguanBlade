@@ -22,6 +22,7 @@ export function useChat() {
     // Tool activity state for per-tool-call streaming progress display
     const [toolActivity, setToolActivity] = useState<ToolActivityState | null>(null);
     const toolChunkCountsRef = useRef<Map<string, { chunkCount: number; startedAt: number; lastChunkAt: number }>>(new Map());
+    const pendingTimeoutsRef = useRef<number[]>([]);
 
     // Active todo list state — lifted out of messages for persistent TaskPanel
     const [activeTodos, setActiveTodos] = useState<import('../types/events').TodoItem[]>([]);
@@ -41,6 +42,10 @@ export function useChat() {
             flushScheduledRef.current = null;
         }
         toolChunkCountsRef.current.clear();
+        if (pendingTimeoutsRef.current.length > 0) {
+            pendingTimeoutsRef.current.forEach(id => clearTimeout(id));
+            pendingTimeoutsRef.current = [];
+        }
         setToolActivity(null);
         setLoading(false);
         setPendingActions(null);
@@ -424,7 +429,7 @@ export function useChat() {
                 // Auto-complete lingering todos when chat finishes.
                 // Models sometimes forget to send a final todo_write marking the last task as completed.
                 // Wait briefly to allow any in-flight todo_updated events to arrive first.
-                setTimeout(() => {
+                const settleTodosTimer = window.setTimeout(() => {
                     setActiveTodos(prev => {
                         if (prev.length === 0) return prev;
                         const hasIncomplete = prev.some(t => t.status !== 'completed');
@@ -432,7 +437,7 @@ export function useChat() {
                         // Mark all remaining items as completed
                         const completed = prev.map(t => ({ ...t, status: 'completed' as const }));
                         // Trigger the completion flow (clear panel + insert summary) after brief display
-                        setTimeout(() => {
+                        const finalizeTodosTimer = window.setTimeout(() => {
                             setActiveTodos([]);
                             const summaryId = `plan-summary-${Date.now()}`;
                             const summaryMessage: ChatMessage = {
@@ -447,9 +452,11 @@ export function useChat() {
                             };
                             setMessages(prev => [...prev, summaryMessage]);
                         }, 1500);
+                        pendingTimeoutsRef.current.push(finalizeTodosTimer);
                         return completed;
                     });
                 }, 500);
+                pendingTimeoutsRef.current.push(settleTodosTimer);
             });
             unlistenDone = u2;
 
@@ -619,7 +626,7 @@ export function useChat() {
                 // Completion detection: all tasks done → brief "all done" state → hide panel + insert summary
                 const allCompleted = todos.length > 0 && todos.every(t => t.status === 'completed');
                 if (allCompleted) {
-                    setTimeout(() => {
+                    const todosCompletedTimer = window.setTimeout(() => {
                         setActiveTodos([]);
                         // Insert compact plan summary message into chat
                         const summaryId = `plan-summary-${Date.now()}`;
@@ -635,6 +642,7 @@ export function useChat() {
                         };
                         setMessages(prev => [...prev, summaryMessage]);
                     }, 1500);
+                    pendingTimeoutsRef.current.push(todosCompletedTimer);
                 }
             });
             const unlistenTodoUpdated = u10;
@@ -803,13 +811,14 @@ export function useChat() {
 
                         if (action !== 'streaming') {
                             toolChunkCountsRef.current.delete(key);
-                            setTimeout(() => {
+                            const clearToolActivityTimer = window.setTimeout(() => {
                                 setToolActivity(prev => {
                                     if (!prev) return prev;
                                     const prevKey = prev.toolCallId || `${prev.toolName}:${prev.filePath}`;
                                     return prevKey === key ? null : prev;
                                 });
                             }, 2000);
+                            pendingTimeoutsRef.current.push(clearToolActivityTimer);
                         }
                     }
                 }
@@ -837,6 +846,10 @@ export function useChat() {
             // Cleanup any pending flush on unmount
             if (flushScheduledRef.current) {
                 clearTimeout(flushScheduledRef.current);
+            }
+            if (pendingTimeoutsRef.current.length > 0) {
+                pendingTimeoutsRef.current.forEach(id => clearTimeout(id));
+                pendingTimeoutsRef.current = [];
             }
         };
     }, [queueMessageUpdate, flushPendingUpdates]);

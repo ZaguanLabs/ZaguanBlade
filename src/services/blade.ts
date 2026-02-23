@@ -46,7 +46,7 @@ export class BladeDispatcher {
         };
 
         try {
-            console.log(`[BladeDispatcher] Dispatching ${domain} intent:`, intent, `ID: ${id}`);
+            console.log(`[BladeDispatcher] Dispatching ${domain} intent ID: ${id}`);
             await invoke('dispatch', { envelope });
             return id;
         } catch (error) {

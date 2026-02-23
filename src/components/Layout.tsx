@@ -375,37 +375,39 @@ const AppLayoutInner: React.FC = () => {
     useEffect(() => {
         if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
 
-        let unlisten: (() => void) | undefined;
+        const unlistenPromise = listen<{ id: string; path: string; old_content: string; new_content: string }[]>('propose-edit', (event) => {
+            if (event.payload.length === 0) return;
 
-        const setupListener = async () => {
-            unlisten = await listen<{ id: string; path: string; old_content: string; new_content: string }[]>('propose-edit', (event) => {
-                if (event.payload.length > 0) {
-                    const firstEdit = event.payload[0];
-                    const existingTab = tabs.find(t => t.type === 'file' && t.path === firstEdit.path);
+            const firstEdit = event.payload[0];
+            const tabId = `file-${firstEdit.path}`;
+            let existingTabId: string | null = null;
 
-                    if (existingTab) {
-                        setActiveTabId(existingTab.id);
-                    } else {
-                        const filename = firstEdit.path.split('/').pop() || firstEdit.path;
-                        const newTab: Tab = {
-                            id: `file-${firstEdit.path}`,
-                            title: filename,
-                            type: 'file',
-                            path: firstEdit.path,
-                        };
-                        setTabs(prev => [...prev, newTab]);
-                        setActiveTabId(newTab.id);
-                    }
+            setTabs(prev => {
+                const existingTab = prev.find(t => t.type === 'file' && t.path === firstEdit.path);
+                if (existingTab) {
+                    existingTabId = existingTab.id;
+                    return prev;
                 }
-            });
-        };
 
-        setupListener();
+                const filename = firstEdit.path.split('/').pop() || firstEdit.path;
+                const newTab: Tab = {
+                    id: tabId,
+                    title: filename,
+                    type: 'file',
+                    path: firstEdit.path,
+                };
+                return [...prev, newTab];
+            });
+
+            setActiveTabId(existingTabId ?? tabId);
+        });
 
         return () => {
-            if (unlisten) unlisten();
+            unlistenPromise
+                .then(unlisten => unlisten())
+                .catch(console.error);
         };
-    }, [tabs]);
+    }, []);
 
     const handleFileSelect = (path: string) => {
         // Add to tabs if not already open
@@ -601,16 +603,7 @@ const AppLayoutInner: React.FC = () => {
     // Listen for open-file and open-ephemeral-document events
     useEffect(() => {
         if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
-
-        let unlistenFile: (() => void) | undefined;
-        let unlistenFileOpened: (() => void) | undefined;
-        let unlistenFileWithHighlight: (() => void) | undefined;
-        let unlistenEphemeral: (() => void) | undefined;
-        let unlistenResearchProgress: (() => void) | undefined;
-        let unlistenChangeApplied: (() => void) | undefined;
-        let unlistenChatError: (() => void) | undefined;
-
-        const setupListeners = async () => {
+        const unlistenPromises: Promise<() => void>[] = [];
             const handleOpenFile = (path: string, sourceEvent: string) => {
                 console.log(`Opening file from backend (${sourceEvent}):`, path);
                 const tabId = `file-${path}`;
@@ -642,16 +635,16 @@ const AppLayoutInner: React.FC = () => {
             };
 
             // Current backend event name (Rust emits this)
-            unlistenFile = await listen<string>('open-file', (event) => {
+            unlistenPromises.push(listen<string>('open-file', (event) => {
                 handleOpenFile(event.payload, 'open-file');
-            });
+            }));
 
             // Backwards-compatible alias (kept for older emitters)
-            unlistenFileOpened = await listen<string>('file-opened', (event) => {
+            unlistenPromises.push(listen<string>('file-opened', (event) => {
                 handleOpenFile(event.payload, 'file-opened');
-            });
+            }));
 
-            unlistenFileWithHighlight = await listen<{ path: string; start_line: number; end_line: number }>('open-file-with-highlight', (event) => {
+            unlistenPromises.push(listen<{ path: string; start_line: number; end_line: number }>('open-file-with-highlight', (event) => {
                 console.log('Opening file with highlight from backend:', event.payload);
                 const { path, start_line, end_line } = event.payload;
                 const tabId = `file-${path}`;
@@ -675,9 +668,9 @@ const AppLayoutInner: React.FC = () => {
                     return [...prev, newTab];
                 });
                 setActiveTabId(tabId);
-            });
+            }));
 
-            unlistenEphemeral = await listen<{ id: string; title: string; content: string; suggestedName: string }>('open-ephemeral-document', (event) => {
+            unlistenPromises.push(listen<{ id: string; title: string; content: string; suggestedName: string }>('open-ephemeral-document', (event) => {
                 console.log('[LAYOUT] 📥 Received open-ephemeral-document event:', {
                     id: event.payload.id,
                     title: event.payload.title,
@@ -710,10 +703,10 @@ const AppLayoutInner: React.FC = () => {
                     return [...prev, newTab];
                 });
                 setActiveTabId(id);
-            });
+            }));
 
             // Listen for research progress events
-            unlistenResearchProgress = await listen<{ message: string; stage: string; percent: number }>('research-progress', (event) => {
+            unlistenPromises.push(listen<{ message: string; stage: string; percent: number }>('research-progress', (event) => {
                 console.log('[LAYOUT] Research progress:', event.payload);
                 
                 // Set temporary state for active indicator
@@ -758,17 +751,17 @@ const AppLayoutInner: React.FC = () => {
                     }
                     return updated;
                 });
-            });
+            }));
 
             // Listen for chat errors to clear progress
-            unlistenChatError = await listen('chat-error', () => {
+            unlistenPromises.push(listen('chat-error', () => {
                 setResearchProgress(null);
-            });
+            }));
 
             // NOTE: context-length-exceeded is now handled in useChat.ts where it belongs
 
             // Listen for change-applied events to convert ephemeral tabs to file tabs
-            unlistenChangeApplied = await listen<{ change_id: string; file_path: string }>('change-applied', (event) => {
+            unlistenPromises.push(listen<{ change_id: string; file_path: string }>('change-applied', (event) => {
                 console.log('[LAYOUT] Change applied:', event.payload);
                 const { change_id, file_path } = event.payload;
 
@@ -818,21 +811,16 @@ const AppLayoutInner: React.FC = () => {
                 setTimeout(() => {
                     processingFilesRef.current.delete(file_path);
                 }, 500);
-            });
-        };
-
-        setupListeners();
+            }));
 
         return () => {
-            if (unlistenFile) unlistenFile();
-            if (unlistenFileOpened) unlistenFileOpened();
-            if (unlistenFileWithHighlight) unlistenFileWithHighlight();
-            if (unlistenEphemeral) unlistenEphemeral();
-            if (unlistenResearchProgress) unlistenResearchProgress();
-            if (unlistenChangeApplied) unlistenChangeApplied();
-            if (unlistenChatError) unlistenChatError();
+            for (const unlistenPromise of unlistenPromises) {
+                unlistenPromise
+                    .then(unlisten => unlisten())
+                    .catch(console.error);
+            }
         };
-    }, [tabs]);
+    }, [chat.setConversation]);
 
     // Clear active indicator when chat stops loading (but keep in message history)
     useEffect(() => {
