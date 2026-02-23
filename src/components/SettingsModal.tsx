@@ -2,8 +2,10 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { emit } from '@tauri-apps/api/event';
+import { getVersion } from '@tauri-apps/api/app';
 import { X, Database, Cloud, Shield, Zap, HardDrive, Server, ChevronRight, Info, Loader2, Code, Key, CheckCircle2 } from 'lucide-react';
 import type { BackendSettings, LocalAiConfig, RemoteAiConfig } from '../types/settings';
+import zbladeLogoUrl from '../assets/zblade-in-app-logo.png';
 
 type StorageMode = 'local' | 'server';
 
@@ -192,7 +194,7 @@ interface SettingsModalProps {
     onRefreshModels?: () => Promise<import('../types/chat').ModelInfo[]>;
 }
 
-type SettingsSection = 'account' | 'localai' | 'storage' | 'context' | 'privacy' | 'editor';
+type SettingsSection = 'account' | 'localai' | 'storage' | 'context' | 'privacy' | 'editor' | 'about';
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, workspacePath, onRefreshModels }) => {
     const [settings, setSettings] = useState<SettingsState>(defaultSettings);
@@ -332,24 +334,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
             { id: 'context', label: 'Context', icon: <Zap className="w-4 h-4" /> },
             // { id: 'privacy', label: 'Privacy', icon: <Shield className="w-4 h-4" /> },
         ] as const : []),
+        { id: 'about', label: 'About', icon: <Info className="w-4 h-4" /> },
     ];
 
     return (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-6">
             {/* Backdrop */}
             <div
-                className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+                className="absolute inset-0 bg-black/72 backdrop-blur-[3px]"
                 onClick={onClose}
             />
 
             {/* Modal */}
-            <div className="relative bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded-lg shadow-2xl w-[800px] h-[620px] flex flex-col animate-in fade-in zoom-in-95 duration-150">
+            <div className="relative w-full max-w-[980px] h-[min(760px,92vh)] flex flex-col animate-in fade-in zoom-in-95 duration-150 border border-[var(--border-default)] bg-[var(--bg-panel)] shadow-[0_26px_80px_rgba(0,0,0,0.55)] overflow-hidden">
                 {/* Header */}
-                <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border-subtle)]">
-                    <h2 className="text-lg font-semibold text-[var(--fg-primary)]">Settings</h2>
+                <div className="flex items-start justify-between px-6 py-4 border-b border-[var(--border-default)] bg-[color-mix(in_srgb,var(--bg-panel)_82%,var(--bg-surface))]">
+                    <div>
+                        <h2 className="text-lg font-semibold text-[var(--fg-primary)]">Settings</h2>
+                        <p className="text-xs text-[var(--fg-tertiary)] mt-0.5">Global + project preferences</p>
+                    </div>
                     <button
                         onClick={onClose}
-                        className="p-1.5 text-[var(--fg-tertiary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] rounded transition-colors"
+                        className="p-1.5 text-[var(--fg-tertiary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] transition-colors"
                     >
                         <X className="w-5 h-5" />
                     </button>
@@ -358,24 +364,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
                 {/* Content */}
                 <div className="flex flex-1 overflow-hidden">
                     {/* Sidebar */}
-                    <div className="w-48 border-r border-[var(--border-subtle)] py-2">
+                    <div className="w-56 border-r border-[var(--border-default)] py-3 px-2 bg-[color-mix(in_srgb,var(--bg-app)_82%,var(--bg-panel))]">
                         {sections.map(section => (
                             <button
                                 key={section.id}
                                 onClick={() => setActiveSection(section.id)}
-                                className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${activeSection === section.id
-                                    ? 'bg-[var(--bg-surface-hover)] text-[var(--fg-primary)] border-l-2 border-[var(--accent-primary)]'
-                                    : 'text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--fg-primary)] border-l-2 border-transparent'
+                                className={`w-full flex items-center justify-between gap-3 px-3 py-2.5 text-sm transition-colors border ${activeSection === section.id
+                                    ? 'bg-[var(--bg-active)] text-[var(--fg-primary)] border-[var(--border-focus)]'
+                                    : 'text-[var(--fg-secondary)] border-transparent hover:bg-[var(--bg-surface)] hover:text-[var(--fg-primary)]'
                                     }`}
                             >
-                                {section.icon}
-                                {section.label}
+                                <span className="flex items-center gap-2.5">
+                                    {section.icon}
+                                    {section.label}
+                                </span>
+                                {activeSection === section.id && <ChevronRight className="w-3.5 h-3.5 text-[var(--accent-primary)]" />}
                             </button>
                         ))}
                     </div>
 
                     {/* Main Content */}
-                    <div className="flex-1 overflow-y-auto p-6">
+                    <div className="flex-1 overflow-y-auto p-6 bg-[var(--bg-editor)]">
                         {isLoading ? (
                             <div className="flex items-center justify-center h-full">
                                 <Loader2 className="w-6 h-6 text-[var(--fg-tertiary)] animate-spin" />
@@ -429,27 +438,33 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
                                         onChange={(updates) => updateSettings('editor', updates)}
                                     />
                                 )}
+                                {activeSection === 'about' && <AboutSettings />}
                             </>
                         )}
                     </div>
                 </div>
 
                 {/* Footer */}
-                <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-[var(--border-subtle)]">
-                    <button
-                        onClick={onClose}
-                        className="px-4 py-2 text-sm font-medium text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] rounded-md transition-colors"
-                    >
-                        Cancel
-                    </button>
-                    <button
-                        onClick={handleSave}
-                        disabled={!hasChanges || isSaving}
-                        className="px-4 py-2 text-sm font-medium bg-emerald-600 hover:bg-emerald-500 text-white rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                    >
-                        {isSaving && <Loader2 className="w-4 h-4 animate-spin" />}
-                        {isSaving ? 'Saving...' : 'Save Changes'}
-                    </button>
+                <div className="flex items-center justify-between gap-3 px-6 py-3 border-t border-[var(--border-default)] bg-[color-mix(in_srgb,var(--bg-panel)_84%,var(--bg-surface))]">
+                    <div className="text-xs text-[var(--fg-tertiary)]">
+                        {hasChanges ? 'You have unsaved changes' : 'All changes saved'}
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={onClose}
+                            className="px-4 py-2 text-sm font-medium text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] transition-colors"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            onClick={handleSave}
+                            disabled={!hasChanges || isSaving}
+                            className="px-4 py-2 text-sm font-medium bg-[var(--accent-primary)] hover:brightness-110 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                        >
+                            {isSaving && <Loader2 className="w-4 h-4 animate-spin" />}
+                            {isSaving ? 'Saving...' : 'Save Changes'}
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -543,7 +558,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
             </div>
 
             {/* Ollama Section */}
-            <div className="border border-[var(--border-subtle)] rounded-lg p-4 space-y-4">
+            <div className="border border-[var(--border-default)] p-4 space-y-4 bg-[color-mix(in_srgb,var(--bg-panel)_88%,var(--bg-editor))]">
                 <div className="flex items-center justify-between">
                     <div>
                         <div className="text-sm font-medium text-[var(--fg-primary)]">Ollama</div>
@@ -565,7 +580,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                         onChange={(e) => onChange({ ollamaUrl: e.target.value })}
                         placeholder="http://localhost:11434"
                         disabled={!settings.ollamaEnabled}
-                        className="w-full bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded-lg py-2 px-3 text-sm text-[var(--fg-primary)] focus:outline-none focus:border-[var(--accent-primary)] placeholder-[var(--fg-tertiary)] disabled:opacity-60"
+                        className="w-full bg-[var(--bg-surface)] border border-[var(--border-default)] py-2 px-3 text-sm text-[var(--fg-primary)] focus:outline-none focus:border-[var(--accent-primary)] placeholder-[var(--fg-tertiary)] disabled:opacity-60"
                     />
                 </div>
 
@@ -574,7 +589,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                         type="button"
                         onClick={handleTestOllamaConnection}
                         disabled={!settings.ollamaEnabled || isTestingOllama}
-                        className="px-3 py-1.5 text-xs font-medium rounded-md border border-[var(--border-subtle)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="px-3 py-1.5 text-xs font-medium border border-[var(--border-default)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         {isTestingOllama ? 'Testing...' : 'Test Connection'}
                     </button>
@@ -582,7 +597,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                         type="button"
                         onClick={handleRefreshOllamaModels}
                         disabled={!settings.ollamaEnabled || isRefreshingOllama}
-                        className="px-3 py-1.5 text-xs font-medium rounded-md border border-[var(--border-subtle)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="px-3 py-1.5 text-xs font-medium border border-[var(--border-default)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         {isRefreshingOllama ? 'Refreshing...' : 'Refresh Models'}
                     </button>
@@ -600,7 +615,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
             </div>
 
             {/* Ollama Cloud Section */}
-            <div className="border border-[var(--border-subtle)] rounded-lg p-4 space-y-4">
+            <div className="border border-[var(--border-default)] p-4 space-y-4 bg-[color-mix(in_srgb,var(--bg-panel)_88%,var(--bg-editor))]">
                 <div className="flex items-center justify-between">
                     <div>
                         <div className="text-sm font-medium text-[var(--fg-primary)]">Ollama Cloud</div>
@@ -622,7 +637,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                         onChange={(e) => onChange({ ollamaCloudApiKey: e.target.value })}
                         placeholder="sk-..."
                         disabled={!settings.ollamaCloudEnabled}
-                        className="w-full bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded-lg py-2 px-3 text-sm text-[var(--fg-primary)] focus:outline-none focus:border-[var(--accent-primary)] placeholder-[var(--fg-tertiary)] disabled:opacity-60"
+                        className="w-full bg-[var(--bg-surface)] border border-[var(--border-default)] py-2 px-3 text-sm text-[var(--fg-primary)] focus:outline-none focus:border-[var(--accent-primary)] placeholder-[var(--fg-tertiary)] disabled:opacity-60"
                     />
                     <p className="text-xs text-[var(--fg-tertiary)] mt-1">
                         Required for cloud models (models ending with :cloud). Get your key from ollama.com.
@@ -631,7 +646,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
             </div>
 
             {/* OpenAI-compatible Section */}
-            <div className="border border-[var(--border-subtle)] rounded-lg p-4 space-y-4">
+            <div className="border border-[var(--border-default)] p-4 space-y-4 bg-[color-mix(in_srgb,var(--bg-panel)_88%,var(--bg-editor))]">
                 <div className="flex items-center justify-between">
                     <div>
                         <div className="text-sm font-medium text-[var(--fg-primary)]">OpenAI-compatible Server</div>
@@ -653,7 +668,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                         onChange={(e) => onChange({ openaiCompatUrl: e.target.value })}
                         placeholder="http://localhost:8080/v1"
                         disabled={!settings.openaiCompatEnabled}
-                        className="w-full bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded-lg py-2 px-3 text-sm text-[var(--fg-primary)] focus:outline-none focus:border-[var(--accent-primary)] placeholder-[var(--fg-tertiary)] disabled:opacity-60"
+                        className="w-full bg-[var(--bg-surface)] border border-[var(--border-default)] py-2 px-3 text-sm text-[var(--fg-primary)] focus:outline-none focus:border-[var(--accent-primary)] placeholder-[var(--fg-tertiary)] disabled:opacity-60"
                     />
                     <p className="text-xs text-[var(--fg-tertiary)] mt-1">
                         No API key required - these are keyless local servers.
@@ -665,7 +680,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                         type="button"
                         onClick={handleTestOpenAIConnection}
                         disabled={!settings.openaiCompatEnabled || isTestingOpenAI}
-                        className="px-3 py-1.5 text-xs font-medium rounded-md border border-[var(--border-subtle)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="px-3 py-1.5 text-xs font-medium border border-[var(--border-default)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         {isTestingOpenAI ? 'Testing...' : 'Test Connection'}
                     </button>
@@ -673,7 +688,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                         type="button"
                         onClick={handleRefreshOpenAIModels}
                         disabled={!settings.openaiCompatEnabled || isRefreshingOpenAI}
-                        className="px-3 py-1.5 text-xs font-medium rounded-md border border-[var(--border-subtle)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="px-3 py-1.5 text-xs font-medium border border-[var(--border-default)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         {isRefreshingOpenAI ? 'Refreshing...' : 'Refresh Models'}
                     </button>
@@ -711,14 +726,14 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
                     {/* Local Storage Option */}
                     <button
                         onClick={() => onChange({ mode: 'local' })}
-                        className={`relative p-4 rounded-lg border-2 text-left transition-all ${settings.mode === 'local'
-                            ? 'border-emerald-500 bg-emerald-500/10'
-                            : 'border-[var(--border-subtle)] hover:border-[var(--border-focus)]'
+                        className={`relative p-4 border text-left transition-all ${settings.mode === 'local'
+                            ? 'border-[var(--border-focus)] bg-[color-mix(in_srgb,var(--bg-active)_78%,transparent)]'
+                            : 'border-[var(--border-default)] hover:border-[var(--border-focus)] bg-[color-mix(in_srgb,var(--bg-panel)_86%,var(--bg-editor))]'
                             }`}
                     >
                         <div className="flex items-center gap-3 mb-3">
-                            <div className={`p-2 rounded-lg ${settings.mode === 'local' ? 'bg-emerald-500/20' : 'bg-[var(--bg-app)]'}`}>
-                                <HardDrive className={`w-5 h-5 ${settings.mode === 'local' ? 'text-emerald-400' : 'text-[var(--fg-secondary)]'}`} />
+                            <div className={`p-2 ${settings.mode === 'local' ? 'bg-[color-mix(in_srgb,var(--accent-primary)_22%,transparent)]' : 'bg-[var(--bg-surface)]'}`}>
+                                <HardDrive className={`w-5 h-5 ${settings.mode === 'local' ? 'text-[var(--accent-primary)]' : 'text-[var(--fg-secondary)]'}`} />
                             </div>
                             <div>
                                 <div className="font-medium text-[var(--fg-primary)]">Local Storage</div>
@@ -727,34 +742,34 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
                         </div>
                         <ul className="text-xs text-[var(--fg-secondary)] space-y-1">
                             <li className="flex items-center gap-1.5">
-                                <ChevronRight className="w-3 h-3 text-emerald-400" />
+                                <ChevronRight className="w-3 h-3 text-[var(--accent-primary)]" />
                                 Code stays on your machine
                             </li>
                             <li className="flex items-center gap-1.5">
-                                <ChevronRight className="w-3 h-3 text-emerald-400" />
+                                <ChevronRight className="w-3 h-3 text-[var(--accent-primary)]" />
                                 Privacy secured
                             </li>
                             <li className="flex items-center gap-1.5">
-                                <ChevronRight className="w-3 h-3 text-emerald-400" />
+                                <ChevronRight className="w-3 h-3 text-[var(--accent-primary)]" />
                                 Higher network latency
                             </li>
                         </ul>
                         {settings.mode === 'local' && (
-                            <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-emerald-500" />
+                            <div className="absolute top-2 right-2 w-2 h-2 bg-[var(--accent-primary)]" />
                         )}
                     </button>
 
                     {/* Server Storage Option */}
                     <button
                         onClick={() => onChange({ mode: 'server' })}
-                        className={`relative p-4 rounded-lg border-2 text-left transition-all ${settings.mode === 'server'
-                            ? 'border-blue-500 bg-blue-500/10'
-                            : 'border-[var(--border-subtle)] hover:border-[var(--border-focus)]'
+                        className={`relative p-4 border text-left transition-all ${settings.mode === 'server'
+                            ? 'border-[var(--border-focus)] bg-[color-mix(in_srgb,var(--bg-active)_78%,transparent)]'
+                            : 'border-[var(--border-default)] hover:border-[var(--border-focus)] bg-[color-mix(in_srgb,var(--bg-panel)_86%,var(--bg-editor))]'
                             }`}
                     >
                         <div className="flex items-center gap-3 mb-3">
-                            <div className={`p-2 rounded-lg ${settings.mode === 'server' ? 'bg-blue-500/20' : 'bg-[var(--bg-app)]'}`}>
-                                <Server className={`w-5 h-5 ${settings.mode === 'server' ? 'text-blue-400' : 'text-[var(--fg-secondary)]'}`} />
+                            <div className={`p-2 ${settings.mode === 'server' ? 'bg-[color-mix(in_srgb,var(--accent-primary)_22%,transparent)]' : 'bg-[var(--bg-surface)]'}`}>
+                                <Server className={`w-5 h-5 ${settings.mode === 'server' ? 'text-[var(--accent-primary)]' : 'text-[var(--fg-secondary)]'}`} />
                             </div>
                             <div>
                                 <div className="font-medium text-[var(--fg-primary)]">Server Storage</div>
@@ -763,26 +778,26 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
                         </div>
                         <ul className="text-xs text-[var(--fg-secondary)] space-y-1">
                             <li className="flex items-center gap-1.5">
-                                <ChevronRight className="w-3 h-3 text-blue-400" />
+                                <ChevronRight className="w-3 h-3 text-[var(--accent-primary)]" />
                                 Faster context retrieval
                             </li>
                             <li className="flex items-center gap-1.5">
-                                <ChevronRight className="w-3 h-3 text-blue-400" />
+                                <ChevronRight className="w-3 h-3 text-[var(--accent-primary)]" />
                                 Cross-device sync
                             </li>
                             <li className="flex items-center gap-1.5">
-                                <ChevronRight className="w-3 h-3 text-blue-400" />
+                                <ChevronRight className="w-3 h-3 text-[var(--accent-primary)]" />
                                 Lower network latency
                             </li>
                         </ul>
                         {settings.mode === 'server' && (
-                            <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-blue-500" />
+                            <div className="absolute top-2 right-2 w-2 h-2 bg-[var(--accent-primary)]" />
                         )}
                     </button>
                 </div>
 
                 {/* Info box */}
-                <div className="mt-4 p-3 bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded-lg flex gap-3">
+                <div className="mt-4 p-3 bg-[var(--bg-surface)] border border-[var(--border-default)] flex gap-3">
                     <Info className="w-4 h-4 text-[var(--fg-tertiary)] shrink-0 mt-0.5" />
                     <p className="text-xs text-[var(--fg-tertiary)]">
                         {settings.mode === 'local'
@@ -910,8 +925,8 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, a
                             <button
                                 onClick={() => onChange({ compression: { ...settings.compression, model: 'remote' } })}
                                 className={`flex-1 px-3 py-2 rounded-md text-sm transition-colors ${settings.compression.model === 'remote'
-                                    ? 'bg-emerald-600 text-white'
-                                    : 'bg-[var(--bg-app)] text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)]'
+                                    ? 'bg-[var(--accent-primary)] text-white'
+                                    : 'bg-[var(--bg-surface)] text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)]'
                                     }`}
                             >
                                 <Cloud className="w-4 h-4 inline-block mr-2" />
@@ -920,8 +935,8 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, a
                             <button
                                 onClick={() => onChange({ compression: { ...settings.compression, model: 'local' } })}
                                 className={`flex-1 px-3 py-2 rounded-md text-sm transition-colors ${settings.compression.model === 'local'
-                                    ? 'bg-emerald-600 text-white'
-                                    : 'bg-[var(--bg-app)] text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)]'
+                                    ? 'bg-[var(--accent-primary)] text-white'
+                                    : 'bg-[var(--bg-surface)] text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)]'
                                     }`}
                             >
                                 <HardDrive className="w-4 h-4 inline-block mr-2" />
@@ -1021,6 +1036,100 @@ const EditorSettings: React.FC<EditorSettingsProps> = ({ settings, onChange }) =
     );
 };
 
+const AboutSettings: React.FC = () => {
+    const [version, setVersion] = useState('dev');
+
+    useEffect(() => {
+        let mounted = true;
+
+        void (async () => {
+            try {
+                const appVersion = await getVersion();
+                if (mounted) {
+                    setVersion(appVersion);
+                }
+            } catch {
+                // Keep fallback for non-Tauri/test environments.
+            }
+        })();
+
+        return () => {
+            mounted = false;
+        };
+    }, []);
+
+    return (
+        <div className="space-y-6">
+            <div className="border border-[var(--border-default)] p-5 bg-[color-mix(in_srgb,var(--bg-panel)_88%,var(--bg-editor))]">
+                <div className="flex items-center gap-4">
+                    <img
+                        src={zbladeLogoUrl}
+                        alt="Zaguán Blade"
+                        className="w-16 h-16 object-contain"
+                        draggable={false}
+                    />
+                    <div>
+                        <div className="text-lg font-semibold text-[var(--fg-primary)]">Zaguán Blade</div>
+                        <div className="text-sm text-[var(--fg-secondary)]">AI-native code editor</div>
+                        <div className="text-xs text-[var(--fg-tertiary)] mt-1">Version {version}</div>
+                    </div>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="border border-[var(--border-default)] p-3 bg-[var(--bg-surface)]">
+                    <div className="text-[10px] uppercase tracking-wider text-[var(--fg-tertiary)] mb-1">Runtime</div>
+                    <div className="text-sm text-[var(--fg-primary)]">Tauri Desktop</div>
+                </div>
+                <div className="border border-[var(--border-default)] p-3 bg-[var(--bg-surface)]">
+                    <div className="text-[10px] uppercase tracking-wider text-[var(--fg-tertiary)] mb-1">Engine</div>
+                    <div className="text-sm text-[var(--fg-primary)]">React + CodeMirror 6</div>
+                </div>
+                <div className="border border-[var(--border-default)] p-3 bg-[var(--bg-surface)]">
+                    <div className="text-[10px] uppercase tracking-wider text-[var(--fg-tertiary)] mb-1">Mode</div>
+                    <div className="text-sm text-[var(--fg-primary)]">Local-first workflow</div>
+                </div>
+            </div>
+
+            <div className="border border-[var(--border-default)] p-4 bg-[var(--bg-surface)] space-y-3">
+                <div className="text-sm font-medium text-[var(--fg-primary)]">Tidbits</div>
+                <ul className="space-y-2 text-sm text-[var(--fg-secondary)]">
+                    <li className="flex items-start gap-2">
+                        <span className="w-1.5 h-1.5 mt-2 bg-[var(--accent-primary)]" />
+                        <span>
+                            Website:{' '}
+                            <a href="https://zblade.dev/" target="_blank" rel="noreferrer" className="text-[var(--accent-primary)] hover:brightness-110">
+                                zblade.dev
+                            </a>
+                        </span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                        <span className="w-1.5 h-1.5 mt-2 bg-[var(--accent-primary)]" />
+                        <span>
+                            GitHub:{' '}
+                            <a href="https://github.com/ZaguanLabs/ZaguanBlade" target="_blank" rel="noreferrer" className="text-[var(--accent-primary)] hover:brightness-110">
+                                ZaguanLabs/ZaguanBlade
+                            </a>
+                        </span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                        <span className="w-1.5 h-1.5 mt-2 bg-[var(--accent-primary)]" />
+                        <span>
+                            Support:{' '}
+                            <a href="https://github.com/ZaguanLabs/ZaguanBlade/issues" target="_blank" rel="noreferrer" className="text-[var(--accent-primary)] hover:brightness-110">
+                                GitHub Issues
+                            </a>
+                        </span>
+                    </li>
+                </ul>
+                <p className="text-xs text-[var(--fg-tertiary)] pt-1 border-t border-[var(--border-subtle)]">
+                    PRs and suggestions are welcome.
+                </p>
+            </div>
+        </div>
+    );
+};
+
 interface ToggleProps {
     checked: boolean;
     onChange: (checked: boolean) => void;
@@ -1032,7 +1141,7 @@ const Toggle: React.FC<ToggleProps> = ({ checked, onChange }) => {
             role="switch"
             aria-checked={checked}
             onClick={() => onChange(!checked)}
-            className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 ${checked ? 'bg-emerald-600' : 'bg-[var(--bg-app)]'
+            className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 ${checked ? 'bg-[var(--accent-primary)]' : 'bg-[var(--bg-app)]'
                 }`}
         >
             <span
@@ -1060,13 +1169,13 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ settings, onChange })
                 </p>
             </div>
 
-            <div className={`border rounded-lg p-4 mb-6 ${settings.apiKey ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-[var(--bg-app)] border-[var(--border-subtle)]'}`}>
+            <div className={`border p-4 mb-6 ${settings.apiKey ? 'bg-[color-mix(in_srgb,var(--accent-primary)_10%,transparent)] border-[var(--border-focus)]' : 'bg-[var(--bg-surface)] border-[var(--border-default)]'}`}>
                 <div className="flex gap-4">
-                    <div className={`p-3 rounded-full h-fit ${settings.apiKey ? 'bg-emerald-500/20' : 'bg-[var(--bg-app)]'}`}>
+                    <div className={`p-3 h-fit ${settings.apiKey ? 'bg-[color-mix(in_srgb,var(--accent-primary)_22%,transparent)]' : 'bg-[var(--bg-editor)]'}`}>
                         {settings.apiKey ? (
-                            <CheckCircle2 className="w-6 h-6 text-emerald-500" />
+                            <CheckCircle2 className="w-6 h-6 text-[var(--accent-primary)]" />
                         ) : (
-                            <Key className="w-6 h-6 text-emerald-500" />
+                            <Key className="w-6 h-6 text-[var(--accent-primary)]" />
                         )}
                     </div>
                     <div className="flex-1">
@@ -1082,7 +1191,7 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ settings, onChange })
                             href={settings.apiKey ? "https://zaguanai.com/dashboard" : "https://zaguanai.com/pricing"}
                             target="_blank"
                             rel="noreferrer"
-                            className="text-sm text-emerald-500 hover:text-emerald-400 font-medium"
+                            className="text-sm text-[var(--accent-primary)] hover:brightness-110 font-medium"
                         >
                             {settings.apiKey ? "Manage Subscription →" : "Get Subscription →"}
                         </a>
@@ -1101,7 +1210,7 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ settings, onChange })
                             value={settings.apiKey}
                             onChange={(e) => onChange({ apiKey: e.target.value })}
                             placeholder="sk-..."
-                            className="w-full bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded-lg py-2 pl-3 pr-10 text-sm text-[var(--fg-primary)] focus:outline-none focus:border-[var(--accent-primary)] placeholder-[var(--fg-tertiary)]"
+                            className="w-full bg-[var(--bg-surface)] border border-[var(--border-default)] py-2 pl-3 pr-10 text-sm text-[var(--fg-primary)] focus:outline-none focus:border-[var(--accent-primary)] placeholder-[var(--fg-tertiary)]"
                         />
                         <button
                             type="button"

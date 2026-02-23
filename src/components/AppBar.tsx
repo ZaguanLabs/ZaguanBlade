@@ -161,7 +161,11 @@ export const AppBar: React.FC<AppBarProps> = ({
     return (
         <div
             className="h-9 flex items-stretch select-none relative z-[51] shrink-0"
-            style={{ backgroundColor: 'var(--bg-app)' }}
+            style={{
+                backgroundColor: 'var(--bg-panel)',
+                borderBottom: '1px solid var(--border-default)',
+                boxShadow: '0 1px 0 rgba(255,255,255,0.02), 0 6px 18px rgba(0,0,0,0.22)',
+            }}
             data-tauri-drag-region
         >
             {/* Left: File Menu */}
@@ -271,10 +275,10 @@ export const AppBar: React.FC<AppBarProps> = ({
                                     ${isDropTarget ? 'border-l-2 border-l-[var(--accent-primary)]' : ''}
                                 `}
                                 style={{
-                                    backgroundColor: isActive ? 'var(--bg-editor)' : 'transparent',
-                                    borderBottom: isActive
-                                        ? '2px solid var(--accent-primary)'
-                                        : '2px solid transparent',
+                                    backgroundColor: isActive
+                                        ? 'var(--bg-editor)'
+                                        : 'color-mix(in srgb, var(--bg-panel) 72%, var(--bg-app))',
+                                    borderBottom: 'none',
                                 }}
                             >
                                 {tab.isEphemeral ? (

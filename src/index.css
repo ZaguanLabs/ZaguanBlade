@@ -33,30 +33,34 @@ body {
     /* Desktop app feel */
 }
 
-/* Scrollbar Styling */
-::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-}
-
-::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-    background: var(--bg-surface-hover);
-    border-radius: 3px;
-    border: 1px solid var(--bg-app);
-}
-
-::-webkit-scrollbar-corner {
-    background: transparent;
-}
-
-/* Firefox thin scrollbars */
-* {
+/* Code editor scrollbar only (avoid styling whole app / terminal overlays) */
+.code-editor-scroll .cm-scroller {
     scrollbar-width: thin;
-    scrollbar-color: var(--bg-surface-hover) transparent;
+    scrollbar-color: color-mix(in srgb, var(--fg-secondary) 40%, transparent) transparent;
+}
+
+.code-editor-scroll .cm-scroller::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+.code-editor-scroll .cm-scroller::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.code-editor-scroll .cm-scroller::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--fg-secondary) 36%, transparent);
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+}
+
+.code-editor-scroll .cm-scroller:hover::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--fg-secondary) 56%, transparent);
+}
+
+.code-editor-scroll .cm-scroller::-webkit-scrollbar-corner {
+    background: transparent;
 }
 
 /* Tab strip scrollbar — completely hidden */

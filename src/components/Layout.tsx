@@ -899,7 +899,8 @@ const AppLayoutInner: React.FC = () => {
                     style={{
                         width: '46px',
                         backgroundColor: 'var(--bg-panel)',
-                        borderRadius: 'var(--panel-radius)',
+                        borderRadius: '0',
+                        border: '1px solid var(--border-default)',
                         boxShadow: 'var(--panel-shadow)',
                     }}
                 >
@@ -978,13 +979,14 @@ const AppLayoutInner: React.FC = () => {
                     <div
                         className={`
                             absolute top-0 bottom-0 left-0 w-80 bg-[var(--bg-panel)] z-30 flex flex-col
-                            transition-transform duration-[var(--transition-base)] ease-out
+                            transition-all duration-[var(--transition-fast)] ease-[cubic-bezier(0.22,1,0.36,1)]
                             ${isSidebarOpen
-                                ? 'translate-x-0'
-                                : '-translate-x-full pointer-events-none'}
+                                ? 'translate-x-0 opacity-100 visible'
+                                : '-translate-x-full opacity-0 invisible pointer-events-none'}
                         `}
                         style={{
-                            borderRadius: `0 var(--panel-radius) var(--panel-radius) 0`,
+                            borderRadius: '0',
+                            border: '1px solid var(--border-default)',
                             boxShadow: isSidebarOpen ? 'var(--panel-shadow)' : 'none',
                         }}
                     >
@@ -1026,11 +1028,17 @@ const AppLayoutInner: React.FC = () => {
                         style={{
                             backgroundColor: 'var(--bg-editor)',
                             borderRadius: 'var(--panel-radius)',
+                            border: '1px solid var(--border-default)',
                             boxShadow: 'var(--panel-shadow)',
                         }}
                     >
 
-                        <div className="flex-1 overflow-hidden relative">
+                        <div
+                            className="flex-1 overflow-hidden relative"
+                            style={{
+                                clipPath: terminalHeight > 0 ? `inset(0 0 ${terminalHeight}px 0)` : undefined,
+                            }}
+                        >
                             {(() => {
                                 const activeTab = tabs.find(t => t.id === activeTabId);
 
@@ -1096,8 +1104,9 @@ const AppLayoutInner: React.FC = () => {
                             style={{
                                 height: terminalHeight,
                                 backgroundColor: 'var(--term-bg)',
+                                borderTop: '1px solid var(--border-default)',
                                 borderRadius: `0 0 var(--panel-radius) var(--panel-radius)`,
-                                boxShadow: '0 -4px 24px rgba(0,0,0,0.5)',
+                                boxShadow: '0 -10px 28px rgba(0,0,0,0.45)',
                                 transform: terminalHeight > 0 ? 'translateY(0)' : 'translateY(100%)',
                                 transition: isDragging ? 'none' : 'transform var(--transition-base)',
                             }}
@@ -1122,10 +1131,14 @@ const AppLayoutInner: React.FC = () => {
 
                     {/* Chat Panel Resizer */}
                     <div
-                        className="relative w-4 -mx-[2px] z-40 shrink-0 group flex justify-center"
-                        style={{ cursor: 'col-resize' }}
+                        className="relative w-0 z-40 shrink-0 group flex justify-center"
+                        style={{
+                            cursor: 'col-resize',
+                            marginLeft: 'calc(var(--panel-gap) * -1)',
+                        }}
                         onMouseDown={handleChatMouseDown}
                     >
+                        <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-2" />
                         <div
                             className={`h-full w-[1px] transition-colors duration-[var(--transition-fast)] ${isChatDragging
                                 ? 'bg-[var(--accent-primary)]'
@@ -1139,7 +1152,8 @@ const AppLayoutInner: React.FC = () => {
                         style={{
                             width: chatPanelWidth,
                             backgroundColor: 'var(--bg-panel)',
-                            borderRadius: 'var(--panel-radius)',
+                            borderRadius: '0',
+                            border: '1px solid var(--border-default)',
                             boxShadow: 'var(--panel-shadow)',
                         }}
                         className="min-w-[280px] max-w-[800px] flex flex-col z-30 overflow-hidden"
@@ -1182,7 +1196,8 @@ const AppLayoutInner: React.FC = () => {
                     height: '24px',
                     backgroundColor: 'var(--bg-panel)',
                     margin: '0 var(--panel-gap) var(--panel-gap)',
-                    borderRadius: 'calc(var(--panel-radius) / 2)',
+                    borderRadius: '0',
+                    border: '1px solid var(--border-default)',
                     boxShadow: 'var(--panel-shadow)',
                 }}
             >

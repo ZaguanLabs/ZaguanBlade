@@ -3,64 +3,59 @@ import { Extension } from "@codemirror/state";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 
-// Zaguan Blade Theme - A premium dark theme with vibrant syntax colors
-// Designed to match the surgical dark aesthetic of the app
+// Zaguan Blade Theme — Intentional "dimmed structural" palette with selective pop colors.
+// Structural tokens (keywords, operators, punctuation) recede; data tokens (strings,
+// numbers, functions, types) pop. Matches the OLED-dark spatial UI theme.
 
-// Tokyo Night Color Palette
-// Matches the theme.css Tokyo Night colors for consistency
 const colors = {
-    // Base colors - Tokyo Night deep blue-grays
-    bg: "#1f2335",           // Editor background (matches --bg-editor, slightly lighter for depth)
-    bgPanel: "#16161e",      // Panel background (matches --bg-panel)
-    bgSurface: "#1f202e",    // Surface background (matches --bg-surface)
-    bgSurfaceHover: "#292a3a", // Hover state (matches --bg-surface-hover)
-    
-    // Foreground - Soft blue-tinted text
-    fg: "#a9b1d6",           // Primary text (matches --fg-primary)
-    fgMuted: "#787c99",      // Secondary text (matches --fg-secondary)
-    fgSubtle: "#565f89",     // Tertiary text (matches --fg-tertiary)
-    fgDim: "#3b4261",        // Dim text
-    
+    // Base — OLED-dark, unified with app theme
+    bg: "#0e0e10",
+    bgPanel: "#111113",
+    bgSurface: "#1c1c1f",
+    bgSurfaceHover: "#252528",
+
+    // Foreground — neutral, no blue tint
+    fg: "#d4d4d8",
+    fgMuted: "#71717a",
+    fgSubtle: "#52525b",
+    fgDim: "#3f3f46",
+
     // Borders
-    border: "#101014",       // Subtle borders (matches --border-subtle)
-    borderFocus: "#3d59a1",  // Focus border (matches --border-focus)
-    
-    // Accent colors - Tokyo Night palette
-    accent: "#7aa2f7",       // Blue - Primary accent (matches --accent-primary)
-    accentBright: "#89b4fa", // Brighter blue
-    
-    // Syntax colors - Tokyo Night authentic palette
-    keyword: "#bb9af7",      // Purple - Keywords, control flow
-    string: "#9ece6a",       // Green - Strings
-    number: "#ff9e64",       // Orange - Numbers
-    comment: "#565f89",      // Muted blue-gray - Comments
-    function: "#7aa2f7",     // Blue - Functions
-    variable: "#c0caf5",     // Bright text - Variables
-    type: "#2ac3de",         // Cyan - Types
-    constant: "#ff9e64",     // Orange - Constants
-    operator: "#89ddff",     // Light cyan - Operators
-    property: "#73daca",     // Teal - Properties
-    tag: "#f7768e",          // Red/pink - Tags (HTML/JSX)
-    attribute: "#e0af68",    // Yellow - Attributes
-    regexp: "#bb9af7",       // Purple - Regex
-    macro: "#bb9af7",        // Purple - Macros
-    
-    // UI colors - Tokyo Night selection/highlight
-    selection: "#515c7e4d",  // Selection (matches --bg-selection)
-    selectionMatch: "#515c7e33",
-    activeLine: "#292e42",   // Active line background
-    activeLineGutter: "#1f2335",
-    cursor: "#c0caf5",       // Bright cursor
-    matchingBracket: "#515c7e80",
-    
+    border: "#1e1e22",
+    borderFocus: "#7c6af7",
+
+    // Accent — electric violet
+    accent: "#818cf8",
+
+    // Syntax — dimmed structural
+    keyword: "#818cf8",      // Muted indigo — present but not loud
+    operator: "#6b7280",     // Gray — fades into background
+    punctuation: "#4b5563",  // Very dim — brain infers them
+    variable: "#c4c4cc",     // Near-neutral — plain text
+    comment: "#4b5563",      // Dark gray — maximally recessive
+
+    // Syntax — pop (data tokens)
+    string: "#4ade80",       // Neon mint green — data stands out
+    number: "#fb923c",       // Warm orange — data stands out
+    function: "#a78bfa",     // Electric violet — actions stand out
+    type: "#67e8f9",         // Bright cyan — types stand out
+    constant: "#fb923c",     // Same as number
+    regexp: "#818cf8",       // Same as keyword
+    macro: "#818cf8",        // Same as keyword
+    property: "#94a3b8",     // Slate — structural, not data
+    tag: "#a78bfa",          // Muted indigo-violet — structural tags recede
+    attribute: "#fbbf24",    // Amber — warm
+
+    // UI
+    selection: "#6366f133",
+    selectionMatch: "#6366f122",
+    cursor: "#f4f4f5",
+    matchingBracket: "#6366f140",
+
     // Gutter
     gutterBg: "transparent",
-    gutterFg: "#3b4261",
-    gutterActiveFg: "#787c99",
-    
-    // Line numbers
-    lineNumber: "#3b4261",
-    lineNumberActive: "#a9b1d6",
+    lineNumber: "#3f3f46",
+    lineNumberActive: "#f4f4f5",
 };
 
 // Editor theme (UI styling)
@@ -69,15 +64,15 @@ export const zaguanEditorTheme = EditorView.theme({
         backgroundColor: colors.bg,
         color: colors.fg,
         fontSize: "14px",
-        fontFamily: '"Fira Code", "Symbols Nerd Font Mono", monospace',
+        fontFamily: '"JetBrains Mono", "Fira Code", "Symbols Nerd Font Mono", monospace',
     },
     
     // Content area
     ".cm-content": {
         caretColor: colors.cursor,
-        fontFamily: '"Fira Code", "Symbols Nerd Font Mono", monospace',
+        fontFamily: '"JetBrains Mono", "Fira Code", "Symbols Nerd Font Mono", monospace',
         lineHeight: "1.6",
-        padding: "8px 0",
+        padding: "12px 0",
     },
     
     // Cursor styling
@@ -96,34 +91,37 @@ export const zaguanEditorTheme = EditorView.theme({
         borderRadius: "2px",
     },
     
-    // Active line
+    // Active line — subtle top/bottom inset lines instead of a solid box
     ".cm-activeLine": {
-        backgroundColor: colors.activeLine,
+        backgroundColor: "transparent",
+        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04), inset 0 -1px 0 rgba(255,255,255,0.04)",
     },
     
     ".cm-activeLineGutter": {
-        backgroundColor: colors.activeLineGutter,
+        backgroundColor: "transparent",
     },
     
     // Gutters
     ".cm-gutters": {
         backgroundColor: colors.gutterBg,
-        color: colors.gutterFg,
+        color: colors.lineNumber,
         border: "none",
-        paddingRight: "8px",
+        paddingRight: "12px",
     },
     
     ".cm-lineNumbers .cm-gutterElement": {
         color: colors.lineNumber,
+        opacity: "0.35",
         padding: "0 12px 0 8px",
         minWidth: "40px",
-        fontFamily: '"Fira Code", monospace',
+        fontFamily: '"JetBrains Mono", "Fira Code", monospace',
         fontSize: "12px",
     },
     
     ".cm-lineNumbers .cm-gutterElement.cm-activeLineGutter": {
         color: colors.lineNumberActive,
-        fontWeight: "500",
+        opacity: "1",
+        fontWeight: "600",
     },
     
     // Fold gutter
@@ -285,7 +283,8 @@ export const zaguanEditorTheme = EditorView.theme({
     // Scroller
     ".cm-scroller": {
         overflow: "auto",
-        fontFamily: '"Fira Code", "Symbols Nerd Font Mono", monospace',
+        fontFamily: '"JetBrains Mono", "Fira Code", "Symbols Nerd Font Mono", monospace',
+        scrollbarWidth: "thin",
     },
     
     // ZLP Hover Tooltip
@@ -316,7 +315,7 @@ export const zaguanEditorTheme = EditorView.theme({
     },
     
     ".cm-zlp-signature": {
-        fontFamily: '"Fira Code", monospace',
+        fontFamily: '"JetBrains Mono", "Fira Code", monospace',
         fontSize: "12px",
         color: colors.fgMuted,
         marginBottom: "4px",
@@ -402,22 +401,22 @@ export const zaguanHighlightStyle = HighlightStyle.define([
     // Tags (HTML/JSX)
     { tag: t.tagName, color: colors.tag },
     { tag: t.standard(t.tagName), color: colors.tag },
-    { tag: t.angleBracket, color: colors.fgMuted },
+    { tag: t.angleBracket, color: colors.punctuation },
     
     // Attributes
     { tag: t.attributeName, color: colors.attribute },
     { tag: t.attributeValue, color: colors.string },
     
     // Punctuation
-    { tag: t.punctuation, color: colors.fgMuted },
-    { tag: t.separator, color: colors.fgMuted },
-    { tag: t.bracket, color: colors.fgMuted },
-    { tag: t.squareBracket, color: colors.fgMuted },
-    { tag: t.paren, color: colors.fgMuted },
-    { tag: t.brace, color: colors.fgMuted },
+    { tag: t.punctuation, color: colors.punctuation },
+    { tag: t.separator, color: colors.punctuation },
+    { tag: t.bracket, color: colors.punctuation },
+    { tag: t.squareBracket, color: colors.punctuation },
+    { tag: t.paren, color: colors.punctuation },
+    { tag: t.brace, color: colors.punctuation },
     
     // Meta
-    { tag: t.meta, color: colors.fgMuted },
+    { tag: t.meta, color: colors.fgSubtle },
     { tag: t.annotation, color: colors.macro },
     { tag: t.processingInstruction, color: colors.macro },
     
@@ -440,15 +439,27 @@ export const zaguanHighlightStyle = HighlightStyle.define([
     { tag: t.strikethrough, textDecoration: "line-through" },
     
     // Code
-    { tag: t.monospace, fontFamily: '"Fira Code", monospace' },
+    { tag: t.monospace, fontFamily: '"JetBrains Mono", "Fira Code", monospace' },
     
     // Invalid
     { tag: t.invalid, color: "#ef4444", textDecoration: "underline wavy" },
 ]);
 
+// AI glow keyframe — injected as a base theme so CM manages it
+export const zaguanGlowTheme = EditorView.baseTheme({
+    "@keyframes cm-ai-glow-fade": {
+        "0%": { textShadow: "0 0 8px rgba(99,102,241,0.85), 0 0 20px rgba(99,102,241,0.4)" },
+        "100%": { textShadow: "none" },
+    },
+    ".cm-ai-appeared": {
+        animation: "cm-ai-glow-fade 2s ease-out forwards",
+    },
+});
+
 // Combined theme extension
 export const zaguanTheme: Extension = [
     zaguanEditorTheme,
+    zaguanGlowTheme,
     syntaxHighlighting(zaguanHighlightStyle),
 ];
 

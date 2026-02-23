@@ -1,9 +1,43 @@
-/* Font Declarations */
+/* Font Declarations — all fonts served locally, no network requests */
+
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/InterVariable.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/InterVariable-Italic.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Variable.ttf') format('truetype');
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Italic-Variable.ttf') format('truetype');
+  font-weight: 100 800;
+  font-style: italic;
+  font-display: swap;
+}
+
 @font-face {
   font-family: 'Symbols Nerd Font Mono';
   src: url('/fonts/SymbolsNerdFontMono-Regular.ttf') format('truetype');
   font-weight: 400;
   font-style: normal;
+  font-display: block;
 }
 
 :root {
@@ -11,24 +45,24 @@
   /* OLED-black canvas, neutral grays, single electric-violet accent */
 
   /* Background Layers - Clear Luminance Hierarchy */
-  --bg-app: #0d0d0f;           /* True near-black canvas (shows between floating panels) */
-  --bg-editor: #141416;        /* Editor card surface */
-  --bg-panel: #111113;         /* Sidebar / chat card (darkest panel) */
-  --bg-surface: #1c1c1f;       /* Interactive surfaces (buttons, inputs) */
-  --bg-surface-hover: #252528; /* Hover states */
+  --bg-app: #10131a;           /* App canvas */
+  --bg-editor: #171b24;        /* Editor card surface (primary work area) */
+  --bg-panel: #141925;         /* Sidebar / chat cards */
+  --bg-surface: #202736;       /* Interactive surfaces (buttons, inputs) */
+  --bg-surface-hover: #2a3448; /* Hover states */
   --bg-selection: #6366f133;   /* Selection background (violet tint) */
-  --bg-active: #1e1e22;        /* Active list items */
+  --bg-active: #263047;        /* Active list items */
 
   /* Foreground - Neutral whites & grays (no blue tint) */
   --fg-primary: #e2e2e8;       /* Primary text — high contrast */
-  --fg-secondary: #8b8b99;     /* Secondary text / icons */
-  --fg-tertiary: #55555f;      /* Tertiary / disabled */
-  --fg-nav: #8b8b99;           /* Navigation icons */
+  --fg-secondary: #9aa3b5;     /* Secondary text / icons */
+  --fg-tertiary: #687186;      /* Tertiary / disabled */
+  --fg-nav: #8f98ad;           /* Navigation icons */
   --fg-bright: #f0f0ff;        /* Bright text (cursor, highlights) */
 
   /* Borders */
-  --border-subtle: #1e1e22;    /* Near-invisible separator */
-  --border-default: #2a2a2f;   /* Default border */
+  --border-subtle: rgba(255, 255, 255, 0.05);    /* Subtle separator */
+  --border-default: rgba(255, 255, 255, 0.08);   /* Default border */
   --border-focus: #7c6af7;     /* Focus state (matches accent) */
   --border-active: #9d8fff;    /* Active state (lighter violet) */
 
@@ -45,8 +79,8 @@
   --font-family-mono: "JetBrains Mono", "Fira Code", "Symbols Nerd Font Mono", "Courier New", monospace;
 
   /* Terminal Colors */
-  --term-bg: #0d0d0f;
-  --term-fg: #8b8b99;
+  --term-bg: #101523;
+  --term-fg: #97a1b8;
   --term-selection: #6366f133;
   --term-cursor: #f0f0ff;
 
@@ -69,10 +103,10 @@
   /* Spatial Layout Tokens */
   --panel-radius: 10px;
   --panel-gap: 6px;
-  --panel-shadow: 0 4px 24px rgba(0, 0, 0, 0.55);
+  --panel-shadow: 0 8px 26px rgba(4, 8, 16, 0.46);
 }
 
 .dark {
-  --bg-app: #0d0d0f;
-  --bg-panel: #111113;
+  --bg-app: #10131a;
+  --bg-panel: #141925;
 }

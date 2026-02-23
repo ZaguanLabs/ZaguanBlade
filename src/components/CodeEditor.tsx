@@ -25,6 +25,8 @@ import {
     diffStateField,
     setDiffState,
     parseUnifiedDiff,
+    aiGlowDecorations,
+    triggerAiGlow,
     zlpHoverTooltip,
 } from "./editor/extensions";
 import { zlpLinter } from "./editor/extensions/zlpLinter";
@@ -152,6 +154,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 lineHighlightField,
                 virtualBufferField,
                 diffDecorations(),
+                aiGlowDecorations(),
 
                 // Line wrapping (enabled for markdown and when explicitly requested)
                 ...(shouldWrap ? [EditorView.lineWrapping] : []),
@@ -282,10 +285,13 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
         if (unifiedDiff) {
             const diffLines = parseUnifiedDiff(unifiedDiff);
             view.dispatch({
-                effects: setDiffState.of({
-                    lines: diffLines,
-                    originalContent: '' // We don't need this for decorations
-                })
+                effects: [
+                    setDiffState.of({
+                        lines: diffLines,
+                        originalContent: '' // We don't need this for decorations
+                    }),
+                    triggerAiGlow.of(undefined),
+                ]
             });
         } else {
             // Clear diff state when no diff
@@ -459,7 +465,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     }, [showMenu]);
 
     return (
-        <div className="h-full w-full relative" onContextMenu={handleContextMenu}>
+        <div className="code-editor-scroll h-full w-full relative" onContextMenu={handleContextMenu}>
             <div ref={editorRef} className="h-full w-full overflow-hidden text-base" />
 
             {inspectorData && filename && (
