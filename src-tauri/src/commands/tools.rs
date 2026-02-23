@@ -259,7 +259,10 @@ pub fn approve_single_command<R: Runtime>(
                             "User explicitly skipped this command: '{}'. Do NOT retry this command. Ask the user how they would like to proceed instead.",
                             cmd.command
                         );
-                        batch.file_results.push((cmd.call.clone(), crate::tools::ToolResult::err(&error_msg)));
+                        batch.file_results.push((
+                            cmd.call.clone(),
+                            crate::tools::ToolResult::skipped(&error_msg),
+                        ));
                         
                         // Emit tool-execution-completed for UI update
                         let _ = app_handle.emit(
@@ -268,7 +271,7 @@ pub fn approve_single_command<R: Runtime>(
                                 tool_name: "run_command".to_string(),
                                 tool_call_id: call_id.clone(),
                                 success: false,
-                                skipped: false,
+                                skipped: true,
                             },
                         );
                     }

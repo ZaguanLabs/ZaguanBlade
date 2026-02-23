@@ -36,6 +36,7 @@ interface ChatPanelProps {
     setSelectedModelId: (modelId: string) => void;
     pendingActions: StructuredAction[] | null;
     approveToolDecision: (decision: string) => void;
+    skipSingleCommand: (callId: string) => void;
     projectId: string;
     onLoadConversation: (messages: ChatMessageType[]) => void;
     researchProgress?: ResearchProgress | null;
@@ -60,6 +61,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     setSelectedModelId,
     pendingActions,
     approveToolDecision,
+    skipSingleCommand,
     projectId,
     onLoadConversation,
     researchProgress,
@@ -252,8 +254,8 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     }, []);
 
     const handleSkipSingleCommand = useCallback((callId: string) => {
-        invoke('approve_single_command', { callId, approved: false });
-    }, []);
+        skipSingleCommand(callId);
+    }, [skipSingleCommand]);
 
     return (
         <div className="flex flex-col h-full bg-[var(--bg-app)] text-[var(--fg-primary)] font-sans tracking-tight" onContextMenu={handleContextMenu}>

@@ -62,6 +62,7 @@ const AppLayoutInner: React.FC = () => {
     const [activeSidebar, setActiveSidebar] = useState<'explorer' | 'git' | 'history'>('explorer');
 
     const chat = useChat();
+    const [wasStoppedByUser, setWasStoppedByUser] = useState(false);
     const { changes: uncommittedChanges, acceptAll: acceptAllChanges, rejectAll: rejectAllChanges } = useUncommittedChanges();
     const {
         status: gitStatus,
@@ -84,6 +85,11 @@ const AppLayoutInner: React.FC = () => {
     const { selectedModelId, setSelectedModelId, messages, refreshModels } = chat;
     const processingFilesRef = useRef<Set<string>>(new Set());
     const terminalPaneRef = useRef<TerminalPaneHandle>(null);
+
+    const handleStopGeneration = useCallback(async () => {
+        setWasStoppedByUser(true);
+        await chat.stopGeneration();
+    }, [chat.stopGeneration]);
 
     // Tab history stack: tracks previously active tabs for "go back" on close
     const tabHistoryRef = useRef<string[]>([]);
@@ -822,12 +828,57 @@ const AppLayoutInner: React.FC = () => {
         };
     }, [chat.setConversation]);
 
-    // Clear active indicator when chat stops loading (but keep in message history)
+    useEffect(() => {
+        if (chat.loading) {
+            setWasStoppedByUser(false);
+        }
+    }, [chat.loading]);
+
+    // Clear active indicator when chat stops loading and finalize any lingering
+    // non-terminal research activity cards so they don't keep spinning forever.
     useEffect(() => {
         if (!chat.loading) {
             setResearchProgress(prev => prev ? { ...prev, isActive: false } : null);
+            const finalStage = wasStoppedByUser ? 'STOPPED' : 'COMPLETE';
+
+            chat.setConversation(prev => {
+                let changed = false;
+                const next = prev.map(msg => {
+                    const activities = msg.researchActivities;
+                    if (!activities || activities.length === 0) return msg;
+
+                    const updatedActivities = activities.map(activity => {
+                        const stage = activity.stage.toLowerCase();
+                        const isTerminalStage =
+                            stage.includes('complete')
+                            || stage.includes('done')
+                            || stage.includes('error')
+                            || stage.includes('fail')
+                            || stage.includes('cancel')
+                            || stage.includes('stop');
+
+                        if (isTerminalStage) return activity;
+
+                        changed = true;
+                        return {
+                            ...activity,
+                            stage: finalStage,
+                            percent: 100,
+                        };
+                    });
+
+                    if (!changed) return msg;
+
+                    return {
+                        ...msg,
+                        researchActivities: updatedActivities,
+                    };
+                });
+
+                return changed ? next : prev;
+            });
         }
-    }, [chat.loading]);
+    }, [chat.loading, chat.setConversation, wasStoppedByUser]);
 
     // Measure editor column width so AppBar can constrain the tab strip to it
     const editorColumnRef = useRef<HTMLDivElement>(null);
@@ -1152,12 +1203,13 @@ const AppLayoutInner: React.FC = () => {
                                 loading={chat.loading}
                                 error={chat.error}
                                 sendMessage={chat.sendMessage}
-                                stopGeneration={chat.stopGeneration}
+                                stopGeneration={handleStopGeneration}
                                 models={chat.models}
                                 selectedModelId={chat.selectedModelId}
                                 setSelectedModelId={chat.setSelectedModelId}
                                 pendingActions={chat.pendingActions}
                                 approveToolDecision={chat.approveToolDecision}
+                                skipSingleCommand={chat.skipSingleCommand}
 
                                 projectId={projectId || "default-project"}
                                 onLoadConversation={chat.loadConversation}

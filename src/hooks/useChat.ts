@@ -187,6 +187,37 @@ export function useChat() {
         }
     }, []);
 
+    const updateToolCallsStatusLocally = useCallback((
+        toolCallIds: string[],
+        nextStatus: 'pending' | 'executing' | 'complete' | 'error' | 'skipped',
+        fallbackResultText: string,
+    ) => {
+        if (toolCallIds.length === 0) return;
+        const idSet = new Set(toolCallIds);
+        setMessages(prev => prev.map(msg => {
+            if (!msg.tool_calls?.some(tc => idSet.has(tc.id))) return msg;
+            return {
+                ...msg,
+                tool_calls: (msg.tool_calls || []).map(tc =>
+                    idSet.has(tc.id)
+                        ? {
+                            ...tc,
+                            status: nextStatus,
+                            ...(tc.result ? {} : { result: fallbackResultText }),
+                        }
+                        : tc,
+                ),
+            };
+        }));
+    }, []);
+
+    const markToolCallsSkippedLocally = useCallback((
+        toolCallIds: string[],
+        skippedResultText = 'Skipped by user',
+    ) => {
+        updateToolCallsStatusLocally(toolCallIds, 'skipped', skippedResultText);
+    }, [updateToolCallsStatusLocally]);
+
     // Wrapper that syncs with backend when model changes
     const setSelectedModelId = useCallback(async (modelId: string) => {
         hasExplicitModelRef.current = true;
@@ -423,6 +454,21 @@ export function useChat() {
             */
 
             const u2 = await listen('chat-done', () => {
+                const inFlightToolCallIds = Array.from(new Set(
+                    messagesRef.current.flatMap(msg =>
+                        (msg.tool_calls || [])
+                            .filter(tc => tc.status === undefined || tc.status === 'pending' || tc.status === 'executing')
+                            .map(tc => tc.id)
+                    )
+                ));
+                if (inFlightToolCallIds.length > 0) {
+                    updateToolCallsStatusLocally(
+                        inFlightToolCallIds,
+                        'complete',
+                        'Completed after conversation ended',
+                    );
+                }
+
                 setLoading(false);
                 setPendingActions(null); // Clear any hanging dialogs
 
@@ -613,7 +659,39 @@ export function useChat() {
             });
             unlistenCommand = u6;
 
-            // u7 removed - redundant with chat-update logic
+            const u7 = await listen<ToolExecutionCompletedPayload>('tool-execution-completed', (event) => {
+                const { tool_call_id, success, skipped } = event.payload;
+                const nextStatus: 'complete' | 'error' | 'skipped' = skipped
+                    ? 'skipped'
+                    : success
+                        ? 'complete'
+                        : 'error';
+
+                setMessages(prev => prev.map(msg => {
+                    if (!msg.tool_calls?.some(tc => tc.id === tool_call_id)) return msg;
+                    return {
+                        ...msg,
+                        tool_calls: (msg.tool_calls || []).map(tc =>
+                            tc.id === tool_call_id
+                                ? {
+                                    ...tc,
+                                    status: nextStatus,
+                                    ...(skipped && !tc.result ? { result: 'Skipped by user' } : {}),
+                                }
+                                : tc,
+                        ),
+                    };
+                }));
+
+                if (skipped) {
+                    setPendingActions(prev => {
+                        if (!prev || prev.length === 0) return prev;
+                        const filtered = prev.filter(action => action.id !== tool_call_id);
+                        return filtered.length > 0 ? filtered : null;
+                    });
+                }
+            });
+            unlistenToolCompleted = u7;
 
 
 
@@ -833,7 +911,7 @@ export function useChat() {
                 if (unlistenMessageTooLarge) unlistenMessageTooLarge();
                 if (unlistenPerm) unlistenPerm();
                 if (unlistenCommand) unlistenCommand();
-                // if (unlistenToolCompleted) unlistenToolCompleted(); // Removed
+                if (unlistenToolCompleted) unlistenToolCompleted();
                 if (unlistenTodoUpdated) unlistenTodoUpdated();
                 if (unlistenV11) unlistenV11();
             };
@@ -852,7 +930,7 @@ export function useChat() {
                 pendingTimeoutsRef.current = [];
             }
         };
-    }, [queueMessageUpdate, flushPendingUpdates]);
+    }, [queueMessageUpdate, flushPendingUpdates, updateToolCallsStatusLocally]);
 
     const [messageQueue, setMessageQueue] = useState<{ text: string; attachments?: ImageAttachment[] }[]>([]);
 
@@ -929,15 +1007,31 @@ export function useChat() {
         setMessageQueue(prev => [...prev, { text, attachments }]);
     }, [loading]);
     const stopGeneration = useCallback(async () => {
+        const inFlightToolCallIds = Array.from(new Set([
+            ...messagesRef.current.flatMap(msg =>
+                (msg.tool_calls || [])
+                    .filter(tc => tc.status === undefined || tc.status === 'pending' || tc.status === 'executing')
+                    .map(tc => tc.id)
+            ),
+            ...(pendingActions?.map(action => action.id) || []),
+        ]));
+
+        if (inFlightToolCallIds.length > 0) {
+            markToolCallsSkippedLocally(inFlightToolCallIds, 'Stopped by user');
+        }
+
+        toolChunkCountsRef.current.clear();
+        setToolActivity(null);
+        // Clear any pending command approvals when stopping
+        setPendingActions(null);
+
         try {
             await BladeDispatcher.chat({ type: 'StopGeneration', payload: {} });
             setLoading(false);
-            // Clear any pending command approvals when stopping
-            setPendingActions(null);
         } catch (e) {
             console.error("Failed to stop generation:", e);
         }
-    }, []);
+    }, [pendingActions, markToolCallsSkippedLocally]);
 
 
 
@@ -955,6 +1049,12 @@ export function useChat() {
 
     const approveToolDecision = useCallback(async (decision: string) => {
         try {
+            const pendingIds = pendingActions?.map(action => action.id) || [];
+            if (decision === 'reject' && pendingIds.length > 0) {
+                // Optimistic UI: immediately flip tool cards to skipped.
+                markToolCallsSkippedLocally(pendingIds);
+            }
+
             // Optimistically clear pending actions for immediate UI feedback
             // New request-confirmation events will set new actions if needed
             setPendingActions(null);
@@ -966,7 +1066,23 @@ export function useChat() {
         } catch (e) {
             console.error('Failed to approve tool decision:', e);
         }
-    }, []);
+    }, [pendingActions, markToolCallsSkippedLocally]);
+
+    const skipSingleCommand = useCallback(async (callId: string) => {
+        // Optimistic UI: immediately mark this tool call as skipped.
+        markToolCallsSkippedLocally([callId]);
+        setPendingActions(prev => {
+            if (!prev || prev.length === 0) return prev;
+            const filtered = prev.filter(action => action.id !== callId);
+            return filtered.length > 0 ? filtered : null;
+        });
+
+        try {
+            await invoke('approve_single_command', { callId, approved: false });
+        } catch (e) {
+            console.error('Failed to skip single command:', e);
+        }
+    }, [markToolCallsSkippedLocally]);
 
     const newConversation = useCallback(async () => {
         try {
@@ -1007,6 +1123,7 @@ export function useChat() {
         pendingActions,
         approveTool,
         approveToolDecision,
+        skipSingleCommand,
         newConversation,
         undoTool,
         setConversation: setMessages,
