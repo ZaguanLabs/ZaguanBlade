@@ -783,7 +783,7 @@ pub fn git_commit_preflight(state: State<'_, AppState>) -> Result<CommitPrefligh
     let has_upstream = branch.as_ref().map_or(false, |b| {
         let config = repo.config_snapshot();
         let key = format!("branch.{}.remote", b);
-        config.string(&key).is_some()
+        config.string(key.as_str()).is_some()
     });
 
     // Use CLI for status checks (staged count + conflicts) until gix status API is wired
@@ -1161,16 +1161,16 @@ pub fn git_log(state: State<'_, AppState>, count: Option<u32>) -> Result<Vec<Git
         let hash = info.id().to_string();
         let short_hash = hash[..7.min(hash.len())].to_string();
 
-        let author = commit_ref.author().map_err(|e| format!("Failed to parse author: {}", e))?;
+        let author = commit_ref.author();
         let author_name = author.name.to_string();
         let author_email = author.email.to_string();
 
         // Convert git timestamp to ISO 8601 and relative date
-        // author.time is a raw string like "1707580800 +0100"
-        let (ts, offset_secs) = parse_git_time(author.time);
+        let ts = author.time.seconds as i64;
+        let offset_secs = author.time.offset;
         let fixed_offset = chrono::FixedOffset::east_opt(offset_secs)
             .unwrap_or_else(|| chrono::FixedOffset::east_opt(0).unwrap());
-        let dt = chrono::DateTime::from_timestamp(ts as i64, 0)
+        let dt = chrono::DateTime::from_timestamp(ts, 0)
             .unwrap_or_default()
             .with_timezone(&fixed_offset);
         let date = dt.to_rfc3339();
@@ -1249,19 +1249,6 @@ fn build_ref_map(repo: &gix::Repository) -> std::collections::HashMap<gix::Objec
     }
 
     map
-}
-
-fn parse_git_time(raw: &str) -> (i64, i32) {
-    let mut parts = raw.split_whitespace();
-    let seconds: i64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-    let offset_str = parts.next().unwrap_or("+0000");
-    // offset_str is like "+0100" or "-0500"
-    let sign = if offset_str.starts_with('-') { -1i32 } else { 1i32 };
-    let digits = offset_str.trim_start_matches(['+', '-']);
-    let hours: i32 = digits.get(..2).and_then(|s| s.parse().ok()).unwrap_or(0);
-    let mins: i32 = digits.get(2..4).and_then(|s| s.parse().ok()).unwrap_or(0);
-    let offset_secs = sign * (hours * 3600 + mins * 60);
-    (seconds, offset_secs)
 }
 
 fn format_relative_date(now: chrono::DateTime<chrono::Utc>, then: chrono::DateTime<chrono::Utc>) -> String {
