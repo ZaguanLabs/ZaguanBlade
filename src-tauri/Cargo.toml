@@ -46,8 +46,8 @@ rusqlite = { version = "0.38", features = ["bundled"] }
 notify = "8"
 ignore = "0.4"
 diffy = "0.4"
-gix = "0.51.0"
-bstr = "=1.9.1"
+gix = "0.80.0"
+bstr = "1.12.1"
 
 # Tree-sitter for AST parsing (ZLP - Zaguán Language Protocol)
 tree-sitter = "0.26"

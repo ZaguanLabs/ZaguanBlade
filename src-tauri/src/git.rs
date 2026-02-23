@@ -1161,13 +1161,14 @@ pub fn git_log(state: State<'_, AppState>, count: Option<u32>) -> Result<Vec<Git
         let hash = info.id().to_string();
         let short_hash = hash[..7.min(hash.len())].to_string();
 
-        let author = commit_ref.author();
+        let author = commit_ref
+            .author()
+            .map_err(|e| format!("Failed to decode commit author: {}", e))?;
         let author_name = author.name.to_string();
         let author_email = author.email.to_string();
 
         // Convert git timestamp to ISO 8601 and relative date
-        let ts = author.time.seconds as i64;
-        let offset_secs = author.time.offset;
+        let (ts, offset_secs) = parse_signature_time(author.time);
         let fixed_offset = chrono::FixedOffset::east_opt(offset_secs)
             .unwrap_or_else(|| chrono::FixedOffset::east_opt(0).unwrap());
         let dt = chrono::DateTime::from_timestamp(ts, 0)
@@ -1249,6 +1250,37 @@ fn build_ref_map(repo: &gix::Repository) -> std::collections::HashMap<gix::Objec
     }
 
     map
+}
+
+fn parse_signature_time(raw: &str) -> (i64, i32) {
+    let mut parts = raw.split_whitespace();
+    let ts = parts
+        .next()
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0);
+    let offset_secs = parts
+        .next()
+        .and_then(parse_git_tz_offset)
+        .unwrap_or(0);
+
+    (ts, offset_secs)
+}
+
+fn parse_git_tz_offset(value: &str) -> Option<i32> {
+    if value.len() != 5 {
+        return None;
+    }
+
+    let sign = match &value[0..1] {
+        "+" => 1,
+        "-" => -1,
+        _ => return None,
+    };
+
+    let hours = value[1..3].parse::<i32>().ok()?;
+    let minutes = value[3..5].parse::<i32>().ok()?;
+
+    Some(sign * (hours * 3600 + minutes * 60))
 }
 
 fn format_relative_date(now: chrono::DateTime<chrono::Utc>, then: chrono::DateTime<chrono::Utc>) -> String {
