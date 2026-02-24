@@ -1,11 +1,46 @@
 use crate::app_state::AppState;
 use crate::uncommitted_changes::UncommittedChange;
+use std::fs;
 use std::path::PathBuf;
 use tauri::State;
 
 #[tauri::command]
 pub fn get_uncommitted_changes(state: State<'_, AppState>) -> Vec<UncommittedChange> {
-    state.uncommitted_changes.get_all()
+    let existing = state.uncommitted_changes.get_all();
+    if existing.is_empty() {
+        return existing;
+    }
+
+    let mut refreshed = Vec::with_capacity(existing.len());
+    let mut changed_any = false;
+
+    for mut change in existing {
+        let snapshot = state.history_service.get_snapshot_content(&change.snapshot_id);
+        let current = fs::read_to_string(&change.file_path);
+
+        if let (Ok(base_content), Ok(new_content)) = (snapshot, current) {
+            let unified_diff = crate::uncommitted_changes::generate_unified_diff(&base_content, &new_content);
+            let (added, removed) = crate::uncommitted_changes::count_diff_stats(&unified_diff);
+
+            if change.unified_diff != unified_diff
+                || change.added_lines != added
+                || change.removed_lines != removed
+            {
+                change.unified_diff = unified_diff;
+                change.added_lines = added;
+                change.removed_lines = removed;
+                changed_any = true;
+            }
+        }
+
+        refreshed.push(change);
+    }
+
+    if changed_any {
+        state.uncommitted_changes.replace_all(refreshed.clone());
+    }
+
+    refreshed
 }
 
 #[tauri::command]

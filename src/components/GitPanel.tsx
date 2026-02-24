@@ -137,6 +137,12 @@ export const GitPanel: React.FC<GitPanelProps> = ({
         return 'text-amber-400'; // Modified unstaged
     };
 
+    const shouldStrikeFileName = (file: GitFileStatus) => {
+        const code = (file.statusCode || '').toUpperCase();
+        // Git porcelain uses D for deletions and R for renames/moves.
+        return code.includes('D') || code.includes('R');
+    };
+
     // File row component for compact display
     const FileRow = ({ file, isStaged }: { file: GitFileStatus; isStaged: boolean }) => (
         <div className="group flex items-center gap-1 py-0.5 px-1 rounded hover:bg-[var(--bg-surface-hover)] text-[11px]">
@@ -144,7 +150,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                 {file.statusCode}
             </span>
             <span
-                className={`truncate flex-1 cursor-pointer ${file.untracked ? 'text-green-400/80' : 'text-[var(--fg-primary)]'}`}
+                className={`truncate flex-1 cursor-pointer ${file.untracked ? 'text-green-400/80' : 'text-[var(--fg-primary)]'} ${shouldStrikeFileName(file) ? 'line-through decoration-red-400/70 text-[var(--fg-tertiary)]' : ''}`}
                 onClick={() => toggleDiff(file)}
                 title={file.path}
             >

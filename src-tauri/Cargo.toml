@@ -46,6 +46,7 @@ rusqlite = { version = "0.38", features = ["bundled"] }
 notify = "8"
 ignore = "0.4"
 diffy = "0.4"
+similar = "2"
 gix = "0.80.0"
 bstr = "1.12.1"
 

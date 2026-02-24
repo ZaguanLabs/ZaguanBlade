@@ -145,14 +145,14 @@ const markdownComponents = {
     // Headings
     h1({ children }: { children?: React.ReactNode }) {
         return (
-            <h1 className="text-[15px] font-semibold text-zinc-100 mt-4 mb-2 first:mt-0 border-b border-zinc-800 pb-1">
+            <h1 className="text-[15px] font-semibold text-zinc-200 mt-4 mb-2 first:mt-0 border-b border-zinc-800 pb-1">
                 {children}
             </h1>
         );
     },
     h2({ children }: { children?: React.ReactNode }) {
         return (
-            <h2 className="text-[14px] font-semibold text-zinc-100 mt-4 mb-2 first:mt-0 border-b border-zinc-800/50 pb-1">
+            <h2 className="text-[14px] font-semibold text-zinc-200 mt-4 mb-2 first:mt-0 border-b border-zinc-800/50 pb-1">
                 {children}
             </h2>
         );
@@ -211,7 +211,7 @@ const markdownComponents = {
 
     // Strong/Bold
     strong({ children }: { children?: React.ReactNode }) {
-        return <strong className="font-semibold text-zinc-100">{children}</strong>;
+        return <strong className="font-semibold text-zinc-200">{children}</strong>;
     },
 
     // Emphasis/Italic

@@ -157,6 +157,33 @@ pub fn get_settings_path(project_path: &Path) -> PathBuf {
         .join("settings.json")
 }
 
+fn line_ignores_zblade(line: &str) -> bool {
+    let trimmed = line.trim();
+    matches!(trimmed, ".zblade" | ".zblade/" | "/.zblade" | "/.zblade/")
+        || trimmed.starts_with(".zblade/")
+        || trimmed.starts_with("/.zblade/")
+}
+
+fn ensure_project_gitignore_has_zblade(project_path: &Path) {
+    let project_gitignore = project_path.join(".gitignore");
+    let mut content = fs::read_to_string(&project_gitignore).unwrap_or_default();
+
+    let already_ignored = content.lines().any(line_ignores_zblade);
+    if already_ignored {
+        return;
+    }
+
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+
+    content.push_str("\n# ZaguanBlade local data\n.zblade/\n");
+
+    if let Err(e) = fs::write(&project_gitignore, content) {
+        eprintln!("[zblade] Warning: Failed to update .gitignore: {}", e);
+    }
+}
+
 /// Initialize .zblade directory structure if it doesn't exist
 pub fn init_zblade_dir(project_path: &Path) -> Result<(), String> {
     let zblade_dir = get_zblade_dir(project_path);
@@ -179,10 +206,9 @@ pub fn init_zblade_dir(project_path: &Path) -> Result<(), String> {
     let gitignore_path = zblade_dir.join(".gitignore");
     if !gitignore_path.exists() {
         let gitignore_content = r#"# ZaguanBlade local data
-# Keep instructions.md tracked, ignore everything else
+# Ignore everything in this local directory
 *
 !.gitignore
-!instructions.md
 "#;
         fs::write(&gitignore_path, gitignore_content)
             .map_err(|e| format!("Failed to create .gitignore: {}", e))?;
@@ -211,30 +237,8 @@ Add project-specific instructions for the AI assistant here.
             .map_err(|e| format!("Failed to create instructions.md: {}", e))?;
     }
 
-    // Add .zblade/ to project's .gitignore if it exists and doesn't already contain it
-    let project_gitignore = project_path.join(".gitignore");
-    if project_gitignore.exists() {
-        if let Ok(content) = fs::read_to_string(&project_gitignore) {
-            // Check if .zblade is already ignored (various formats)
-            let already_ignored = content.lines().any(|line| {
-                let trimmed = line.trim();
-                trimmed == ".zblade" || trimmed == ".zblade/" || trimmed == "/.zblade" || trimmed == "/.zblade/"
-            });
-            
-            if !already_ignored {
-                // Append .zblade/ to the gitignore
-                let mut new_content = content;
-                if !new_content.ends_with('\n') {
-                    new_content.push('\n');
-                }
-                new_content.push_str("\n# ZaguanBlade local data\n.zblade/\n");
-                
-                if let Err(e) = fs::write(&project_gitignore, new_content) {
-                    eprintln!("[zblade] Warning: Failed to update .gitignore: {}", e);
-                }
-            }
-        }
-    }
+    // Ensure the workspace root .gitignore always excludes .zblade
+    ensure_project_gitignore_has_zblade(project_path);
 
     Ok(())
 }
@@ -347,5 +351,16 @@ mod tests {
         let loaded = load_project_settings(project_path).unwrap();
         assert_eq!(loaded.storage.mode, StorageMode::Server);
         assert_eq!(loaded.context.max_tokens, 16000);
+    }
+
+    #[test]
+    fn test_init_zblade_dir_creates_project_gitignore_entry() {
+        let temp = tempdir().unwrap();
+        let project_path = temp.path();
+
+        init_zblade_dir(project_path).unwrap();
+
+        let content = fs::read_to_string(project_path.join(".gitignore")).unwrap();
+        assert!(content.lines().any(line_ignores_zblade));
     }
 }

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use similar::{Algorithm, TextDiff};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -176,6 +177,19 @@ impl Default for UncommittedChangeTracker {
     }
 }
 
+pub fn generate_unified_diff(base_content: &str, new_content: &str) -> String {
+    // Patience diff is much more stable for repeated boilerplate blocks
+    // (e.g. changelog sections) and avoids under-highlighting large insertions.
+    let diff = TextDiff::configure()
+        .algorithm(Algorithm::Patience)
+        .diff_lines(base_content, new_content);
+
+    diff.unified_diff()
+        .context_radius(3)
+        .header("a/file", "b/file")
+        .to_string()
+}
+
 pub fn count_diff_stats(diff: &str) -> (usize, usize) {
     let mut added = 0;
     let mut removed = 0;
@@ -234,5 +248,63 @@ mod tests {
         let accepted = tracker.accept("test-1").unwrap();
         assert_eq!(accepted.id, "test-1");
         assert_eq!(tracker.count(), 0);
+    }
+
+    #[test]
+    fn test_generate_unified_diff_marks_full_repeated_block_insertions() {
+        let base = r#"<section class=\"changelog-section\">
+  <div class=\"version-card\">
+    <div class=\"version-header\">
+      <h2 class=\"version-number\">v0.3.1</h2>
+      <span class=\"version-date\">February 25, 2026</span>
+    </div>
+    <div class=\"version-content\">
+      <ul class=\"changes-list\">
+        <li>Previous entry</li>
+      </ul>
+    </div>
+  </div>
+</section>
+"#;
+
+        let next = r#"<section class=\"changelog-section\">
+  <div class=\"version-card version-dev\">
+    <div class=\"version-header\">
+      <h2 class=\"version-number\">v0.3.2</h2>
+      <span class=\"version-date\">TBD</span>
+    </div>
+    <div class=\"version-content\">
+      <ul class=\"changes-list\">
+        <li>Welcome screen alignment fix</li>
+        <li>Clipboard image paste fix</li>
+        <li>Keep focus on active tab</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class=\"changelog-section\">
+  <div class=\"version-card\">
+    <div class=\"version-header\">
+      <h2 class=\"version-number\">v0.3.1</h2>
+      <span class=\"version-date\">February 25, 2026</span>
+    </div>
+    <div class=\"version-content\">
+      <ul class=\"changes-list\">
+        <li>Previous entry</li>
+      </ul>
+    </div>
+  </div>
+</section>
+"#;
+
+        let diff = generate_unified_diff(base, next);
+        let (added, removed) = count_diff_stats(&diff);
+
+        assert!(
+            added >= 10,
+            "expected multi-line insertion to be represented in unified diff, got {added} added lines. diff:\n{diff}"
+        );
+        assert_eq!(removed, 0, "insertion-only change should not remove lines. diff:\n{diff}");
     }
 }

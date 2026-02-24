@@ -20,6 +20,11 @@ pub struct GitStatusSummary {
     pub dirty: bool,
 }
 
+fn is_zblade_path(path: &str) -> bool {
+    let normalized = path.replace('\\', "/").trim_start_matches("./").to_string();
+    normalized == ".zblade" || normalized.starts_with(".zblade/")
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitFileStatus {
@@ -192,6 +197,9 @@ fn git_status_output(root: &str) -> Result<Option<String>, String> {
         .arg("--porcelain=v2")
         .arg("-uall")
         .arg("--branch")
+        .arg("--")
+        .arg(".")
+        .arg(":(exclude).zblade/**")
         .output()
         .map_err(|e| format!("failed to run git status: {}", e))?;
 
@@ -637,6 +645,10 @@ pub fn git_stage_file(state: State<'_, AppState>, path: String) -> Result<(), St
         return Err("No workspace open".to_string());
     };
 
+    if is_zblade_path(&path) {
+        return Ok(());
+    }
+
     let output = Command::new("git")
         .arg("-C")
         .arg(&root)
@@ -689,6 +701,9 @@ pub fn git_stage_all(state: State<'_, AppState>) -> Result<(), String> {
         .arg(&root)
         .arg("add")
         .arg("-A")
+        .arg("--")
+        .arg(".")
+        .arg(":(exclude).zblade/**")
         .output()
         .map_err(|e| format!("failed to run git add -A: {}", e))?;
 

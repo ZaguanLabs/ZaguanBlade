@@ -50,6 +50,36 @@ interface ChatPanelProps {
     setActiveTodos: React.Dispatch<React.SetStateAction<TodoItem[]>>;
 }
 
+const pendingResponseWords = [
+    'Working...',
+    'Thinking...',
+    'Waiting...',
+    'Ruminating...',
+] as const;
+
+const PendingResponseIndicator: React.FC = () => {
+    const [wordIndex, setWordIndex] = useState(0);
+
+    useEffect(() => {
+        const intervalId = window.setInterval(() => {
+            setWordIndex((prev) => (prev + 1) % pendingResponseWords.length);
+        }, 6500);
+
+        return () => window.clearInterval(intervalId);
+    }, []);
+
+    return (
+        <div className="px-4 py-2">
+            <div className="inline-flex items-center gap-2 rounded-md border border-(--border-subtle) bg-(--bg-surface)/70 px-3 py-1.5 text-[11px] font-medium text-(--fg-secondary)">
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-(--fg-tertiary)" />
+                <span key={pendingResponseWords[wordIndex]} className="pending-response-word">
+                    {pendingResponseWords[wordIndex]}
+                </span>
+            </div>
+        </div>
+    );
+};
+
 const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     messages,
     loading,
@@ -106,6 +136,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     const scrollContainerRef = useRef<HTMLDivElement>(null);
 
     const lastMessage = messages[messages.length - 1];
+    const shouldShowPendingResponseIndicator = loading && lastMessage?.role !== 'Assistant';
     const streamingSignature = useMemo(() => {
         if (!lastMessage) return '';
         return [
@@ -334,6 +365,8 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                                 />
                             );
                         })}
+
+                        {shouldShowPendingResponseIndicator && <PendingResponseIndicator />}
 
                         {/* Research progress indicator */}
                         {researchProgress?.isActive && (

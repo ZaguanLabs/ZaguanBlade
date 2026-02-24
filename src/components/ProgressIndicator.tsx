@@ -8,6 +8,30 @@ interface ProgressIndicatorProps {
 }
 
 export const ProgressIndicator: React.FC<ProgressIndicatorProps> = ({ progress }) => {
+    const getPrettyStageLabel = () => {
+        const rawStage = progress.stage || '';
+        const stage = rawStage.toLowerCase();
+
+        const prettyStageMap: Record<string, string> = {
+            considering_next_steps: 'Planning Next Step',
+        };
+
+        if (prettyStageMap[stage]) {
+            return prettyStageMap[stage];
+        }
+
+        if (rawStage.includes('_')) {
+            return rawStage
+                .toLowerCase()
+                .split('_')
+                .filter(Boolean)
+                .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+                .join(' ');
+        }
+
+        return rawStage;
+    };
+
     const getStageIcon = () => {
         const stage = progress.stage.toLowerCase();
         
@@ -78,7 +102,7 @@ export const ProgressIndicator: React.FC<ProgressIndicatorProps> = ({ progress }
                     {getStageIcon()}
                 </div>
                 <span className="font-mono text-xs text-zinc-200 uppercase tracking-wider font-semibold">
-                    {progress.stage}
+                    {getPrettyStageLabel()}
                 </span>
                 <div className="ml-auto flex items-center gap-2">
                     <span className="text-xs text-zinc-400 font-mono">
@@ -87,7 +111,7 @@ export const ProgressIndicator: React.FC<ProgressIndicatorProps> = ({ progress }
                 </div>
             </div>
             
-            <div className="text-sm text-zinc-300 font-medium mb-2">
+            <div className="text-[11px] leading-relaxed text-zinc-300/90 font-medium mb-2">
                 {progress.message}
             </div>
             

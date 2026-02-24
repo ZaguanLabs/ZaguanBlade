@@ -112,8 +112,32 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
 
     const handlePaste = useCallback(async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
         const items = Array.from(event.clipboardData.items);
-        const imageItems = items.filter((item) => item.type.startsWith('image/'));
-        if (imageItems.length === 0) return;
+        const filesFromItems = items
+            .map((item) => item.getAsFile())
+            .filter((file): file is File => !!file);
+        const filesFromClipboard = Array.from(event.clipboardData.files);
+
+        const dedupeKey = (file: File) => `${file.name}:${file.size}:${file.lastModified}`;
+        const fileMap = new Map<string, File>();
+        [...filesFromItems, ...filesFromClipboard].forEach((file) => {
+            fileMap.set(dedupeKey(file), file);
+        });
+
+        const looksLikeImageFile = (file: File) => {
+            if (file.type.startsWith('image/')) return true;
+            const lowerName = file.name.toLowerCase();
+            return lowerName.endsWith('.png')
+                || lowerName.endsWith('.jpg')
+                || lowerName.endsWith('.jpeg')
+                || lowerName.endsWith('.webp')
+                || lowerName.endsWith('.gif')
+                || file.type === '';
+        };
+
+        const pastedFiles = Array.from(fileMap.values()).filter(looksLikeImageFile);
+        if (pastedFiles.length === 0) return;
+
+        event.preventDefault();
 
         if (isLocalOnly) {
             setAttachmentError('Image support requires a subscription. Go to Settings.');
@@ -124,26 +148,24 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
             return;
         }
 
-        event.preventDefault();
-
         const newAttachments: ImageAttachment[] = [];
         const errors: string[] = [];
-        for (const item of imageItems) {
-            const file = item.getAsFile();
-            if (!file) continue;
+        for (const file of pastedFiles) {
             const sizeError = validateImageSize(file);
             if (sizeError) {
                 errors.push(sizeError);
                 continue;
             }
-            const mimeError = validateImageMimeType(file.type);
+
+            const dataUrl = await fileToDataUrl(file);
+            const mimeType = extractMimeTypeFromDataUrl(dataUrl) || file.type || 'image/png';
+            const mimeError = validateImageMimeType(mimeType);
             if (mimeError) {
                 errors.push(mimeError);
                 continue;
             }
-            const dataUrl = await fileToDataUrl(file);
+
             const thumbnailUrl = await createThumbnailDataUrl(dataUrl, 64, 64);
-            const mimeType = extractMimeTypeFromDataUrl(dataUrl) || file.type || 'image/png';
             newAttachments.push({
                 id: crypto.randomUUID(),
                 dataUrl,

@@ -461,7 +461,10 @@ impl AiWorkflow {
 
                                         // Read new content for diff
                                         let new_content = fs::read_to_string(&full_path).unwrap_or_default();
-                                        let diff = diffy::create_patch(&base_content, &new_content).to_string();
+                                        let diff = crate::uncommitted_changes::generate_unified_diff(
+                                            &base_content,
+                                            &new_content,
+                                        );
                                         let (added, removed) = crate::uncommitted_changes::count_diff_stats(&diff);
 
                                         let uncommitted = crate::uncommitted_changes::UncommittedChange {

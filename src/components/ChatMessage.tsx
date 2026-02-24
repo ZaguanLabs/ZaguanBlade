@@ -120,7 +120,8 @@ const resolveImageUrls = (image: ChatImage) => {
     const attachment = image as ImageAttachment;
     const fullUrl = attachment.dataUrl
         || (image.data && image.mime_type ? `data:${image.mime_type};base64,${image.data}` : '');
-    const previewUrl = attachment.thumbnailUrl || fullUrl;
+    // Render high-resolution previews in chat; thumbnailUrl is only for compact attachment chips.
+    const previewUrl = fullUrl || attachment.thumbnailUrl;
     return {
         fullUrl,
         previewUrl,
@@ -366,14 +367,14 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                     href={image.fullUrl}
                                     target="_blank"
                                     rel="noreferrer"
-                                    className="block max-w-[240px]"
+                                    className="block max-w-[160px]"
                                 >
                                     <div className="overflow-hidden rounded-md border border-zinc-800/60 bg-zinc-900/40">
                                         <img
                                             src={image.previewUrl}
                                             alt={image.name}
                                             loading="lazy"
-                                            className="w-full max-h-48 object-contain"
+                                            className="w-full max-h-32 object-contain"
                                         />
                                     </div>
                                     {image.name && (

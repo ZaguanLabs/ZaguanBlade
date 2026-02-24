@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, Suspense } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -51,6 +51,8 @@ const AppLayoutInner: React.FC = () => {
     const { t } = useTranslation();
     const [activeTabId, setActiveTabId] = useState<string | null>(null);
     const [tabs, setTabs] = useState<Tab[]>([]);
+    const [aiEditedFilePaths, setAiEditedFilePaths] = useState<Set<string>>(new Set());
+    const [unseenAiEditedFilePaths, setUnseenAiEditedFilePaths] = useState<Set<string>>(new Set());
     const [terminalHeight, setTerminalHeight] = useState(300);
     const [chatPanelWidth, setChatPanelWidth] = useState(400);
     const [isDragging, setIsDragging] = useState(false);
@@ -184,6 +186,46 @@ const AppLayoutInner: React.FC = () => {
         return () => {
             if (unlisten) unlisten();
         };
+    }, []);
+
+    useEffect(() => {
+        const activeTab = tabs.find(t => t.id === activeTabId);
+        if (!activeTab || activeTab.type !== 'file' || !activeTab.path) return;
+
+        setUnseenAiEditedFilePaths(prev => {
+            if (!prev.has(activeTab.path!)) return prev;
+            const next = new Set(prev);
+            next.delete(activeTab.path!);
+            return next;
+        });
+    }, [activeTabId, tabs]);
+
+    const hasPendingVirtualChanges = useCallback((path?: string) => {
+        if (!path) return false;
+        return uncommittedChanges.some(change =>
+            change.file_path === path
+            || change.file_path.endsWith(path)
+            || path.endsWith(change.file_path)
+        );
+    }, [uncommittedChanges]);
+
+    const appBarTabs = useMemo(() => tabs.map(t => {
+        const isFileTab = t.type === 'file' && !!t.path;
+        const path = t.path;
+
+        return {
+            id: t.id,
+            title: t.title,
+            isEphemeral: t.type === 'ephemeral',
+            isDirty: false,
+            hasVirtualChanges: isFileTab ? hasPendingVirtualChanges(path) : false,
+            isAiEdited: isFileTab ? aiEditedFilePaths.has(path!) : false,
+            hasUnreadAiEdit: isFileTab ? unseenAiEditedFilePaths.has(path!) : false,
+        };
+    }), [tabs, hasPendingVirtualChanges, aiEditedFilePaths, unseenAiEditedFilePaths]);
+
+    const handleTabClick = useCallback((tabId: string) => {
+        setActiveTabId(tabId);
     }, []);
 
     // Research progress state
@@ -377,35 +419,51 @@ const AppLayoutInner: React.FC = () => {
 
 
 
-    // Auto-open files when edit proposals arrive
+    // Auto-open files when edit proposals arrive (without stealing focus)
     useEffect(() => {
         if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
 
         const unlistenPromise = listen<{ id: string; path: string; old_content: string; new_content: string }[]>('propose-edit', (event) => {
             if (event.payload.length === 0) return;
 
-            const firstEdit = event.payload[0];
-            const tabId = `file-${firstEdit.path}`;
-            let existingTabId: string | null = null;
+            const editedPaths = event.payload.map(edit => edit.path);
 
-            setTabs(prev => {
-                const existingTab = prev.find(t => t.type === 'file' && t.path === firstEdit.path);
-                if (existingTab) {
-                    existingTabId = existingTab.id;
-                    return prev;
-                }
-
-                const filename = firstEdit.path.split('/').pop() || firstEdit.path;
-                const newTab: Tab = {
-                    id: tabId,
-                    title: filename,
-                    type: 'file',
-                    path: firstEdit.path,
-                };
-                return [...prev, newTab];
+            setAiEditedFilePaths(prev => {
+                const next = new Set(prev);
+                for (const path of editedPaths) next.add(path);
+                return next;
             });
 
-            setActiveTabId(existingTabId ?? tabId);
+            setUnseenAiEditedFilePaths(prev => {
+                const next = new Set(prev);
+                for (const path of editedPaths) next.add(path);
+                return next;
+            });
+
+            setTabs(prev => {
+                let next = prev;
+
+                for (const path of editedPaths) {
+                    const existingTab = next.find(t => t.type === 'file' && t.path === path);
+                    if (existingTab) continue;
+
+                    const filename = path.split('/').pop() || path;
+                    const newTab: Tab = {
+                        id: `file-${path}`,
+                        title: filename,
+                        type: 'file',
+                        path,
+                    };
+
+                    if (next === prev) {
+                        next = [...prev, newTab];
+                    } else {
+                        next.push(newTab);
+                    }
+                }
+
+                return next;
+            });
         });
 
         return () => {
@@ -637,7 +695,8 @@ const AppLayoutInner: React.FC = () => {
                     processingFilesRef.current.delete(path);
                     return [...prev, newTab];
                 });
-                setActiveTabId(tabId);
+                // Keep current focus while allowing backend/AI-opened files to appear in background tabs.
+                setActiveTabId(prev => prev ?? tabId);
             };
 
             // Current backend event name (Rust emits this)
@@ -673,7 +732,8 @@ const AppLayoutInner: React.FC = () => {
                     };
                     return [...prev, newTab];
                 });
-                setActiveTabId(tabId);
+                // Do not steal editor focus; only activate if no file is currently active.
+                setActiveTabId(prev => prev ?? tabId);
             }));
 
             unlistenPromises.push(listen<{ id: string; title: string; content: string; suggestedName: string }>('open-ephemeral-document', (event) => {
@@ -810,8 +870,8 @@ const AppLayoutInner: React.FC = () => {
                     return [...newTabs, fileTab];
                 });
 
-                // Switch to the new file tab
-                setActiveTabId(`file-${file_path}`);
+                // Keep current focus while surfacing the converted file tab in the background.
+                setActiveTabId(prev => prev ?? `file-${file_path}`);
 
                 // Clear the processing flag after a short delay to allow the open-file event to be ignored
                 setTimeout(() => {
@@ -907,15 +967,9 @@ const AppLayoutInner: React.FC = () => {
         <div className="h-screen w-screen bg-[var(--bg-app)] overflow-hidden flex flex-col font-sans text-[var(--fg-primary)]">
             {/* Unified App Bar: title bar + tab strip merged */}
             <AppBar
-                tabs={tabs.map(t => ({
-                    id: t.id,
-                    title: t.title,
-                    isEphemeral: t.type === 'ephemeral',
-                    isDirty: false,
-                    hasVirtualChanges: false,
-                }))}
+                tabs={appBarTabs}
                 activeTabId={activeTabId}
-                onTabClick={setActiveTabId}
+                onTabClick={handleTabClick}
                 onTabClose={handleTabClose}
                 onReorder={(fromIndex, toIndex) => {
                     setTabs(prev => {
@@ -1074,9 +1128,6 @@ const AppLayoutInner: React.FC = () => {
 
                         <div
                             className="flex-1 overflow-hidden relative"
-                            style={{
-                                clipPath: terminalHeight > 0 ? `inset(0 0 ${terminalHeight}px 0)` : undefined,
-                            }}
                         >
                             {(() => {
                                 const activeTab = tabs.find(t => t.id === activeTabId);
@@ -1103,7 +1154,7 @@ const AppLayoutInner: React.FC = () => {
 
                                         {/* Render Welcome Page if no tabs */}
                                         {tabs.length === 0 && (
-                                            <div className="absolute inset-0 z-10">
+                                            <div className="absolute inset-0 z-10" style={{ bottom: terminalHeight > 0 ? terminalHeight : 0 }}>
                                                 <EditorPanel
                                                     activeFile={null}
                                                     onOpenSettings={() => setIsSettingsOpen(true)}

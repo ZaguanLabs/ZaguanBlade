@@ -10,6 +10,8 @@ export interface AppBarTab {
     isEphemeral?: boolean;
     isDirty?: boolean;
     hasVirtualChanges?: boolean;
+    isAiEdited?: boolean;
+    hasUnreadAiEdit?: boolean;
 }
 
 interface AppBarProps {
@@ -289,11 +291,18 @@ export const AppBar: React.FC<AppBarProps> = ({
                                 <span className={isActive ? 'font-medium' : ''}>
                                     {tab.title}
                                 </span>
+                                {tab.isAiEdited && !tab.hasVirtualChanges && (
+                                    <span
+                                        className={`w-1.5 h-1.5 rounded-full shrink-0 ${tab.hasUnreadAiEdit ? 'animate-pulse' : ''}`}
+                                        style={{ backgroundColor: 'var(--accent-primary)' }}
+                                        title={tab.hasUnreadAiEdit ? 'AI edited this file (unread)' : 'AI edited this file'}
+                                    />
+                                )}
                                 {tab.hasVirtualChanges && (
                                     <span
                                         className="w-1.5 h-1.5 rounded-full shrink-0 animate-pulse"
                                         style={{ backgroundColor: 'var(--accent-warning)' }}
-                                        title="Virtual changes (not saved to disk)"
+                                        title={tab.hasUnreadAiEdit ? 'AI edit pending review (unread)' : 'AI edit pending review'}
                                     />
                                 )}
                                 {tab.isDirty && !tab.hasVirtualChanges && (
