@@ -368,7 +368,7 @@ Zaguán Blade is free and open source. The hosted AI backend requires a subscrip
 
 ## Project Status
 
-**Current Version:** v0.3.1  
+**Current Version:** v0.3.2  
 **Status:** Active Development  
 **Stability:** Near-stable (very close to production-ready)  
 **License:** MIT  
