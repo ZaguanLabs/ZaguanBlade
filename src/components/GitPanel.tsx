@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import type { GitFileStatus, GitStatusSummary, CommitPreflightResult } from '../hooks/useGitStatus';
 import { Sparkles, GitCommit, Upload, ChevronDown, ChevronRight, Plus, Minus, RefreshCw, AlertTriangle } from 'lucide-react';
 import { GitGraph } from './GitGraph';
@@ -83,6 +83,26 @@ export const GitPanel: React.FC<GitPanelProps> = ({
             setBusyAction(null);
         }
     };
+
+    const handlePushOnButtonUp = useCallback(async () => {
+        if (busyAction === 'push' || pushSuccess) return;
+
+        setActionError(null);
+        setBusyAction('push');
+
+        // Yield one frame so the "Pushing" state paints immediately on button-up.
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+
+        try {
+            await onPush();
+            setPushSuccess(true);
+            setTimeout(() => setPushSuccess(false), 2500);
+        } catch (e) {
+            setActionError(String(e));
+        } finally {
+            setBusyAction(null);
+        }
+    }, [busyAction, onPush, pushSuccess]);
 
     const toggleDiff = async (file: GitFileStatus) => {
         const key = file.path;
@@ -264,11 +284,15 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                                     : 'bg-green-600 text-white hover:bg-green-500 hover:shadow-md hover:shadow-green-500/20'
                                         }`}
                                         disabled={busyAction === 'push' || pushSuccess}
-                                        onClick={() => runAction('push', async () => {
-                                            await onPush();
-                                            setPushSuccess(true);
-                                            setTimeout(() => setPushSuccess(false), 2500);
-                                        })}
+                                        onPointerUp={() => {
+                                            void handlePushOnButtonUp();
+                                        }}
+                                        onKeyUp={(e) => {
+                                            if (e.key === 'Enter' || e.key === ' ') {
+                                                e.preventDefault();
+                                                void handlePushOnButtonUp();
+                                            }
+                                        }}
                                     >
                                         {/* Push indicator badge */}
                                         {status?.ahead && status.ahead > 0 && !pushSuccess && (

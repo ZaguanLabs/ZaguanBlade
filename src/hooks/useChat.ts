@@ -212,7 +212,10 @@ export function useChat() {
                         };
                     }
                 } else {
-                    // Create new message - insert after last user message to maintain flow
+                    // Create new message.
+                    // IMPORTANT: append in chronological order.
+                    // Inserting after "last user" can invert assistant message order when
+                    // multiple new assistant IDs land in the same batched flush.
                     if (!changed) {
                         updated = [...prev];
                         changed = true;
@@ -226,18 +229,7 @@ export function useChat() {
                         streaming: update.streaming,
                     } as ChatMessage;
                     
-                    // Find the correct insertion point - after the last user message
-                    const lastUserIdx = updated.map(m => m.role).lastIndexOf('User');
-                    if (lastUserIdx >= 0 && lastUserIdx === updated.length - 1) {
-                        // User message is at the end, append after it
-                        updated.push(newMsg);
-                    } else if (lastUserIdx >= 0) {
-                        // Insert after the last user message
-                        updated.splice(lastUserIdx + 1, 0, newMsg);
-                    } else {
-                        // No user message found, append at end
-                        updated.push(newMsg);
-                    }
+                    updated.push(newMsg);
                 }
             });
 

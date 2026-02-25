@@ -107,6 +107,9 @@ export const useGitStatus = () => {
     }, [refresh]);
 
     const push = useCallback(async () => {
+        // Align with push intent: if user is pushing, treat pending AI edits as accepted.
+        await invoke('accept_all_changes');
+        window.dispatchEvent(new CustomEvent('uncommitted-changes-updated'));
         await invoke('git_push');
         await refresh();
     }, [refresh]);
