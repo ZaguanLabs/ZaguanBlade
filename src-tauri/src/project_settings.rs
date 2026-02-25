@@ -214,29 +214,6 @@ pub fn init_zblade_dir(project_path: &Path) -> Result<(), String> {
             .map_err(|e| format!("Failed to create .gitignore: {}", e))?;
     }
 
-    // Create default instructions.md if it doesn't exist
-    let instructions_path = zblade_dir.join("instructions.md");
-    if !instructions_path.exists() {
-        let instructions_content = r#"# Project Instructions
-
-Add project-specific instructions for the AI assistant here.
-
-## Project Overview
-
-<!-- Describe your project briefly -->
-
-## Coding Guidelines
-
-<!-- Add any specific coding conventions or patterns to follow -->
-
-## Important Files
-
-<!-- List key files the AI should be aware of -->
-"#;
-        fs::write(&instructions_path, instructions_content)
-            .map_err(|e| format!("Failed to create instructions.md: {}", e))?;
-    }
-
     // Ensure the workspace root .gitignore always excludes .zblade
     ensure_project_gitignore_has_zblade(project_path);
 
@@ -332,9 +309,6 @@ mod tests {
             .exists());
         assert!(get_zblade_dir(project_path).join("index").exists());
         assert!(get_zblade_dir(project_path).join(".gitignore").exists());
-        assert!(get_zblade_dir(project_path)
-            .join("instructions.md")
-            .exists());
     }
 
     #[test]

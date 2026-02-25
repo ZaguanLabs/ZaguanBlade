@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { listen, emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { BladeDispatcher } from '../services/blade';
+import { EditorFacade } from '../services/editorFacade';
 import type { ChatMessage, ImageAttachment, ModelInfo, ToolActivityState, ToolCall, StreamingState } from '../types/chat';
 import type { Change } from '../types/change';
 import { EventNames, type RequestConfirmationPayload, type StructuredAction, type ChangeAppliedPayload, type AllEditsAppliedPayload, type ToolExecutionCompletedPayload } from '../types/events';
@@ -13,6 +14,8 @@ import { ensureMessagesHaveBlocks } from '../utils/messageBlocks';
 
 export function useChat() {
     const editorState = useEditorState();
+    const editorStateRef = useRef(editorState);
+    const firstDispatchRef = useRef(true);
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const messagesRef = useRef<ChatMessage[]>([]);
     const blocksRef = useRef<Map<string, import('../types/chat').MessageBlock[]>>(new Map());
@@ -26,6 +29,97 @@ export function useChat() {
 
     // Active todo list state — lifted out of messages for persistent TaskPanel
     const [activeTodos, setActiveTodos] = useState<import('../types/events').TodoItem[]>([]);
+
+    useEffect(() => {
+        editorStateRef.current = editorState;
+    }, [editorState]);
+
+    const buildEditorContext = useCallback((state: {
+        activeFile: string | null;
+        openFiles: string[];
+        cursorLine: number | null;
+        cursorColumn: number | null;
+        selectionStartLine: number | null;
+        selectionEndLine: number | null;
+    }) => {
+        const safeActiveFile = state.activeFile || null;
+        const openFromState = state.openFiles.length > 0
+            ? state.openFiles
+            : (safeActiveFile ? [safeActiveFile] : []);
+        const normalizedOpenFiles = Array.from(new Set(openFromState.filter(Boolean)));
+
+        return {
+            active_file: safeActiveFile,
+            open_files: normalizedOpenFiles,
+            cursor_line: state.cursorLine ?? null,
+            cursor_column: state.cursorColumn ?? null,
+            selection_start: state.selectionStartLine ?? null,
+            selection_end: state.selectionEndLine ?? null,
+        };
+    }, []);
+
+    const requestFreshEditorContext = useCallback(async () => {
+        if (!firstDispatchRef.current) {
+            return buildEditorContext(editorStateRef.current);
+        }
+
+        let unlisten: (() => void) | undefined;
+        try {
+            const snapshotPromise = new Promise<{
+                active_file: string | null;
+                open_files: string[];
+                cursor_line: number | null;
+                cursor_column: number | null;
+                selection_start: number | null;
+                selection_end: number | null;
+            }>((resolve, reject) => {
+                const timeout = window.setTimeout(() => {
+                    if (unlisten) {
+                        unlisten();
+                        unlisten = undefined;
+                    }
+                    reject(new Error('Editor state snapshot timeout'));
+                }, 300);
+
+                listen<BladeEventEnvelope>('blade-event', (event) => {
+                    const bladeEvent = event.payload.event;
+                    if (bladeEvent.type !== 'Editor') return;
+                    const payload = bladeEvent.payload as import('../types/blade').EditorEvent;
+                    if (payload.type !== 'StateSnapshot') return;
+
+                    window.clearTimeout(timeout);
+                    if (unlisten) {
+                        unlisten();
+                        unlisten = undefined;
+                    }
+                    resolve(payload.payload);
+                })
+                    .then((fn) => {
+                        unlisten = fn;
+                    })
+                    .catch((err) => {
+                        window.clearTimeout(timeout);
+                        reject(err);
+                    });
+            });
+
+            await EditorFacade.getState();
+            const snapshot = await snapshotPromise;
+
+            return buildEditorContext({
+                activeFile: snapshot.active_file,
+                openFiles: snapshot.open_files,
+                cursorLine: snapshot.cursor_line,
+                cursorColumn: snapshot.cursor_column,
+                selectionStartLine: snapshot.selection_start,
+                selectionEndLine: snapshot.selection_end,
+            });
+        } catch {
+            return buildEditorContext(editorStateRef.current);
+        } finally {
+            unlisten?.();
+        }
+    }, [buildEditorContext]);
 
     // Reset all streaming infrastructure — must be called when switching conversations
     const resetStreamingState = useCallback(() => {
@@ -939,13 +1033,7 @@ export function useChat() {
             setLoading(true);
             setError(null);
 
-            // Get editor state from context
-            const activeFile = editorState.activeFile;
-            // activeFile might be null/undefined, ensure we pass string or null
-            const safeActiveFile = activeFile || null;
-            const openFiles = editorState.openFiles.length > 0
-                ? editorState.openFiles
-                : (activeFile ? [activeFile] : []);
+            const context = await requestFreshEditorContext();
 
             // Dispatch via Blade Protocol
             await BladeDispatcher.chat({
@@ -959,16 +1047,11 @@ export function useChat() {
                         name: attachment.name,
                         size: attachment.size,
                     })),
-                    context: {
-                        active_file: safeActiveFile, // Use active tab file as context
-                        open_files: openFiles,
-                        cursor_line: editorState.cursorLine ?? null,
-                        cursor_column: editorState.cursorColumn ?? null,
-                        selection_start: editorState.selectionStartLine ?? null,
-                        selection_end: editorState.selectionEndLine ?? null
-                    }
+                    context
                 }
             });
+
+            firstDispatchRef.current = false;
 
         } catch (e) {
             console.error('Failed to send message:', e);
@@ -976,12 +1059,7 @@ export function useChat() {
             setLoading(false); // Ensure loading is cleared on immediate error
         }
     }, [
-        editorState.activeFile,
-        editorState.openFiles,
-        editorState.cursorLine,
-        editorState.cursorColumn,
-        editorState.selectionStartLine,
-        editorState.selectionEndLine,
+        requestFreshEditorContext,
     ]);
 
     // Queue processing effect

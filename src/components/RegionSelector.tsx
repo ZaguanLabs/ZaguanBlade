@@ -44,35 +44,45 @@ export const RegionSelector: React.FC<RegionSelectorProps> = ({
 
     const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
-    const getRelativePoint = (event: React.MouseEvent): Point | null => {
+    const getRelativePoint = (clientX: number, clientY: number): Point | null => {
         const rect = wrapperRef.current?.getBoundingClientRect();
         if (!rect) return null;
         return {
-            x: clamp(event.clientX - rect.left, 0, rect.width),
-            y: clamp(event.clientY - rect.top, 0, rect.height),
+            x: clamp(clientX - rect.left, 0, rect.width),
+            y: clamp(clientY - rect.top, 0, rect.height),
         };
     };
 
     const handleMouseDown = (event: React.MouseEvent) => {
         event.preventDefault();
-        const point = getRelativePoint(event);
+        const point = getRelativePoint(event.clientX, event.clientY);
         if (!point) return;
         setDragStart(point);
         setDragEnd(point);
         setIsDragging(true);
     };
 
-    const handleMouseMove = (event: React.MouseEvent) => {
+    useEffect(() => {
         if (!isDragging) return;
-        const point = getRelativePoint(event);
-        if (!point) return;
-        setDragEnd(point);
-    };
 
-    const handleMouseUp = () => {
-        if (!isDragging) return;
-        setIsDragging(false);
-    };
+        const handleGlobalMouseMove = (event: MouseEvent) => {
+            const point = getRelativePoint(event.clientX, event.clientY);
+            if (!point) return;
+            setDragEnd(point);
+        };
+
+        const handleGlobalMouseUp = () => {
+            setIsDragging(false);
+        };
+
+        window.addEventListener('mousemove', handleGlobalMouseMove);
+        window.addEventListener('mouseup', handleGlobalMouseUp);
+
+        return () => {
+            window.removeEventListener('mousemove', handleGlobalMouseMove);
+            window.removeEventListener('mouseup', handleGlobalMouseUp);
+        };
+    }, [isDragging]);
 
     const selection = dragStart && dragEnd
         ? {
@@ -116,9 +126,6 @@ export const RegionSelector: React.FC<RegionSelectorProps> = ({
                         className="relative inline-block select-none"
                         style={{ cursor: isDragging ? 'crosshair' : 'crosshair' }}
                         onMouseDown={handleMouseDown}
-                        onMouseMove={handleMouseMove}
-                        onMouseUp={handleMouseUp}
-                        onMouseLeave={handleMouseUp}
                     >
                         <img
                             src={dataUrl}

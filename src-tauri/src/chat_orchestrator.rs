@@ -71,10 +71,6 @@ pub async fn handle_send_message<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<(), String> {
     println!("Received message from frontend: {}", message);
-    eprintln!(
-        "[SEND MSG] active_file={:?}, cursor_line={:?}, cursor_column={:?}",
-        active_file, cursor_line, cursor_column
-    );
 
     // Parse @commands and convert to tool calls
     let (actual_message, forced_tool) = parse_command(&message);
@@ -99,11 +95,43 @@ pub async fn handle_send_message<R: Runtime>(
 
         if effective_open_files.is_empty() {
             actual_message = format!(
-                "[SYSTEM NOTE: No file tabs are open. Infer relevant files from the workspace using tools and proceed with implementation. Do not summarize the project unless explicitly asked.]\n\n{}",
+                "[SYSTEM NOTE: No file tabs are open. Start with get_project_index_overview for fast orientation. Use get_project_index_chunk only if you need deeper paging. Avoid broad repo-wide grep/search as a first action when index overview is available. Infer relevant files using tools and proceed with implementation. Do not summarize the project unless explicitly asked.]\n\n{}",
                 actual_message
             );
         }
     }
+
+    let active_in_open = active_file
+        .as_ref()
+        .map(|active| effective_open_files.iter().any(|path| path == active))
+        .unwrap_or(false);
+    let open_preview: Vec<String> = effective_open_files
+        .iter()
+        .take(5)
+        .map(|path| {
+            std::path::Path::new(path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(path)
+                .to_string()
+        })
+        .collect();
+    let open_preview_suffix = if effective_open_files.len() > open_preview.len() {
+        " ..."
+    } else {
+        ""
+    };
+
+    eprintln!(
+        "[SEND MSG] active_file={:?}, open_files_count={}, active_in_open={}, open_files_preview=[{}{}], cursor_line={:?}, cursor_column={:?}",
+        active_file,
+        effective_open_files.len(),
+        active_in_open,
+        open_preview.join(", "),
+        open_preview_suffix,
+        cursor_line,
+        cursor_column
+    );
 
     // Store editor state in AppState for tool execution
     {

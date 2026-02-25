@@ -6,6 +6,7 @@ use crate::agentic_loop::AgenticLoop;
 use crate::ai_workflow::get_tool_definitions;
 use crate::ai_workflow::{AiWorkflow, PendingToolBatch};
 use crate::blade_ws_client::BladeWsClient;
+use crate::chat::handler::merge_tool_call_deltas;
 use crate::config::ApiConfig;
 use crate::conversation::ConversationHistory;
 use crate::models::registry::ModelInfo;
@@ -167,6 +168,7 @@ pub struct ChatManager {
     stream_parse_reasoning: bool,
     stream_xml_tool_fallback: bool,
     stream_auto_start_loop_on_tools: bool,
+    pending_done_without_tools: bool,
     ws_conversation_messages: Arc<Mutex<Vec<serde_json::Value>>>,
 }
 
@@ -201,6 +203,7 @@ impl ChatManager {
             stream_parse_reasoning: false,
             stream_xml_tool_fallback: false,
             stream_auto_start_loop_on_tools: false,
+            pending_done_without_tools: false,
             ws_conversation_messages: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -208,10 +211,25 @@ impl ChatManager {
     fn to_blade_conversation_messages(
         conversation: &ConversationHistory,
     ) -> Vec<serde_json::Value> {
-        conversation
-            .get_messages()
+        let messages = conversation.get_messages();
+        let latest_user_with_images_idx = messages
             .iter()
-            .filter_map(|msg| {
+            .enumerate()
+            .rev()
+            .find(|(_, msg)| {
+                msg.role == ChatRole::User
+                    && msg
+                        .images
+                        .as_ref()
+                        .map(|images| !images.is_empty())
+                        .unwrap_or(false)
+            })
+            .map(|(idx, _)| idx);
+
+        messages
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, msg)| {
                 let has_content = !msg.content.trim().is_empty();
                 let has_reasoning = msg
                     .reasoning
@@ -275,6 +293,12 @@ impl ChatManager {
                     blade_msg["tool_calls"] = serde_json::json!(tc_json);
                 }
                 if let Some(ref images) = msg.images {
+                    // Keep full image payload only for the latest user image turn.
+                    // Re-sending older base64 images on every context request can bloat
+                    // payloads and trigger provider-side empty/error responses.
+                    if msg.role != ChatRole::User || latest_user_with_images_idx != Some(idx) {
+                        return Some(blade_msg);
+                    }
                     blade_msg["images"] = serde_json::json!(images);
                 }
                 Some(blade_msg)
@@ -328,6 +352,7 @@ impl ChatManager {
         self.accumulated_tool_calls.clear();
         self.updated_assistant_message = None;
         self.message_seq = 0; // v1.1: reset sequence counter for new message
+        self.pending_done_without_tools = false;
 
         let selected = resolve_model_selection(models, selected_model);
         self.update_stream_profile(selected.provider, &selected.model_id_for_request);
@@ -1381,7 +1406,10 @@ impl ChatManager {
             }
 
             let mut stream = response.bytes_stream();
-            let mut buffer = String::new();
+            // Keep raw bytes until newline boundaries so multi-byte UTF-8 chars are
+            // decoded only after the full SSE line is assembled.
+            let mut buffer: Vec<u8> = Vec::new();
+            let mut tool_call_deltas_buf: Vec<ToolCall> = Vec::new();
 
             while let Some(chunk_result) = stream.next().await {
                 let chunk = match chunk_result {
@@ -1392,11 +1420,25 @@ impl ChatManager {
                     }
                 };
 
-                buffer.push_str(&String::from_utf8_lossy(&chunk));
+                buffer.extend_from_slice(&chunk);
 
-                while let Some(line_end) = buffer.find('\n') {
-                    let line = buffer[..line_end].trim().to_string();
-                    buffer = buffer[line_end + 1..].to_string();
+                while let Some(line_end) = buffer.iter().position(|&b| b == b'\n') {
+                    let mut line_bytes: Vec<u8> = buffer.drain(..=line_end).collect();
+                    while matches!(line_bytes.last(), Some(b'\n' | b'\r')) {
+                        line_bytes.pop();
+                    }
+
+                    if line_bytes.is_empty() {
+                        continue;
+                    }
+
+                    let line = match std::str::from_utf8(&line_bytes) {
+                        Ok(s) => s.trim(),
+                        Err(e) => {
+                            eprintln!("[OPENAI COMPAT] Skipping non-UTF8 SSE line: {}", e);
+                            continue;
+                        }
+                    };
 
                     if line.is_empty() || line == "data: [DONE]" {
                         continue;
@@ -1439,33 +1481,21 @@ impl ChatManager {
 
                                 // Handle tool call deltas (OpenAI-compatible)
                                 if !choice.delta.tool_calls.is_empty() {
-                                    let calls: Vec<ToolCall> = choice
-                                        .delta
-                                        .tool_calls
+                                    merge_tool_call_deltas(
+                                        &mut tool_call_deltas_buf,
+                                        &choice.delta.tool_calls,
+                                    );
+
+                                    let calls: Vec<ToolCall> = tool_call_deltas_buf
                                         .iter()
-                                        .map(|delta| ToolCall {
-                                            id: delta
-                                                .id
-                                                .clone()
-                                                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-                                            typ: delta
-                                                .typ
-                                                .clone()
-                                                .unwrap_or_else(|| "function".to_string()),
-                                            function: ToolFunction {
-                                                name: delta
-                                                    .function
-                                                    .as_ref()
-                                                    .and_then(|f| f.name.clone())
-                                                    .unwrap_or_else(|| "unknown".to_string()),
-                                                arguments: delta
-                                                    .function
-                                                    .as_ref()
-                                                    .and_then(|f| f.arguments.clone())
-                                                    .unwrap_or_else(|| "{}".to_string()),
-                                            },
-                                            status: Some("executing".to_string()),
-                                            result: None,
+                                        .filter(|call| !call.function.name.trim().is_empty())
+                                        .map(|call| {
+                                            let mut merged = call.clone();
+                                            if merged.typ.is_empty() {
+                                                merged.typ = "function".to_string();
+                                            }
+                                            merged.status = Some("executing".to_string());
+                                            merged
                                         })
                                         .collect();
 
@@ -1539,6 +1569,8 @@ impl ChatManager {
         workspace: Option<&PathBuf>,
         http: reqwest::Client,
     ) -> Result<(), String> {
+        self.pending_done_without_tools = false;
+
         // RFC: Large Tool Result Handling - determine if we should truncate locally
         let is_local_mode = workspace
             .map(|ws| {
@@ -1749,6 +1781,35 @@ impl ChatManager {
         }
 
         if events.is_empty() {
+            if self.pending_done_without_tools {
+                // Confirmed no trailing events after Done on previous drain cycle.
+                self.pending_done_without_tools = false;
+                self.rx = None;
+                self.streaming = false;
+
+                let no_error: Option<String> = None;
+                self.finalize_turn(conversation, None, &no_error);
+                self.reasoning_parser.reset();
+
+                let msg_id = conversation
+                    .last_assistant()
+                    .and_then(|msg| msg.id.clone())
+                    .or_else(|| Some(uuid::Uuid::new_v4().to_string()));
+                if let Some(id) = msg_id {
+                    self.pending_results
+                        .push_back(DrainResult::MessageCompleted(id));
+                }
+
+                if let Some(msg) = self.updated_assistant_message.take() {
+                    self.pending_results
+                        .push_back(DrainResult::ToolStatusUpdate(msg));
+                }
+
+                return self
+                    .pending_results
+                    .pop_front()
+                    .unwrap_or(DrainResult::None);
+            }
             return DrainResult::None;
         }
 
@@ -1860,6 +1921,11 @@ impl ChatManager {
         }
 
         for provider_event in events {
+            let is_done_event = matches!(&provider_event, ProviderEvent::Done);
+            if !is_done_event {
+                self.pending_done_without_tools = false;
+            }
+
             match provider_event {
                 ProviderEvent::Chunk(s) => {
                     // Set streaming=true when we receive first content
@@ -1950,7 +2016,17 @@ impl ChatManager {
                     for call in &calls {
                         self.pending_tool_progress.remove(&call.id);
                     }
-                    self.accumulated_tool_calls.extend(calls.clone());
+                    for call in &calls {
+                        if let Some(idx) = self
+                            .accumulated_tool_calls
+                            .iter()
+                            .position(|existing| existing.id == call.id)
+                        {
+                            self.accumulated_tool_calls[idx] = call.clone();
+                        } else {
+                            self.accumulated_tool_calls.push(call.clone());
+                        }
+                    }
                     let calls_for_emit = calls.clone();
 
                     if let Some(last) = conversation.last_assistant_mut() {
@@ -1959,7 +2035,15 @@ impl ChatManager {
                             last.content_before_tools = Some(last.content.clone());
                         }
                         let existing = last.tool_calls.get_or_insert_with(Vec::new);
-                        existing.extend(calls);
+                        for call in calls {
+                            if let Some(idx) =
+                                existing.iter().position(|existing_call| existing_call.id == call.id)
+                            {
+                                existing[idx] = call;
+                            } else {
+                                existing.push(call);
+                            }
+                        }
 
                         self.pending_results.push_back(DrainResult::ToolCreated(
                             last.clone(),
@@ -2128,6 +2212,22 @@ impl ChatManager {
             // If there are no tool calls, this is a true end-of-turn.
             // Only then should we clear rx and emit MessageCompleted (frontend uses this to reset loading).
             let should_complete_turn = tool_calls.is_none() && error_msg.is_none();
+            let should_defer_completion = should_complete_turn
+                && matches!(self.active_provider, ProviderId::Zaguan)
+                && !self.pending_done_without_tools;
+
+            if should_defer_completion {
+                // Some Zaguan streams can emit Done slightly before trailing events.
+                // Wait one additional drain cycle before finalizing no-tool completion.
+                self.pending_done_without_tools = true;
+                return self
+                    .pending_results
+                    .pop_front()
+                    .unwrap_or(DrainResult::None);
+            }
+
+            self.pending_done_without_tools = false;
+
             // If channel was closed but tool calls are pending, we keep rx until follow-up streams/tools resolve.
             if should_complete_turn {
                 // eprintln!("[DRAIN] Turn complete: clearing rx + emitting MessageCompleted");

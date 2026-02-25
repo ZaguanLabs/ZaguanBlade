@@ -5,6 +5,7 @@ pub mod preview;
 pub mod handler;
 pub mod cache;
 pub mod manager;
+pub mod minimal_index;
 
 pub use types::{ProjectIndex, FileMetadata, CachedPreview, DirectoryTree};
 pub use builder::index_workspace;

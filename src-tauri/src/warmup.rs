@@ -21,6 +21,17 @@ pub struct WarmupRequest {
     pub user_id: String,
     pub model: String,
     pub trigger: WarmupTrigger,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_strategy: Option<WarmupCacheStrategy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preferred_artifacts: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WarmupCacheStrategy {
+    ExplicitMinimal,
+    Opportunistic,
 }
 
 /// Warmup response from zcoderd
@@ -72,19 +83,38 @@ impl WarmupClient {
         model: &str,
         trigger: WarmupTrigger,
     ) -> Result<WarmupResponse, String> {
+        let provider = detect_provider(model).to_lowercase();
+        let (cache_strategy, preferred_artifacts) = if provider_requires_explicit_minimal(&provider) {
+            (
+                Some(WarmupCacheStrategy::ExplicitMinimal),
+                Some(vec!["project_index_min.md".to_string()]),
+            )
+        } else if provider_prefers_opportunistic_cache(&provider) {
+            (Some(WarmupCacheStrategy::Opportunistic), None)
+        } else {
+            (None, None)
+        };
+
         let request = WarmupRequest {
             request_type: "warmup".to_string(),
             session_id: session_id.to_string(),
             user_id: self.user_id.clone(),
             model: model.to_string(),
             trigger,
+            cache_strategy,
+            preferred_artifacts,
         };
 
         let url = format!("{}/v1/blade/warmup", self.base_url);
 
         eprintln!(
-            "[WARMUP] Sending warmup request: session={}, model={}, trigger={:?}",
-            session_id, model, request.trigger
+            "[WARMUP] Sending warmup request: session={}, model={}, provider={}, trigger={:?}, strategy={:?}, preferred_artifacts={:?}",
+            session_id,
+            model,
+            provider,
+            request.trigger,
+            request.cache_strategy,
+            request.preferred_artifacts
         );
 
         let response = self
@@ -139,9 +169,20 @@ pub fn detect_provider(model: &str) -> &str {
     model.split('/').next().unwrap_or("unknown")
 }
 
+/// Providers where zcoderd should explicitly warm only the compact deterministic index.
+pub fn provider_requires_explicit_minimal(provider: &str) -> bool {
+    matches!(provider.to_lowercase().as_str(), "anthropic" | "qwen" | "minimax")
+}
+
+/// Providers that already optimize caching without forced artifact preload.
+pub fn provider_prefers_opportunistic_cache(provider: &str) -> bool {
+    matches!(provider.to_lowercase().as_str(), "openai" | "groq" | "novita")
+}
+
 /// Check if a provider supports prompt caching
 #[allow(dead_code)]
 pub fn provider_supports_cache(provider: &str) -> bool {
-    matches!(provider.to_lowercase().as_str(), "anthropic" | "openai")
+    provider_requires_explicit_minimal(provider)
+        || provider_prefers_opportunistic_cache(provider)
 }
 

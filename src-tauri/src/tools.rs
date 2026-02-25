@@ -22,6 +22,10 @@ const MAX_TOOL_RESULT_BYTES: usize = 50 * 1024; // 50KB
 const MAX_TOOL_RESULT_LINES: usize = 2000;
 const HEAD_LINES: usize = 100;
 const TAIL_LINES: usize = 50;
+const PROJECT_INDEX_OVERVIEW_DEFAULT_MAX_CHARS: usize = 6000;
+const PROJECT_INDEX_OVERVIEW_MAX_CHARS: usize = 12000;
+const PROJECT_INDEX_CHUNK_DEFAULT_MAX_CHARS: usize = 4000;
+const PROJECT_INDEX_CHUNK_MAX_CHARS: usize = 8000;
 
 impl ToolResult {
     pub fn ok(content: impl Into<String>) -> Self {
@@ -70,6 +74,25 @@ impl ToolResult {
     pub fn to_tool_content_truncated(&self) -> String {
         let content = self.to_tool_content();
         truncate_large_content(&content)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_patch_to_string;
+
+    #[test]
+    fn apply_patch_rejects_ambiguous_exact_matches() {
+        let content = "A\nTARGET\nB\nTARGET\nC\n";
+        let err = apply_patch_to_string(content, "TARGET", "REPLACED").unwrap_err();
+        assert!(err.contains("Ambiguous match"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn apply_patch_replaces_single_exact_match() {
+        let content = "A\nTARGET\nB\n";
+        let updated = apply_patch_to_string(content, "TARGET", "REPLACED").unwrap();
+        assert_eq!(updated, "A\nREPLACED\nB\n");
     }
 }
 
@@ -198,6 +221,8 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
         "read_file_range" => read_file_range(workspace_root, &args),
         "apply_edit" | "apply_patch" => apply_edit_tool(workspace_root, &args),
         "get_workspace_structure" => get_workspace_structure(workspace_root, &args),
+        "get_project_index_overview" => get_project_index_overview(workspace_root, &args),
+        "get_project_index_chunk" => get_project_index_chunk(workspace_root, &args),
 
 
         // New file system tools
@@ -337,6 +362,139 @@ fn read_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -
         }
         Err(e) => ToolResult::err(e.to_string()),
     }
+}
+
+fn get_project_index_overview(
+    workspace_root: &Path,
+    args: &HashMap<String, serde_json::Value>,
+) -> ToolResult {
+    let root = match resolve_index_root(workspace_root, args) {
+        Ok(root) => root,
+        Err(e) => return ToolResult::err(e),
+    };
+
+    let max_chars = parse_bounded_usize_arg(
+        args,
+        "max_chars",
+        PROJECT_INDEX_OVERVIEW_DEFAULT_MAX_CHARS,
+        PROJECT_INDEX_OVERVIEW_MAX_CHARS,
+    );
+    let offset = parse_bounded_usize_arg(args, "offset", 0, usize::MAX);
+
+    build_project_index_window_result("get_project_index_overview", &root, offset, max_chars)
+}
+
+fn get_project_index_chunk(
+    workspace_root: &Path,
+    args: &HashMap<String, serde_json::Value>,
+) -> ToolResult {
+    let root = match resolve_index_root(workspace_root, args) {
+        Ok(root) => root,
+        Err(e) => return ToolResult::err(e),
+    };
+
+    let max_chars = parse_bounded_usize_arg(
+        args,
+        "max_chars",
+        PROJECT_INDEX_CHUNK_DEFAULT_MAX_CHARS,
+        PROJECT_INDEX_CHUNK_MAX_CHARS,
+    );
+    let offset = parse_bounded_usize_arg(args, "offset", 0, usize::MAX);
+
+    build_project_index_window_result("get_project_index_chunk", &root, offset, max_chars)
+}
+
+fn build_project_index_window_result(
+    tool_name: &str,
+    root: &Path,
+    offset: usize,
+    max_chars: usize,
+) -> ToolResult {
+    let index_path = root.join(".zblade/context/project_index.md");
+    if !index_path.exists() {
+        return ToolResult::err(format!(
+            "project index missing: {}. Run workspace indexing to generate .zblade/context/project_index.md",
+            index_path.display()
+        ));
+    }
+
+    let content = match fs::read_to_string(&index_path) {
+        Ok(content) => content,
+        Err(e) => {
+            return ToolResult::err(format!(
+                "failed to read project index {}: {}",
+                index_path.display(),
+                e
+            ));
+        }
+    };
+
+    let (window, end, total_chars, has_more) = slice_by_char_window(&content, offset, max_chars);
+    let returned_chars = window.chars().count();
+
+    let result = serde_json::json!({
+        "tool": tool_name,
+        "workspace_root": root.display().to_string(),
+        "index_path": index_path.display().to_string(),
+        "total_chars": total_chars,
+        "offset": offset,
+        "end": end,
+        "returned_chars": returned_chars,
+        "max_chars": max_chars,
+        "has_more": has_more,
+        "next_offset": if has_more { Some(end) } else { None },
+        "content": window,
+    });
+
+    ToolResult::ok(serde_json::to_string_pretty(&result).unwrap_or_default())
+}
+
+fn resolve_index_root(
+    workspace_root: &Path,
+    args: &HashMap<String, serde_json::Value>,
+) -> Result<PathBuf, String> {
+    let path = get_str_arg(args, &["path"]).unwrap_or_else(|| ".".to_string());
+    let root = resolve_path_in_workspace(workspace_root, Path::new(&path))?;
+
+    if !root.exists() {
+        return Err(format!(
+            "project root does not exist: {}",
+            root.display()
+        ));
+    }
+    if !root.is_dir() {
+        return Err(format!(
+            "project root must be a directory: {}",
+            root.display()
+        ));
+    }
+
+    Ok(root)
+}
+
+fn parse_bounded_usize_arg(
+    args: &HashMap<String, serde_json::Value>,
+    key: &str,
+    default: usize,
+    max_allowed: usize,
+) -> usize {
+    args.get(key)
+        .and_then(|v| v.as_u64())
+        .map(|v| (v as usize).min(max_allowed))
+        .unwrap_or(default)
+}
+
+fn slice_by_char_window(content: &str, offset: usize, max_chars: usize) -> (String, usize, usize, bool) {
+    let total_chars = content.chars().count();
+    if offset >= total_chars {
+        return (String::new(), total_chars, total_chars, false);
+    }
+
+    let window: String = content.chars().skip(offset).take(max_chars).collect();
+    let end = offset + window.chars().count();
+    let has_more = end < total_chars;
+
+    (window, end, total_chars, has_more)
 }
 
 fn write_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {
@@ -734,7 +892,27 @@ pub fn apply_patch_to_string(
     new_text: &str,
 ) -> Result<String, String> {
     // Strategy 1: Exact Match
-    if let Some(pos) = content.find(old_text) {
+    // Guard against repeated boilerplate blocks (e.g. changelog sections). If old_text
+    // appears multiple times, replacing the first match silently can corrupt unrelated
+    // sections and produce misleading diffs.
+    if !old_text.is_empty() {
+        let mut exact_matches = content.match_indices(old_text);
+        if let Some((pos, _)) = exact_matches.next() {
+            if exact_matches.next().is_some() {
+                return Err(
+                    "Ambiguous match: old_text appears multiple times (exact match). Please provide more unique context."
+                        .to_string(),
+                );
+            }
+
+            let mut out = String::with_capacity(content.len() - old_text.len() + new_text.len());
+            out.push_str(&content[..pos]);
+            out.push_str(new_text);
+            out.push_str(&content[pos + old_text.len()..]);
+            return Ok(out);
+        }
+    } else if let Some(pos) = content.find(old_text) {
+        // Preserve legacy behavior for explicit empty old_text usage.
         let mut out = String::with_capacity(content.len() - old_text.len() + new_text.len());
         out.push_str(&content[..pos]);
         out.push_str(new_text);

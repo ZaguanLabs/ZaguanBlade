@@ -290,6 +290,56 @@ Get a tree view of the workspace structure.
 
 ---
 
+### `get_project_index_overview`
+
+Read a compact, bounded overview from `.zblade/context/project_index.md` for fast first-turn orientation.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `path` | string | No | Optional workspace root path (default: `.`) |
+| `max_chars` | integer | No | Output cap (default: `6000`, max: `12000`) |
+| `offset` | integer | No | Character offset (default: `0`) |
+
+**Returns:** JSON with range/size metadata (`offset`, `end`, `returned_chars`, `total_chars`, `has_more`, `next_offset`) and `content`.
+
+**Example:**
+```json
+{
+  "max_chars": 6000,
+  "offset": 0
+}
+```
+
+> **Recommended usage:** Prefer this early when no active-file context is available. Avoid broad repo-wide `grep_search` as a first action when overview is available.
+
+---
+
+### `get_project_index_chunk`
+
+Read deterministic paged chunks from `.zblade/context/project_index.md` when deeper paging is needed.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `path` | string | No | Optional workspace root path (default: `.`) |
+| `offset` | integer | No | Character offset (default: `0`) |
+| `max_chars` | integer | No | Output cap (default: `4000`, max: `8000`) |
+
+**Returns:** JSON with range/size metadata and a `next_offset` hint when additional content exists.
+
+**Example:**
+```json
+{
+  "offset": 4000,
+  "max_chars": 4000
+}
+```
+
+> **Recommended usage:** Use this only after `get_project_index_overview` when additional paging is required.
+
+---
+
 ### `find_files`
 
 Find files by name pattern (substring match).

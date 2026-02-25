@@ -1,4 +1,5 @@
 use serde::Serialize;
+use serde_json::json;
 use std::process::Command;
 use tauri::State;
 
@@ -21,8 +22,12 @@ pub struct GitStatusSummary {
 }
 
 fn is_zblade_path(path: &str) -> bool {
-    let normalized = path.replace('\\', "/").trim_start_matches("./").to_string();
-    normalized == ".zblade" || normalized.starts_with(".zblade/")
+    let normalized = path.replace('\\', "/");
+    let trimmed = normalized.trim_start_matches("./");
+    trimmed == ".zblade"
+        || trimmed.starts_with(".zblade/")
+        || trimmed.ends_with("/.zblade")
+        || trimmed.contains("/.zblade/")
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -71,6 +76,68 @@ fn empty_summary() -> GitStatusSummary {
     }
 }
 
+async fn generate_commit_message_via_openai_compat(
+    api_config: &crate::config::ApiConfig,
+    model_id: &str,
+    prompt: &str,
+) -> Result<String, String> {
+    let model_name = model_id
+        .strip_prefix("openai-compat/")
+        .unwrap_or(model_id);
+    let url = format!(
+        "{}/v1/chat/completions",
+        api_config.openai_compat_url.trim_end_matches('/')
+    );
+
+    let body = json!({
+        "model": model_name,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "stream": false
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("OpenAI-compatible request failed: {}", e))?;
+
+    let status = response.status();
+    let payload = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read OpenAI-compatible response: {}", e))?;
+
+    if !status.is_success() {
+        return Err(format!(
+            "OpenAI-compatible server returned HTTP {}: {}",
+            status,
+            payload.chars().take(500).collect::<String>()
+        ));
+    }
+
+    let parsed: serde_json::Value = serde_json::from_str(&payload)
+        .map_err(|e| format!("Invalid OpenAI-compatible response: {}", e))?;
+
+    let raw = parsed
+        .pointer("/choices/0/message/content")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let message = extract_commit_message(raw);
+    if message.is_empty() {
+        Err("AI returned empty response".to_string())
+    } else {
+        Ok(message)
+    }
+}
+
 fn parse_git_status(output: &str) -> GitStatusSummary {
     let mut summary = GitStatusSummary {
         is_repo: true,
@@ -108,8 +175,15 @@ fn parse_git_status(output: &str) -> GitStatusSummary {
         }
 
         if let Some(rest) = line.strip_prefix("1 ") {
-            let mut parts = rest.split_whitespace();
-            let xy = parts.next().unwrap_or("..");
+            let parts: Vec<&str> = rest.split_whitespace().collect();
+            if parts.len() < 2 {
+                continue;
+            }
+            let xy = parts[0];
+            let path = parts.last().unwrap_or(&"");
+            if is_zblade_path(path) {
+                continue;
+            }
             let mut chars = xy.chars();
             let x = chars.next().unwrap_or('.');
             let y = chars.next().unwrap_or('.');
@@ -123,8 +197,15 @@ fn parse_git_status(output: &str) -> GitStatusSummary {
         }
 
         if let Some(rest) = line.strip_prefix("2 ") {
-            let mut parts = rest.split_whitespace();
-            let xy = parts.next().unwrap_or("..");
+            let parts: Vec<&str> = rest.split_whitespace().collect();
+            if parts.len() < 3 {
+                continue;
+            }
+            let xy = parts[0];
+            let new_path = parts.get(parts.len().saturating_sub(2)).unwrap_or(&"");
+            if is_zblade_path(new_path) {
+                continue;
+            }
             let mut chars = xy.chars();
             let x = chars.next().unwrap_or('.');
             let y = chars.next().unwrap_or('.');
@@ -138,8 +219,15 @@ fn parse_git_status(output: &str) -> GitStatusSummary {
         }
 
         if let Some(rest) = line.strip_prefix("u ") {
-            let mut parts = rest.split_whitespace();
-            let xy = parts.next().unwrap_or("..");
+            let parts: Vec<&str> = rest.split_whitespace().collect();
+            if parts.len() < 2 {
+                continue;
+            }
+            let xy = parts[0];
+            let path = parts.last().unwrap_or(&"");
+            if is_zblade_path(path) {
+                continue;
+            }
             let mut chars = xy.chars();
             let x = chars.next().unwrap_or('.');
             let y = chars.next().unwrap_or('.');
@@ -152,7 +240,10 @@ fn parse_git_status(output: &str) -> GitStatusSummary {
             continue;
         }
 
-        if line.starts_with("? ") {
+        if let Some(rest) = line.strip_prefix("? ") {
+            if is_zblade_path(rest.trim()) {
+                continue;
+            }
             summary.untracked_count += 1;
         }
     }
@@ -197,9 +288,6 @@ fn git_status_output(root: &str) -> Result<Option<String>, String> {
         .arg("--porcelain=v2")
         .arg("-uall")
         .arg("--branch")
-        .arg("--")
-        .arg(".")
-        .arg(":(exclude).zblade/**")
         .output()
         .map_err(|e| format!("failed to run git status: {}", e))?;
 
@@ -365,6 +453,75 @@ fn resolve_model_id(models: &[registry::ModelInfo], requested_id: &str) -> Strin
     }
 }
 
+async fn generate_commit_message_via_ollama(
+    api_config: &crate::config::ApiConfig,
+    model_id: &str,
+    prompt: &str,
+) -> Result<String, String> {
+    let model_name = model_id.strip_prefix("ollama/").unwrap_or(model_id);
+    let url = format!("{}/api/chat", api_config.ollama_url.trim_end_matches('/'));
+
+    let body = json!({
+        "model": model_name,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "stream": false
+    });
+
+    let client = reqwest::Client::new();
+    let mut request = client.post(&url).json(&body);
+
+    if api_config.ollama_cloud_enabled && !api_config.ollama_cloud_api_key.is_empty() {
+        request = request.header(
+            "Authorization",
+            format!("Bearer {}", api_config.ollama_cloud_api_key),
+        );
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("Ollama request failed: {}", e))?;
+
+    let status = response.status();
+    let payload = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read Ollama response: {}", e))?;
+
+    if !status.is_success() {
+        return Err(format!(
+            "Ollama returned HTTP {}: {}",
+            status,
+            payload.chars().take(500).collect::<String>()
+        ));
+    }
+
+    let parsed: serde_json::Value = serde_json::from_str(&payload)
+        .map_err(|e| format!("Invalid Ollama response: {}", e))?;
+
+    if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
+        return Err(format!("Ollama error: {}", err));
+    }
+
+    let raw = parsed
+        .pointer("/message/content")
+        .and_then(|v| v.as_str())
+        .or_else(|| parsed.get("response").and_then(|v| v.as_str()))
+        .unwrap_or("");
+
+    let message = extract_commit_message(raw);
+    if message.is_empty() {
+        Err("AI returned empty response".to_string())
+    } else {
+        Ok(message)
+    }
+}
+
 fn collect_changes_for_message(root: &str) -> Result<CommitContext, String> {
     let staged_files = run_git(root, &["diff", "--cached", "--name-only"][..])?;
     let mut files: Vec<String> = staged_files
@@ -511,6 +668,9 @@ fn parse_git_status_files(output: &str) -> Vec<GitFileStatus> {
             }
             let xy = parts[0];
             let path = parts.last().unwrap_or(&"").to_string();
+            if is_zblade_path(&path) {
+                continue;
+            }
             let mut chars = xy.chars();
             let x = chars.next().unwrap_or('.');
             let y = chars.next().unwrap_or('.');
@@ -534,6 +694,9 @@ fn parse_git_status_files(output: &str) -> Vec<GitFileStatus> {
             let xy = parts[0];
             let new_path = parts.get(parts.len().saturating_sub(2)).unwrap_or(&"");
             let old_path = parts.get(parts.len().saturating_sub(1)).unwrap_or(&"");
+            if is_zblade_path(new_path) {
+                continue;
+            }
             let mut chars = xy.chars();
             let x = chars.next().unwrap_or('.');
             let y = chars.next().unwrap_or('.');
@@ -556,6 +719,9 @@ fn parse_git_status_files(output: &str) -> Vec<GitFileStatus> {
             }
             let xy = parts[0];
             let path = parts.last().unwrap_or(&"").to_string();
+            if is_zblade_path(&path) {
+                continue;
+            }
             let mut chars = xy.chars();
             let x = chars.next().unwrap_or('.');
             let y = chars.next().unwrap_or('.');
@@ -573,6 +739,9 @@ fn parse_git_status_files(output: &str) -> Vec<GitFileStatus> {
 
         if let Some(rest) = line.strip_prefix("? ") {
             let path = rest.trim().to_string();
+            if is_zblade_path(&path) {
+                continue;
+            }
             files.push(GitFileStatus {
                 path,
                 display_path: None,
@@ -701,9 +870,6 @@ pub fn git_stage_all(state: State<'_, AppState>) -> Result<(), String> {
         .arg(&root)
         .arg("add")
         .arg("-A")
-        .arg("--")
-        .arg(".")
-        .arg(":(exclude).zblade/**")
         .output()
         .map_err(|e| format!("failed to run git add -A: {}", e))?;
 
@@ -711,6 +877,19 @@ pub fn git_stage_all(state: State<'_, AppState>) -> Result<(), String> {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         return Err(format!("git add -A failed: {}", stderr.trim()));
     }
+
+    // Ensure local .zblade data never ends up staged/committed via app workflows,
+    // even if files were tracked historically.
+    let _ = Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .arg("rm")
+        .arg("-r")
+        .arg("--cached")
+        .arg("--ignore-unmatch")
+        .arg("--")
+        .arg(".zblade")
+        .output();
 
     Ok(())
 }
@@ -1005,6 +1184,23 @@ Do NOT include analysis, reasoning, explanations, or multiple options."#,
 
     let available_models = load_models(&state).await;
     let resolved_model_id = resolve_model_id(&available_models, &model_id);
+    let resolved_provider = catalog::resolve_model_index(&available_models, &model_id)
+        .map(|idx| providers::resolve_model_selection(&available_models, idx).provider);
+
+    if matches!(resolved_provider, Some(providers::ProviderId::Ollama))
+        || resolved_model_id.starts_with("ollama/")
+    {
+        let api_config = { state.config.lock().unwrap().clone() };
+        return generate_commit_message_via_ollama(&api_config, &resolved_model_id, &prompt).await;
+    }
+
+    if matches!(resolved_provider, Some(providers::ProviderId::OpenAiCompat))
+        || resolved_model_id.starts_with("openai-compat/")
+    {
+        let api_config = { state.config.lock().unwrap().clone() };
+        return generate_commit_message_via_openai_compat(&api_config, &resolved_model_id, &prompt)
+            .await;
+    }
 
     // Use shared WebSocket connection manager from AppState
     let ws_manager = state.ws_connection.clone();

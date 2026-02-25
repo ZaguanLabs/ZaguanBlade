@@ -81,6 +81,44 @@ pub fn get_tool_definitions() -> Vec<Value> {
         }),
         serde_json::json!({
             "type": "function",
+            "name": "get_project_index_overview",
+            "function": {
+                "name": "get_project_index_overview",
+                "description": "Read a compact capped overview window from .zblade/context/project_index.md for first-turn orientation. Prefer this before broad repo-wide grep/search when no active file context is available.",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "Optional workspace root path" },
+                        "max_chars": { "type": "integer", "description": "Optional output cap (default 6000, max 12000)" },
+                        "offset": { "type": "integer", "description": "Optional character offset (default 0)" }
+                    },
+                    "required": [],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "name": "get_project_index_chunk",
+            "function": {
+                "name": "get_project_index_chunk",
+                "description": "Read a deterministic paged chunk from .zblade/context/project_index.md. Use this only when deeper paging is needed after get_project_index_overview.",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "Optional workspace root path" },
+                        "offset": { "type": "integer", "description": "Optional character offset (default 0)" },
+                        "max_chars": { "type": "integer", "description": "Optional output cap (default 4000, max 8000)" }
+                    },
+                    "required": [],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
             "name": "read_file",
             "function": {
                 "name": "read_file",

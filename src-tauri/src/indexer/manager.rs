@@ -1,6 +1,7 @@
 use crate::indexer::builder::index_workspace;
 use crate::indexer::cache::{load_cache, save_cache};
 use crate::indexer::handler::{handle_get_full_context, GetFullContextOptions};
+use crate::indexer::minimal_index::generate_project_index_min;
 use crate::indexer::types::{ProjectIndex, detect_language};
 use crate::indexer::preview::get_or_load_preview;
 use crate::indexer::watcher::IndexWatcher;
@@ -53,6 +54,13 @@ impl IndexerManager {
             eprintln!("[Indexer] Failed to write project_index.md: {}", e);
         } else {
             eprintln!("[Indexer] Wrote .zblade/context/project_index.md");
+        }
+
+        // Write compact deterministic index for first-turn warmup context
+        if let Err(e) = manager.write_project_index_min_sync() {
+            eprintln!("[Indexer] Failed to write project_index_min.md: {}", e);
+        } else {
+            eprintln!("[Indexer] Wrote .zblade/context/project_index_min.md");
         }
 
         Ok(manager)
@@ -122,6 +130,23 @@ impl IndexerManager {
             idx.mark_clean();
         }
         
+        Ok(output_path.to_string_lossy().to_string())
+    }
+
+    fn write_project_index_min_sync(
+        &self,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let (root, output) = {
+            let idx = self.index.read().unwrap();
+            (idx.root.clone(), generate_project_index_min(&*idx))
+        };
+
+        let output_dir = root.join(".zblade/context");
+        fs::create_dir_all(&output_dir)?;
+
+        let output_path = output_dir.join("project_index_min.md");
+        fs::write(&output_path, output)?;
+
         Ok(output_path.to_string_lossy().to_string())
     }
 
