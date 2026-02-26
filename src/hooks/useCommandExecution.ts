@@ -97,6 +97,26 @@ export function useCommandExecution() {
         });
     }, [escapeShellArg, handleCommandComplete]);
 
+    const stopCommandExecution = useCallback(async (callId: string) => {
+        const pending = pendingCommandsRef.current.get(callId);
+        if (!pending) return;
+
+        pendingCommandsRef.current.delete(callId);
+
+        try {
+            await BladeDispatcher.terminal({
+                type: 'Kill',
+                payload: {
+                    id: pending.terminalId,
+                },
+            });
+        } catch (err) {
+            console.error('[CMD EXEC] Failed to kill terminal:', err);
+        }
+
+        await handleCommandComplete(callId, 'Command cancelled by user.', 130);
+    }, [handleCommandComplete]);
+
     useEffect(() => {
         let unlistenStart: (() => void) | undefined;
         let unlistenExit: (() => void) | undefined;
@@ -182,5 +202,6 @@ export function useCommandExecution() {
     return {
         executions,
         handleCommandComplete,
+        stopCommandExecution,
     };
 }

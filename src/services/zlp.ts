@@ -13,7 +13,7 @@ export class ZLPService {
     static async capabilities(): Promise<ZLPCapabilitiesResult> {
         return this.send<ZLPCapabilitiesResult>("zlp.capabilities", {
             client_name: "zblade",
-            version: "0.0.4-alpha"
+            version: "0.0.4"
         });
     }
 

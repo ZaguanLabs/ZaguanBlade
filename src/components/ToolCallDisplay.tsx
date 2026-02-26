@@ -1,12 +1,13 @@
 'use client';
 import React, { useState, useCallback } from 'react';
 import { ToolCall } from '../types/chat';
-import { Zap, CheckCircle2, XCircle, Loader2, Copy, Check, ChevronRight, ChevronDown, RotateCcw } from 'lucide-react';
+import { Zap, CheckCircle2, XCircle, Loader2, Copy, Check, ChevronRight, ChevronDown, RotateCcw, StopCircle } from 'lucide-react';
 
 interface ToolCallDisplayProps {
     toolCall: ToolCall;
     status?: 'pending' | 'executing' | 'complete' | 'error' | 'skipped';
     result?: string;
+    onStopCommand?: () => void;
     onUndo?: () => void;
 }
 
@@ -14,6 +15,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     toolCall,
     status = 'pending',
     result,
+    onStopCommand,
     onUndo
 }) => {
     const [copied, setCopied] = useState(false);
@@ -242,6 +244,19 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                     </span>
                 </div>
                 <div className="flex items-center gap-2">
+                    {isRunCommand && status === 'executing' && onStopCommand && (
+                        <button
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                onStopCommand();
+                            }}
+                            className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-red-500/40 bg-red-500/10 text-red-400 transition-colors hover:bg-red-500/20"
+                            title="Stop command"
+                            aria-label="Stop command"
+                        >
+                            <StopCircle className="h-3.5 w-3.5" />
+                        </button>
+                    )}
                     <span className={`text-[9px] font-mono uppercase tracking-wider ${status === 'complete' ? 'text-emerald-400' :
                         status === 'executing' ? 'text-blue-400' :
                             status === 'error' ? 'text-red-400' :

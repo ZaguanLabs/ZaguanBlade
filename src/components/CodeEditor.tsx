@@ -38,6 +38,15 @@ import { StructureNode } from "../types/zlp";
 import { GraphInspector } from "./GraphInspector";
 
 
+const getDiffStateFromUnifiedDiff = (unifiedDiff?: string) => {
+    if (!unifiedDiff) return null;
+    return {
+        lines: parseUnifiedDiff(unifiedDiff),
+        originalContent: ''
+    };
+};
+
+
 interface CodeEditorProps {
     content: string;
     onChange: (val: string) => void;
@@ -253,12 +262,15 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
         if (isFileSwitch) {
             lastFilename.current = filename;
 
+            const diffState = getDiffStateFromUnifiedDiff(unifiedDiff);
+
             // Replace entire document content
             view.dispatch({
                 changes: { from: 0, to: view.state.doc.length, insert: content },
                 effects: [
                     languageConf.current.reconfigure(getLanguageExtension(filename)),
-                    setBaseContent.of(content) // Initialize virtual buffer with base content
+                    setBaseContent.of(content), // Initialize virtual buffer with base content
+                    setDiffState.of(diffState),
                 ]
             });
 
@@ -267,15 +279,19 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
             // Skip if this was a user edit to prevent feedback loops
             const currentDoc = view.state.doc.toString();
             if (currentDoc !== content) {
+                const diffState = getDiffStateFromUnifiedDiff(unifiedDiff);
                 view.dispatch({
                     changes: { from: 0, to: view.state.doc.length, insert: content },
-                    effects: setBaseContent.of(content) // Update base content
+                    effects: [
+                        setBaseContent.of(content), // Update base content
+                        setDiffState.of(diffState),
+                    ]
                 });
             }
         }
         // Reset the user edit flag after processing
         isUserEditRef.current = false;
-    }, [filename, content, onNavigate]);
+    }, [filename, content, onNavigate, unifiedDiff]);
 
     // Apply diff decorations when unifiedDiff changes
     useEffect(() => {
@@ -283,13 +299,9 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
         if (!view) return;
 
         if (unifiedDiff) {
-            const diffLines = parseUnifiedDiff(unifiedDiff);
             view.dispatch({
                 effects: [
-                    setDiffState.of({
-                        lines: diffLines,
-                        originalContent: '' // We don't need this for decorations
-                    }),
+                    setDiffState.of(getDiffStateFromUnifiedDiff(unifiedDiff)),
                     triggerAiGlow.of(undefined),
                 ]
             });

@@ -173,6 +173,7 @@ interface ChatMessageProps {
     isContinued?: boolean; // For visual grouping
     isActive?: boolean; // Is this the currently streaming message?
     onUndoTool?: (toolCallId: string) => void;
+    onStopCommand?: (callId: string) => void;
 }
 
 const StreamingTextPreview: React.FC<{ content: string }> = ({ content }) => (
@@ -191,6 +192,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     isContinued = false,
     isActive = false,
     onUndoTool,
+    onStopCommand,
 }) => {
     const isUser = message.role === 'User';
     const isSystem = message.role === 'System';
@@ -454,6 +456,11 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                             toolCall={toolCall}
                                             status={toolCall.status || 'executing'}
                                             result={toolCall.result}
+                                            onStopCommand={
+                                                toolCall.function.name === 'run_command' && onStopCommand
+                                                    ? (() => onStopCommand(toolCall.id))
+                                                    : undefined
+                                            }
                                             onUndo={
                                                 onUndoTool && REVERTIBLE_TOOLS.has(toolCall.function.name)
                                                     ? (() => onUndoTool(toolCall.id))
@@ -613,6 +620,11 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                                     toolCall={call}
                                                     status={call.status || 'executing'}
                                                     result={call.result}
+                                                    onStopCommand={
+                                                        call.function.name === 'run_command' && onStopCommand
+                                                            ? (() => onStopCommand(call.id))
+                                                            : undefined
+                                                    }
                                                     onUndo={
                                                         onUndoTool && REVERTIBLE_TOOLS.has(call.function.name)
                                                             ? (() => onUndoTool(call.id))

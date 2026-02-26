@@ -90,8 +90,8 @@ export const GitPanel: React.FC<GitPanelProps> = ({
         setActionError(null);
         setBusyAction('push');
 
-        // Yield one frame so the "Pushing" state paints immediately on button-up.
-        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        // Yield to the event loop so the "Pushing" state paints immediately on click.
+        await new Promise<void>(resolve => setTimeout(resolve, 50));
 
         try {
             await onPush();
@@ -274,7 +274,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                 <div className="flex-1" />
 
                                 {/* Dynamic Commit/Push button */}
-                                {(status?.ahead ?? 0) > 0 || pushSuccess ? (
+                                {(status?.ahead ?? 0) > 0 || pushSuccess || busyAction === 'push' ? (
                                     <button
                                         className={`relative flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-md transition-all duration-300 font-medium overflow-hidden ${
                                             pushSuccess
@@ -284,7 +284,8 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                                     : 'bg-green-600 text-white hover:bg-green-500 hover:shadow-md hover:shadow-green-500/20'
                                         }`}
                                         disabled={busyAction === 'push' || pushSuccess}
-                                        onPointerUp={() => {
+                                        onClick={(e) => {
+                                            e.preventDefault();
                                             void handlePushOnButtonUp();
                                         }}
                                         onKeyUp={(e) => {

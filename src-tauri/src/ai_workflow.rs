@@ -860,7 +860,7 @@ fn parse_run_command_args(raw_args: &str) -> Result<(String, Option<String>, boo
             Value::String(s) => s.parse::<bool>().ok(),
             _ => None,
         })
-        .unwrap_or(true);
+        .unwrap_or(false);
 
     let wait_ms_before_async = obj
         .get("wait_ms_before_async")

@@ -168,7 +168,6 @@ export const AppBar: React.FC<AppBarProps> = ({
                 borderBottom: '1px solid var(--border-default)',
                 boxShadow: '0 1px 0 rgba(255,255,255,0.02), 0 6px 18px rgba(0,0,0,0.22)',
             }}
-            data-tauri-drag-region
         >
             {/* Left: File Menu */}
             {!isFullscreen && (
@@ -241,13 +240,12 @@ export const AppBar: React.FC<AppBarProps> = ({
                 </div>
             )}
 
-            {/* Center: Tab strip (when tabs open) or branding (no tabs) */}
+            {/* Center: Tab strip (when tabs open) or drag filler (no tabs) */}
             {hasTabs ? (
                 <div
                     ref={scrollRef}
                     className="flex items-end overflow-x-auto tabs-scrollbar min-w-0"
                     style={tabStripMaxWidth ? { width: tabStripMaxWidth, maxWidth: tabStripMaxWidth } : { flex: 1 }}
-                    data-tauri-drag-region
                 >
                     {tabs.map((tab, index) => {
                         const isActive = activeTabId === tab.id;
@@ -327,10 +325,11 @@ export const AppBar: React.FC<AppBarProps> = ({
                     <div className="flex-1 min-w-4 h-full" data-tauri-drag-region />
                 </div>
             ) : (
-                <div
-                    className="flex-1 flex items-center justify-center gap-2 h-full"
-                    data-tauri-drag-region
-                >
+                <div className="flex-1" data-tauri-drag-region />
+            )}
+
+            {!hasTabs && (
+                <div className="absolute inset-0 flex items-center justify-center gap-2 pointer-events-none" data-tauri-drag-region>
                     <img src={zbladeAppIcon} alt="" className="w-4 h-4 object-contain opacity-60" draggable={false} />
                     <span
                         className="text-[11px] font-medium tracking-wider uppercase"
@@ -347,8 +346,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                 </div>
             )}
 
-            {/* Spacer — fills remaining width, stays draggable */}
-            <div className="flex-1" data-tauri-drag-region />
+            {hasTabs && <div className="flex-1" data-tauri-drag-region />}
 
             {/* Right: Window controls */}
             {!isFullscreen && (

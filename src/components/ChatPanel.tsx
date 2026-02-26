@@ -105,7 +105,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     setActiveTodos,
 }) => {
     const { t } = useTranslation();
-    useCommandExecution();
+    const { stopCommandExecution } = useCommandExecution();
     const [taskPanelCollapsed, setTaskPanelCollapsed] = useState(false);
     const { loadConversation } = useHistory();
     const isUserAtBottomRef = useRef(true);
@@ -288,6 +288,10 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         skipSingleCommand(callId);
     }, [skipSingleCommand]);
 
+    const handleStopCommand = useCallback((callId: string) => {
+        stopCommandExecution(callId);
+    }, [stopCommandExecution]);
+
     return (
         <div className="flex flex-col h-full bg-[var(--bg-app)] text-[var(--fg-primary)] font-sans tracking-tight" onContextMenu={handleContextMenu}>
             {/* Tab Bar */}
@@ -362,6 +366,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                                     isContinued={isContinued}
                                     isActive={isActive}
                                     onUndoTool={onUndoTool}
+                                    onStopCommand={handleStopCommand}
                                 />
                             );
                         })}

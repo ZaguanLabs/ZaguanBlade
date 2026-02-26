@@ -160,9 +160,42 @@ export default function Terminal({ id = "main-terminal", cwd }: TerminalProps) {
         // only handles AltGraph for Windows in _isThirdLevelShift. We suppress the
         // keydown processing here so the composition path handles it instead.
         term.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
-            if (ev.type === 'keydown' && ev.getModifierState('AltGraph')) {
+            if (ev.type !== 'keydown') {
+                return true;
+            }
+
+            if (ev.getModifierState('AltGraph')) {
                 return false;
             }
+
+            const isCtrlShift = ev.ctrlKey && ev.shiftKey && !ev.altKey && !ev.metaKey;
+            const isCmdShift = ev.metaKey && ev.shiftKey && !ev.altKey && !ev.ctrlKey;
+
+            if ((isCtrlShift || isCmdShift) && ev.code === 'KeyC') {
+                const selection = term.getSelection();
+                if (selection) {
+                    navigator.clipboard.writeText(selection).catch((err) => {
+                        console.error('Failed to copy:', err);
+                    });
+                }
+                return false;
+            }
+
+            if ((isCtrlShift || isCmdShift) && ev.code === 'KeyV') {
+                navigator.clipboard.readText()
+                    .then((text) => {
+                        if (!text) return;
+                        BladeDispatcher.terminal({
+                            type: 'Input',
+                            payload: { id, data: text },
+                        }).catch(console.error);
+                    })
+                    .catch((err) => {
+                        console.error('Failed to paste:', err);
+                    });
+                return false;
+            }
+
             return true;
         });
 

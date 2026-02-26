@@ -11,6 +11,16 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
   const [changes, setChanges] = useState<UncommittedChange[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const normalizePath = useCallback((value: string): string => {
+    return value.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
+  }, []);
+
+  const isBoundarySuffixMatch = useCallback((full: string, suffix: string): boolean => {
+    if (!full.endsWith(suffix)) return false;
+    if (full.length === suffix.length) return true;
+    return full[full.length - suffix.length - 1] === '/';
+  }, []);
+
   const refresh = useCallback(async () => {
     try {
       const result = await invoke<UncommittedChange[]>('get_uncommitted_changes');
@@ -45,20 +55,34 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
   }, [refresh, options?.onFileChanged]);
 
   const getChangeForFile = useCallback((filePath: string): UncommittedChange | undefined => {
-    const matches = changes.filter(c => c.file_path === filePath || c.file_path.endsWith(filePath));
+    const target = normalizePath(filePath);
+
+    // Primary matching: normalized exact path.
+    let matches = changes.filter(c => normalizePath(c.file_path) === target);
+
+    // Fallback only when no exact match is available: boundary-safe suffix matching
+    // for absolute/relative path representation differences.
+    if (matches.length === 0) {
+      matches = changes.filter(c => {
+        const candidate = normalizePath(c.file_path);
+        return isBoundarySuffixMatch(candidate, target) || isBoundarySuffixMatch(target, candidate);
+      });
+    }
+
     if (matches.length === 0) return undefined;
 
-    // Prefer the newest non-empty diff (covers repeated edits on same file where
-    // older/stale entries may still exist with path-format variants).
-    for (let i = matches.length - 1; i >= 0; i -= 1) {
-      if (matches[i].unified_diff.trim().length > 0) {
-        return matches[i];
+    // Deterministic latest-first selection.
+    const sorted = [...matches].sort((a, b) => b.timestamp - a.timestamp);
+
+    // Prefer the newest non-empty diff.
+    for (const change of sorted) {
+      if (change.unified_diff.trim().length > 0) {
+        return change;
       }
     }
 
-    // Fallback to the most recent entry if all are empty.
-    return matches[matches.length - 1];
-  }, [changes]);
+    return sorted[0];
+  }, [changes, normalizePath, isBoundarySuffixMatch]);
 
   const acceptChange = useCallback(async (id: string): Promise<boolean> => {
     try {
