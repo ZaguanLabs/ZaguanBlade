@@ -17,6 +17,7 @@ export interface AppBarTab {
 interface AppBarProps {
     tabs?: AppBarTab[];
     activeTabId?: string | null;
+    projectName?: string | null;
     onTabClick?: (id: string) => void;
     onTabClose?: (id: string) => void;
     onReorder?: (fromIndex: number, toIndex: number) => void;
@@ -26,6 +27,7 @@ interface AppBarProps {
 export const AppBar: React.FC<AppBarProps> = ({
     tabs = [],
     activeTabId,
+    projectName,
     onTabClick,
     onTabClose,
     onReorder,
@@ -159,6 +161,7 @@ export const AppBar: React.FC<AppBarProps> = ({
     }, [activeTabId]);
 
     const hasTabs = tabs.length > 0;
+    const appBarBrandText = projectName ? `Zaguán Blade - ${projectName}` : 'Zaguán Blade';
 
     return (
         <div
@@ -336,7 +339,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                         style={{ color: 'var(--fg-tertiary)' }}
                         data-tauri-drag-region
                     >
-                        Zaguán Blade
+                        {appBarBrandText}
                     </span>
                     {isFullscreen && (
                         <span className="text-[9px] opacity-40 ml-2" style={{ color: 'var(--fg-tertiary)' }}>

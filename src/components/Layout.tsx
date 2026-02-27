@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo, Suspense } fr
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ExplorerPanel } from './ExplorerPanel';
 import { EditorPanel } from './EditorPanel';
 import { TerminalPane, TerminalPaneHandle } from './TerminalPane';
@@ -49,6 +50,7 @@ interface Tab {
 
 const AppLayoutInner: React.FC = () => {
     const { t } = useTranslation();
+    const appWindow = getCurrentWindow();
     const [activeTabId, setActiveTabId] = useState<string | null>(null);
     const [tabs, setTabs] = useState<Tab[]>([]);
     const [aiEditedFilePaths, setAiEditedFilePaths] = useState<Set<string>>(new Set());
@@ -253,6 +255,32 @@ const AppLayoutInner: React.FC = () => {
     const [workspacePath, setWorkspacePath] = useState<string | null>(null);
     const [userId, setUserId] = useState<string | null>(null);
     const [projectId, setProjectId] = useState<string | null>(null);
+
+    const projectName = useMemo(() => {
+        if (!workspacePath) return null;
+        const normalized = workspacePath.replace(/[/\\]+$/, '');
+        const segments = normalized.split(/[/\\]/).filter(Boolean);
+        return segments.length > 0 ? segments[segments.length - 1] : null;
+    }, [workspacePath]);
+
+    const activeTab = useMemo(() => tabs.find(t => t.id === activeTabId) ?? null, [tabs, activeTabId]);
+    const activeFilename = useMemo(() => {
+        if (!activeTab) return null;
+        if (activeTab.path) {
+            const parts = activeTab.path.split(/[/\\]/).filter(Boolean);
+            return parts.length > 0 ? parts[parts.length - 1] : activeTab.title;
+        }
+        return activeTab.title;
+    }, [activeTab]);
+
+    useEffect(() => {
+        const titleParts = ['Zaguán Blade'];
+        if (projectName) titleParts.push(projectName);
+        if (activeFilename) titleParts.push(activeFilename);
+        appWindow.setTitle(titleParts.join(' - ')).catch((err) => {
+            console.error('[Layout] Failed to set window title:', err);
+        });
+    }, [appWindow, projectName, activeFilename]);
 
     // Fetch project settings and sync to EditorContext
     useEffect(() => {
@@ -969,6 +997,7 @@ const AppLayoutInner: React.FC = () => {
             <AppBar
                 tabs={appBarTabs}
                 activeTabId={activeTabId}
+                projectName={projectName}
                 onTabClick={handleTabClick}
                 onTabClose={handleTabClose}
                 onReorder={(fromIndex, toIndex) => {
