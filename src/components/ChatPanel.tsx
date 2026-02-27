@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { Check, X, Settings, Key, Loader2 } from 'lucide-react';
 import { useCommandExecution } from '../hooks/useCommandExecution';
 import { useHistory } from '../hooks/useHistory';
-import type { ChatMessage as ChatMessageType, ImageAttachment, ModelInfo, ToolActivityState } from '../types/chat';
+import type { ChatMessage as ChatMessageType, ImageAttachment, ModelInfo, QueuedRequest, ToolActivityState } from '../types/chat';
 
 import type { StructuredAction, TodoItem } from '../types/events';
 import type { RemoteAiConfig } from '../types/settings';
@@ -16,6 +16,7 @@ import { HistoryTab } from './HistoryTab';
 import { ProgressIndicator } from './ProgressIndicator';
 import { GlobalChangeActions } from './editor/GlobalChangeActions';
 import { TaskPanel } from './TaskPanel';
+import { QueuePanel } from './QueuePanel';
 import type { UncommittedChange } from '../types/uncommitted';
 
 interface ResearchProgress {
@@ -48,6 +49,8 @@ interface ChatPanelProps {
     toolActivity?: ToolActivityState | null;
     activeTodos: TodoItem[];
     setActiveTodos: React.Dispatch<React.SetStateAction<TodoItem[]>>;
+    queuedRequests: QueuedRequest[];
+    deleteQueuedRequest: (index: number) => void;
 }
 
 const pendingResponseWords = [
@@ -103,6 +106,8 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     toolActivity,
     activeTodos,
     setActiveTodos,
+    queuedRequests,
+    deleteQueuedRequest,
 }) => {
     const { t } = useTranslation();
     const { stopCommandExecution } = useCommandExecution();
@@ -112,6 +117,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     const prevMessageCountRef = useRef(0);
     const [activeTab, setActiveTab] = useState<'chat' | 'history'>('chat');
     const [hasApiKey, setHasApiKey] = useState<boolean>(true);
+    const [composerPrefill, setComposerPrefill] = useState<QueuedRequest | null>(null);
 
     // Check API Key
     const checkApiKey = useCallback(async () => {
@@ -291,6 +297,17 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     const handleStopCommand = useCallback((callId: string) => {
         stopCommandExecution(callId);
     }, [stopCommandExecution]);
+
+    const handleEditQueuedRequest = useCallback((index: number) => {
+        const request = queuedRequests[index];
+        if (!request) return;
+        setComposerPrefill(request);
+        deleteQueuedRequest(index);
+    }, [queuedRequests, deleteQueuedRequest]);
+
+    const handleComposerPrefillConsumed = useCallback(() => {
+        setComposerPrefill(null);
+    }, []);
 
     return (
         <div className="flex flex-col h-full bg-[var(--bg-app)] text-[var(--fg-primary)] font-sans tracking-tight" onContextMenu={handleContextMenu}>
@@ -479,6 +496,12 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                 onToggleCollapse={() => setTaskPanelCollapsed(prev => !prev)}
             />
 
+            <QueuePanel
+                requests={queuedRequests}
+                onEditRequest={handleEditQueuedRequest}
+                onDeleteRequest={deleteQueuedRequest}
+            />
+
             <CommandCenter
                 onSend={sendMessage}
                 onStop={stopGeneration}
@@ -487,6 +510,8 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                 selectedModelId={selectedModelId}
                 setSelectedModelId={setSelectedModelId}
                 disabled={!hasApiKey}
+                prefillRequest={composerPrefill}
+                onPrefillConsumed={handleComposerPrefillConsumed}
             />
 
             {/* API Key Missing Overlay */}

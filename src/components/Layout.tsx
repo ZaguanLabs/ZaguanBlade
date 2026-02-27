@@ -608,18 +608,19 @@ const AppLayoutInner: React.FC = () => {
         if (isDragging) {
             document.addEventListener('mousemove', handleMouseMove);
             document.addEventListener('mouseup', handleMouseUp);
-            document.body.style.cursor = 'row-resize';
+            document.body.classList.add('resize-y-cursor');
         }
 
         return () => {
             document.removeEventListener('mousemove', handleMouseMove);
             document.removeEventListener('mouseup', handleMouseUp);
-            document.body.style.removeProperty('cursor');
+            document.body.classList.remove('resize-y-cursor');
         };
     }, [isDragging]);
 
     // Chat panel resize handler
     const handleChatMouseDown = (e: React.MouseEvent) => {
+        if (e.button !== 0) return;
         setIsChatDragging(true);
         e.preventDefault();
     };
@@ -642,13 +643,13 @@ const AppLayoutInner: React.FC = () => {
         if (isChatDragging) {
             document.addEventListener('mousemove', handleChatMouseMove);
             document.addEventListener('mouseup', handleChatMouseUp);
-            document.body.style.cursor = 'col-resize';
+            document.body.classList.add('resize-x-cursor');
         }
 
         return () => {
             document.removeEventListener('mousemove', handleChatMouseMove);
             document.removeEventListener('mouseup', handleChatMouseUp);
-            document.body.style.removeProperty('cursor');
+            document.body.classList.remove('resize-x-cursor');
         };
     }, [isChatDragging]);
 
@@ -991,6 +992,8 @@ const AppLayoutInner: React.FC = () => {
         }
     };
 
+    const editorViewportBottomInset = terminalHeight > 0 ? terminalHeight : 0;
+
     return (
         <div className="h-screen w-screen bg-[var(--bg-app)] overflow-hidden flex flex-col font-sans text-[var(--fg-primary)]">
             {/* Unified App Bar: title bar + tab strip merged */}
@@ -1170,7 +1173,8 @@ const AppLayoutInner: React.FC = () => {
                                             return (
                                                 <div
                                                     key={tab.id}
-                                                    className={`absolute inset-0 ${isActive ? 'z-10' : 'z-0 pointer-events-none opacity-0'}`}
+                                                    className={`absolute inset-x-0 top-0 ${isActive ? 'z-10' : 'z-0 pointer-events-none opacity-0'}`}
+                                                    style={{ bottom: editorViewportBottomInset }}
                                                 >
                                                     <EditorPanel
                                                         activeFile={tab.path || null}
@@ -1183,7 +1187,7 @@ const AppLayoutInner: React.FC = () => {
 
                                         {/* Render Welcome Page if no tabs */}
                                         {tabs.length === 0 && (
-                                            <div className="absolute inset-0 z-10" style={{ bottom: terminalHeight > 0 ? terminalHeight : 0 }}>
+                                            <div className="absolute inset-x-0 top-0 z-10" style={{ bottom: editorViewportBottomInset }}>
                                                 <EditorPanel
                                                     activeFile={null}
                                                     onOpenSettings={() => setIsSettingsOpen(true)}
@@ -1197,7 +1201,8 @@ const AppLayoutInner: React.FC = () => {
                                             return (
                                                 <div
                                                     key={tab.id}
-                                                    className={`absolute inset-0 ${isActive ? 'z-10' : 'z-0 pointer-events-none opacity-0'}`}
+                                                    className={`absolute inset-x-0 top-0 ${isActive ? 'z-10' : 'z-0 pointer-events-none opacity-0'}`}
+                                                    style={{ bottom: editorViewportBottomInset }}
                                                 >
                                                     <DocumentViewer
                                                         documentId={tab.id}
@@ -1232,7 +1237,7 @@ const AppLayoutInner: React.FC = () => {
                         >
                             {/* Drag handle strip */}
                             <div
-                                className="relative h-3 shrink-0 group flex items-center cursor-row-resize"
+                                className="relative h-3 shrink-0 group flex items-center resize-y-cursor"
                                 onMouseDown={handleMouseDown}
                             >
                                 <div
@@ -1250,14 +1255,9 @@ const AppLayoutInner: React.FC = () => {
 
                     {/* Chat Panel Resizer */}
                     <div
-                        className="relative w-0 z-40 shrink-0 group flex justify-center"
-                        style={{
-                            cursor: 'col-resize',
-                            marginLeft: 'calc(var(--panel-gap) * -1)',
-                        }}
+                        className="relative w-2 -mx-1 z-40 shrink-0 group flex items-stretch justify-center select-none resize-x-cursor"
                         onMouseDown={handleChatMouseDown}
                     >
-                        <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-2" />
                         <div
                             className={`h-full w-[1px] transition-colors duration-[var(--transition-fast)] ${isChatDragging
                                 ? 'bg-[var(--accent-primary)]'
@@ -1302,6 +1302,8 @@ const AppLayoutInner: React.FC = () => {
                                 toolActivity={chat.toolActivity}
                                 activeTodos={chat.activeTodos}
                                 setActiveTodos={chat.setActiveTodos}
+                                queuedRequests={chat.messageQueue}
+                                deleteQueuedRequest={chat.deleteQueuedRequest}
                             />
                         </Suspense>
                     </div>

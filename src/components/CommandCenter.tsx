@@ -9,7 +9,7 @@ import { FeatureMenu } from './FeatureMenu';
 import { ImageAttachmentBar } from './ImageAttachmentBar';
 import { WindowPicker } from './WindowPicker';
 import { RegionSelector } from './RegionSelector';
-import type { ImageAttachment, ModelInfo } from '../types/chat';
+import type { ImageAttachment, ModelInfo, QueuedRequest } from '../types/chat';
 import type { CaptureResult, WindowInfo } from '../types/screenshot';
 import {
     createThumbnailDataUrl,
@@ -45,6 +45,8 @@ interface CommandCenterProps {
     models: ModelInfo[];
     selectedModelId: string;
     setSelectedModelId: (modelId: string) => void;
+    prefillRequest?: QueuedRequest | null;
+    onPrefillConsumed?: () => void;
 }
 
 const CommandCenterComponent: React.FC<CommandCenterProps> = ({
@@ -54,7 +56,9 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
     loading,
     models,
     selectedModelId,
-    setSelectedModelId
+    setSelectedModelId,
+    prefillRequest,
+    onPrefillConsumed,
 }) => {
     const { t } = useTranslation();
     const [text, setText] = useState('');
@@ -109,6 +113,23 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
             }
         };
     }, []);
+
+    useEffect(() => {
+        if (!prefillRequest) return;
+        setText(prefillRequest.text);
+        setAttachments(prefillRequest.attachments || []);
+        setAttachmentError(null);
+
+        requestAnimationFrame(() => {
+            if (!textareaRef.current) return;
+            const end = prefillRequest.text.length;
+            textareaRef.current.focus();
+            textareaRef.current.setSelectionRange(end, end);
+            resizeTextarea(textareaRef.current);
+        });
+
+        onPrefillConsumed?.();
+    }, [prefillRequest, onPrefillConsumed, resizeTextarea]);
 
     const handlePaste = useCallback(async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
         const items = Array.from(event.clipboardData.items);
@@ -607,7 +628,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                         />
                         <button
                             onClick={() => {
-                                const showStop = loading && !text.trim() && attachments.length === 0;
+                                const showStop = loading && !text.trim();
                                 if (showStop && onStop) {
                                     onStop();
                                 } else if (isLocalOnly && attachments.length > 0) {
@@ -672,6 +693,13 @@ export const CommandCenter = React.memo(CommandCenterComponent, (prevProps, next
     if (prevProps.onSend !== nextProps.onSend) return false;
     if (prevProps.onStop !== nextProps.onStop) return false;
     if (prevProps.setSelectedModelId !== nextProps.setSelectedModelId) return false;
+    if (prevProps.onPrefillConsumed !== nextProps.onPrefillConsumed) return false;
+
+    // Prefill state (queue item edit)
+    const prevPrefill = prevProps.prefillRequest;
+    const nextPrefill = nextProps.prefillRequest;
+    if ((prevPrefill?.text ?? '') !== (nextPrefill?.text ?? '')) return false;
+    if ((prevPrefill?.attachments?.length ?? 0) !== (nextPrefill?.attachments?.length ?? 0)) return false;
     
     // Check models array - compare by length and IDs
     if (prevProps.models.length !== nextProps.models.length) return false;

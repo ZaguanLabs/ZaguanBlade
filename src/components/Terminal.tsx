@@ -155,11 +155,49 @@ export default function Terminal({ id = "main-terminal", cwd }: TerminalProps) {
 
         term.open(terminalRef.current);
 
+        let pasteShortcutInFlight = false;
+
         // Fix: On Linux, Alt-Gr composed characters (e.g. ~, @, {, [) fire both
         // a keydown and a composition/input event, causing double input. xterm.js
         // only handles AltGraph for Windows in _isThirdLevelShift. We suppress the
         // keydown processing here so the composition path handles it instead.
         term.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
+            const isCtrlShift = ev.ctrlKey && ev.shiftKey && !ev.altKey && !ev.metaKey;
+            const isCmdShift = ev.metaKey && ev.shiftKey && !ev.altKey && !ev.ctrlKey;
+            const isPasteShortcut = (isCtrlShift || isCmdShift) && ev.code === 'KeyV';
+
+            // Handle paste shortcut on keydown only, and swallow corresponding keyup.
+            // Some environments still route the shortcut through keyup/default path,
+            // which can cause a second paste unless both phases are suppressed.
+            if (isPasteShortcut) {
+                if (ev.type === 'keyup') {
+                    pasteShortcutInFlight = false;
+                    return false;
+                }
+
+                if (ev.type === 'keydown') {
+                    if (pasteShortcutInFlight || ev.repeat) {
+                        return false;
+                    }
+                    pasteShortcutInFlight = true;
+
+                    navigator.clipboard.readText()
+                        .then((text) => {
+                            if (!text) return;
+                            BladeDispatcher.terminal({
+                                type: 'Input',
+                                payload: { id, data: text },
+                            }).catch(console.error);
+                        })
+                        .catch((err) => {
+                            console.error('Failed to paste:', err);
+                        });
+                    return false;
+                }
+
+                return false;
+            }
+
             if (ev.type !== 'keydown') {
                 return true;
             }
@@ -168,9 +206,6 @@ export default function Terminal({ id = "main-terminal", cwd }: TerminalProps) {
                 return false;
             }
 
-            const isCtrlShift = ev.ctrlKey && ev.shiftKey && !ev.altKey && !ev.metaKey;
-            const isCmdShift = ev.metaKey && ev.shiftKey && !ev.altKey && !ev.ctrlKey;
-
             if ((isCtrlShift || isCmdShift) && ev.code === 'KeyC') {
                 const selection = term.getSelection();
                 if (selection) {
@@ -178,21 +213,6 @@ export default function Terminal({ id = "main-terminal", cwd }: TerminalProps) {
                         console.error('Failed to copy:', err);
                     });
                 }
-                return false;
-            }
-
-            if ((isCtrlShift || isCmdShift) && ev.code === 'KeyV') {
-                navigator.clipboard.readText()
-                    .then((text) => {
-                        if (!text) return;
-                        BladeDispatcher.terminal({
-                            type: 'Input',
-                            payload: { id, data: text },
-                        }).catch(console.error);
-                    })
-                    .catch((err) => {
-                        console.error('Failed to paste:', err);
-                    });
                 return false;
             }
 

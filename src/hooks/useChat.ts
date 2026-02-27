@@ -3,7 +3,7 @@ import { listen, emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { BladeDispatcher } from '../services/blade';
 import { EditorFacade } from '../services/editorFacade';
-import type { ChatMessage, ImageAttachment, ModelInfo, ToolActivityState, ToolCall, StreamingState } from '../types/chat';
+import type { ChatMessage, ImageAttachment, ModelInfo, QueuedRequest, ToolActivityState, ToolCall, StreamingState } from '../types/chat';
 import type { Change } from '../types/change';
 import { EventNames, type RequestConfirmationPayload, type StructuredAction, type ChangeAppliedPayload, type AllEditsAppliedPayload, type ToolExecutionCompletedPayload } from '../types/events';
 import { useEditorState } from '../contexts/EditorContext';
@@ -1018,7 +1018,7 @@ export function useChat() {
         };
     }, [queueMessageUpdate, flushPendingUpdates, updateToolCallsStatusLocally]);
 
-    const [messageQueue, setMessageQueue] = useState<{ text: string; attachments?: ImageAttachment[] }[]>([]);
+    const [messageQueue, setMessageQueue] = useState<QueuedRequest[]>([]);
 
     const dispatchToBackend = useCallback(async (text: string, attachments?: ImageAttachment[]) => {
         try {
@@ -1076,6 +1076,10 @@ export function useChat() {
         // Add to queue for processing
         setMessageQueue(prev => [...prev, { text, attachments }]);
     }, [loading]);
+
+    const deleteQueuedRequest = useCallback((index: number) => {
+        setMessageQueue(prev => prev.filter((_, idx) => idx !== index));
+    }, []);
     const stopGeneration = useCallback(async () => {
         const inFlightToolCallIds = Array.from(new Set([
             ...messagesRef.current.flatMap(msg =>
@@ -1163,6 +1167,7 @@ export function useChat() {
             resetStreamingState();
             setMessages([]);
             setActiveTodos([]);
+            setMessageQueue([]);
         } catch (e) {
             console.error('Failed to start new conversation:', e);
         }
@@ -1201,9 +1206,12 @@ export function useChat() {
             resetStreamingState();
             setMessages(msgs);
             setActiveTodos([]);
+            setMessageQueue([]);
         }, [resetStreamingState]),
         toolActivity,
         activeTodos,
         setActiveTodos,
+        messageQueue,
+        deleteQueuedRequest,
     };
 }

@@ -15,6 +15,11 @@ export interface ImageAttachment extends ChatImage {
     thumbnailUrl: string;
 }
 
+export interface QueuedRequest {
+    text: string;
+    attachments?: ImageAttachment[];
+}
+
 export interface ChatMessage {
     id?: string;
     role: 'User' | 'Assistant' | 'System' | 'Tool';
