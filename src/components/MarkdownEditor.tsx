@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import CodeEditor, { type CodeEditorHandle } from './CodeEditor';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { Eye, Edit3 } from 'lucide-react';
+import { useUncommittedChanges } from '../hooks/useUncommittedChanges';
+import { FileChangeBar } from './editor/FileChangeBar';
 
 interface MarkdownEditorProps {
     content: string;
@@ -18,6 +20,22 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
 }) => {
     const [mode, setMode] = useState<'edit' | 'view'>('edit');
     const editorRef = React.useRef<CodeEditorHandle>(null);
+
+    const { getChangeForFile, acceptFile, rejectFile, refresh } = useUncommittedChanges();
+    const change = filename ? getChangeForFile(filename) : undefined;
+
+    const handleAccept = async () => {
+        if (filename) await acceptFile(filename);
+    };
+
+    const handleReject = async () => {
+        if (filename) {
+            await rejectFile(filename);
+            setTimeout(() => {
+                refresh();
+            }, 100);
+        }
+    };
 
     // Keyboard shortcut for mode toggle
     React.useEffect(() => {
@@ -72,15 +90,25 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
             </div>
 
             {/* Content Area */}
-            <div className="flex-1 overflow-hidden">
+            <div className="flex-1 overflow-hidden relative">
                 {mode === 'edit' ? (
-                    <CodeEditor
-                        ref={editorRef}
-                        content={content}
-                        onChange={onChange}
-                        onSave={onSave}
-                        filename={filename}
-                    />
+                    <>
+                        <CodeEditor
+                            ref={editorRef}
+                            content={content}
+                            onChange={onChange}
+                            onSave={onSave}
+                            filename={filename}
+                            unifiedDiff={change?.unified_diff}
+                        />
+                        {change && (
+                            <FileChangeBar
+                                change={change}
+                                onAccept={handleAccept}
+                                onReject={handleReject}
+                            />
+                        )}
+                    </>
                 ) : (
                     <div className="h-full overflow-y-auto px-8 py-6 bg-[#1e1e1e]">
                         <div className="max-w-4xl mx-auto">

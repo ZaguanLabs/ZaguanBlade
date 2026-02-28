@@ -46,6 +46,12 @@ pub struct EnvironmentInfo {
     /// Editor/IDE name
     #[serde(skip_serializing_if = "Option::is_none")]
     pub editor: Option<String>,
+    /// Current local date
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_date: Option<String>,
+    /// Current local time
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_time: Option<String>,
 }
 
 impl EnvironmentInfo {
@@ -75,6 +81,9 @@ impl EnvironmentInfo {
         let go_version = get_version("go", &["version"]);
         let rust_version = get_version("rustc", &["--version"]);
 
+        let local_date = Some(chrono::Local::now().format("%Y-%m-%d").to_string());
+        let local_time = Some(chrono::Local::now().format("%H:%M:%S %z").to_string());
+
         EnvironmentInfo {
             os,
             os_version,
@@ -90,6 +99,8 @@ impl EnvironmentInfo {
             go_version,
             rust_version,
             editor: Some("zblade".to_string()),
+            local_date,
+            local_time,
         }
     }
 }

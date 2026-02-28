@@ -839,6 +839,8 @@ impl ChatManager {
         let active_file_value = active_file.unwrap_or_default();
         let os_value = std::env::consts::OS.to_string();
         let shell_value = std::env::var("SHELL").unwrap_or_default();
+        let date_value = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let time_value = chrono::Local::now().format("%H:%M:%S %z").to_string();
 
         let mut messages: Vec<OllamaMessage> = Vec::new();
         if let Ok(Some(prompt)) = crate::config::read_prompt_for_model(&model_name) {
@@ -846,7 +848,9 @@ impl ChatManager {
                 .replace("{{WORKSPACE_ROOT}}", &workspace_root)
                 .replace("{{ACTIVE_FILE}}", &active_file_value)
                 .replace("{{OS}}", &os_value)
-                .replace("{{SHELL}}", &shell_value);
+                .replace("{{SHELL}}", &shell_value)
+                .replace("{{DATE}}", &date_value)
+                .replace("{{TIME}}", &time_value);
             if !rendered_prompt.trim().is_empty() {
                 messages.push(OllamaMessage {
                     role: "system".to_string(),
@@ -1202,6 +1206,8 @@ impl ChatManager {
         let active_file_value = active_file.unwrap_or_default();
         let os_value = std::env::consts::OS.to_string();
         let shell_value = std::env::var("SHELL").unwrap_or_default();
+        let date_value = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let time_value = chrono::Local::now().format("%H:%M:%S %z").to_string();
 
         #[derive(Serialize, Clone)]
         #[serde(untagged)]
@@ -1252,7 +1258,9 @@ impl ChatManager {
                 .replace("{{WORKSPACE_ROOT}}", &workspace_root)
                 .replace("{{ACTIVE_FILE}}", &active_file_value)
                 .replace("{{OS}}", &os_value)
-                .replace("{{SHELL}}", &shell_value);
+                .replace("{{SHELL}}", &shell_value)
+                .replace("{{DATE}}", &date_value)
+                .replace("{{TIME}}", &time_value);
             if !rendered_prompt.trim().is_empty() {
                 messages.push(OpenAIMessage {
                     role: "system".to_string(),
