@@ -37,11 +37,12 @@ body {
 .code-editor-scroll .cm-scroller {
     scrollbar-width: thin;
     scrollbar-color: color-mix(in srgb, var(--fg-secondary) 40%, transparent) transparent;
+    overflow-x: hidden !important;
 }
 
 .code-editor-scroll .cm-scroller::-webkit-scrollbar {
     width: 10px;
-    height: 10px;
+    height: 0;
 }
 
 .code-editor-scroll .cm-scroller::-webkit-scrollbar-track {
@@ -186,8 +187,43 @@ body {
     cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cg stroke='black' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m8 16 4 4 4-4'/%3E%3Cpath d='M12 4v16'/%3E%3Cpath d='m8 8 4-4 4 4'/%3E%3C/g%3E%3Cg stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m8 16 4 4 4-4'/%3E%3Cpath d='M12 4v16'/%3E%3Cpath d='m8 8 4-4 4 4'/%3E%3C/g%3E%3C/svg%3E") 12 12, ns-resize, row-resize !important;
 }
 
-/* Hide horizontal scrollbar in xterm */
-.xterm .xterm-viewport {
+/* Terminal: suppress horizontal overflow and the phantom horizontal scrollbar bar.
+ *
+ * xterm.js always creates a HorizontalScrollbar DOM node (.scrollbar.horizontal)
+ * inside .xterm-scrollable-element, positioned absolute at bottom:0 with a default
+ * height of 10px — even when horizontal=Hidden.  The .invisible class only sets
+ * opacity:0 / pointer-events:none; it does NOT zero the height, so on Linux/WebKitGTK
+ * the element paints as a dark 10 px band across the bottom of the terminal.
+ * Force height:0 and overflow:hidden on both the visible and invisible states so
+ * the band never appears regardless of scrollbar visibility state.
+ */
+.terminal-host .xterm .xterm-scrollable-element > .scrollbar.horizontal,
+.terminal-host .xterm .xterm-scrollable-element > .visible.scrollbar.horizontal,
+.terminal-host .xterm .xterm-scrollable-element > .invisible.scrollbar.horizontal {
+    height: 0 !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+    pointer-events: none !important;
+}
+
+/* Also hard-stop any native horizontal overflow in the xterm mount chain */
+.terminal-host,
+.terminal-host .xterm,
+.terminal-host .xterm-screen,
+.terminal-host .xterm-helpers,
+.terminal-host .xterm .xterm-scroll-area {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
     overflow-x: hidden !important;
+}
+
+.terminal-host .xterm .xterm-viewport {
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+}
+
+.terminal-host .xterm .xterm-viewport::-webkit-scrollbar:horizontal {
+    height: 0 !important;
 }
 

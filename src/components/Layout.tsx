@@ -57,7 +57,6 @@ const AppLayoutInner: React.FC = () => {
     const [unseenAiEditedFilePaths, setUnseenAiEditedFilePaths] = useState<Set<string>>(new Set());
     const [terminalHeight, setTerminalHeight] = useState(300);
     const [chatPanelWidth, setChatPanelWidth] = useState(400);
-    const [isDragging, setIsDragging] = useState(false);
     const [isChatDragging, setIsChatDragging] = useState(false);
 
 
@@ -584,40 +583,6 @@ const AppLayoutInner: React.FC = () => {
         }
     };
 
-    const handleMouseDown = (e: React.MouseEvent) => {
-        setIsDragging(true);
-        e.preventDefault();
-    };
-
-    useEffect(() => {
-        const handleMouseMove = (e: MouseEvent) => {
-            if (!isDragging) return;
-            // Calculate new height from bottom
-            // Height = TotalWindowHeight - MouseY - StatusBarHeight(24px)
-            const newHeight = window.innerHeight - e.clientY - 24;
-            // Clamp height
-            if (newHeight > 100 && newHeight < window.innerHeight - 100) {
-                setTerminalHeight(newHeight);
-            }
-        };
-
-        const handleMouseUp = () => {
-            setIsDragging(false);
-        };
-
-        if (isDragging) {
-            document.addEventListener('mousemove', handleMouseMove);
-            document.addEventListener('mouseup', handleMouseUp);
-            document.body.classList.add('resize-y-cursor');
-        }
-
-        return () => {
-            document.removeEventListener('mousemove', handleMouseMove);
-            document.removeEventListener('mouseup', handleMouseUp);
-            document.body.classList.remove('resize-y-cursor');
-        };
-    }, [isDragging]);
-
     // Chat panel resize handler
     const handleChatMouseDown = (e: React.MouseEvent) => {
         if (e.button !== 0) return;
@@ -1098,7 +1063,7 @@ const AppLayoutInner: React.FC = () => {
                 </div>
 
                 {/* Content Area */}
-                <div className="flex-1 flex min-w-0 relative" style={{ gap: 'var(--panel-gap)' }}>
+                <div className="flex-1 flex min-w-0 relative overflow-hidden" style={{ gap: 'var(--panel-gap)' }}>
 
                     {/* Explorer / Sidebar (Floating overlay) */}
                     <div
@@ -1224,30 +1189,17 @@ const AppLayoutInner: React.FC = () => {
 
                         {/* Terminal Drawer — floats over the editor from the bottom */}
                         <div
-                            className="absolute bottom-0 left-0 right-0 z-20 flex flex-col"
+                            className="absolute bottom-0 left-0 right-0 z-20 flex flex-col overflow-hidden"
                             style={{
                                 height: terminalHeight,
                                 backgroundColor: 'var(--term-bg)',
-                                borderTop: '1px solid var(--border-default)',
                                 borderRadius: `0 0 var(--panel-radius) var(--panel-radius)`,
                                 boxShadow: '0 -10px 28px rgba(0,0,0,0.45)',
                                 transform: terminalHeight > 0 ? 'translateY(0)' : 'translateY(100%)',
-                                transition: isDragging ? 'none' : 'transform var(--transition-base)',
+                                transition: 'transform var(--transition-base)',
                             }}
                         >
-                            {/* Drag handle strip */}
-                            <div
-                                className="relative h-3 shrink-0 group flex items-center resize-y-cursor"
-                                onMouseDown={handleMouseDown}
-                            >
-                                <div
-                                    className={`w-full transition-all duration-[var(--transition-fast)] ${isDragging
-                                        ? 'h-[2px] bg-[var(--accent-primary)]'
-                                        : 'h-px bg-[var(--border-subtle)] group-hover:h-[2px] group-hover:bg-[var(--accent-primary)]'
-                                    }`}
-                                />
-                            </div>
-                            <div className="flex-1 min-h-0">
+                            <div className="flex-1 min-h-0 overflow-hidden">
                                 <TerminalPane ref={terminalPaneRef} />
                             </div>
                         </div>
@@ -1255,15 +1207,22 @@ const AppLayoutInner: React.FC = () => {
 
                     {/* Chat Panel Resizer */}
                     <div
-                        className="relative w-2 -mx-1 z-40 shrink-0 group flex items-stretch justify-center select-none resize-x-cursor"
-                        onMouseDown={handleChatMouseDown}
+                        className="relative w-0 z-40 shrink-0 select-none pointer-events-none"
+                        style={{
+                            marginLeft: 'calc(var(--panel-gap) / -2)',
+                            marginRight: 'calc(var(--panel-gap) / -2)',
+                        }}
                     >
                         <div
-                            className={`h-full w-[1px] transition-colors duration-[var(--transition-fast)] ${isChatDragging
-                                ? 'bg-[var(--accent-primary)]'
-                                : 'bg-transparent group-hover:bg-[var(--accent-primary)]'
+                            className={`absolute inset-y-0 left-1/2 -translate-x-1/2 flex items-center justify-center pointer-events-auto resize-x-cursor transition-colors duration-[var(--transition-fast)] ${isChatDragging
+                                ? 'bg-[var(--accent-primary)]/10'
+                                : 'bg-transparent hover:bg-[var(--accent-primary)]/10'
                                 }`}
-                        />
+                            style={{ width: 'var(--panel-gap)' }}
+                            onMouseDown={handleChatMouseDown}
+                        >
+                            <div className={`h-full w-px ${isChatDragging ? 'bg-[var(--accent-primary)]' : 'bg-transparent hover:bg-[var(--accent-primary)]'}`} />
+                        </div>
                     </div>
 
                     {/* AI Chat — floating card */}

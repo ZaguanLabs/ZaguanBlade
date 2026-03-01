@@ -27,6 +27,35 @@ pub struct PendingCommand {
     pub wait_ms_before_async: Option<u64>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::parse_run_command_args;
+
+    #[test]
+    fn parse_run_command_defaults_to_blocking() {
+        let (command, cwd, blocking, wait_ms_before_async) = parse_run_command_args(
+            r#"{"command":"echo test","cwd":"/tmp"}"#,
+        )
+        .expect("should parse run_command args");
+
+        assert_eq!(command, "echo test");
+        assert_eq!(cwd.as_deref(), Some("/tmp"));
+        assert!(blocking);
+        assert!(wait_ms_before_async.is_none());
+    }
+
+    #[test]
+    fn parse_run_command_respects_explicit_non_blocking() {
+        let (_, _, blocking, wait_ms_before_async) = parse_run_command_args(
+            r#"{"command":"bun run dev","cwd":"/repo","Blocking":false,"WaitMsBeforeAsync":2500}"#,
+        )
+        .expect("should parse run_command args");
+
+        assert!(!blocking);
+        assert_eq!(wait_ms_before_async, Some(2500));
+    }
+}
+
 fn normalize_json_string(input: &str) -> String {
     // Parse JSON and produce a stable canonical string for loop detection/cache keys
     serde_json::from_str::<Value>(input)
@@ -860,7 +889,7 @@ fn parse_run_command_args(raw_args: &str) -> Result<(String, Option<String>, boo
             Value::String(s) => s.parse::<bool>().ok(),
             _ => None,
         })
-        .unwrap_or(false);
+        .unwrap_or(true);
 
     let wait_ms_before_async = obj
         .get("wait_ms_before_async")

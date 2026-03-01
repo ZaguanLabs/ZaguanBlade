@@ -410,7 +410,7 @@ export default function Terminal({ id = "main-terminal", cwd }: TerminalProps) {
     return (
         <div
             ref={terminalRef}
-            className="w-full h-full bg-[var(--term-bg)]"
+            className="terminal-host w-full h-full bg-[var(--term-bg)]"
             style={{ overflow: "hidden" }}
             onContextMenu={handleContextMenu}
         />

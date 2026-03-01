@@ -110,10 +110,11 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
                         )}
                     </>
                 ) : (
-                    <div className="h-full overflow-y-auto px-8 py-6 bg-[#1e1e1e]">
+                    <div className="h-full overflow-y-auto px-8 py-6 pb-[35vh] bg-[#1e1e1e]" style={{ scrollPaddingBottom: '35vh' }}>
                         <div className="max-w-4xl mx-auto">
                             <MarkdownRenderer content={content} />
                         </div>
+                        <div aria-hidden="true" className="h-[35vh]" />
                     </div>
                 )}
             </div>
