@@ -58,6 +58,7 @@ const AppLayoutInner: React.FC = () => {
     const [terminalHeight, setTerminalHeight] = useState(300);
     const [chatPanelWidth, setChatPanelWidth] = useState(400);
     const [isChatDragging, setIsChatDragging] = useState(false);
+    const [isTerminalDragging, setIsTerminalDragging] = useState(false);
 
 
     // Sidebar State
@@ -583,6 +584,42 @@ const AppLayoutInner: React.FC = () => {
         }
     };
 
+    // Terminal panel resize handler
+    const handleTerminalMouseDown = (e: React.MouseEvent) => {
+        if (e.button !== 0) return;
+        setIsTerminalDragging(true);
+        e.preventDefault();
+    };
+
+    useEffect(() => {
+        const handleTerminalMouseMove = (e: MouseEvent) => {
+            if (!isTerminalDragging) return;
+            const col = editorColumnRef.current;
+            if (!col) return;
+            const rect = col.getBoundingClientRect();
+            const newHeight = rect.bottom - e.clientY;
+            if (newHeight >= 80 && newHeight <= rect.height - 60) {
+                setTerminalHeight(newHeight);
+            }
+        };
+
+        const handleTerminalMouseUp = () => {
+            setIsTerminalDragging(false);
+        };
+
+        if (isTerminalDragging) {
+            document.addEventListener('mousemove', handleTerminalMouseMove);
+            document.addEventListener('mouseup', handleTerminalMouseUp);
+            document.body.classList.add('resize-y-cursor');
+        }
+
+        return () => {
+            document.removeEventListener('mousemove', handleTerminalMouseMove);
+            document.removeEventListener('mouseup', handleTerminalMouseUp);
+            document.body.classList.remove('resize-y-cursor');
+        };
+    }, [isTerminalDragging]);
+
     // Chat panel resize handler
     const handleChatMouseDown = (e: React.MouseEvent) => {
         if (e.button !== 0) return;
@@ -980,7 +1017,7 @@ const AppLayoutInner: React.FC = () => {
             />
 
             <div
-                className="flex-1 flex overflow-hidden"
+                className="flex-1 flex overflow-hidden relative"
                 style={{ padding: 'var(--panel-gap)', gap: 'var(--panel-gap)' }}
             >
                 {/* Activity Bar (Vertical) — floating pill */}
@@ -1062,54 +1099,57 @@ const AppLayoutInner: React.FC = () => {
                     </div>
                 </div>
 
-                {/* Content Area */}
-                <div className="flex-1 flex min-w-0 relative overflow-hidden" style={{ gap: 'var(--panel-gap)' }}>
+                {/* Explorer / Sidebar (Floating overlay — anchored to outer row, above all editor content) */}
+                <div
+                    className={`
+                        absolute top-0 bottom-0 w-80 bg-[var(--bg-panel)] flex flex-col overflow-hidden
+                        transition-all duration-[var(--transition-fast)] ease-[cubic-bezier(0.22,1,0.36,1)]
+                        ${isSidebarOpen
+                            ? 'opacity-100 visible'
+                            : 'opacity-0 invisible pointer-events-none'}
+                    `}
+                    style={{
+                        left: 'calc(46px + 2 * var(--panel-gap))',
+                        borderRadius: '0',
+                        border: '1px solid var(--border-default)',
+                        boxShadow: isSidebarOpen ? 'var(--panel-shadow)' : 'none',
+                        zIndex: 200,
+                        transform: isSidebarOpen ? 'translateX(0)' : 'translateX(-100%)',
+                    }}
+                >
+                    {activeSidebar === 'explorer' && (
+                        <ExplorerPanel onFileSelect={handleFileSelect} activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
+                    )}
+                    {activeSidebar === 'git' && (
+                        <Suspense fallback={<div className="h-full flex items-center justify-center text-[var(--fg-subtle)]">Loading Git...</div>}>
+                            <GitPanel
+                                status={gitStatus}
+                                files={gitFiles}
+                                error={gitError}
+                                filesError={gitFilesError}
+                                lastRefreshedAt={gitLastRefreshedAt}
+                                onRefresh={refreshGitStatus}
+                                onStageFile={stageGitFile}
+                                onUnstageFile={unstageGitFile}
+                                onStageAll={stageAllGit}
+                                onUnstageAll={unstageAllGit}
+                                onCommit={commitGit}
+                                onPush={pushGit}
+                                onDiff={diffGit}
+                                onGenerateCommitMessage={() => generateGitCommitMessage(selectedModelId)}
+                                onCommitPreflight={commitPreflightGit}
+                            />
+                        </Suspense>
+                    )}
+                    {activeSidebar === 'history' && (
+                        <Suspense fallback={<div className="h-full flex items-center justify-center text-[var(--fg-subtle)]">Loading History...</div>}>
+                            <FileHistoryPanel activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
+                        </Suspense>
+                    )}
+                </div>
 
-                    {/* Explorer / Sidebar (Floating overlay) */}
-                    <div
-                        className={`
-                            absolute top-0 bottom-0 left-0 w-80 bg-[var(--bg-panel)] z-30 flex flex-col
-                            transition-all duration-[var(--transition-fast)] ease-[cubic-bezier(0.22,1,0.36,1)]
-                            ${isSidebarOpen
-                                ? 'translate-x-0 opacity-100 visible'
-                                : '-translate-x-full opacity-0 invisible pointer-events-none'}
-                        `}
-                        style={{
-                            borderRadius: '0',
-                            border: '1px solid var(--border-default)',
-                            boxShadow: isSidebarOpen ? 'var(--panel-shadow)' : 'none',
-                        }}
-                    >
-                        {activeSidebar === 'explorer' && (
-                            <ExplorerPanel onFileSelect={handleFileSelect} activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
-                        )}
-                        {activeSidebar === 'git' && (
-                            <Suspense fallback={<div className="h-full flex items-center justify-center text-[var(--fg-subtle)]">Loading Git...</div>}>
-                                <GitPanel
-                                    status={gitStatus}
-                                    files={gitFiles}
-                                    error={gitError}
-                                    filesError={gitFilesError}
-                                    lastRefreshedAt={gitLastRefreshedAt}
-                                    onRefresh={refreshGitStatus}
-                                    onStageFile={stageGitFile}
-                                    onUnstageFile={unstageGitFile}
-                                    onStageAll={stageAllGit}
-                                    onUnstageAll={unstageAllGit}
-                                    onCommit={commitGit}
-                                    onPush={pushGit}
-                                    onDiff={diffGit}
-                                    onGenerateCommitMessage={() => generateGitCommitMessage(selectedModelId)}
-                                    onCommitPreflight={commitPreflightGit}
-                                />
-                            </Suspense>
-                        )}
-                        {activeSidebar === 'history' && (
-                            <Suspense fallback={<div className="h-full flex items-center justify-center text-[var(--fg-subtle)]">Loading History...</div>}>
-                                <FileHistoryPanel activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
-                            </Suspense>
-                        )}
-                    </div>
+                {/* Content Area */}
+                <div className="flex-1 flex min-w-0 overflow-hidden" style={{ gap: 'var(--panel-gap)' }}>
 
                     {/* Editor & Terminal — floating card */}
                     <div
@@ -1196,9 +1236,21 @@ const AppLayoutInner: React.FC = () => {
                                 borderRadius: `0 0 var(--panel-radius) var(--panel-radius)`,
                                 boxShadow: '0 -10px 28px rgba(0,0,0,0.45)',
                                 transform: terminalHeight > 0 ? 'translateY(0)' : 'translateY(100%)',
-                                transition: 'transform var(--transition-base)',
+                                transition: isTerminalDragging ? 'none' : 'transform var(--transition-base)',
                             }}
                         >
+                            {/* Drag handle strip */}
+                            <div
+                                className="relative h-3 shrink-0 group flex items-center resize-y-cursor select-none"
+                                onMouseDown={handleTerminalMouseDown}
+                            >
+                                <div
+                                    className={`w-full transition-all duration-[var(--transition-fast)] ${isTerminalDragging
+                                        ? 'h-[2px] bg-[var(--accent-primary)]'
+                                        : 'h-px bg-[var(--border-subtle)] group-hover:h-[2px] group-hover:bg-[var(--accent-primary)]'
+                                    }`}
+                                />
+                            </div>
                             <div className="flex-1 min-h-0 overflow-hidden">
                                 <TerminalPane ref={terminalPaneRef} />
                             </div>

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { ChevronDown, ChevronRight, Copy, Check, ExternalLink, GitCommit } from 'lucide-react';
 
@@ -29,13 +29,136 @@ const GRAPH_COLORS = [
     '#ef4444', // red
 ];
 
-function getCommitColor(entry: GitLogEntry, index: number): string {
-    // HEAD commit gets orange (like the screenshot)
-    if (entry.refs.some(r => r.includes('HEAD'))) return GRAPH_COLORS[0];
-    // Merge commits get purple
-    if (entry.parents.length > 1) return GRAPH_COLORS[1];
-    // Use index-based cycling for the graph line
-    return GRAPH_COLORS[index % GRAPH_COLORS.length];
+const PRIMARY_BRANCH_CANDIDATES = ['main', 'master', 'trunk'];
+const LANE_X_START = 9;
+const LANE_STEP = 14;
+const GRAPH_LEFT_PADDING = 6;
+const GRAPH_RIGHT_PADDING = 10;
+
+interface GraphRenderRow {
+    lane: number;
+    color: string;
+    beforeSegments: Array<{ lane: number; color: string }>;
+    afterSegments: Array<{ lane: number; color: string }>;
+}
+
+function collectLaneSegments(
+    activeLanes: Array<string | null>,
+    laneColors: Map<number, string>
+): Array<{ lane: number; color: string }> {
+    return activeLanes
+        .map((expectedHash, laneIdx) => {
+            if (!expectedHash) return null;
+            return {
+                lane: laneIdx,
+                color: laneColors.get(laneIdx) ?? GRAPH_COLORS[laneIdx % GRAPH_COLORS.length],
+            };
+        })
+        .filter((segment): segment is { lane: number; color: string } => segment !== null);
+}
+
+function normalizeBranchRef(refValue: string): string {
+    return refValue
+        .replace('HEAD -> ', '')
+        .replace('origin/', '')
+        .trim();
+}
+
+function extractBranchRefs(entry: GitLogEntry): string[] {
+    return entry.refs
+        .filter((refValue) => !refValue.startsWith('tag: '))
+        .map(normalizeBranchRef)
+        .filter(Boolean);
+}
+
+function detectPrimaryBranch(entries: GitLogEntry[]): string | null {
+    for (const candidate of PRIMARY_BRANCH_CANDIDATES) {
+        const hasCandidate = entries.some((entry) =>
+            extractBranchRefs(entry).some((refValue) => refValue === candidate)
+        );
+        if (hasCandidate) return candidate;
+    }
+    return null;
+}
+
+function getFirstEmptyLane(activeLanes: Array<string | null>): number {
+    const emptyIdx = activeLanes.findIndex((value) => value === null);
+    if (emptyIdx !== -1) return emptyIdx;
+    activeLanes.push(null);
+    return activeLanes.length - 1;
+}
+
+function buildGraphRows(entries: GitLogEntry[]): GraphRenderRow[] {
+    const primaryBranch = detectPrimaryBranch(entries);
+    const rows: GraphRenderRow[] = [];
+    const activeLanes: Array<string | null> = [];
+    const laneColors = new Map<number, string>();
+    const branchColors = new Map<string, string>();
+    let nextColorIndex = 1;
+
+    if (primaryBranch) {
+        branchColors.set(primaryBranch, GRAPH_COLORS[0]);
+    }
+
+    for (const entry of entries) {
+        const beforeSegments = collectLaneSegments(activeLanes, laneColors);
+
+        let lane = activeLanes.findIndex((expectedHash) => expectedHash === entry.shortHash);
+        if (lane === -1) {
+            lane = getFirstEmptyLane(activeLanes);
+        }
+
+        const branchRefs = extractBranchRefs(entry);
+        const branchRef = branchRefs[0] ?? null;
+        const isPrimary = primaryBranch !== null && branchRefs.some((refValue) => refValue === primaryBranch);
+
+        let color = laneColors.get(lane);
+        if (!color) {
+            if (isPrimary) {
+                color = GRAPH_COLORS[0];
+            } else if (branchRef && branchColors.has(branchRef)) {
+                color = branchColors.get(branchRef)!;
+            } else {
+                color = GRAPH_COLORS[nextColorIndex % GRAPH_COLORS.length];
+                nextColorIndex += 1;
+            }
+            laneColors.set(lane, color);
+        }
+
+        if (branchRef && !branchColors.has(branchRef)) {
+            branchColors.set(branchRef, color);
+        }
+        if (isPrimary) {
+            laneColors.set(lane, GRAPH_COLORS[0]);
+            color = GRAPH_COLORS[0];
+        }
+
+        const firstParent = entry.parents[0] ?? null;
+        activeLanes[lane] = firstParent;
+
+        for (const parentHash of entry.parents.slice(1)) {
+            let parentLane = activeLanes.findIndex((expectedHash) => expectedHash === parentHash);
+            if (parentLane === -1) {
+                parentLane = getFirstEmptyLane(activeLanes);
+                activeLanes[parentLane] = parentHash;
+            }
+            if (!laneColors.has(parentLane)) {
+                laneColors.set(parentLane, GRAPH_COLORS[nextColorIndex % GRAPH_COLORS.length]);
+                nextColorIndex += 1;
+            }
+        }
+
+        const afterSegments = collectLaneSegments(activeLanes, laneColors);
+
+        rows.push({
+            lane,
+            color,
+            beforeSegments,
+            afterSegments,
+        });
+    }
+
+    return rows;
 }
 
 function getLocalAvatar(name: string, email: string, size = 32): string {
@@ -226,11 +349,15 @@ export const GitGraph: React.FC<GitGraphProps> = ({ expanded, onToggle }) => {
         setTooltipPos(null);
     }, []);
 
-    // Determine which commits are on the "main line" vs merge parents
-    // Simple heuristic: first parent is always the main line
-    const getGraphColumn = (_entry: GitLogEntry, _index: number): number => {
-        return 0; // Simplified single-column graph for now
-    };
+    const graphRows = useMemo(() => buildGraphRows(entries), [entries]);
+    const laneCount = useMemo(
+        () => graphRows.reduce((max, row) => Math.max(max, row.lane + 1), 1),
+        [graphRows]
+    );
+    const graphColumnWidth =
+        GRAPH_LEFT_PADDING +
+        GRAPH_RIGHT_PADDING +
+        (laneCount > 0 ? LANE_X_START + (laneCount - 1) * LANE_STEP + 4 : 20);
 
     return (
         <div className={`flex flex-col ${expanded ? 'basis-1/2 shrink-0 grow-0 min-h-0' : ''}`}>
@@ -259,12 +386,11 @@ export const GitGraph: React.FC<GitGraphProps> = ({ expanded, onToggle }) => {
                     {!loading && entries.length > 0 && (
                         <div className="pb-2">
                             {entries.map((entry, index) => {
-                                const color = getCommitColor(entry, index);
-                                const col = getGraphColumn(entry, index);
+                                const row = graphRows[index];
+                                const color = row?.color ?? GRAPH_COLORS[0];
+                                const lane = row?.lane ?? 0;
                                 const isMerge = entry.parents.length > 1;
                                 const isHovered = hoveredIndex === index;
-                                const isFirst = index === 0;
-                                const isLast = index === entries.length - 1;
 
                                 // Parse refs into badges
                                 const branchRefs = entry.refs.filter(r => !r.startsWith('tag:'));
@@ -283,42 +409,43 @@ export const GitGraph: React.FC<GitGraphProps> = ({ expanded, onToggle }) => {
                                         {/* Graph column: vertical line + dot */}
                                         <div
                                             className="relative flex-shrink-0"
-                                            style={{ width: 20 + col * 16, height: 22 }}
+                                            style={{ width: graphColumnWidth, height: 22 }}
                                         >
-                                            {/* Vertical line above */}
-                                            {!isFirst && (
+                                            {/* Vertical lanes above current commit */}
+                                            {row?.beforeSegments.map((segment) => (
                                                 <div
-                                                    className="absolute left-[9px] top-0 w-[2px]"
+                                                    key={`before-${entry.hash}-${segment.lane}`}
+                                                    className="absolute top-0 w-[2px]"
                                                     style={{
+                                                        left: LANE_X_START + segment.lane * LANE_STEP,
                                                         height: 10,
-                                                        backgroundColor: color,
-                                                        opacity: 0.5,
+                                                        backgroundColor: segment.color,
+                                                        opacity: 0.6,
                                                     }}
                                                 />
-                                            )}
-                                            {/* Vertical line below */}
-                                            {!isLast && (
+                                            ))}
+                                            {/* Vertical lanes below current commit */}
+                                            {row?.afterSegments.map((segment) => (
                                                 <div
-                                                    className="absolute left-[9px] bottom-0 w-[2px]"
+                                                    key={`after-${entry.hash}-${segment.lane}`}
+                                                    className="absolute bottom-0 w-[2px]"
                                                     style={{
+                                                        left: LANE_X_START + segment.lane * LANE_STEP,
                                                         height: 10,
-                                                        backgroundColor: getCommitColor(
-                                                            entries[Math.min(index + 1, entries.length - 1)],
-                                                            index + 1
-                                                        ),
-                                                        opacity: 0.5,
+                                                        backgroundColor: segment.color,
+                                                        opacity: 0.6,
                                                     }}
                                                 />
-                                            )}
+                                            ))}
                                             {/* Commit dot */}
                                             <div
-                                                className="absolute left-[5px] top-1/2 -translate-y-1/2 rounded-full border-2"
+                                                className="absolute top-1/2 -translate-y-1/2 rounded-full border-2"
                                                 style={{
                                                     width: isMerge ? 12 : 10,
                                                     height: isMerge ? 12 : 10,
                                                     borderColor: color,
                                                     backgroundColor: isMerge ? 'transparent' : color,
-                                                    left: isMerge ? 4 : 5,
+                                                    left: LANE_X_START + lane * LANE_STEP - (isMerge ? 5 : 4),
                                                 }}
                                             />
                                         </div>

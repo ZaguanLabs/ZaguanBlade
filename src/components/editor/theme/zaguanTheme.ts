@@ -284,7 +284,6 @@ export const zaguanEditorTheme = EditorView.theme({
     ".cm-scroller": {
         overflow: "auto",
         fontFamily: '"JetBrains Mono", "Fira Code", "Symbols Nerd Font Mono", monospace',
-        scrollbarWidth: "thin",
     },
     
     // ZLP Hover Tooltip

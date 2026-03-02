@@ -97,8 +97,6 @@ body {
 
 /* Code editor scrollbar only (avoid styling whole app / terminal overlays) */
 .code-editor-scroll .cm-scroller {
-    scrollbar-width: thin;
-    scrollbar-color: color-mix(in srgb, var(--fg-secondary) 30%, transparent) transparent;
     overflow-x: auto;
 }
 
