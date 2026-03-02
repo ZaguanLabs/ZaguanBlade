@@ -51,9 +51,15 @@ fn infer_context_files_from_query(
     files
 }
 
-async fn load_available_models(state: &State<'_, AppState>) -> Vec<crate::models::registry::ModelInfo> {
-    let config = { state.config.lock().unwrap().clone() };
-    crate::models::catalog::list_all_models(&config).await
+async fn load_available_models(
+    state: &State<'_, AppState>,
+) -> Result<Vec<crate::models::registry::ModelInfo>, String> {
+    let config = state
+        .config
+        .lock()
+        .map_err(|e| format!("Failed to lock config: {}", e))?
+        .clone();
+    Ok(crate::models::catalog::list_all_models(&config).await)
 }
 
 pub async fn handle_send_message<R: Runtime>(
@@ -78,7 +84,10 @@ pub async fn handle_send_message<R: Runtime>(
     // Check for pending error feedback from previous turn (e.g. message too large)
     // Prepend it as a system note so the model knows what happened
     let mut actual_message = {
-        let mut feedback = state.pending_error_feedback.lock().unwrap();
+        let mut feedback = state
+            .pending_error_feedback
+            .lock()
+            .map_err(|e| format!("Failed to lock pending_error_feedback: {}", e))?;
         if let Some(hint) = feedback.take() {
             eprintln!("[SEND MSG] Prepending error feedback to message: {}", hint);
             format!("[SYSTEM NOTE: {}]\n\n{}", hint, actual_message)
@@ -135,17 +144,41 @@ pub async fn handle_send_message<R: Runtime>(
 
     // Store editor state in AppState for tool execution
     {
-        *state.active_file.lock().unwrap() = active_file.clone();
-        *state.open_files.lock().unwrap() = effective_open_files.clone();
-        *state.cursor_line.lock().unwrap() = cursor_line;
-        *state.cursor_column.lock().unwrap() = cursor_column;
-        *state.selection_start_line.lock().unwrap() = selection_start_line;
-        *state.selection_end_line.lock().unwrap() = selection_end_line;
+        *state
+            .active_file
+            .lock()
+            .map_err(|e| format!("Failed to lock active_file: {}", e))? = active_file.clone();
+        *state
+            .open_files
+            .lock()
+            .map_err(|e| format!("Failed to lock open_files: {}", e))? =
+            effective_open_files.clone();
+        *state
+            .cursor_line
+            .lock()
+            .map_err(|e| format!("Failed to lock cursor_line: {}", e))? = cursor_line;
+        *state
+            .cursor_column
+            .lock()
+            .map_err(|e| format!("Failed to lock cursor_column: {}", e))? = cursor_column;
+        *state
+            .selection_start_line
+            .lock()
+            .map_err(|e| format!("Failed to lock selection_start_line: {}", e))? =
+            selection_start_line;
+        *state
+            .selection_end_line
+            .lock()
+            .map_err(|e| format!("Failed to lock selection_end_line: {}", e))? =
+            selection_end_line;
     }
 
     // 1. Add User Message
     {
-        let mut conversation = state.conversation.lock().unwrap();
+        let mut conversation = state
+            .conversation
+            .lock()
+            .map_err(|e| format!("Failed to lock conversation: {}", e))?;
         let mut chat_msg = crate::protocol::ChatMessage::new(
             crate::protocol::ChatRole::User,
             actual_message.clone(),
@@ -165,15 +198,30 @@ pub async fn handle_send_message<R: Runtime>(
     }
 
     // 2. Start Stream
-    let models = load_available_models(&state).await;
+    let models = load_available_models(&state).await?;
     {
-        let mut mgr = state.chat_manager.lock().unwrap();
-        let mut conversation = state.conversation.lock().unwrap();
-        let config = state.config.lock().unwrap();
-        let workspace = state.workspace.lock().unwrap();
+        let mut mgr = state
+            .chat_manager
+            .lock()
+            .map_err(|e| format!("Failed to lock chat_manager: {}", e))?;
+        let mut conversation = state
+            .conversation
+            .lock()
+            .map_err(|e| format!("Failed to lock conversation: {}", e))?;
+        let config = state
+            .config
+            .lock()
+            .map_err(|e| format!("Failed to lock config: {}", e))?;
+        let workspace = state
+            .workspace
+            .lock()
+            .map_err(|e| format!("Failed to lock workspace: {}", e))?;
 
         // Default to the currently selected model index from state, rather than 0
-        let mut selected_model = *state.selected_model_index.lock().unwrap();
+        let mut selected_model = *state
+            .selected_model_index
+            .lock()
+            .map_err(|e| format!("Failed to lock selected_model_index: {}", e))?;
 
         if let Some(ref id) = model_id {
             let matched_idx = crate::models::catalog::resolve_model_index(&models, id);
@@ -202,7 +250,10 @@ pub async fn handle_send_message<R: Runtime>(
         }
 
         // Store active model index for use in continue_tool_batch
-        *state.selected_model_index.lock().unwrap() = selected_model;
+        *state
+            .selected_model_index
+            .lock()
+            .map_err(|e| format!("Failed to lock selected_model_index: {}", e))? = selected_model;
 
         // We use reqwest Client
         let http = reqwest::Client::new();
@@ -951,7 +1002,13 @@ pub async fn handle_send_message<R: Runtime>(
                         // Check if loop was detected - if so, stop the agentic loop
                         eprintln!("[AGENTIC LOOP] Stopping due to loop detection");
 
-                        let models = load_available_models(&state).await;
+                        let models = match load_available_models(&state).await {
+                            Ok(models) => models,
+                            Err(e) => {
+                                eprintln!("[ORCHESTRATOR] Failed to load models: {}", e);
+                                Vec::new()
+                            }
+                        };
 
                         {
                             let mut mgr = state.chat_manager.lock().unwrap();
@@ -983,7 +1040,13 @@ pub async fn handle_send_message<R: Runtime>(
 
                         // Don't continue the loop - let it finish naturally
                     } else {
-                        let models = load_available_models(&state).await;
+                        let models = match load_available_models(&state).await {
+                            Ok(models) => models,
+                            Err(e) => {
+                                eprintln!("[ORCHESTRATOR] Failed to load models: {}", e);
+                                Vec::new()
+                            }
+                        };
 
                         {
                             let mut mgr = state.chat_manager.lock().unwrap();

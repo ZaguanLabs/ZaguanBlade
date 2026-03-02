@@ -1,7 +1,0 @@
-.resize-x-cursor {
-    cursor: ew-resize !important;
-}
-
-.resize-y-cursor {
-    cursor: ns-resize !important;
-}

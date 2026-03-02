@@ -192,15 +192,22 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "run_command",
             "function": {
                 "name": "run_command",
-                "description": "Execute shell command (requires approval)",
+                "description": "Execute command (requires approval). Prefer structured form with program+args. Use command only when shell behavior is required.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "command": { "type": "string", "description": "Shell command" },
+                        "command": { "type": "string", "description": "Legacy shell command line" },
+                        "program": { "type": "string", "description": "Executable name/path for structured non-shell execution" },
+                        "args": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Arguments for program in structured non-shell mode"
+                        },
+                        "shell": { "type": "boolean", "description": "Force shell execution. Defaults to false when program is used, true for legacy command" },
                         "cwd": { "type": "string", "description": "Working directory" }
                     },
-                    "required": ["command", "cwd"],
+                    "required": [],
                     "additionalProperties": false
                 }
             }

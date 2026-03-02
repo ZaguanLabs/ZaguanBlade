@@ -22,7 +22,7 @@
     "@codemirror/lang-python": "^6.2.1",
     "@codemirror/lang-rust": "^6.0.2",
     "@codemirror/lang-yaml": "^6.1.2",
-    "@codemirror/language": "^6.12.2",
+    "@codemirror/language": "6.12.1",
     "@codemirror/lint": "^6.9.4",
     "@codemirror/search": "^6.6.0",
     "@codemirror/state": "^6.5.4",
@@ -47,8 +47,8 @@
     "i18next": "^25.8.13",
     "i18next-browser-languagedetector": "^8.2.1",
     "i18next-http-backend": "^3.0.2",
-    "lucide-react": "^0.575.0",
-    "pdfjs-dist": "^5.4.624",
+    "lucide-react": "^0.576.0",
+    "pdfjs-dist": "^5.5.207",
     "postcss": "^8.5.6",
     "react": "19.2.4",
     "react-dom": "19.2.4",
@@ -76,6 +76,9 @@
     "terser": "^5.46.0",
     "typescript": "^5.9.3",
     "vite": "^7.3.1"
+  },
+  "overrides": {
+    "@codemirror/language": "6.12.1"
   },
   "workspaces": [
     "."

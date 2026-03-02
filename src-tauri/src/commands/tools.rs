@@ -3,44 +3,72 @@ use crate::events;
 use crate::utils::extract_root_command;
 use crate::workflow_controller::check_batch_completion;
 use regex::Regex;
+use std::sync::OnceLock;
 use tauri::{Emitter, Manager, Runtime, State, Window};
 
-/// Strip ANSI escape codes and BLADE command scaffolding from terminal output
-/// for clean display in chat and AI context.
-fn strip_ansi_codes(input: &str) -> String {
-    // 1. Strip ANSI escape sequences
-    let ansi_regex = Regex::new(
-        r"(?x)
+fn ansi_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(
+            r"(?x)
         \x1b\[[0-9;?]*[A-Za-z]|           # CSI sequences (colors, cursor, etc.)
         \x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|# OSC sequences
         \x1b[PX^_][^\x1b]*\x1b\\|         # DCS, SOS, PM, APC sequences
         \x1b[\x20-\x2f]*[\x30-\x7e]       # Other escape sequences
         "
-    )
-    .unwrap();
-    let result = ansi_regex.replace_all(input, "").to_string();
+        )
+        .expect("valid ANSI regex")
+    })
+}
 
-    // 2. Strip BLADE command marker scaffolding (from shell echo)
-    let blade_regex = Regex::new(
-        r"(?x)
+fn blade_marker_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(
+            r"(?x)
         printf\s+%s\s+\$'[^']*BLADE_CMD[^']*'[;\s]*|                           # Start marker printf
         __e=\$\?;\s*printf\s+'%s%s'\s+\$'[^']*BLADE_CMD[^']*'\s+\x22\$__e\x22;\s*printf\s+\$'[^']*'  # Exit marker printf
         "
-    )
-    .unwrap();
-    let result = blade_regex.replace_all(&result, "").to_string();
+        )
+        .expect("valid BLADE marker regex")
+    })
+}
+
+fn control_char_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]").expect("valid control-char regex")
+    })
+}
+
+fn orphan_csi_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| Regex::new(r"\[([0-9;?]*)([A-Za-z])").expect("valid orphan CSI regex"))
+}
+
+fn cleanup_newlines_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| Regex::new(r"\n{3,}").expect("valid cleanup regex"))
+}
+
+/// Strip ANSI escape codes and BLADE command scaffolding from terminal output
+/// for clean display in chat and AI context.
+fn strip_ansi_codes(input: &str) -> String {
+    // 1. Strip ANSI escape sequences
+    let result = ansi_regex().replace_all(input, "").to_string();
+
+    // 2. Strip BLADE command marker scaffolding (from shell echo)
+    let result = blade_marker_regex().replace_all(&result, "").to_string();
 
     // 3. Strip stray control characters (keep \n, \r, \t)
-    let control_regex = Regex::new(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]").unwrap();
-    let result = control_regex.replace_all(&result, "").to_string();
+    let result = control_char_regex().replace_all(&result, "").to_string();
 
     // 4. Strip any remaining bare ESC bytes (all known sequences already stripped above)
     let result = result.replace('\x1b', "");
 
     // 5. Strip orphaned CSI bracket sequences where ESC byte is already gone
     //    These look like: [0m, [1m, [38;5;4m, [0;1m, [38;5;2m, [39;49m etc.
-    let orphan_regex = Regex::new(r"\[([0-9;?]*)([A-Za-z])").unwrap();
-    let result = orphan_regex.replace_all(&result, |caps: &regex::Captures| {
+    let result = orphan_csi_regex().replace_all(&result, |caps: &regex::Captures| {
         let params = caps.get(1).map_or("", |m| m.as_str());
         // Only strip if params are purely digits/semicolons/question marks (ANSI CSI params)
         if params.chars().all(|c| c.is_ascii_digit() || c == ';' || c == '?') {
@@ -54,8 +82,10 @@ fn strip_ansi_codes(input: &str) -> String {
     let result = result.replace('\x07', "");
 
     // 7. Clean up excessive blank lines
-    let cleanup_regex = Regex::new(r"\n{3,}").unwrap();
-    cleanup_regex.replace_all(&result, "\n\n").trim().to_string()
+    cleanup_newlines_regex()
+        .replace_all(&result, "\n\n")
+        .trim()
+        .to_string()
 }
 
 // #[tauri::command]
@@ -89,6 +119,13 @@ pub fn approve_tool<R: Runtime>(approved: bool, window: Window<R>, state: State<
                                 command_id,
                                 call_id: cmd.call.id.clone(),
                                 command: cmd.command.clone(),
+                                program: cmd.command_spec.program.clone(),
+                                args: if cmd.command_spec.args.is_empty() {
+                                    None
+                                } else {
+                                    Some(cmd.command_spec.args.clone())
+                                },
+                                shell: Some(cmd.command_spec.shell),
                                 cwd: cmd.cwd.clone(),
                                 blocking: cmd.blocking,
                                 wait_ms_before_async: cmd.wait_ms_before_async,
@@ -247,6 +284,13 @@ pub fn approve_single_command<R: Runtime>(
                                 command_id,
                                 call_id: cmd.call.id.clone(),
                                 command: cmd.command.clone(),
+                                program: cmd.command_spec.program.clone(),
+                                args: if cmd.command_spec.args.is_empty() {
+                                    None
+                                } else {
+                                    Some(cmd.command_spec.args.clone())
+                                },
+                                shell: Some(cmd.command_spec.shell),
                                 cwd: cmd.cwd.clone(),
                                 blocking: cmd.blocking,
                                 wait_ms_before_async: cmd.wait_ms_before_async,

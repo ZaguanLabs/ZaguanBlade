@@ -17,6 +17,9 @@ type PendingCommand = {
     callId: string;
     terminalId: string;
     command: string;
+    program?: string;
+    args?: string[];
+    shell?: boolean;
     cwd?: string;
     blocking: boolean;
     waitMsBeforeAsync?: number;
@@ -59,8 +62,19 @@ export function useCommandExecution() {
         return `'${value.replace(/'/g, `'"'"'`)}'`;
     }, []);
 
+    const buildCommandForExecution = useCallback((pending: PendingCommand) => {
+        if (pending.shell === false && pending.program) {
+            const escapedProgram = escapeShellArg(pending.program);
+            const escapedArgs = (pending.args || []).map(arg => escapeShellArg(arg));
+            return [escapedProgram, ...escapedArgs].join(' ');
+        }
+
+        return pending.command;
+    }, [escapeShellArg]);
+
     const sendCommandToBlade = useCallback((pending: PendingCommand) => {
-        const { callId, terminalId, command, cwd, blocking, waitMsBeforeAsync } = pending;
+        const { callId, terminalId, cwd, blocking, waitMsBeforeAsync } = pending;
+        const commandToRun = buildCommandForExecution(pending);
 
         const parts: string[] = [];
         parts.push(`echo '${SENTINEL_START}${callId}${SENTINEL_END}'`);
@@ -68,11 +82,11 @@ export function useCommandExecution() {
             parts.push(`cd ${escapeShellArg(cwd)}`);
         }
         if (blocking) {
-            parts.push(command);
+            parts.push(commandToRun);
         } else {
             const waitMs = typeof waitMsBeforeAsync === 'number' ? Math.max(0, waitMsBeforeAsync) : 1000;
             const waitSeconds = (waitMs / 1000).toString();
-            parts.push(`( ${command} ) & __blade_pid=$!`);
+            parts.push(`( ${commandToRun} ) & __blade_pid=$!`);
             if (waitMs > 0) {
                 parts.push(`sleep ${waitSeconds}`);
             }
@@ -95,7 +109,7 @@ export function useCommandExecution() {
             pendingCommandsRef.current.delete(callId);
             await handleCommandComplete(callId, `Failed to start command terminal: ${String(err)}`, 1);
         });
-    }, [escapeShellArg, handleCommandComplete]);
+    }, [buildCommandForExecution, escapeShellArg, handleCommandComplete]);
 
     const stopCommandExecution = useCallback(async (callId: string) => {
         const pending = pendingCommandsRef.current.get(callId);
@@ -128,6 +142,9 @@ export function useCommandExecution() {
                 command_id: string;
                 call_id: string;
                 command: string;
+                program?: string;
+                args?: string[];
+                shell?: boolean;
                 cwd?: string;
                 blocking?: boolean;
                 wait_ms_before_async?: number;
@@ -139,6 +156,9 @@ export function useCommandExecution() {
                     callId: event.payload.call_id,
                     terminalId,
                     command: event.payload.command,
+                    program: event.payload.program,
+                    args: event.payload.args,
+                    shell: event.payload.shell,
                     cwd: event.payload.cwd,
                     blocking: event.payload.blocking ?? true,
                     waitMsBeforeAsync: event.payload.wait_ms_before_async,

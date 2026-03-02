@@ -313,26 +313,28 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     ERR_LOAD: {error}
                 </div>
             )}
-            {isPdfFile ? (
-                <PdfViewer filePath={activeFile} />
-            ) : isMarkdownFile ? (
-                <MarkdownEditor
-                    content={content}
-                    onChange={setContent}
-                    onSave={handleSave}
-                    filename={activeFile}
-                />
-            ) : (
-                <EditorWithChangeBar
-                    editorRef={editorRef}
-                    content={content}
-                    setContent={setContent}
-                    handleSave={handleSave}
-                    activeFile={activeFile}
-                    highlightLines={highlightLines ?? null}
-                    handleNavigate={handleNavigate}
-                />
-            )}
+            <div className="flex-1 min-h-0 relative w-full">
+                {isPdfFile ? (
+                    <PdfViewer filePath={activeFile} />
+                ) : isMarkdownFile ? (
+                    <MarkdownEditor
+                        content={content}
+                        onChange={setContent}
+                        onSave={handleSave}
+                        filename={activeFile}
+                    />
+                ) : (
+                    <EditorWithChangeBar
+                        editorRef={editorRef}
+                        content={content}
+                        setContent={setContent}
+                        handleSave={handleSave}
+                        activeFile={activeFile}
+                        highlightLines={highlightLines ?? null}
+                        handleNavigate={handleNavigate}
+                    />
+                )}
+            </div>
 
         </div>
     );
@@ -373,7 +375,7 @@ const EditorWithChangeBar: React.FC<EditorWithChangeBarProps> = ({
     };
 
     return (
-        <div className="relative h-full">
+        <div className="relative h-full w-full">
             <CodeEditor
                 ref={editorRef}
                 content={content}

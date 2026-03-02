@@ -33,16 +33,83 @@ body {
     /* Desktop app feel */
 }
 
+/* CodeMirror token colors fallback (classHighlighter).
+ * This preserves syntax coloring even if generated HighlightStyle classes
+ * fail to attach in some runtime environments.
+ */
+.code-editor-scroll .cm-editor .tok-comment {
+    color: #4b5563;
+    font-style: italic;
+}
+
+.code-editor-scroll .cm-editor .tok-keyword,
+.code-editor-scroll .cm-editor .tok-operatorKeyword,
+.code-editor-scroll .cm-editor .tok-definitionKeyword,
+.code-editor-scroll .cm-editor .tok-moduleKeyword,
+.code-editor-scroll .cm-editor .tok-controlKeyword {
+    color: #818cf8;
+}
+
+.code-editor-scroll .cm-editor .tok-string,
+.code-editor-scroll .cm-editor .tok-special.tok-string,
+.code-editor-scroll .cm-editor .tok-character,
+.code-editor-scroll .cm-editor .tok-attributeValue {
+    color: #4ade80;
+}
+
+.code-editor-scroll .cm-editor .tok-number,
+.code-editor-scroll .cm-editor .tok-integer,
+.code-editor-scroll .cm-editor .tok-float,
+.code-editor-scroll .cm-editor .tok-bool,
+.code-editor-scroll .cm-editor .tok-null,
+.code-editor-scroll .cm-editor .tok-constant {
+    color: #fb923c;
+}
+
+.code-editor-scroll .cm-editor .tok-typeName,
+.code-editor-scroll .cm-editor .tok-className,
+.code-editor-scroll .cm-editor .tok-namespace {
+    color: #67e8f9;
+}
+
+.code-editor-scroll .cm-editor .tok-function,
+.code-editor-scroll .cm-editor .tok-macroName,
+.code-editor-scroll .cm-editor .tok-tagName {
+    color: #a78bfa;
+}
+
+.code-editor-scroll .cm-editor .tok-propertyName {
+    color: #94a3b8;
+}
+
+.code-editor-scroll .cm-editor .tok-attributeName {
+    color: #fbbf24;
+}
+
+.code-editor-scroll .cm-editor .tok-punctuation,
+.code-editor-scroll .cm-editor .tok-bracket,
+.code-editor-scroll .cm-editor .tok-paren,
+.code-editor-scroll .cm-editor .tok-brace,
+.code-editor-scroll .cm-editor .tok-angleBracket,
+.code-editor-scroll .cm-editor .tok-separator {
+    color: #4b5563;
+}
+
 /* Code editor scrollbar only (avoid styling whole app / terminal overlays) */
 .code-editor-scroll .cm-scroller {
     scrollbar-width: thin;
-    scrollbar-color: color-mix(in srgb, var(--fg-secondary) 40%, transparent) transparent;
-    overflow-x: hidden !important;
+    scrollbar-color: color-mix(in srgb, var(--fg-secondary) 30%, transparent) transparent;
+    overflow-x: auto;
+}
+
+.code-editor-scroll .cm-editor {
+    height: 100%;
+    padding-bottom: 8px;
 }
 
 .code-editor-scroll .cm-scroller::-webkit-scrollbar {
-    width: 10px;
-    height: 0;
+    width: 8px;
+    height: 6px;
 }
 
 .code-editor-scroll .cm-scroller::-webkit-scrollbar-track {
@@ -50,14 +117,18 @@ body {
 }
 
 .code-editor-scroll .cm-scroller::-webkit-scrollbar-thumb {
-    background: color-mix(in srgb, var(--fg-secondary) 36%, transparent);
-    border-radius: 8px;
-    border: 2px solid transparent;
+    background: color-mix(in srgb, var(--fg-secondary) 28%, transparent);
+    border-radius: 9999px;
+    border: 1px solid transparent;
     background-clip: padding-box;
 }
 
 .code-editor-scroll .cm-scroller:hover::-webkit-scrollbar-thumb {
-    background: color-mix(in srgb, var(--fg-secondary) 56%, transparent);
+    background: color-mix(in srgb, var(--fg-secondary) 44%, transparent);
+}
+
+.code-editor-scroll .cm-scroller::-webkit-scrollbar-thumb:active {
+    background: color-mix(in srgb, var(--fg-secondary) 62%, transparent);
 }
 
 .code-editor-scroll .cm-scroller::-webkit-scrollbar-corner {

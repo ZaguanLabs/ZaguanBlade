@@ -1,6 +1,68 @@
 use crate::app_state::AppState;
 use tauri::{Emitter, Manager};
 
+fn normalize_path(path: &std::path::Path) -> std::path::PathBuf {
+    use std::path::Component;
+
+    let mut normalized = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(p) => normalized.push(p.as_os_str()),
+            Component::RootDir => normalized.push("/"),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Normal(c) => normalized.push(c),
+        }
+    }
+    normalized
+}
+
+pub(crate) fn resolve_path_under_workspace_root(
+    workspace_root: &std::path::Path,
+    path: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    let ws = std::fs::canonicalize(workspace_root).map_err(|e| {
+        format!(
+            "Failed to canonicalize workspace root '{}': {}",
+            workspace_root.display(),
+            e
+        )
+    })?;
+
+    let candidate = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        ws.join(path)
+    };
+    let normalized = normalize_path(&candidate);
+
+    if !normalized.starts_with(&ws) {
+        return Err(format!(
+            "Path is outside workspace (workspace: {}, path: {})",
+            ws.display(),
+            normalized.display()
+        ));
+    }
+
+    Ok(normalized)
+}
+
+pub(crate) fn resolve_path_under_workspace(
+    state: &AppState,
+    path: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    let workspace_root = {
+        let ws = state.workspace.lock().unwrap();
+        ws.workspace
+            .clone()
+            .ok_or_else(|| "No workspace open".to_string())?
+    };
+
+    resolve_path_under_workspace_root(&workspace_root, path)
+}
+
 pub async fn open_workspace_logic(
     path: String,
     state: &AppState,
@@ -86,20 +148,8 @@ pub async fn list_files(
 pub fn read_file_content_logic(path: String, state: &AppState) -> Result<String, String> {
     // Virtual buffers removal - surgically removed.
 
-    // Resolve path relative to workspace if needed
-    let resolved_path = {
-        let p = std::path::PathBuf::from(&path);
-        if p.is_absolute() {
-            p
-        } else {
-            let ws = state.workspace.lock().unwrap();
-            if let Some(root) = &ws.workspace {
-                root.join(&p)
-            } else {
-                p
-            }
-        }
-    };
+    let requested_path = std::path::PathBuf::from(&path);
+    let resolved_path = resolve_path_under_workspace(state, &requested_path)?;
 
     // No virtual content, read from disk
     match std::fs::read_to_string(&resolved_path) {
@@ -138,17 +188,8 @@ pub fn write_file_content_logic(
     content: String,
     state: &AppState,
 ) -> Result<(), String> {
-    let p = std::path::PathBuf::from(&path);
-    let resolved_path = if p.is_absolute() {
-        p
-    } else {
-        let ws = state.workspace.lock().unwrap();
-        if let Some(root) = ws.workspace.as_ref() {
-            root.join(&path)
-        } else {
-            std::path::PathBuf::from(&path)
-        }
-    };
+    let requested_path = std::path::PathBuf::from(&path);
+    let resolved_path = resolve_path_under_workspace(state, &requested_path)?;
 
     std::fs::write(&resolved_path, content).map_err(|e| e.to_string())
 }
@@ -173,4 +214,39 @@ pub async fn open_file_in_editor(
     // Emit the open-file event to trigger the frontend to open the file
     window.emit("open-file", &path).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_path_blocks_parent_traversal() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let res = resolve_path_under_workspace_root(
+            dir.path(),
+            std::path::Path::new("../../etc/passwd"),
+        );
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn resolve_path_blocks_absolute_outside_workspace() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let outside = std::env::temp_dir().join("outside-zblade-test.txt");
+        let res = resolve_path_under_workspace_root(dir.path(), &outside);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn resolve_path_allows_in_workspace_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let resolved = resolve_path_under_workspace_root(
+            dir.path(),
+            std::path::Path::new("src/main.rs"),
+        )
+        .expect("path should resolve");
+        assert!(resolved.starts_with(dir.path()));
+        assert!(resolved.ends_with("src/main.rs"));
+    }
 }

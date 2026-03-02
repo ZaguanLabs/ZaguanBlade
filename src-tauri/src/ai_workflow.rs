@@ -18,10 +18,36 @@ use tauri::Emitter;
 
 pub use tool_defs::get_tool_definitions;
 
+#[derive(Clone, Debug)]
+pub struct CommandSpec {
+    pub command_line: Option<String>,
+    pub program: Option<String>,
+    pub args: Vec<String>,
+    pub shell: bool,
+}
+
+impl CommandSpec {
+    fn display_command(&self) -> String {
+        if let Some(command_line) = &self.command_line {
+            return command_line.clone();
+        }
+
+        if let Some(program) = &self.program {
+            if self.args.is_empty() {
+                return program.clone();
+            }
+            return format!("{} {}", program, self.args.join(" "));
+        }
+
+        String::new()
+    }
+}
+
 #[derive(Clone)]
 pub struct PendingCommand {
     pub call: ToolCall,
     pub command: String,
+    pub command_spec: CommandSpec,
     pub cwd: Option<String>,
     pub blocking: bool,
     pub wait_ms_before_async: Option<u64>,
@@ -33,27 +59,51 @@ mod tests {
 
     #[test]
     fn parse_run_command_defaults_to_blocking() {
-        let (command, cwd, blocking, wait_ms_before_async) = parse_run_command_args(
+        let parsed = parse_run_command_args(
             r#"{"command":"echo test","cwd":"/tmp"}"#,
         )
         .expect("should parse run_command args");
 
-        assert_eq!(command, "echo test");
-        assert_eq!(cwd.as_deref(), Some("/tmp"));
-        assert!(blocking);
-        assert!(wait_ms_before_async.is_none());
+        assert_eq!(parsed.command, "echo test");
+        assert_eq!(parsed.spec.command_line.as_deref(), Some("echo test"));
+        assert!(parsed.spec.shell);
+        assert_eq!(parsed.cwd.as_deref(), Some("/tmp"));
+        assert!(parsed.blocking);
+        assert!(parsed.wait_ms_before_async.is_none());
     }
 
     #[test]
     fn parse_run_command_respects_explicit_non_blocking() {
-        let (_, _, blocking, wait_ms_before_async) = parse_run_command_args(
+        let parsed = parse_run_command_args(
             r#"{"command":"bun run dev","cwd":"/repo","Blocking":false,"WaitMsBeforeAsync":2500}"#,
         )
         .expect("should parse run_command args");
 
-        assert!(!blocking);
-        assert_eq!(wait_ms_before_async, Some(2500));
+        assert!(!parsed.blocking);
+        assert_eq!(parsed.wait_ms_before_async, Some(2500));
     }
+
+    #[test]
+    fn parse_run_command_program_args_defaults_non_shell() {
+        let parsed = parse_run_command_args(
+            r#"{"program":"echo","args":["hello","world"],"cwd":"/tmp"}"#,
+        )
+        .expect("should parse program/args command");
+
+        assert_eq!(parsed.command, "echo hello world");
+        assert_eq!(parsed.spec.program.as_deref(), Some("echo"));
+        assert_eq!(parsed.spec.args, vec!["hello".to_string(), "world".to_string()]);
+        assert!(!parsed.spec.shell);
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ParsedRunCommandArgs {
+    command: String,
+    spec: CommandSpec,
+    cwd: Option<String>,
+    blocking: bool,
+    wait_ms_before_async: Option<u64>,
 }
 
 fn normalize_json_string(input: &str) -> String {
@@ -338,21 +388,22 @@ impl AiWorkflow {
             // INTERCEPTION LOGIC
             if call.function.name == "run_command" {
                 match parse_run_command_args(&call.function.arguments) {
-                    Ok((command, cwd, blocking, wait_ms_before_async)) => {
+                    Ok(parsed) => {
                         if let Some(err) = should_block_irrelevant_language_scan(
-                            &command,
+                            &parsed.command,
                             workspace_root,
-                            cwd.as_deref(),
+                            parsed.cwd.as_deref(),
                         ) {
                             file_results.push((call.clone(), tools::ToolResult::err(err)));
                             continue;
                         }
                         commands.push(PendingCommand {
                             call: call.clone(),
-                            command,
-                            cwd,
-                            blocking,
-                            wait_ms_before_async,
+                            command: parsed.command,
+                            command_spec: parsed.spec,
+                            cwd: parsed.cwd,
+                            blocking: parsed.blocking,
+                            wait_ms_before_async: parsed.wait_ms_before_async,
                         })
                     }
                     Err(e) => file_results.push((call.clone(), tools::ToolResult::err(e))),
@@ -859,21 +910,70 @@ impl AiWorkflow {
     }
 }
 
-fn parse_run_command_args(raw_args: &str) -> Result<(String, Option<String>, bool, Option<u64>), String> {
+fn parse_run_command_args(raw_args: &str) -> Result<ParsedRunCommandArgs, String> {
     let v: serde_json::Value =
         serde_json::from_str(raw_args).map_err(|e| format!("invalid tool args json: {e}"))?;
     let obj = v
         .as_object()
         .ok_or_else(|| "invalid args: expected object".to_string())?;
 
-    let command = obj
+    let command_line = obj
         .get("command")
         .or_else(|| obj.get("Command"))
         .or_else(|| obj.get("command_line"))
         .or_else(|| obj.get("CommandLine"))
         .and_then(|v| v.as_str())
-        .ok_or_else(|| "missing required arg: command/CommandLine".to_string())?
-        .to_string();
+        .map(ToString::to_string);
+
+    let program = obj
+        .get("program")
+        .or_else(|| obj.get("Program"))
+        .and_then(|v| v.as_str())
+        .map(ToString::to_string);
+
+    let args = obj
+        .get("args")
+        .or_else(|| obj.get("Args"))
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(ToString::to_string))
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default();
+
+    let explicit_shell = obj
+        .get("shell")
+        .or_else(|| obj.get("Shell"))
+        .and_then(|v| match v {
+            Value::Bool(b) => Some(*b),
+            Value::String(s) => s.parse::<bool>().ok(),
+            _ => None,
+        });
+
+    let spec = if program.is_some() {
+        CommandSpec {
+            command_line: None,
+            program,
+            args,
+            shell: explicit_shell.unwrap_or(false),
+        }
+    } else if let Some(command_line) = command_line {
+        CommandSpec {
+            command_line: Some(command_line),
+            program: None,
+            args: Vec::new(),
+            shell: true,
+        }
+    } else {
+        return Err("missing required arg: command/CommandLine or program".to_string());
+    };
+
+    let command = spec.display_command();
+    if command.trim().is_empty() {
+        return Err("run_command resolved to an empty command".to_string());
+    }
 
     let cwd = obj
         .get("cwd")
@@ -900,7 +1000,13 @@ fn parse_run_command_args(raw_args: &str) -> Result<(String, Option<String>, boo
             _ => None,
         });
 
-    Ok((command, cwd, blocking, wait_ms_before_async))
+    Ok(ParsedRunCommandArgs {
+        command,
+        spec,
+        cwd,
+        blocking,
+        wait_ms_before_async,
+    })
 }
 
 fn should_block_irrelevant_language_scan(
@@ -952,6 +1058,20 @@ fn should_block_irrelevant_language_scan(
 pub fn run_command_in_workspace(
     workspace_root: &Path,
     command: &str,
+    cwd: Option<&str>,
+) -> tools::ToolResult {
+    let legacy_spec = CommandSpec {
+        command_line: Some(command.to_string()),
+        program: None,
+        args: Vec::new(),
+        shell: true,
+    };
+    run_command_spec_in_workspace(workspace_root, &legacy_spec, cwd)
+}
+
+pub fn run_command_spec_in_workspace(
+    workspace_root: &Path,
+    command_spec: &CommandSpec,
     cwd: Option<&str>,
 ) -> tools::ToolResult {
     let ws = match fs::canonicalize(workspace_root) {
@@ -1006,15 +1126,51 @@ pub fn run_command_in_workspace(
         ws.clone()
     };
 
-    let output = Command::new("sh")
-        .arg("-lc")
-        .arg(command)
-        .current_dir(&dir)
-        .env_remove("ARGV0")
-        .env_remove("APPIMAGE")
-        .env_remove("APPDIR")
-        .env_remove("OWD")
-        .output();
+    let output = if !command_spec.shell {
+        if let Some(program) = &command_spec.program {
+            let mut cmd = Command::new(program);
+            cmd.args(&command_spec.args)
+                .current_dir(&dir)
+                .env_remove("ARGV0")
+                .env_remove("APPIMAGE")
+                .env_remove("APPDIR")
+                .env_remove("OWD")
+                .output()
+        } else {
+            return tools::ToolResult {
+                success: false,
+                content: String::new(),
+                error: Some("non-shell command requires 'program'".to_string()),
+                skipped: false,
+            };
+        }
+    } else if let Some(command_line) = &command_spec.command_line {
+        Command::new("sh")
+            .arg("-lc")
+            .arg(command_line)
+            .current_dir(&dir)
+            .env_remove("ARGV0")
+            .env_remove("APPIMAGE")
+            .env_remove("APPDIR")
+            .env_remove("OWD")
+            .output()
+    } else if let Some(program) = &command_spec.program {
+        let mut cmd = Command::new(program);
+        cmd.args(&command_spec.args)
+            .current_dir(&dir)
+            .env_remove("ARGV0")
+            .env_remove("APPIMAGE")
+            .env_remove("APPDIR")
+            .env_remove("OWD")
+            .output()
+    } else {
+        return tools::ToolResult {
+            success: false,
+            content: String::new(),
+            error: Some("missing command payload".to_string()),
+            skipped: false,
+        };
+    };
 
     match output {
         Ok(out) => {

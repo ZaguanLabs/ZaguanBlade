@@ -156,7 +156,12 @@ pub async fn dispatch(
                     Ok(())
                 }
                 blade_protocol::ChatIntent::ClearHistory {} => {
-                    let mut conversation = state.conversation.lock().unwrap();
+                    let mut conversation = state.conversation.lock().map_err(|e| {
+                        blade_protocol::BladeError::Internal {
+                            trace_id: intent_id.to_string(),
+                            message: format!("Failed to lock conversation state: {}", e),
+                        }
+                    })?;
                     conversation.clear();
                     let _ = window.emit(
                         "chat-update",
@@ -248,19 +253,14 @@ pub async fn dispatch(
                 }
             }
             blade_protocol::FileIntent::Create { path, is_dir } => {
-                let resolved_path = {
-                    let p = std::path::PathBuf::from(&path);
-                    if p.is_absolute() {
-                        p
-                    } else {
-                        let ws = state.workspace.lock().unwrap();
-                        if let Some(root) = ws.workspace.as_ref() {
-                            root.join(&path)
-                        } else {
-                            p
-                        }
-                    }
-                };
+                let resolved_path = files::resolve_path_under_workspace(
+                    &*state,
+                    std::path::Path::new(&path),
+                )
+                .map_err(|e| blade_protocol::BladeError::Internal {
+                    trace_id: intent_id.to_string(),
+                    message: e,
+                })?;
 
                 let result = if is_dir {
                     std::fs::create_dir_all(&resolved_path)
@@ -295,19 +295,14 @@ pub async fn dispatch(
                 }
             }
             blade_protocol::FileIntent::Delete { path } => {
-                let resolved_path = {
-                    let p = std::path::PathBuf::from(&path);
-                    if p.is_absolute() {
-                        p
-                    } else {
-                        let ws = state.workspace.lock().unwrap();
-                        if let Some(root) = ws.workspace.as_ref() {
-                            root.join(&path)
-                        } else {
-                            p
-                        }
-                    }
-                };
+                let resolved_path = files::resolve_path_under_workspace(
+                    &*state,
+                    std::path::Path::new(&path),
+                )
+                .map_err(|e| blade_protocol::BladeError::Internal {
+                    trace_id: intent_id.to_string(),
+                    message: e,
+                })?;
 
                 let result = if resolved_path.is_dir() {
                     std::fs::remove_dir_all(&resolved_path)
@@ -333,23 +328,22 @@ pub async fn dispatch(
                 }
             }
             blade_protocol::FileIntent::Rename { old_path, new_path } => {
-                let (resolved_old, resolved_new) = {
-                    let ws = state.workspace.lock().unwrap();
-                    let root = ws.workspace.clone();
-
-                    let resolve = |p: &str| {
-                        let path = std::path::PathBuf::from(p);
-                        if path.is_absolute() {
-                            path
-                        } else if let Some(ref r) = root {
-                            r.join(p)
-                        } else {
-                            path
-                        }
-                    };
-
-                    (resolve(&old_path), resolve(&new_path))
-                };
+                let resolved_old = files::resolve_path_under_workspace(
+                    &*state,
+                    std::path::Path::new(&old_path),
+                )
+                .map_err(|e| blade_protocol::BladeError::Internal {
+                    trace_id: intent_id.to_string(),
+                    message: e,
+                })?;
+                let resolved_new = files::resolve_path_under_workspace(
+                    &*state,
+                    std::path::Path::new(&new_path),
+                )
+                .map_err(|e| blade_protocol::BladeError::Internal {
+                    trace_id: intent_id.to_string(),
+                    message: e,
+                })?;
 
                 match std::fs::rename(&resolved_old, &resolved_new) {
                     Ok(_) => {
@@ -844,7 +838,12 @@ pub async fn dispatch(
 
                     // Get config to create BladeClient
                     let (blade_url, api_key) = {
-                        let config = state.config.lock().unwrap();
+                        let config = state.config.lock().map_err(|e| {
+                            blade_protocol::BladeError::Internal {
+                                trace_id: intent_id.to_string(),
+                                message: format!("Failed to lock config: {}", e),
+                            }
+                        })?;
                         (config.blade_url.clone(), config.api_key.clone())
                     };
 

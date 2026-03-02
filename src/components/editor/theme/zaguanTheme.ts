@@ -1,7 +1,7 @@
 import { EditorView } from "@codemirror/view";
 import { Extension } from "@codemirror/state";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
-import { tags as t } from "@lezer/highlight";
+import { classHighlighter, tags as t } from "@lezer/highlight";
 
 // Zaguan Blade Theme — Intentional "dimmed structural" palette with selective pop colors.
 // Structural tokens (keywords, operators, punctuation) recede; data tokens (strings,
@@ -461,6 +461,7 @@ export const zaguanTheme: Extension = [
     zaguanEditorTheme,
     zaguanGlowTheme,
     syntaxHighlighting(zaguanHighlightStyle),
+    syntaxHighlighting(classHighlighter),
 ];
 
 export default zaguanTheme;

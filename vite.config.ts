@@ -19,6 +19,14 @@ export default defineConfig(async () => ({
         },
     },
     resolve: {
+        dedupe: [
+            "@codemirror/state",
+            "@codemirror/view",
+            "@codemirror/language",
+            "@lezer/common",
+            "@lezer/highlight",
+            "@lezer/lr",
+        ],
         alias: {
             "@": "/src",
         },
