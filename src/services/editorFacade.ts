@@ -21,7 +21,7 @@ let featureFlags: FeatureFlagsSnapshot | null = null;
 export async function initEditorFacade(): Promise<void> {
     try {
         featureFlags = await invoke<FeatureFlagsSnapshot>('get_feature_flags');
-        console.log('[EditorFacade] Initialized with flags:', featureFlags);
+        console.debug('[EditorFacade] Initialized with flags:', featureFlags);
     } catch (e) {
         console.warn('[EditorFacade] Failed to load feature flags, using defaults:', e);
         featureFlags = {

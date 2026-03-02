@@ -55,7 +55,7 @@ export const StorageSetupModal: React.FC<StorageSetupModalProps> = ({
                 settings,
             });
 
-            console.log('[StorageSetup] Initialized with mode:', selectedMode);
+            console.debug('[StorageSetup] Initialized with mode:', selectedMode);
             onComplete();
         } catch (e) {
             console.error('[StorageSetup] Failed:', e);

@@ -282,13 +282,13 @@ const AppLayoutInner: React.FC = () => {
         });
     }, [appWindow, projectName, activeFilename]);
 
-    // Fetch project settings and sync to EditorContext
+    // Trigger backend to load project settings on mount and when settings change
     useEffect(() => {
         if (!workspacePath) return;
 
         const loadSettings = async () => {
             try {
-                const settings = await invoke<BackendSettings>('load_project_settings', {
+                await invoke<BackendSettings>('load_project_settings', {
                     projectPath: workspacePath,
                 });
             } catch (e) {
@@ -366,7 +366,7 @@ const AppLayoutInner: React.FC = () => {
 
     // Handle project state restoration
     const handleStateLoaded = useCallback((state: ProjectState) => {
-        console.log('[Layout] Restoring project state:', state);
+        console.debug('[Layout] Restoring project state:', state);
 
         // Restore tabs
         if (state.open_tabs && state.open_tabs.length > 0) {
@@ -545,17 +545,17 @@ const AppLayoutInner: React.FC = () => {
     };
 
     const handleEphemeralSave = async (ephemeralTabId: string, savedPath: string) => {
-        console.log('[Layout] handleEphemeralSave called:', { ephemeralTabId, savedPath });
+        console.debug('[Layout] handleEphemeralSave called:', { ephemeralTabId, savedPath });
         
         // Convert ephemeral tab to regular file tab
         setTabs(prev => {
             const ephemeralTab = prev.find(t => t.id === ephemeralTabId);
             if (!ephemeralTab) {
-                console.log('[Layout] Ephemeral tab not found:', ephemeralTabId);
+                console.debug('[Layout] Ephemeral tab not found:', ephemeralTabId);
                 return prev;
             }
 
-            console.log('[Layout] Found ephemeral tab:', ephemeralTab);
+            console.debug('[Layout] Found ephemeral tab:', ephemeralTab);
             const filename = savedPath.split('/').pop() || savedPath;
             const newTab: Tab = {
                 id: `file-${savedPath}`,
@@ -564,21 +564,21 @@ const AppLayoutInner: React.FC = () => {
                 path: savedPath,
             };
 
-            console.log('[Layout] Creating new file tab:', newTab);
+            console.debug('[Layout] Creating new file tab:', newTab);
             // Remove ephemeral tab and add file tab
             return [...prev.filter(t => t.id !== ephemeralTabId), newTab];
         });
 
         // Switch to the new file tab
         const newTabId = `file-${savedPath}`;
-        console.log('[Layout] Switching to new tab:', newTabId);
+        console.debug('[Layout] Switching to new tab:', newTabId);
         setActiveTabId(newTabId);
 
         // Trigger backend to open the file so it loads in the editor
         try {
-            console.log('[Layout] Calling open_file_in_editor:', savedPath);
+            console.debug('[Layout] Calling open_file_in_editor:', savedPath);
             await invoke('open_file_in_editor', { path: savedPath });
-            console.log('[Layout] open_file_in_editor completed successfully');
+            console.debug('[Layout] open_file_in_editor completed successfully');
         } catch (error) {
             console.error('[Layout] Failed to open saved file:', error);
         }
@@ -700,12 +700,12 @@ const AppLayoutInner: React.FC = () => {
         if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
         const unlistenPromises: Promise<() => void>[] = [];
             const handleOpenFile = (path: string, sourceEvent: string) => {
-                console.log(`Opening file from backend (${sourceEvent}):`, path);
+                console.debug(`Opening file from backend (${sourceEvent}):`, path);
                 const tabId = `file-${path}`;
 
                 // Prevent duplicate processing
                 if (processingFilesRef.current.has(path)) {
-                    console.log('[LAYOUT] Ignoring duplicate file open event for:', path);
+                    console.debug('[LAYOUT] Ignoring duplicate file open event for:', path);
                     return;
                 }
                 processingFilesRef.current.add(path);
@@ -741,7 +741,7 @@ const AppLayoutInner: React.FC = () => {
             }));
 
             unlistenPromises.push(listen<{ path: string; start_line: number; end_line: number }>('open-file-with-highlight', (event) => {
-                console.log('Opening file with highlight from backend:', event.payload);
+                console.debug('Opening file with highlight from backend:', event.payload);
                 const { path, start_line, end_line } = event.payload;
                 const tabId = `file-${path}`;
                 setTabs(prev => {
@@ -768,7 +768,7 @@ const AppLayoutInner: React.FC = () => {
             }));
 
             unlistenPromises.push(listen<{ id: string; title: string; content: string; suggestedName: string }>('open-ephemeral-document', (event) => {
-                console.log('[LAYOUT] 📥 Received open-ephemeral-document event:', {
+                console.debug('[LAYOUT] 📥 Received open-ephemeral-document event:', {
                     id: event.payload.id,
                     title: event.payload.title,
                     contentLength: event.payload.content.length,
@@ -784,11 +784,11 @@ const AppLayoutInner: React.FC = () => {
                     // Check if tab already exists
                     const existingTab = prev.find(t => t.id === id);
                     if (existingTab) {
-                        console.log('[LAYOUT] ⚠️ Tab already exists, just activating:', id);
+                        console.debug('[LAYOUT] ⚠️ Tab already exists, just activating:', id);
                         return prev;
                     }
 
-                    console.log('[LAYOUT] ✅ Creating new tab with ID:', id);
+                    console.debug('[LAYOUT] ✅ Creating new tab with ID:', id);
                     const newTab: Tab = {
                         id,
                         title,
@@ -796,7 +796,7 @@ const AppLayoutInner: React.FC = () => {
                         content,
                         suggestedName,
                     };
-                    console.log('[LAYOUT] Adding tab to existing tabs:', prev.length, '→', prev.length + 1);
+                    console.debug('[LAYOUT] Adding tab to existing tabs:', prev.length, '→', prev.length + 1);
                     return [...prev, newTab];
                 });
                 setActiveTabId(id);
@@ -804,7 +804,7 @@ const AppLayoutInner: React.FC = () => {
 
             // Listen for research progress events
             unlistenPromises.push(listen<{ message: string; stage: string; percent: number }>('research-progress', (event) => {
-                console.log('[LAYOUT] Research progress:', event.payload);
+                console.debug('[LAYOUT] Research progress:', event.payload);
                 
                 // Set temporary state for active indicator
                 setResearchProgress({
@@ -859,7 +859,7 @@ const AppLayoutInner: React.FC = () => {
 
             // Listen for change-applied events to convert ephemeral tabs to file tabs
             unlistenPromises.push(listen<{ change_id: string; file_path: string }>('change-applied', (event) => {
-                console.log('[LAYOUT] Change applied:', event.payload);
+                console.debug('[LAYOUT] Change applied:', event.payload);
                 const { change_id, file_path } = event.payload;
 
                 // Find any ephemeral tab that might be associated with this change
@@ -887,7 +887,7 @@ const AppLayoutInner: React.FC = () => {
                         return prev;
                     }
 
-                    console.log('[LAYOUT] Found matching ephemeral tab, converting to file tab:', ephemeralTab.id, '→', file_path);
+                    console.debug('[LAYOUT] Found matching ephemeral tab, converting to file tab:', ephemeralTab.id, '→', file_path);
                     const fileTab: Tab = {
                         id: `file-${file_path}`,
                         title: filename,

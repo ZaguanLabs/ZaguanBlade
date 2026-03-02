@@ -113,7 +113,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                 pendingRequests.current.delete(folderPath === 'root' ? null : folderPath);
                 // Use optimistic invalidation to avoid loading flicker
                 item.invalidateChildrenIds(true);
-                console.log('[Explorer] Invalidated children for:', folderPath);
+                console.debug('[Explorer] Invalidated children for:', folderPath);
                 return true;
             }
         } catch (err) {
@@ -132,7 +132,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                 type: 'Create',
                 payload: { path: fullPath, is_dir: isDir }
             });
-            console.log(`[Explorer] Created ${isDir ? 'folder' : 'file'}:`, fullPath);
+            console.debug(`[Explorer] Created ${isDir ? 'folder' : 'file'}:`, fullPath);
             
             // Auto-open newly created files in the editor (not directories)
             if (!isDir && onFileSelect) {
@@ -149,7 +149,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                 type: 'Delete',
                 payload: { path }
             });
-            console.log('[Explorer] Deleted:', path);
+            console.debug('[Explorer] Deleted:', path);
         } catch (err) {
             console.error('[Explorer] Failed to delete:', err);
         }
@@ -165,12 +165,12 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                     type: 'Rename',
                     payload: { old_path: clipboard.path, new_path: newPath }
                 });
-                console.log('[Explorer] Moved:', clipboard.path, '->', newPath);
+                console.debug('[Explorer] Moved:', clipboard.path, '->', newPath);
                 setClipboard(null); // Clear clipboard after cut
             } else {
                 // Copy - need to read and write
                 // For now, just copy the path to system clipboard as a fallback
-                console.log('[Explorer] Copy not yet implemented, path:', clipboard.path);
+                console.debug('[Explorer] Copy not yet implemented, path:', clipboard.path);
             }
         } catch (err) {
             console.error('[Explorer] Failed to paste:', err);
@@ -219,7 +219,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                 shortcut: 'Ctrl+X',
                 onClick: () => {
                     setClipboard({ path: itemId, name: itemName, operation: 'cut' });
-                    console.log('[Context] Cut:', itemId);
+                    console.debug('[Context] Cut:', itemId);
                 }
             },
             {
@@ -229,7 +229,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                 shortcut: 'Ctrl+C',
                 onClick: () => {
                     setClipboard({ path: itemId, name: itemName, operation: 'copy' });
-                    console.log('[Context] Copy:', itemId);
+                    console.debug('[Context] Copy:', itemId);
                 }
             },
             {
@@ -281,7 +281,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                 onClick: async () => {
                     try {
                         await navigator.clipboard.writeText(itemId);
-                        console.log('[Context] Copied path:', itemId);
+                        console.debug('[Context] Copied path:', itemId);
                     } catch (err) {
                         console.error('[Context] Failed to copy path:', err);
                     }
@@ -295,7 +295,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                     // For folders, open terminal at the folder path
                     // For files, open terminal at the parent directory
                     const targetPath = isFolder ? itemId : parentPath;
-                    console.log('[Context] Open terminal at:', targetPath);
+                    console.debug('[Context] Open terminal at:', targetPath);
                     await emit('open-terminal', { path: targetPath });
                 }
             }
@@ -410,7 +410,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                     type: 'Rename',
                     payload: { old_path: oldPath, new_path: newPath }
                 });
-                console.log('[Explorer] Renamed via inline:', oldPath, '->', newPath);
+                console.debug('[Explorer] Renamed via inline:', oldPath, '->', newPath);
             } catch (err) {
                 console.error('[Explorer] Failed to rename:', err);
             }
@@ -446,7 +446,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                         type: 'Rename',
                         payload: { old_path: sourcePath, new_path: newPath }
                     });
-                    console.log('[Explorer] Moved via drag:', sourcePath, '->', newPath);
+                    console.debug('[Explorer] Moved via drag:', sourcePath, '->', newPath);
                 } catch (err) {
                     console.error('[Explorer] Failed to move:', err);
                 }
@@ -514,7 +514,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
     // Clear cache and pending requests on refresh to force re-fetch
     // Also reset lastExpandedFileRef so the tree re-expands to active file after refresh
     React.useEffect(() => {
-        console.log('[Explorer] Refreshing tree view (Key: ' + refreshKey + ')');
+        console.debug('[Explorer] Refreshing tree view (Key: ' + refreshKey + ')');
         itemCache.current.clear();
         pendingRequests.current.clear();
         lastExpandedFileRef.current = null;

@@ -48,7 +48,7 @@ export class EventBuffer<T> {
         // CRITICAL FIX: If we receive seq 0 but nextSeq > 0, this is a new stream
         // Reset the buffer to avoid dropping chunks from the new stream
         if (this.nextSeq !== null && seq === 0 && this.nextSeq > 0) {
-            console.log(`[EventBuffer] New stream detected (seq=0, nextSeq=${this.nextSeq}), resetting buffer`);
+            console.debug(`[EventBuffer] New stream detected (seq=0, nextSeq=${this.nextSeq}), resetting buffer`);
             this.clear();
             this.nextSeq = seq;
         }

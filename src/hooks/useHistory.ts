@@ -18,20 +18,20 @@ export function useHistory() {
             return;
         }
 
-        console.log('[useHistory] Setting up blade-event listener');
+        console.debug('[useHistory] Setting up blade-event listener');
         let unlistenHistory: (() => void) | undefined;
 
         const setupListener = async () => {
             const unlisten = await listen<BladeEventEnvelope>('blade-event', (event) => {
                 const envelope = event.payload;
-                console.log('[useHistory] Received blade-event:', envelope.event.type);
+                console.debug('[useHistory] Received blade-event:', envelope.event.type);
 
                 if (envelope.event.type === 'History') {
                     const historyEvent = envelope.event.payload;
-                    console.log('[useHistory] History event type:', historyEvent.type);
+                    console.debug('[useHistory] History event type:', historyEvent.type);
 
                     if (historyEvent.type === 'ConversationList') {
-                        console.log('[useHistory] ConversationList received with', historyEvent.payload.conversations.length, 'conversations');
+                        console.debug('[useHistory] ConversationList received with', historyEvent.payload.conversations.length, 'conversations');
                         if (historyEvent.payload.conversations.length > 0) {
                             const sample = historyEvent.payload.conversations[0];
                             // Use Tauri's invoke to log to terminal
@@ -47,21 +47,21 @@ export function useHistory() {
                     }
                 }
             });
-            console.log('[useHistory] blade-event listener set up successfully');
+            console.debug('[useHistory] blade-event listener set up successfully');
             unlistenHistory = unlisten;
         };
 
         setupListener();
 
         return () => {
-            console.log('[useHistory] Cleaning up blade-event listener');
+            console.debug('[useHistory] Cleaning up blade-event listener');
             if (unlistenHistory) unlistenHistory();
         };
     }, []);
 
     const fetchConversations = useCallback(async (projectId: string) => {
         try {
-            console.log('[useHistory] fetchConversations called with projectId:', projectId);
+            console.debug('[useHistory] fetchConversations called with projectId:', projectId);
             setLoading(true);
             setError(null);
 
@@ -77,7 +77,7 @@ export function useHistory() {
             }
 
             if (useLocal) {
-                console.log('[useHistory] Loading conversations from LOCAL storage');
+                console.debug('[useHistory] Loading conversations from LOCAL storage');
                 const localConversations = await invoke<any[]>('list_conversations');
 
                 // Map Rust metadata to UI Summary format
@@ -96,12 +96,12 @@ export function useHistory() {
             } else {
                 // SERVER mode
                 // Dispatch ListConversations Intent via BCP
-                console.log('[useHistory] Dispatching ListConversations intent (SERVER)...');
+                console.debug('[useHistory] Dispatching ListConversations intent (SERVER)...');
                 await BladeDispatcher.history({
                     type: 'ListConversations',
                     payload: { project_id: projectId }
                 });
-                console.log('[useHistory] ListConversations intent dispatched successfully');
+                console.debug('[useHistory] ListConversations intent dispatched successfully');
                 // Backend will respond with ConversationList Event
             }
 
@@ -137,7 +137,7 @@ export function useHistory() {
         }
 
         if (useLocal) {
-            console.log('[useHistory] Loading conversation from LOCAL storage');
+            console.debug('[useHistory] Loading conversation from LOCAL storage');
             setLoading(true);
             setError(null);
             try {

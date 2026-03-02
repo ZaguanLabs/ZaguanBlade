@@ -26,11 +26,11 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
     };
 
     useEffect(() => {
-        console.log('[HistoryTab] projectId:', projectId);
-        console.log('[HistoryTab] conversations.length:', conversations.length);
+        console.debug('[HistoryTab] projectId:', projectId);
+        console.debug('[HistoryTab] conversations.length:', conversations.length);
 
         if (projectId) {
-            console.log('[HistoryTab] Fetching conversations...');
+            console.debug('[HistoryTab] Fetching conversations...');
             fetchConversations(projectId);
         } else {
             console.warn('[HistoryTab] Missing projectId, not fetching');

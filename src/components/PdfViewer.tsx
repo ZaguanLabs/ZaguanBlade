@@ -31,11 +31,11 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
             setError(null);
 
             try {
-                console.log('[PDF] Loading file:', filePath);
+                console.debug('[PDF] Loading file:', filePath);
                 
                 // Read the PDF file as binary data using tauri-plugin-fs
                 const fileData = await readFile(filePath);
-                console.log('[PDF] File read successfully, size:', fileData.length, 'bytes');
+                console.debug('[PDF] File read successfully, size:', fileData.length, 'bytes');
                 
                 // Load the PDF from the binary data (fileData is already Uint8Array)
                 const loadingTask = pdfjsLib.getDocument({
@@ -45,7 +45,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
                     useSystemFonts: true,
                 });
                 const pdf = await loadingTask.promise;
-                console.log('[PDF] PDF loaded successfully, pages:', pdf.numPages);
+                console.debug('[PDF] PDF loaded successfully, pages:', pdf.numPages);
                 
                 setPdfDoc(pdf);
                 setNumPages(pdf.numPages);

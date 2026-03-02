@@ -314,7 +314,7 @@ export function useChat() {
                 type: 'SetSelectedModel',
                 payload: { model: modelId }
             });
-            console.log('[useChat] Synced model to backend:', modelId);
+            console.debug('[useChat] Synced model to backend:', modelId);
         } catch (e) {
             console.error('[useChat] Failed to sync model to backend:', e);
         }
@@ -337,7 +337,7 @@ export function useChat() {
             try {
                 // Ensure we are in a window context (client-side) and have Tauri
                 if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
-                    console.log('Not in Tauri environment, skipping chat init');
+                    console.debug('Not in Tauri environment, skipping chat init');
                     return;
                 }
 
@@ -347,14 +347,14 @@ export function useChat() {
                     invoke<boolean>('get_chat_status'),
                 ]);
 
-                console.log('Loaded conversation:', history);
+                console.debug('Loaded conversation:', history);
                 // Reconstruct blocks for historical messages
                 setMessages(ensureMessagesHaveBlocks(history));
                 setModels(modelList);
 
                 // Restore loading state if backend is still streaming (e.g. after UI reload)
                 if (isStreaming) {
-                    console.log('[useChat] Backend is still streaming — restoring loading state');
+                    console.debug('[useChat] Backend is still streaming — restoring loading state');
                     setLoading(true);
                 }
 
@@ -365,7 +365,7 @@ export function useChat() {
                         || modelList.find(m => m.id === 'openai/gpt-5.2')
                         || modelList[0];
                     setSelectedModelIdState(defaultModel.id);
-                    console.log('[useChat] Set initial default model:', defaultModel.id);
+                    console.debug('[useChat] Set initial default model:', defaultModel.id);
                 }
 
             } catch (e) {
@@ -529,7 +529,7 @@ export function useChat() {
             /*
             const u1 = await listen<ChatMessage>('chat-update', (event) => {
                 const msg = event.payload;
-                console.log('[CHAT UPDATE]', msg);
+                console.debug('[CHAT UPDATE]', msg);
                 // ... legacy logic ...
                  setMessages((prev) => {
                      // ... 
@@ -608,7 +608,7 @@ export function useChat() {
                 recoverable: boolean;
                 recovery_hint: string | null;
             }>('context-length-exceeded', (event) => {
-                console.log('[useChat] Context length exceeded:', event.payload);
+                console.debug('[useChat] Context length exceeded:', event.payload);
                 const { message, token_count, max_tokens, recoverable, recovery_hint } = event.payload;
                 
                 setLoading(false);
@@ -642,7 +642,7 @@ export function useChat() {
                 message: string;
                 recovery_hint: string;
             }>('message-too-large', (event) => {
-                console.log('[useChat] Message too large:', event.payload);
+                console.debug('[useChat] Message too large:', event.payload);
                 const { message, recovery_hint } = event.payload;
                 
                 setLoading(false);
@@ -663,7 +663,7 @@ export function useChat() {
 
             // Listen for permission requests
             const u4 = await listen<RequestConfirmationPayload>('request-confirmation', (event) => {
-                console.log("Permission requested for:", event.payload);
+                console.debug("Permission requested for:", event.payload);
                 setPendingActions(event.payload.actions);
             });
             unlistenPerm = u4;
@@ -673,7 +673,7 @@ export function useChat() {
             // Listen for command executions
             const u6 = await listen<{ command: string; cwd?: string; output: string; exitCode: number; duration?: number; call_id: string }>('command-executed', (event) => {
                 const { command, cwd, output, exitCode, duration, call_id } = event.payload;
-                console.log('[COMMAND EXECUTED]', { command, call_id, exitCode });
+                console.debug('[COMMAND EXECUTED]', { command, call_id, exitCode });
 
                 setMessages(prev => {
                     // 1. Find the message containing this tool call ID
@@ -1175,9 +1175,9 @@ export function useChat() {
 
     const undoTool = useCallback(async (toolCallId: string) => {
         try {
-            console.log('[useChat] Undoing tool batch:', toolCallId);
+            console.debug('[useChat] Undoing tool batch:', toolCallId);
             const revertedFiles = await invoke<string[]>('undo_batch', { groupId: toolCallId });
-            console.log('[useChat] Reverted files:', revertedFiles);
+            console.debug('[useChat] Reverted files:', revertedFiles);
             // We might want to show a toast or notification here
         } catch (e) {
             console.error('Failed to undo tool batch:', e);

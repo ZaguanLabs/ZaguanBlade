@@ -1,6 +1,5 @@
 import React, { Suspense, useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
-import { BrowserRouter } from 'react-router-dom';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import App from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -51,10 +50,8 @@ const AppWrapper = () => {
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
     <ErrorBoundary>
-        <BrowserRouter>
-            <ContextMenuProvider>
-                <AppWrapper />
-            </ContextMenuProvider>
-        </BrowserRouter>
+        <ContextMenuProvider>
+            <AppWrapper />
+        </ContextMenuProvider>
     </ErrorBoundary>
 );

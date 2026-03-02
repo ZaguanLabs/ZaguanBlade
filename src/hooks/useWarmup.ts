@@ -52,22 +52,22 @@ export function useWarmup(workspacePath: string | null, modelId: string | null, 
 
     const warmup = useCallback(async (trigger: WarmupTrigger): Promise<WarmupResponse | null> => {
         if (!modelId) {
-            console.log('[Warmup] Skipping - no model selected');
+            console.debug('[Warmup] Skipping - no model selected');
             return null;
         }
 
         try {
-            console.log(`[Warmup] Sending warmup request: trigger=${trigger}, model=${modelId}, session=${sessionId}`);
+            console.debug(`[Warmup] Sending warmup request: trigger=${trigger}, model=${modelId}, session=${sessionId}`);
             const response = await invoke<WarmupResponse>('warmup_cache', {
                 sessionId,
                 model: modelId,
                 trigger,
             });
 
-            console.log(`[Warmup] Response: type=${response.response_type}, provider=${response.provider}, artifacts=${response.artifacts_loaded}, ready=${response.cache_ready}`);
+            console.debug(`[Warmup] Response: type=${response.response_type}, provider=${response.provider}, artifacts=${response.artifacts_loaded}, ready=${response.cache_ready}`);
 
             if (response.message) {
-                console.log(`[Warmup] Message: ${response.message}`);
+                console.debug(`[Warmup] Message: ${response.message}`);
             }
 
             return response;
@@ -101,7 +101,7 @@ export function useWarmup(workspacePath: string | null, modelId: string | null, 
         // Only trigger model change warmup if we're ready and this is a real change
         // Also require that we've already done the launch warmup to avoid race conditions
         if (ready && isReadyRef.current && hasWarmedOnLaunchRef.current && modelId && lastModelRef.current && lastModelRef.current !== modelId) {
-            console.log(`[Warmup] Model changed: ${lastModelRef.current} -> ${modelId}`);
+            console.debug(`[Warmup] Model changed: ${lastModelRef.current} -> ${modelId}`);
             warmup('model_change');
         }
         // Always update the ref (but only matters after ready)
@@ -113,7 +113,7 @@ export function useWarmup(workspacePath: string | null, modelId: string | null, 
     // Warmup on workspace change (only after ready)
     useEffect(() => {
         if (ready && isReadyRef.current && workspacePath && lastWorkspaceRef.current && lastWorkspaceRef.current !== workspacePath) {
-            console.log(`[Warmup] Workspace changed: ${lastWorkspaceRef.current} -> ${workspacePath}`);
+            console.debug(`[Warmup] Workspace changed: ${lastWorkspaceRef.current} -> ${workspacePath}`);
             warmup('workspace_change');
         }
         if (isReadyRef.current) {
@@ -131,7 +131,7 @@ export function useWarmup(workspacePath: string | null, modelId: string | null, 
             try {
                 const shouldRewarm = await invoke<boolean>('should_rewarm_cache');
                 if (shouldRewarm) {
-                    console.log('[Warmup] Session resume detected after inactivity');
+                    console.debug('[Warmup] Session resume detected after inactivity');
                     warmup('session_resume');
                 }
             } catch (error) {

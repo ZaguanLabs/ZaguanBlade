@@ -332,7 +332,7 @@ export default function Terminal({ id = "main-terminal", cwd }: TerminalProps) {
                         }
                     } else if (terminalEvent.type === 'Spawned') {
                         const { id: termId, owner } = terminalEvent.payload;
-                        console.log(`[v1.1 Terminal] Spawned: id=${termId}, owner=${owner.type}`);
+                        console.debug(`[v1.1 Terminal] Spawned: id=${termId}, owner=${owner.type}`);
                     } else if (terminalEvent.type === 'Exit') {
                         const { id: termId, code } = terminalEvent.payload;
                         if (termId === id && xtermRef.current) {

@@ -125,7 +125,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
             const newTab = { id: newId, title, cwd: path };
             setTerminals(prev => [...prev, newTab]);
             setActiveId(newId);
-            console.log('[TerminalPane] Opening terminal at:', path);
+            console.debug('[TerminalPane] Opening terminal at:', path);
         });
 
         return () => {

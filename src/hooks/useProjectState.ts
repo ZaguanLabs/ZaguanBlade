@@ -108,7 +108,7 @@ export function useProjectState({
 
         try {
             await invoke('save_project_state', { stateData: state });
-            // console.log('[ProjectState] Saved state for:', projectPath); // Disabled log for cleaner output
+            // console.debug('[ProjectState] Saved state for:', projectPath); // Disabled log for cleaner output
             isDirtyRef.current = false;
         } catch (e) {
             console.error('[ProjectState] Failed to save state:', e);
@@ -120,7 +120,7 @@ export function useProjectState({
 
         try {
             const state = await invoke<ProjectState | null>('load_project_state', { projectPath });
-            // console.log('[ProjectState] Loaded state invoked'); // Disabled log
+            // console.debug('[ProjectState] Loaded state invoked'); // Disabled log
             return state;
         } catch (e) {
             console.error('[ProjectState] Failed to load state:', e);
@@ -141,7 +141,7 @@ export function useProjectState({
             if (state && onStateLoaded) {
                 onStateLoaded(state);
             } else {
-                console.log('[ProjectState] No saved state found');
+                console.debug('[ProjectState] No saved state found');
             }
 
             setLoaded(true);

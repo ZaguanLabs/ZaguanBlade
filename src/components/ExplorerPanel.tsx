@@ -66,7 +66,7 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
             unlistenFn = await listen('refresh-explorer', () => {
                 if (debounceTimer) clearTimeout(debounceTimer);
                 debounceTimer = setTimeout(() => {
-                    console.log('[EXPLORER] Refresh event received (debounced)');
+                    console.debug('[EXPLORER] Refresh event received (debounced)');
                     setRefreshKey(prev => prev + 1);
                     loadRoot();
                     debounceTimer = null;

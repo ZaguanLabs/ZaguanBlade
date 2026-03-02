@@ -60,7 +60,7 @@ export function useCoreStateSync(): CoreStateSyncResult {
                 detail: { state, flags }
             }));
 
-            console.log('[CoreStateSync] Recovery complete:', {
+            console.debug('[CoreStateSync] Recovery complete:', {
                 workspace: state.workspace.path,
                 activeFile: state.editor.active_file,
                 openFiles: state.editor.open_files.length,

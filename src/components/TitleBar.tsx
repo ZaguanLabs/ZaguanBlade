@@ -75,7 +75,7 @@ export const TitleBar: React.FC = () => {
                 e.preventDefault();
                 try {
                     const currentFullscreen = await appWindow.isFullscreen();
-                    console.log('[TitleBar] Toggling fullscreen:', !currentFullscreen);
+                    console.debug('[TitleBar] Toggling fullscreen:', !currentFullscreen);
                     await appWindow.setFullscreen(!currentFullscreen);
                     setIsFullscreen(!currentFullscreen);
                 } catch (err) {
@@ -92,7 +92,7 @@ export const TitleBar: React.FC = () => {
         e.stopPropagation();
         e.preventDefault();
         try {
-            console.log('[TitleBar] Minimizing window...');
+            console.debug('[TitleBar] Minimizing window...');
             await appWindow.minimize();
         } catch (err) {
             console.error('[TitleBar] Failed to minimize:', err);
@@ -103,7 +103,7 @@ export const TitleBar: React.FC = () => {
         e.stopPropagation();
         e.preventDefault();
         try {
-            console.log('[TitleBar] Toggling maximize...');
+            console.debug('[TitleBar] Toggling maximize...');
             await appWindow.toggleMaximize();
         } catch (err) {
             console.error('[TitleBar] Failed to toggle maximize:', err);
@@ -114,7 +114,7 @@ export const TitleBar: React.FC = () => {
         e.stopPropagation();
         e.preventDefault();
         try {
-            console.log('[TitleBar] Closing window...');
+            console.debug('[TitleBar] Closing window...');
             await appWindow.close();
         } catch (err) {
             console.error('[TitleBar] Failed to close:', err);

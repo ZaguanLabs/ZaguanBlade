@@ -245,7 +245,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
                             ...mergedSettings,
                             ...backendToFrontend(backendSettings),
                         };
-                        console.log('[Settings] Loaded project settings:', backendSettings);
+                        console.debug('[Settings] Loaded project settings:', backendSettings);
                     } catch (e) {
                         console.error('[Settings] Failed to load project settings:', e);
                         // Don't fail completely, just use defaults for project
@@ -254,7 +254,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
 
                 setSettings(mergedSettings);
                 setHasChanges(false);
-                console.log('[Settings] Loaded settings:', mergedSettings);
+                console.debug('[Settings] Loaded settings:', mergedSettings);
             } catch (e) {
                 console.error('[Settings] Failed to load global settings:', e);
                 setError(String(e));
@@ -317,7 +317,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
                     await refreshModels();
                 }
 
-                console.log('[Settings] Saved settings');
+                console.debug('[Settings] Saved settings');
             } catch (e) {
                 console.error('[Settings] Failed to save in background:', e);
             }

@@ -35,20 +35,20 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
   const handleSave = async () => {
     if (!isEphemeral) return;
 
-    console.log('[DocumentViewer] Starting save process for:', documentId);
+    console.debug('[DocumentViewer] Starting save process for:', documentId);
 
     setIsSaving(true);
     try {
       // Save directly to project root without dialog
       const filename = suggestedName || 'document.md';
-      console.log('[DocumentViewer] Saving document to project root:', filename);
+      console.debug('[DocumentViewer] Saving document to project root:', filename);
       
       const savedPath = await invoke<string>('save_ephemeral_document_to_workspace', {
         id: documentId,
         filename: filename
       });
 
-      console.log('[DocumentViewer] Document saved successfully to:', savedPath);
+      console.debug('[DocumentViewer] Document saved successfully to:', savedPath);
       if (onSave) {
         onSave(savedPath);
       }

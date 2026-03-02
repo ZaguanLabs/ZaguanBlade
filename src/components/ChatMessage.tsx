@@ -265,7 +265,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                 onClick: async () => {
                     try {
                         await navigator.clipboard.writeText(message.content);
-                        console.log('[Context] Copied message');
+                        console.debug('[Context] Copied message');
                     } catch (err) {
                         console.error('[Context] Failed to copy:', err);
                     }
@@ -279,7 +279,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                     try {
                         const markdown = `**${message.role}:**\n\n${message.content}`;
                         await navigator.clipboard.writeText(markdown);
-                        console.log('[Context] Copied as markdown');
+                        console.debug('[Context] Copied as markdown');
                     } catch (err) {
                         console.error('[Context] Failed to copy:', err);
                     }
@@ -296,7 +296,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                     icon: <Pencil className="w-4 h-4" />,
                     onClick: () => {
                         // TODO: Implement edit message functionality
-                        console.log('[Context] Edit message');
+                        console.debug('[Context] Edit message');
                     }
                 }
             );
@@ -311,7 +311,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                     icon: <RotateCcw className="w-4 h-4" />,
                     onClick: () => {
                         // TODO: Implement regenerate
-                        console.log('[Context] Regenerate response');
+                        console.debug('[Context] Regenerate response');
                     }
                 }
             );

@@ -32,7 +32,7 @@ export class ErrorBoundary extends Component<Props, State> {
     }
 
     private handleReset = () => {
-        console.log('[ErrorBoundary] Resetting UI...');
+        console.debug('[ErrorBoundary] Resetting UI...');
         this.props.onReset?.();
         this.setState({
             hasError: false,
@@ -43,7 +43,7 @@ export class ErrorBoundary extends Component<Props, State> {
     };
 
     private handleHardReset = () => {
-        console.log('[ErrorBoundary] Hard reset - clearing sessionStorage...');
+        console.debug('[ErrorBoundary] Hard reset - clearing sessionStorage...');
         try {
             sessionStorage.clear();
         } catch (e) {
@@ -53,7 +53,7 @@ export class ErrorBoundary extends Component<Props, State> {
     };
 
     private handleFullReload = () => {
-        console.log('[ErrorBoundary] Full page reload...');
+        console.debug('[ErrorBoundary] Full page reload...');
         window.location.reload();
     };
 

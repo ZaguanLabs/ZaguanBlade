@@ -1,5 +1,4 @@
 import { useEffect } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
 import { listen } from '@tauri-apps/api/event';
 import { AppLayout } from './components/Layout';
 import { initNotifications, notifyFileChanges } from './utils/notifications';
@@ -11,7 +10,7 @@ export default function App() {
 
     useEffect(() => {
         if (coreState) {
-            console.log('[App] Core state recovered:', {
+            console.debug('[App] Core state recovered:', {
                 workspace: coreState.workspace.path,
                 activeFile: coreState.editor.active_file,
                 openFiles: coreState.editor.open_files.length,
@@ -49,10 +48,5 @@ export default function App() {
         };
     }, []);
 
-    return (
-        <Routes>
-            <Route path="/" element={<AppLayout />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-    );
+    return <AppLayout />;
 }

@@ -35,7 +35,7 @@ export function useCommandExecution() {
     const pendingCommandsRef = useRef<Map<string, PendingCommand>>(new Map());
 
     const handleCommandComplete = useCallback(async (callId: string, output: string, exitCode: number) => {
-        console.log('[CMD EXEC] Complete:', { callId, exitCode, outputLength: output.length });
+        console.debug('[CMD EXEC] Complete:', { callId, exitCode, outputLength: output.length });
 
         // Update local state - Remove execution to unmount terminal
         setExecutions(prev => {
@@ -51,7 +51,7 @@ export function useCommandExecution() {
                 output,
                 exitCode,
             });
-            console.log('[CMD EXEC] Result submitted to backend');
+            console.debug('[CMD EXEC] Result submitted to backend');
         } catch (err) {
             console.error('[CMD EXEC] Failed to submit result:', err);
         }
@@ -149,7 +149,7 @@ export function useCommandExecution() {
                 blocking?: boolean;
                 wait_ms_before_async?: number;
             }>('command-execution-started', (event) => {
-                console.log('[CMD EXEC] Started:', event.payload);
+                console.debug('[CMD EXEC] Started:', event.payload);
 
                 const terminalId = `ai-cmd-${event.payload.call_id}`;
                 const pending: PendingCommand = {

@@ -147,7 +147,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         const unlistenFileChangesPromise = listen<{ count: number, paths: string[] }>('file-changes-detected', (event) => {
                 // If the active file is in the changed paths, reload it
                 if (activeFile && event.payload.paths.some(p => pathsMatch(p, activeFile))) {
-                    console.log('[EDITOR] File changed on disk, reloading:', activeFile);
+                    console.debug('[EDITOR] File changed on disk, reloading:', activeFile);
                     setReloadTrigger(prev => prev + 1);
                 }
             });
@@ -157,7 +157,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             // so this provides a reliable, direct notification when a tool modifies a file.
             const unlistenChangeAppliedPromise = listen<{ change_id: string; file_path: string }>('change-applied', (event) => {
                 if (activeFile && pathsMatch(event.payload.file_path, activeFile)) {
-                    console.log('[EDITOR] Tool change applied to active file, reloading:', activeFile);
+                    console.debug('[EDITOR] Tool change applied to active file, reloading:', activeFile);
                     setReloadTrigger(prev => prev + 1);
                 }
             });
@@ -181,12 +181,12 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 if (bladeEvent.type === 'File') {
                     const fileEvent = bladeEvent.payload;
                     if (fileEvent.type === 'Content' && pathsMatch(fileEvent.payload.path, activeFile)) {
-                        console.log('[EDITOR] Received content for:', activeFile);
+                        console.debug('[EDITOR] Received content for:', activeFile);
                         setContent(fileEvent.payload.data);
                         setLoading(false);
                         setError(null);
                     } else if (fileEvent.type === 'Written' && pathsMatch(fileEvent.payload.path, activeFile)) {
-                        console.log('[EDITOR] Confirmed written:', activeFile);
+                        console.debug('[EDITOR] Confirmed written:', activeFile);
                         // Optional: Show toast
                     }
                 } else if (bladeEvent.type === 'System') {
@@ -276,7 +276,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     type: 'Write',
                     payload: { path: activeFile, content: text }
                 });
-                console.log("Save intent dispatched:", activeFile);
+                console.debug("Save intent dispatched:", activeFile);
                 // ToDo: Toast notification
             } catch (e) {
                 console.error("Save failed:", e);
@@ -285,7 +285,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     };
 
     const handleNavigate = (path: string, line: number, character: number) => {
-        console.log("Navigating to:", path, line, character);
+        console.debug("Navigating to:", path, line, character);
         setActiveFile(path);
         pendingNavigation.current = { path, line, col: character };
     };

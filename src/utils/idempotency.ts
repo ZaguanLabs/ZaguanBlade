@@ -129,7 +129,7 @@ export function getOrCreateIdempotencyKey(
     // Check cache first
     const cached = idempotencyCache.get(operation, identifier);
     if (cached) {
-        console.log(`[Idempotency] Using cached key for ${operation}:${identifier}`);
+        console.debug(`[Idempotency] Using cached key for ${operation}:${identifier}`);
         return cached;
     }
     
@@ -137,7 +137,7 @@ export function getOrCreateIdempotencyKey(
     const key = generateIdempotencyKey(operation, identifier);
     idempotencyCache.set(operation, identifier, key);
     
-    console.log(`[Idempotency] Generated new key for ${operation}:${identifier}`);
+    console.debug(`[Idempotency] Generated new key for ${operation}:${identifier}`);
     return key;
 }
 
