@@ -1,4 +1,5 @@
 import React, { useMemo, useCallback, useState, useRef, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useTree } from '@headless-tree/react';
 import {
     selectionFeature,
@@ -47,6 +48,7 @@ const getIcon = (name: string | undefined, isDir: boolean, expanded: boolean) =>
 };
 
 export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, activeFile, roots, refreshKey }) => {
+    const { t } = useTranslation();
 
     // Use Ref for cache to persist data across renders.
     const itemCache = React.useRef(new Map<string, NodeData>());
@@ -643,7 +645,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                 <Search className="w-3 h-3 text-[var(--fg-tertiary)]" />
                 <input
                     type="text"
-                    placeholder="Search..."
+                    placeholder={t('fileTree.searchPlaceholder')}
                     className="bg-transparent border-none outline-none text-xs w-full text-[var(--fg-primary)] placeholder-[var(--fg-tertiary)]"
                     onChange={(e) => tree.setSearch(e.target.value)}
                 />
@@ -760,7 +762,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                                             // Small delay to allow click events to fire first
                                             setTimeout(() => setNewItem(null), 150);
                                         }}
-                                        placeholder={newItem.isDir ? 'folder name...' : 'file name...'}
+                                        placeholder={newItem.isDir ? t('fileTree.folderNamePlaceholder') : t('fileTree.fileNamePlaceholder')}
                                         className="bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded px-1 text-xs text-[var(--fg-primary)] outline-none flex-1 min-w-0"
                                         autoFocus
                                     />

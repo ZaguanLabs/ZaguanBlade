@@ -1,5 +1,6 @@
 'use client';
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { emit } from '@tauri-apps/api/event';
 import { getVersion } from '@tauri-apps/api/app';
@@ -197,6 +198,7 @@ interface SettingsModalProps {
 type SettingsSection = 'account' | 'localai' | 'storage' | 'context' | 'privacy' | 'editor' | 'about';
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, workspacePath, onRefreshModels }) => {
+    const { t } = useTranslation();
     const [settings, setSettings] = useState<SettingsState>(defaultSettings);
     const [activeSection, setActiveSection] = useState<SettingsSection>('account');
     const [hasChanges, setHasChanges] = useState(false);
@@ -478,6 +480,7 @@ interface LocalAiSettingsProps {
 }
 
 const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, onRefreshModels }) => {
+    const { t } = useTranslation();
     const [isTestingOllama, setIsTestingOllama] = useState(false);
     const [ollamaTestResult, setOllamaTestResult] = useState<'idle' | 'success' | 'error'>('idle');
     const [ollamaTestMessage, setOllamaTestMessage] = useState<string | null>(null);
@@ -551,9 +554,9 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
     return (
         <div className="space-y-6">
             <div>
-                <h3 className="text-base font-semibold text-[var(--fg-primary)] mb-1">Local AI</h3>
+                <h3 className="text-base font-semibold text-[var(--fg-primary)] mb-1">{t('settings.localAi.title')}</h3>
                 <p className="text-sm text-[var(--fg-tertiary)] mb-4">
-                    Configure local AI providers running on your machine or network.
+                    {t('settings.localAi.description')}
                 </p>
             </div>
 
@@ -561,9 +564,9 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
             <div className="border border-[var(--border-default)] p-4 space-y-4 bg-[color-mix(in_srgb,var(--bg-panel)_88%,var(--bg-editor))]">
                 <div className="flex items-center justify-between">
                     <div>
-                        <div className="text-sm font-medium text-[var(--fg-primary)]">Ollama</div>
+                        <div className="text-sm font-medium text-[var(--fg-primary)]">{t('settings.ollama.title')}</div>
                         <div className="text-xs text-[var(--fg-tertiary)]">
-                            Enable and connect to an Ollama server.
+                            {t('settings.ollama.description')}
                         </div>
                     </div>
                     <Toggle
@@ -573,12 +576,12 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                 </div>
 
                 <div className="space-y-2">
-                    <label className="text-xs text-[var(--fg-secondary)] block">Server URL</label>
+                    <label className="text-xs text-[var(--fg-secondary)] block">{t('settings.serverUrl')}</label>
                     <input
                         type="text"
                         value={settings.ollamaUrl}
                         onChange={(e) => onChange({ ollamaUrl: e.target.value })}
-                        placeholder="http://localhost:11434"
+                        placeholder={t('settings.ollama.urlPlaceholder')}
                         disabled={!settings.ollamaEnabled}
                         className="w-full bg-[var(--bg-surface)] border border-[var(--border-default)] py-2 px-3 text-sm text-[var(--fg-primary)] focus:outline-none focus:border-[var(--accent-primary)] placeholder-[var(--fg-tertiary)] disabled:opacity-60"
                     />
@@ -591,7 +594,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                         disabled={!settings.ollamaEnabled || isTestingOllama}
                         className="px-3 py-1.5 text-xs font-medium border border-[var(--border-default)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                        {isTestingOllama ? 'Testing...' : 'Test Connection'}
+                        {isTestingOllama ? t('settings.testing') : t('settings.testConnection')}
                     </button>
                     <button
                         type="button"
@@ -599,7 +602,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                         disabled={!settings.ollamaEnabled || isRefreshingOllama}
                         className="px-3 py-1.5 text-xs font-medium border border-[var(--border-default)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                        {isRefreshingOllama ? 'Refreshing...' : 'Refresh Models'}
+                        {isRefreshingOllama ? t('settings.refreshing') : t('settings.refreshModels')}
                     </button>
                     {ollamaTestMessage && (
                         <span
@@ -618,9 +621,9 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
             <div className="border border-[var(--border-default)] p-4 space-y-4 bg-[color-mix(in_srgb,var(--bg-panel)_88%,var(--bg-editor))]">
                 <div className="flex items-center justify-between">
                     <div>
-                        <div className="text-sm font-medium text-[var(--fg-primary)]">Ollama Cloud</div>
+                        <div className="text-sm font-medium text-[var(--fg-primary)]">{t('settings.ollamaCloud.title')}</div>
                         <div className="text-xs text-[var(--fg-tertiary)]">
-                            Enable Ollama Cloud models (requires API key for cloud models ending with :cloud).
+                            {t('settings.ollamaCloud.description')}
                         </div>
                     </div>
                     <Toggle
@@ -630,17 +633,17 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                 </div>
 
                 <div className="space-y-2">
-                    <label className="text-xs text-[var(--fg-secondary)] block">API Key</label>
+                    <label className="text-xs text-[var(--fg-secondary)] block">{t('settings.apiKey')}</label>
                     <input
                         type="password"
                         value={settings.ollamaCloudApiKey}
                         onChange={(e) => onChange({ ollamaCloudApiKey: e.target.value })}
-                        placeholder="sk-..."
+                        placeholder={t('settings.apiKeyPlaceholder')}
                         disabled={!settings.ollamaCloudEnabled}
                         className="w-full bg-[var(--bg-surface)] border border-[var(--border-default)] py-2 px-3 text-sm text-[var(--fg-primary)] focus:outline-none focus:border-[var(--accent-primary)] placeholder-[var(--fg-tertiary)] disabled:opacity-60"
                     />
                     <p className="text-xs text-[var(--fg-tertiary)] mt-1">
-                        Required for cloud models (models ending with :cloud). Get your key from ollama.com.
+                        {t('settings.ollamaCloud.apiKeyHelp')}
                     </p>
                 </div>
             </div>
@@ -649,9 +652,9 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
             <div className="border border-[var(--border-default)] p-4 space-y-4 bg-[color-mix(in_srgb,var(--bg-panel)_88%,var(--bg-editor))]">
                 <div className="flex items-center justify-between">
                     <div>
-                        <div className="text-sm font-medium text-[var(--fg-primary)]">OpenAI-compatible Server</div>
+                        <div className="text-sm font-medium text-[var(--fg-primary)]">{t('settings.openaiCompat.title')}</div>
                         <div className="text-xs text-[var(--fg-tertiary)]">
-                            Connect to OpenAI-compatible servers (llama.cpp, LocalAI, vLLM, etc.)
+                            {t('settings.openaiCompat.description')}
                         </div>
                     </div>
                     <Toggle
@@ -661,17 +664,17 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                 </div>
 
                 <div className="space-y-2">
-                    <label className="text-xs text-[var(--fg-secondary)] block">Server URL</label>
+                    <label className="text-xs text-[var(--fg-secondary)] block">{t('settings.serverUrl')}</label>
                     <input
                         type="text"
                         value={settings.openaiCompatUrl}
                         onChange={(e) => onChange({ openaiCompatUrl: e.target.value })}
-                        placeholder="http://localhost:8080/v1"
+                        placeholder={t('settings.openaiCompat.urlPlaceholder')}
                         disabled={!settings.openaiCompatEnabled}
                         className="w-full bg-[var(--bg-surface)] border border-[var(--border-default)] py-2 px-3 text-sm text-[var(--fg-primary)] focus:outline-none focus:border-[var(--accent-primary)] placeholder-[var(--fg-tertiary)] disabled:opacity-60"
                     />
                     <p className="text-xs text-[var(--fg-tertiary)] mt-1">
-                        No API key required - these are keyless local servers.
+                        {t('settings.openaiCompat.apiKeyHelp')}
                     </p>
                 </div>
 
@@ -682,7 +685,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                         disabled={!settings.openaiCompatEnabled || isTestingOpenAI}
                         className="px-3 py-1.5 text-xs font-medium border border-[var(--border-default)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                        {isTestingOpenAI ? 'Testing...' : 'Test Connection'}
+                        {isTestingOpenAI ? t('settings.testing') : t('settings.testConnection')}
                     </button>
                     <button
                         type="button"
@@ -690,7 +693,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                         disabled={!settings.openaiCompatEnabled || isRefreshingOpenAI}
                         className="px-3 py-1.5 text-xs font-medium border border-[var(--border-default)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                        {isRefreshingOpenAI ? 'Refreshing...' : 'Refresh Models'}
+                        {isRefreshingOpenAI ? t('settings.refreshing') : t('settings.refreshModels')}
                     </button>
                     {openaiTestMessage && (
                         <span
@@ -714,12 +717,13 @@ interface StorageSettingsProps {
 }
 
 const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange }) => {
+    const { t } = useTranslation();
     return (
         <div className="space-y-6">
             <div>
-                <h3 className="text-base font-semibold text-[var(--fg-primary)] mb-1">Storage Mode</h3>
+                <h3 className="text-base font-semibold text-[var(--fg-primary)] mb-1">{t('settings.storage.title')}</h3>
                 <p className="text-sm text-[var(--fg-tertiary)] mb-4">
-                    Choose where your conversation history is stored.
+                    {t('settings.storage.description')}
                 </p>
 
                 <div className="grid grid-cols-2 gap-4">
@@ -736,22 +740,22 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
                                 <HardDrive className={`w-5 h-5 ${settings.mode === 'local' ? 'text-[var(--accent-primary)]' : 'text-[var(--fg-secondary)]'}`} />
                             </div>
                             <div>
-                                <div className="font-medium text-[var(--fg-primary)]">Local Storage</div>
-                                <div className="text-xs text-[var(--fg-tertiary)]">Maximum privacy</div>
+                                <div className="font-medium text-[var(--fg-primary)]">{t('settings.storage.local')}</div>
+                                <div className="text-xs text-[var(--fg-tertiary)]">{t('settings.storage.localSubtitle')}</div>
                             </div>
                         </div>
                         <ul className="text-xs text-[var(--fg-secondary)] space-y-1">
                             <li className="flex items-center gap-1.5">
                                 <ChevronRight className="w-3 h-3 text-[var(--accent-primary)]" />
-                                Code stays on your machine
+                                {t('settings.storage.localBullet1')}
                             </li>
                             <li className="flex items-center gap-1.5">
                                 <ChevronRight className="w-3 h-3 text-[var(--accent-primary)]" />
-                                Privacy secured
+                                {t('settings.storage.localBullet2')}
                             </li>
                             <li className="flex items-center gap-1.5">
                                 <ChevronRight className="w-3 h-3 text-[var(--accent-primary)]" />
-                                Higher network latency
+                                {t('settings.storage.localBullet3')}
                             </li>
                         </ul>
                         {settings.mode === 'local' && (
@@ -772,22 +776,22 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
                                 <Server className={`w-5 h-5 ${settings.mode === 'server' ? 'text-[var(--accent-primary)]' : 'text-[var(--fg-secondary)]'}`} />
                             </div>
                             <div>
-                                <div className="font-medium text-[var(--fg-primary)]">Server Storage</div>
-                                <div className="text-xs text-[var(--fg-tertiary)]">Maximum performance</div>
+                                <div className="font-medium text-[var(--fg-primary)]">{t('settings.storage.server')}</div>
+                                <div className="text-xs text-[var(--fg-tertiary)]">{t('settings.storage.serverSubtitle')}</div>
                             </div>
                         </div>
                         <ul className="text-xs text-[var(--fg-secondary)] space-y-1">
                             <li className="flex items-center gap-1.5">
                                 <ChevronRight className="w-3 h-3 text-[var(--accent-primary)]" />
-                                Faster context retrieval
+                                {t('settings.storage.serverBullet1')}
                             </li>
                             <li className="flex items-center gap-1.5">
                                 <ChevronRight className="w-3 h-3 text-[var(--accent-primary)]" />
-                                Cross-device sync
+                                {t('settings.storage.serverBullet2')}
                             </li>
                             <li className="flex items-center gap-1.5">
                                 <ChevronRight className="w-3 h-3 text-[var(--accent-primary)]" />
-                                Lower network latency
+                                {t('settings.storage.serverBullet3')}
                             </li>
                         </ul>
                         {settings.mode === 'server' && (
@@ -801,8 +805,8 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
                     <Info className="w-4 h-4 text-[var(--fg-tertiary)] shrink-0 mt-0.5" />
                     <p className="text-xs text-[var(--fg-tertiary)]">
                         {settings.mode === 'local'
-                            ? 'Your conversations are stored in the .zblade/ folder in your project. Code never leaves your machine.'
-                            : 'Your conversations are stored on Zaguán servers. This enables faster context retrieval and cross-device sync.'}
+                            ? t('settings.storage.localInfo')
+                            : t('settings.storage.serverInfo')}
                     </p>
                 </div>
             </div>
@@ -811,9 +815,9 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
             {settings.mode === 'local' && (
                 <div className="flex items-center justify-between py-3 border-t border-[var(--border-subtle)]">
                     <div>
-                        <div className="text-sm font-medium text-[var(--fg-primary)]">Sync Metadata</div>
+                        <div className="text-sm font-medium text-[var(--fg-primary)]">{t('settings.storage.syncMetadata')}</div>
                         <div className="text-xs text-[var(--fg-tertiary)]">
-                            Sync conversation titles and tags to server (no code)
+                            {t('settings.storage.syncMetadataDescription')}
                         </div>
                     </div>
                     <Toggle
@@ -827,9 +831,9 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
             <div className="border-t border-[var(--border-subtle)] pt-4">
                 <div className="flex items-center justify-between mb-3">
                     <div>
-                        <div className="text-sm font-medium text-[var(--fg-primary)]">Enable Cache</div>
+                        <div className="text-sm font-medium text-[var(--fg-primary)]">{t('settings.storage.enableCache')}</div>
                         <div className="text-xs text-[var(--fg-tertiary)]">
-                            Cache recent context for faster access
+                            {t('settings.storage.cacheDescription')}
                         </div>
                     </div>
                     <Toggle
@@ -841,7 +845,7 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
                 {settings.cache.enabled && (
                     <div className="mt-3">
                         <label className="text-xs text-[var(--fg-secondary)] mb-1 block">
-                            Max Cache Size: {settings.cache.maxSizeMb} MB
+                            {t('settings.storage.maxCacheSize', { size: settings.cache.maxSizeMb })}
                         </label>
                         <input
                             type="range"
@@ -871,19 +875,20 @@ interface ContextSettingsProps {
 }
 
 const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, allowGitIgnoredFiles, onAllowGitIgnoredFilesChange }) => {
+    const { t } = useTranslation();
     return (
         <div className="space-y-6">
             <div>
-                <h3 className="text-base font-semibold text-[var(--fg-primary)] mb-1">Context Settings</h3>
+                <h3 className="text-base font-semibold text-[var(--fg-primary)] mb-1">{t('settings.context.title')}</h3>
                 <p className="text-sm text-[var(--fg-tertiary)] mb-4">
-                    Configure how context is assembled and compressed.
+                    {t('settings.context.description')}
                 </p>
             </div>
 
             {/* Max Tokens */}
             <div>
                 <label className="text-sm font-medium text-[var(--fg-primary)] mb-2 block">
-                    Max Context Tokens: {settings.maxTokens.toLocaleString()}
+                    {t('settings.context.maxContextTokens', { count: settings.maxTokens })}
                 </label>
                 <input
                     type="range"
@@ -899,7 +904,7 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, a
                     <span>32K</span>
                 </div>
                 <p className="text-xs text-[var(--fg-tertiary)] mt-2">
-                    Higher values provide more context but increase latency and cost.
+                    {t('settings.context.tokenHelp')}
                 </p>
             </div>
 
@@ -907,9 +912,9 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, a
             <div className="border-t border-[var(--border-subtle)] pt-4">
                 <div className="flex items-center justify-between mb-3">
                     <div>
-                        <div className="text-sm font-medium text-[var(--fg-primary)]">Enable Compression</div>
+                        <div className="text-sm font-medium text-[var(--fg-primary)]">{t('settings.context.enableCompression')}</div>
                         <div className="text-xs text-[var(--fg-tertiary)]">
-                            Use AI to intelligently compress context
+                            {t('settings.context.compressionDescription')}
                         </div>
                     </div>
                     <Toggle
@@ -920,7 +925,7 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, a
 
                 {settings.compression.enabled && (
                     <div className="mt-4 space-y-2">
-                        <label className="text-xs text-[var(--fg-secondary)] block">Compression Model</label>
+                        <label className="text-xs text-[var(--fg-secondary)] block">{t('settings.context.compressionModel')}</label>
                         <div className="flex gap-3">
                             <button
                                 onClick={() => onChange({ compression: { ...settings.compression, model: 'remote' } })}
@@ -930,7 +935,7 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, a
                                     }`}
                             >
                                 <Cloud className="w-4 h-4 inline-block mr-2" />
-                                Remote (Faster)
+                                {t('settings.context.compressionRemote')}
                             </button>
                             <button
                                 onClick={() => onChange({ compression: { ...settings.compression, model: 'local' } })}
@@ -940,13 +945,13 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, a
                                     }`}
                             >
                                 <HardDrive className="w-4 h-4 inline-block mr-2" />
-                                Local (Private)
+                                {t('settings.context.compressionLocal')}
                             </button>
                         </div>
                         <p className="text-xs text-[var(--fg-tertiary)]">
                             {settings.compression.model === 'remote'
-                                ? 'Uses a fast cloud model for compression. Summaries are sent to server.'
-                                : 'Uses a local model for compression. Everything stays on your machine.'}
+                                ? t('settings.context.compressionRemoteHelp')
+                                : t('settings.context.compressionLocalHelp')}
                         </p>
                     </div>
                 )}
@@ -956,9 +961,9 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, a
             <div className="border-t border-[var(--border-subtle)] pt-4">
                 <div className="flex items-center justify-between">
                     <div>
-                        <div className="text-sm font-medium text-[var(--fg-primary)]">Allow .gitignored Files</div>
+                        <div className="text-sm font-medium text-[var(--fg-primary)]">{t('settings.context.allowGitignored')}</div>
                         <div className="text-xs text-[var(--fg-tertiary)]">
-                            Include files matched by .gitignore in context
+                            {t('settings.context.allowGitignoredDescription')}
                         </div>
                     </div>
                     <Toggle
@@ -968,8 +973,8 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, a
                 </div>
                 <p className="text-xs text-[var(--fg-tertiary)] mt-2">
                     {allowGitIgnoredFiles
-                        ? 'Gitignored files (e.g., build outputs, secrets) will be accessible to the AI.'
-                        : 'Gitignored files are hidden from the AI for security and relevance.'}
+                        ? t('settings.context.gitignoredEnabledHelp')
+                        : t('settings.context.gitignoredDisabledHelp')}
                 </p>
             </div>
         </div>
@@ -982,21 +987,22 @@ interface PrivacySettingsProps {
 }
 
 const PrivacySettings: React.FC<PrivacySettingsProps> = ({ settings, onChange }) => {
+    const { t } = useTranslation();
     return (
         <div className="space-y-6">
             <div>
-                <h3 className="text-base font-semibold text-[var(--fg-primary)] mb-1">Privacy</h3>
+                <h3 className="text-base font-semibold text-[var(--fg-primary)] mb-1">{t('settings.privacy.title')}</h3>
                 <p className="text-sm text-[var(--fg-tertiary)] mb-4">
-                    Control what data is shared.
+                    {t('settings.privacy.description')}
                 </p>
             </div>
 
             {/* Telemetry */}
             <div className="flex items-center justify-between py-3">
                 <div>
-                    <div className="text-sm font-medium text-[var(--fg-primary)]">Usage Telemetry</div>
+                    <div className="text-sm font-medium text-[var(--fg-primary)]">{t('settings.privacy.usageTelemetry')}</div>
                     <div className="text-xs text-[var(--fg-tertiary)]">
-                        We do not collect any telemetry data.
+                        {t('settings.privacy.noTelemetry')}
                     </div>
                 </div>
             </div>
@@ -1005,10 +1011,9 @@ const PrivacySettings: React.FC<PrivacySettingsProps> = ({ settings, onChange })
                 <div className="flex gap-3">
                     <Shield className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                     <div className="text-xs text-[var(--fg-tertiary)]">
-                        <p className="font-medium text-[var(--fg-secondary)] mb-1">Your code is never shared</p>
+                        <p className="font-medium text-[var(--fg-secondary)] mb-1">{t('settings.privacy.codeNeverShared')}</p>
                         <p>
-                            Telemetry only includes feature usage, performance metrics, and error reports.
-                            No code, file contents, or conversation data is ever collected.
+                            {t('settings.privacy.telemetryDetail')}
                         </p>
                     </div>
                 </div>
@@ -1023,12 +1028,13 @@ interface EditorSettingsProps {
 }
 
 const EditorSettings: React.FC<EditorSettingsProps> = ({ settings, onChange }) => {
+    const { t } = useTranslation();
     return (
         <div className="space-y-6">
             <div>
-                <h3 className="text-base font-semibold text-[var(--fg-primary)] mb-1">Editor</h3>
+                <h3 className="text-base font-semibold text-[var(--fg-primary)] mb-1">{t('settings.editorSection.title')}</h3>
                 <p className="text-sm text-[var(--fg-tertiary)] mb-4">
-                    Configure editor behavior.
+                    {t('settings.editorSection.description')}
                 </p>
             </div>
             {/* No settings for now */}
@@ -1037,6 +1043,7 @@ const EditorSettings: React.FC<EditorSettingsProps> = ({ settings, onChange }) =
 };
 
 const AboutSettings: React.FC = () => {
+    const { t } = useTranslation();
     const [version, setVersion] = useState('dev');
 
     useEffect(() => {
@@ -1069,35 +1076,35 @@ const AboutSettings: React.FC = () => {
                         draggable={false}
                     />
                     <div>
-                        <div className="text-lg font-semibold text-[var(--fg-primary)]">Zaguán Blade</div>
-                        <div className="text-sm text-[var(--fg-secondary)]">AI-native code editor</div>
-                        <div className="text-xs text-[var(--fg-tertiary)] mt-1">Version {version}</div>
+                        <div className="text-lg font-semibold text-[var(--fg-primary)]">{t('settings.aboutSection.appName')}</div>
+                        <div className="text-sm text-[var(--fg-secondary)]">{t('settings.aboutSection.appTagline')}</div>
+                        <div className="text-xs text-[var(--fg-tertiary)] mt-1">{t('settings.aboutSection.version', { version })}</div>
                     </div>
                 </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="border border-[var(--border-default)] p-3 bg-[var(--bg-surface)]">
-                    <div className="text-[10px] uppercase tracking-wider text-[var(--fg-tertiary)] mb-1">Runtime</div>
-                    <div className="text-sm text-[var(--fg-primary)]">Tauri Desktop</div>
+                    <div className="text-[10px] uppercase tracking-wider text-[var(--fg-tertiary)] mb-1">{t('settings.aboutSection.runtime')}</div>
+                    <div className="text-sm text-[var(--fg-primary)]">{t('settings.aboutSection.runtimeValue')}</div>
                 </div>
                 <div className="border border-[var(--border-default)] p-3 bg-[var(--bg-surface)]">
-                    <div className="text-[10px] uppercase tracking-wider text-[var(--fg-tertiary)] mb-1">Engine</div>
-                    <div className="text-sm text-[var(--fg-primary)]">React + CodeMirror 6</div>
+                    <div className="text-[10px] uppercase tracking-wider text-[var(--fg-tertiary)] mb-1">{t('settings.aboutSection.engine')}</div>
+                    <div className="text-sm text-[var(--fg-primary)]">{t('settings.aboutSection.engineValue')}</div>
                 </div>
                 <div className="border border-[var(--border-default)] p-3 bg-[var(--bg-surface)]">
-                    <div className="text-[10px] uppercase tracking-wider text-[var(--fg-tertiary)] mb-1">Mode</div>
-                    <div className="text-sm text-[var(--fg-primary)]">Local-first workflow</div>
+                    <div className="text-[10px] uppercase tracking-wider text-[var(--fg-tertiary)] mb-1">{t('settings.aboutSection.mode')}</div>
+                    <div className="text-sm text-[var(--fg-primary)]">{t('settings.aboutSection.modeValue')}</div>
                 </div>
             </div>
 
             <div className="border border-[var(--border-default)] p-4 bg-[var(--bg-surface)] space-y-3">
-                <div className="text-sm font-medium text-[var(--fg-primary)]">Tidbits</div>
+                <div className="text-sm font-medium text-[var(--fg-primary)]">{t('settings.aboutSection.tidbits')}</div>
                 <ul className="space-y-2 text-sm text-[var(--fg-secondary)]">
                     <li className="flex items-start gap-2">
                         <span className="w-1.5 h-1.5 mt-2 bg-[var(--accent-primary)]" />
                         <span>
-                            Website:{' '}
+                            {t('settings.aboutSection.website')}:{' '}
                             <a href="https://zblade.dev/" target="_blank" rel="noreferrer" className="text-[var(--accent-primary)] hover:brightness-110">
                                 zblade.dev
                             </a>
@@ -1106,7 +1113,7 @@ const AboutSettings: React.FC = () => {
                     <li className="flex items-start gap-2">
                         <span className="w-1.5 h-1.5 mt-2 bg-[var(--accent-primary)]" />
                         <span>
-                            GitHub:{' '}
+                            {t('settings.aboutSection.github')}:{' '}
                             <a href="https://github.com/ZaguanLabs/ZaguanBlade" target="_blank" rel="noreferrer" className="text-[var(--accent-primary)] hover:brightness-110">
                                 ZaguanLabs/ZaguanBlade
                             </a>
@@ -1115,7 +1122,7 @@ const AboutSettings: React.FC = () => {
                     <li className="flex items-start gap-2">
                         <span className="w-1.5 h-1.5 mt-2 bg-[var(--accent-primary)]" />
                         <span>
-                            Support:{' '}
+                            {t('settings.aboutSection.support')}:{' '}
                             <a href="https://github.com/ZaguanLabs/ZaguanBlade/issues" target="_blank" rel="noreferrer" className="text-[var(--accent-primary)] hover:brightness-110">
                                 GitHub Issues
                             </a>
@@ -1123,7 +1130,7 @@ const AboutSettings: React.FC = () => {
                     </li>
                 </ul>
                 <p className="text-xs text-[var(--fg-tertiary)] pt-1 border-t border-[var(--border-subtle)]">
-                    PRs and suggestions are welcome.
+                    {t('settings.aboutSection.prsWelcome')}
                 </p>
             </div>
         </div>
@@ -1158,14 +1165,15 @@ interface AccountSettingsProps {
 }
 
 const AccountSettings: React.FC<AccountSettingsProps> = ({ settings, onChange }) => {
+    const { t } = useTranslation();
     const [showKey, setShowKey] = useState(false);
 
     return (
         <div className="space-y-6">
             <div>
-                <h3 className="text-base font-semibold text-[var(--fg-primary)] mb-1">Account & API</h3>
+                <h3 className="text-base font-semibold text-[var(--fg-primary)] mb-1">{t('settings.account.title')}</h3>
                 <p className="text-sm text-[var(--fg-tertiary)] mb-4">
-                    Manage your Zaguán Blade connection and subscription.
+                    {t('settings.account.description')}
                 </p>
             </div>
 
@@ -1180,12 +1188,12 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ settings, onChange })
                     </div>
                     <div className="flex-1">
                         <h4 className="font-medium text-[var(--fg-primary)] mb-1">
-                            {settings.apiKey ? 'Active Subscription' : 'Zaguán Blade Pro'}
+                            {settings.apiKey ? t('settings.account.activeSubscription') : t('settings.account.zaguanPro')}
                         </h4>
                         <p className="text-sm text-[var(--fg-secondary)] mb-3">
                             {settings.apiKey
-                                ? 'Your subscription is active. AI features are enabled.'
-                                : 'You need an active subscription to use AI features.'}
+                                ? t('settings.account.subscriptionActive')
+                                : t('settings.account.subscriptionNeeded')}
                         </p>
                         <a
                             href={settings.apiKey ? "https://zaguanai.com/dashboard" : "https://zaguanai.com/pricing"}
@@ -1193,7 +1201,7 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ settings, onChange })
                             rel="noreferrer"
                             className="text-sm text-[var(--accent-primary)] hover:brightness-110 font-medium"
                         >
-                            {settings.apiKey ? "Manage Subscription →" : "Get Subscription →"}
+                            {settings.apiKey ? t('settings.account.manageSubscription') : t('settings.account.getSubscription')}
                         </a>
                     </div>
                 </div>
@@ -1201,7 +1209,7 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ settings, onChange })
 
             <div className="space-y-2">
                 <label className="text-sm font-medium text-[var(--fg-primary)] block">
-                    API Key
+                    {t('settings.apiKey')}
                 </label>
                 <div className="flex gap-2">
                     <div className="relative flex-1">
@@ -1209,7 +1217,7 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ settings, onChange })
                             type={showKey ? 'text' : 'password'}
                             value={settings.apiKey}
                             onChange={(e) => onChange({ apiKey: e.target.value })}
-                            placeholder="sk-..."
+                            placeholder={t('settings.apiKeyPlaceholder')}
                             className="w-full bg-[var(--bg-surface)] border border-[var(--border-default)] py-2 pl-3 pr-10 text-sm text-[var(--fg-primary)] focus:outline-none focus:border-[var(--accent-primary)] placeholder-[var(--fg-tertiary)]"
                         />
                         <button

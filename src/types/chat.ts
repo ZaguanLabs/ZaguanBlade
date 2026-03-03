@@ -1,7 +1,5 @@
 import { TodoItem } from './events';
 
-export type ChatRole = 'User' | 'Assistant' | 'System' | 'Tool';
-
 export interface ChatImage {
     data: string;
     mime_type: string;
@@ -91,12 +89,6 @@ export interface ToolCall {
     };
     status?: 'pending' | 'executing' | 'complete' | 'error' | 'skipped';
     result?: string;
-}
-
-export interface ChatState {
-    messages: ChatMessage[];
-    loading: boolean;
-    error: string | null;
 }
 
 export interface ModelInfo {

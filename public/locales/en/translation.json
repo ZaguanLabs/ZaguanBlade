@@ -44,7 +44,12 @@
     "tabSize": "Tab Size",
     "indentation": "Indentation",
     "spaces": "Spaces",
-    "tabs": "Tabs"
+    "tabs": "Tabs",
+    "placeholder": "Start typing or paste code here...",
+    "toggleEditView": "Toggle Edit/View Mode (Ctrl+E)",
+    "untitled": "Untitled.md",
+    "editing": "Editing",
+    "viewing": "Viewing"
   },
   "chat": {
     "title": "AI Chat",
@@ -62,7 +67,9 @@
     "modelSelection": "Select Model",
     "attachFile": "Attach File",
     "captureScreenshot": "Capture Screenshot",
-    "screenshotShortcut": "Ctrl+Shift+S"
+    "screenshotShortcut": "Ctrl+Shift+S",
+    "imageNoSubscription": "Image support requires a subscription. Go to Settings.",
+    "imageNotSupported": "GLM models do not support image attachments. Please select a different model."
   },
   "fileTree": {
     "title": "Explorer",
@@ -80,7 +87,10 @@
     "duplicate": "Duplicate",
     "reveal": "Reveal in File Manager",
     "copyPath": "Copy Path",
-    "copyRelativePath": "Copy Relative Path"
+    "copyRelativePath": "Copy Relative Path",
+    "searchPlaceholder": "Search...",
+    "folderNamePlaceholder": "folder name...",
+    "fileNamePlaceholder": "file name..."
   },
   "terminal": {
     "title": "Terminal",
@@ -102,7 +112,11 @@
     "pinTab": "Pin Tab",
     "unpinTab": "Unpin Tab",
     "splitRight": "Split Right",
-    "splitDown": "Split Down"
+    "splitDown": "Split Down",
+    "aiEdited": "AI edited this file",
+    "aiEditedUnread": "AI edited this file (unread)",
+    "aiPendingReview": "AI edit pending review",
+    "aiPendingReviewUnread": "AI edit pending review (unread)"
   },
   "diff": {
     "title": "Diff View",
@@ -157,10 +171,32 @@
     "formatOnSave": "Format on Save",
     "aiProvider": "AI Provider",
     "apiKey": "API Key",
+    "apiKeyPlaceholder": "sk-...",
     "model": "Model",
     "temperature": "Temperature",
     "maxTokens": "Max Tokens",
     "systemPrompt": "System Prompt",
+    "serverUrl": "Server URL",
+    "testConnection": "Test Connection",
+    "testing": "Testing...",
+    "refreshModels": "Refresh Models",
+    "refreshing": "Refreshing...",
+    "ollama": {
+      "title": "Ollama (Local)",
+      "description": "Enable local AI model support through Ollama.",
+      "urlPlaceholder": "http://localhost:11434"
+    },
+    "ollamaCloud": {
+      "title": "Ollama Cloud",
+      "description": "Enable Ollama Cloud models (requires API key for cloud models ending with :cloud).",
+      "apiKeyHelp": "Required for cloud models (models ending with :cloud). Get your key from ollama.com."
+    },
+    "openaiCompat": {
+      "title": "OpenAI-compatible Server",
+      "description": "Connect to OpenAI-compatible servers (llama.cpp, LocalAI, vLLM, etc.)",
+      "urlPlaceholder": "http://localhost:8080/v1",
+      "apiKeyHelp": "No API key required - these are keyless local servers."
+    },
     "screenshot": {
       "title": "Screenshot Capture",
       "method": "Capture Method",
@@ -173,10 +209,106 @@
       "qualityLow": "Low (smaller file, faster upload)",
       "autoCleanup": "Auto-cleanup temp files",
       "customToolPath": "Custom Tool Path"
+    },
+    "localAi": {
+      "title": "Local AI",
+      "description": "Configure local AI providers running on your machine or network."
+    },
+    "storage": {
+      "title": "Storage Mode",
+      "description": "Choose where your conversation history is stored.",
+      "local": "Local Storage",
+      "localSubtitle": "Maximum privacy",
+      "localBullet1": "Code stays on your machine",
+      "localBullet2": "Privacy secured",
+      "localBullet3": "Higher network latency",
+      "server": "Server Storage",
+      "serverSubtitle": "Maximum performance",
+      "serverBullet1": "Faster context retrieval",
+      "serverBullet2": "Cross-device sync",
+      "serverBullet3": "Lower network latency",
+      "localInfo": "Your conversations are stored in the .zblade/ folder in your project. Code never leaves your machine.",
+      "serverInfo": "Your conversations are stored on Zaguán servers. This enables faster context retrieval and cross-device sync.",
+      "syncMetadata": "Sync Metadata",
+      "syncMetadataDescription": "Sync conversation titles and tags to server (no code)",
+      "enableCache": "Enable Cache",
+      "cacheDescription": "Cache recent context for faster access",
+      "maxCacheSize": "Max Cache Size: {size} MB"
+    },
+    "context": {
+      "title": "Context Settings",
+      "description": "Configure how context is assembled and compressed.",
+      "maxContextTokens": "Max Context Tokens: {count}",
+      "tokenRangeMin": "2K",
+      "tokenRangeMax": "32K",
+      "tokenHelp": "Higher values provide more context but increase latency and cost.",
+      "enableCompression": "Enable Compression",
+      "compressionDescription": "Use AI to intelligently compress context",
+      "compressionModel": "Compression Model",
+      "compressionRemote": "Remote (Faster)",
+      "compressionLocal": "Local (Private)",
+      "compressionRemoteHelp": "Uses a fast cloud model for compression. Summaries are sent to server.",
+      "compressionLocalHelp": "Uses a local model for compression. Everything stays on your machine.",
+      "allowGitignored": "Allow .gitignored Files",
+      "allowGitignoredDescription": "Include files matched by .gitignore in context",
+      "gitignoredEnabledHelp": "Gitignored files (e.g., build outputs, secrets) will be accessible to the AI.",
+      "gitignoredDisabledHelp": "Gitignored files are hidden from the AI for security and relevance."
+    },
+    "privacy": {
+      "title": "Privacy",
+      "description": "Control what data is shared.",
+      "usageTelemetry": "Usage Telemetry",
+      "noTelemetry": "We do not collect any telemetry data.",
+      "codeNeverShared": "Your code is never shared",
+      "telemetryDetail": "Telemetry only includes feature usage, performance metrics, and error reports. No code, file contents, or conversation data is ever collected."
+    },
+    "editorSection": {
+      "title": "Editor",
+      "description": "Configure editor behavior."
+    },
+    "aboutSection": {
+      "appName": "Zaguán Blade",
+      "appTagline": "AI-native code editor",
+      "version": "Version {version}",
+      "runtime": "Runtime",
+      "runtimeValue": "Tauri Desktop",
+      "engine": "Engine",
+      "engineValue": "React + CodeMirror 6",
+      "mode": "Mode",
+      "modeValue": "Local-first workflow",
+      "tidbits": "Tidbits",
+      "website": "Website",
+      "github": "GitHub",
+      "support": "Support",
+      "prsWelcome": "PRs and suggestions are welcome."
+    },
+    "account": {
+      "title": "Account & API",
+      "description": "Manage your Zaguán Blade connection and subscription.",
+      "activeSubscription": "Active Subscription",
+      "zaguanPro": "Zaguán Blade Pro",
+      "subscriptionActive": "Your subscription is active. AI features are enabled.",
+      "subscriptionNeeded": "You need an active subscription to use AI features.",
+      "manageSubscription": "Manage Subscription →",
+      "getSubscription": "Get Subscription →"
     }
+  },
+  "activityBar": {
+    "explorer": "Explorer",
+    "git": "Git",
+    "fileHistory": "File History",
+    "search": "Search",
+    "searchComingSoon": "Search (coming soon)",
+    "settings": "Settings"
+  },
+  "sidebar": {
+    "loadingGit": "Loading Git...",
+    "loadingHistory": "Loading History..."
   },
   "statusBar": {
     "branch": "Branch",
+    "noBranch": "no branch",
+    "saving": "Saving...",
     "changes": "{count} changes",
     "errors": "{count} errors",
     "warnings": "{count} warnings",
@@ -184,6 +316,13 @@
     "sync": "Sync",
     "extension": "Extension",
     "feedback": "Feedback"
+  },
+  "windowControls": {
+    "minimize": "Minimize",
+    "maximize": "Maximize",
+    "restore": "Restore",
+    "close": "Close",
+    "exitFullscreen": "(F11 to exit)"
   },
   "notifications": {
     "title": "Notifications",
@@ -194,6 +333,10 @@
     "warning": "Warning",
     "error": "Error",
     "success": "Success"
+  },
+  "toolCall": {
+    "stopCommand": "Stop command",
+    "copyCommand": "Copy command"
   },
   "search": {
     "title": "Search",
@@ -216,6 +359,7 @@
     "stagedChanges": "Staged Changes",
     "commit": "Commit",
     "commitMessage": "Commit message",
+    "commitMessagePlaceholder": "Commit message...",
     "push": "Push",
     "pull": "Pull",
     "fetch": "Fetch",
@@ -231,7 +375,8 @@
     "viewDiff": "View Diff",
     "history": "History",
     "noChanges": "No changes",
-    "noRepository": "No repository found"
+    "noRepository": "No repository found",
+    "generateCommitMessage": "Generate commit message with AI"
   },
   "errors": {
     "fileNotFound": "File not found: {path}",
@@ -338,7 +483,11 @@
     "permissionDenied": "Screen recording permission denied",
     "attachmentAdded": "Screenshot attached",
     "attachmentRemoved": "Screenshot removed",
-    "multipleAttachments": "{count} screenshots attached"
+    "multipleAttachments": "{count} screenshots attached",
+    "windowPickerTitle": "Capture Window",
+    "regionPickerTitle": "Select Window for Region Capture",
+    "windowPickerSubtitle": "Select a window to capture",
+    "regionPickerSubtitle": "Pick a window, then select a region to crop"
   },
   "workspace": {
     "title": "Workspace",

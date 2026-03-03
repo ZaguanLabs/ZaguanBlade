@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Minus, Square, X, Maximize2, ChevronDown } from 'lucide-react';
 import zbladeAppIcon from '../assets/zblade-app-icon.png';
@@ -14,6 +15,7 @@ import zbladeAppIcon from '../assets/zblade-app-icon.png';
  * - Premium micro-animations
  */
 export const TitleBar: React.FC = () => {
+    const { t } = useTranslation();
     const [isMaximized, setIsMaximized] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [fileMenuOpen, setFileMenuOpen] = useState(false);
@@ -223,7 +225,7 @@ export const TitleBar: React.FC = () => {
                     <button
                         onClick={handleMinimize}
                         className="window-control-btn h-7 w-7 rounded-md flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[var(--bg-surface)] hover:text-[var(--fg-secondary)] active:scale-95 transition-all duration-150"
-                        title="Minimize"
+                        title={t('windowControls.minimize')}
                     >
                         <Minus className="w-3.5 h-3.5" strokeWidth={1.8} />
                     </button>
@@ -232,7 +234,7 @@ export const TitleBar: React.FC = () => {
                     <button
                         onClick={handleMaximizeRestore}
                         className="window-control-btn h-7 w-7 rounded-md flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[var(--bg-surface)] hover:text-[var(--fg-secondary)] active:scale-95 transition-all duration-150"
-                        title={isMaximized ? "Restore" : "Maximize"}
+                        title={isMaximized ? t('windowControls.restore') : t('windowControls.maximize')}
                     >
                         {isMaximized ? (
                             <Maximize2 className="w-3 h-3" strokeWidth={1.8} />
@@ -245,7 +247,7 @@ export const TitleBar: React.FC = () => {
                     <button
                         onClick={handleClose}
                         className="window-control-btn h-7 w-7 rounded-md flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[#c42b1c] hover:text-white active:scale-95 transition-all duration-150"
-                        title="Close"
+                        title={t('windowControls.close')}
                     >
                         <X className="w-3.5 h-3.5" strokeWidth={1.8} />
                     </button>

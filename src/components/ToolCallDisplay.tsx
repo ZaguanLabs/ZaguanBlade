@@ -1,5 +1,6 @@
 'use client';
 import React, { useState, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ToolCall } from '../types/chat';
 import { Zap, CheckCircle2, XCircle, Loader2, Copy, Check, ChevronRight, ChevronDown, RotateCcw, StopCircle } from 'lucide-react';
 
@@ -18,6 +19,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     onStopCommand,
     onUndo
 }) => {
+    const { t } = useTranslation();
     const [copied, setCopied] = useState(false);
     const [isExpanded, setIsExpanded] = useState(false);
     const isRunCommand = toolCall.function.name === 'run_command';
@@ -251,8 +253,8 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                                 onStopCommand();
                             }}
                             className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-red-500/40 bg-red-500/10 text-red-400 transition-colors hover:bg-red-500/20"
-                            title="Stop command"
-                            aria-label="Stop command"
+                            title={t('toolCall.stopCommand')}
+                            aria-label={t('toolCall.stopCommand')}
                         >
                             <StopCircle className="h-3.5 w-3.5" />
                         </button>
@@ -278,7 +280,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                         <button
                             onClick={() => handleCopyCommand(commandText)}
                             className="shrink-0 p-1 rounded hover:bg-zinc-800 transition-colors group/copy"
-                            title="Copy command"
+                            title={t('toolCall.copyCommand')}
                         >
                             {copied ? (
                                 <Check className="w-3.5 h-3.5 text-emerald-400" />

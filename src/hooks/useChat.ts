@@ -167,8 +167,15 @@ export function useChat() {
             let updated = prev;
             let changed = false;
 
+            // Build id→index lookup once per flush instead of findIndex per pending update
+            const idxById = new Map<string, number>();
+            for (let i = 0; i < prev.length; i++) {
+                const mid = prev[i].id;
+                if (mid) idxById.set(mid, i);
+            }
+
             pending.forEach((update, id) => {
-                const idx = updated.findIndex(m => m.id === id);
+                const idx = idxById.get(id) ?? -1;
                 if (idx !== -1) {
                     // Update existing message
                     const msg = updated[idx];

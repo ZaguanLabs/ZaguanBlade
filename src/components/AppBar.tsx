@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Minus, Square, X, Maximize2, ChevronDown, FileText } from 'lucide-react';
 import zbladeAppIcon from '../assets/zblade-app-icon.png';
@@ -41,6 +42,7 @@ export const AppBar: React.FC<AppBarProps> = ({
     const activeTabRef = useRef<HTMLDivElement>(null);
     const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
     const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
+    const { t } = useTranslation();
     const appWindow = getCurrentWindow();
 
     useEffect(() => {
@@ -296,14 +298,14 @@ export const AppBar: React.FC<AppBarProps> = ({
                                     <span
                                         className={`w-1.5 h-1.5 rounded-full shrink-0 ${tab.hasUnreadAiEdit ? 'animate-pulse' : ''}`}
                                         style={{ backgroundColor: 'var(--accent-primary)' }}
-                                        title={tab.hasUnreadAiEdit ? 'AI edited this file (unread)' : 'AI edited this file'}
+                                        title={tab.hasUnreadAiEdit ? t('tabs.aiEditedUnread') : t('tabs.aiEdited')}
                                     />
                                 )}
                                 {tab.hasVirtualChanges && (
                                     <span
                                         className="w-1.5 h-1.5 rounded-full shrink-0 animate-pulse"
                                         style={{ backgroundColor: 'var(--accent-warning)' }}
-                                        title={tab.hasUnreadAiEdit ? 'AI edit pending review (unread)' : 'AI edit pending review'}
+                                        title={tab.hasUnreadAiEdit ? t('tabs.aiPendingReviewUnread') : t('tabs.aiPendingReview')}
                                     />
                                 )}
                                 {tab.isDirty && !tab.hasVirtualChanges && (
@@ -343,7 +345,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                     </span>
                     {isFullscreen && (
                         <span className="text-[9px] opacity-40 ml-2" style={{ color: 'var(--fg-tertiary)' }}>
-                            (F11 to exit)
+                            {t('windowControls.exitFullscreen')}
                         </span>
                     )}
                 </div>
@@ -357,14 +359,14 @@ export const AppBar: React.FC<AppBarProps> = ({
                     <button
                         onClick={handleMinimize}
                         className="h-7 w-7 rounded-md flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[var(--bg-surface)] hover:text-[var(--fg-secondary)] active:scale-95 transition-all duration-150"
-                        title="Minimize"
+                        title={t('windowControls.minimize')}
                     >
                         <Minus className="w-3.5 h-3.5" strokeWidth={1.8} />
                     </button>
                     <button
                         onClick={handleMaximizeRestore}
                         className="h-7 w-7 rounded-md flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[var(--bg-surface)] hover:text-[var(--fg-secondary)] active:scale-95 transition-all duration-150"
-                        title={isMaximized ? 'Restore' : 'Maximize'}
+                        title={isMaximized ? t('windowControls.restore') : t('windowControls.maximize')}
                     >
                         {isMaximized ? (
                             <Maximize2 className="w-3 h-3" strokeWidth={1.8} />
@@ -375,7 +377,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                     <button
                         onClick={handleClose}
                         className="h-7 w-7 rounded-md flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[#c42b1c] hover:text-white active:scale-95 transition-all duration-150"
-                        title="Close"
+                        title={t('windowControls.close')}
                     >
                         <X className="w-3.5 h-3.5" strokeWidth={1.8} />
                     </button>

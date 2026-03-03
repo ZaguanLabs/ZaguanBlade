@@ -1,4 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { GitFileStatus, GitStatusSummary, CommitPreflightResult } from '../hooks/useGitStatus';
 import { Sparkles, GitCommit, Upload, ChevronDown, ChevronRight, Plus, Minus, RefreshCw, AlertTriangle } from 'lucide-react';
 import { GitGraph } from './GitGraph';
@@ -48,6 +49,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
     onGenerateCommitMessage,
     onCommitPreflight,
 }) => {
+    const { t } = useTranslation();
     const [commitMessage, setCommitMessage] = useState('');
     const [actionError, setActionError] = useState<string | null>(null);
     const [preflightWarning, setPreflightWarning] = useState<string | null>(null);
@@ -182,7 +184,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                         className="p-0.5 rounded hover:bg-[var(--bg-surface)] text-[var(--fg-tertiary)] hover:text-[var(--fg-primary)]"
                         onClick={() => runAction(`unstage-${file.path}`, () => onUnstageFile(file.path))}
                         disabled={busyAction === `unstage-${file.path}`}
-                        title="Unstage"
+                        title={t('git.unstage')}
                     >
                         <Minus className="w-3 h-3" />
                     </button>
@@ -191,7 +193,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                         className="p-0.5 rounded hover:bg-[var(--bg-surface)] text-[var(--fg-tertiary)] hover:text-[var(--fg-primary)]"
                         onClick={() => runAction(`stage-${file.path}`, () => onStageFile(file.path))}
                         disabled={busyAction === `stage-${file.path}`}
-                        title="Stage"
+                        title={t('git.stage')}
                     >
                         <Plus className="w-3 h-3" />
                     </button>
@@ -208,7 +210,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                 <button
                     onClick={() => runAction('refresh', async () => onRefresh())}
                     className="hover:text-[var(--fg-primary)] transition-colors"
-                    title="Refresh"
+                    title={t('fileTree.refresh')}
                 >
                     <RefreshCw className={`w-3 h-3 ${busyAction === 'refresh' ? 'animate-spin' : ''}`} />
                 </button>
@@ -244,7 +246,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                             {/* Commit message textarea */}
                             <textarea
                                 className="w-full min-h-[60px] bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg p-2.5 text-[11px] text-[var(--fg-primary)] placeholder-[var(--fg-secondary)] resize-none focus:outline-none focus:border-[var(--accent-primary)]/50 focus:ring-1 focus:ring-[var(--accent-primary)]/20 transition-all"
-                                placeholder="Commit message..."
+                                placeholder={t('git.commitMessagePlaceholder')}
                                 value={commitMessage}
                                 onChange={e => setCommitMessage(e.target.value)}
                             />
@@ -265,7 +267,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                             setCommitMessage(message);
                                         })
                                     }
-                                    title="Generate commit message with AI"
+                                    title={t('git.generateCommitMessage')}
                                 >
                                     <Sparkles className={`w-3 h-3 ${busyAction === 'generate-message' ? 'animate-pulse' : ''}`} />
                                     Generate

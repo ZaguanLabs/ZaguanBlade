@@ -16,50 +16,19 @@ import { StorageSetupModal } from './StorageSetupModal';
 import { useProjectState, type ProjectState } from '../hooks/useProjectState';
 import { useWarmup } from '../hooks/useWarmup';
 import { useGitStatus } from '../hooks/useGitStatus';
-import { EditorFacade, isTabsBackendAuthoritative } from '../services/editorFacade';
-import type { BladeEventEnvelope, EditorEvent, TabInfo } from '../types/blade';
+import { useTabManager, type Tab } from '../hooks/useTabManager';
+import { useResizeHandlers } from '../hooks/useResizeHandlers';
+import { useLayoutEvents } from '../hooks/useLayoutEvents';
+import type { BackendSettings } from '../types/settings';
 const ChatPanel = React.lazy(() => import('./ChatPanel').then(module => ({ default: module.ChatPanel })));
 const GitPanel = React.lazy(() => import('./GitPanel').then(module => ({ default: module.GitPanel })));
 const FileHistoryPanel = React.lazy(() => import('./FileHistoryPanel').then(module => ({ default: module.FileHistoryPanel })));
 const SettingsModal = React.lazy(() => import('./SettingsModal').then(module => ({ default: module.SettingsModal })));
 const ProtocolExplorer = React.lazy(() => import('./dev/ProtocolExplorer').then(module => ({ default: module.ProtocolExplorer })));
-import type { BackendSettings } from '../types/settings';
-
-// Helper to convert backend TabInfo to frontend Tab
-function tabInfoToTab(info: TabInfo): Tab {
-    const isEphemeral = typeof info.tab_type === 'object' && info.tab_type.type === 'Ephemeral';
-    return {
-        id: info.id,
-        title: info.title,
-        type: isEphemeral ? 'ephemeral' : 'file',
-        path: info.path ?? undefined,
-        content: isEphemeral && 'data' in info.tab_type ? (info.tab_type as any).data.content : undefined,
-        suggestedName: isEphemeral && 'data' in info.tab_type ? (info.tab_type as any).data.suggested_name : undefined,
-    };
-}
-
-interface Tab {
-    id: string;
-    title: string;
-    type: 'file' | 'ephemeral';
-    path?: string;
-    content?: string;
-    suggestedName?: string;
-    highlightLines?: { startLine: number; endLine: number };
-}
 
 const AppLayoutInner: React.FC = () => {
     const { t } = useTranslation();
     const appWindow = getCurrentWindow();
-    const [activeTabId, setActiveTabId] = useState<string | null>(null);
-    const [tabs, setTabs] = useState<Tab[]>([]);
-    const [aiEditedFilePaths, setAiEditedFilePaths] = useState<Set<string>>(new Set());
-    const [unseenAiEditedFilePaths, setUnseenAiEditedFilePaths] = useState<Set<string>>(new Set());
-    const [terminalHeight, setTerminalHeight] = useState(300);
-    const [chatPanelWidth, setChatPanelWidth] = useState(400);
-    const [isChatDragging, setIsChatDragging] = useState(false);
-    const [isTerminalDragging, setIsTerminalDragging] = useState(false);
-
 
     // Sidebar State
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -86,8 +55,7 @@ const AppLayoutInner: React.FC = () => {
         commitPreflight: commitPreflightGit,
     } = useGitStatus();
     const gitChangedCount = gitStatus?.changedCount ?? 0;
-    const { selectedModelId, setSelectedModelId, messages, refreshModels } = chat;
-    const processingFilesRef = useRef<Set<string>>(new Set());
+    const { selectedModelId, setSelectedModelId, refreshModels } = chat;
     const terminalPaneRef = useRef<TerminalPaneHandle>(null);
 
     const handleStopGeneration = useCallback(async () => {
@@ -95,42 +63,20 @@ const AppLayoutInner: React.FC = () => {
         await chat.stopGeneration();
     }, [chat.stopGeneration]);
 
-    // Tab history stack: tracks previously active tabs for "go back" on close
-    const tabHistoryRef = useRef<string[]>([]);
-
-    // Push to history whenever the active tab changes
-    useEffect(() => {
-        if (activeTabId) {
-            const history = tabHistoryRef.current;
-            // Don't push duplicates at the top
-            if (history[history.length - 1] !== activeTabId) {
-                history.push(activeTabId);
-                // Cap at 50 entries to avoid unbounded growth
-                if (history.length > 50) history.shift();
-            }
-        }
-    }, [activeTabId]);
-
-    // Pop the history stack to find the most recent tab that's still open
-    const popTabHistory = (closedId: string, openTabs: Tab[]): string | null => {
-        const history = tabHistoryRef.current;
-        const openIds = new Set(openTabs.filter(t => t.id !== closedId).map(t => t.id));
-        while (history.length > 0) {
-            const prev = history.pop()!;
-            if (prev !== closedId && openIds.has(prev)) {
-                return prev;
-            }
-        }
-        // Fallback: pick the last remaining tab, or null
-        const remaining = openTabs.filter(t => t.id !== closedId);
-        return remaining.length > 0 ? remaining[remaining.length - 1].id : null;
-    };
+    // Tab management (CRUD, history, keyboard shortcuts, backend sync)
+    const tabManager = useTabManager(uncommittedChanges);
+    const {
+        tabs, setTabs, activeTabId, setActiveTabId, activeTab, activeFilename,
+        appBarTabs, setAiEditedFilePaths, setUnseenAiEditedFilePaths,
+        processingFilesRef, handleTabClick, handleFileSelect, handleTabClose,
+        handleTabReorder, handleEphemeralSave,
+    } = tabManager;
 
     // Sync active tab and open file paths to EditorContext
     const { setActiveFile, setOpenFiles } = useEditorActions();
     useEffect(() => {
-        const activeTab = tabs.find(t => t.id === activeTabId);
-        setActiveFile(activeTab?.path || null);
+        const tab = tabs.find(t => t.id === activeTabId);
+        setActiveFile(tab?.path || null);
     }, [activeTabId, tabs, setActiveFile]);
 
     useEffect(() => {
@@ -140,103 +86,15 @@ const AppLayoutInner: React.FC = () => {
         setOpenFiles(filePaths);
     }, [tabs, setOpenFiles]);
 
-    // Listen for backend tab events when tabs_backend_authority is enabled
-    useEffect(() => {
-        let unlisten: (() => void) | undefined;
-
-        const setup = async () => {
-            unlisten = await listen<BladeEventEnvelope>('blade-event', (event) => {
-                const bladeEvent = event.payload.event;
-                if (bladeEvent.type !== 'Editor') return;
-
-                const editorEvent = bladeEvent.payload as EditorEvent;
-
-                if (editorEvent.type === 'TabOpened') {
-                    const newTab = tabInfoToTab(editorEvent.payload.tab);
-                    setTabs(prev => {
-                        if (prev.find(t => t.id === newTab.id)) return prev;
-                        return [...prev, newTab];
-                    });
-                } else if (editorEvent.type === 'TabClosed') {
-                    const closedId = editorEvent.payload.tab_id;
-                    setTabs(prev => {
-                        const remaining = prev.filter(t => t.id !== closedId);
-                        setActiveTabId(prevActive => {
-                            if (prevActive !== closedId) return prevActive;
-                            return popTabHistory(closedId, prev);
-                        });
-                        return remaining;
-                    });
-                } else if (editorEvent.type === 'ActiveTabChanged') {
-                    setActiveTabId(editorEvent.payload.tab_id);
-                } else if (editorEvent.type === 'TabsReordered') {
-                    const orderedIds = editorEvent.payload.tab_ids;
-                    setTabs(prev => {
-                        const tabMap = new Map(prev.map(t => [t.id, t]));
-                        return orderedIds.map(id => tabMap.get(id)).filter((t): t is Tab => !!t);
-                    });
-                } else if (editorEvent.type === 'TabStateSnapshot') {
-                    const { tabs: backendTabs, active_tab_id } = editorEvent.payload;
-                    setTabs(backendTabs.map(tabInfoToTab));
-                    setActiveTabId(active_tab_id);
-                }
-            });
-        };
-
-        setup().catch(console.error);
-
-        return () => {
-            if (unlisten) unlisten();
-        };
-    }, []);
-
-    useEffect(() => {
-        const activeTab = tabs.find(t => t.id === activeTabId);
-        if (!activeTab || activeTab.type !== 'file' || !activeTab.path) return;
-
-        setUnseenAiEditedFilePaths(prev => {
-            if (!prev.has(activeTab.path!)) return prev;
-            const next = new Set(prev);
-            next.delete(activeTab.path!);
-            return next;
-        });
-    }, [activeTabId, tabs]);
-
-    const hasPendingVirtualChanges = useCallback((path?: string) => {
-        if (!path) return false;
-        return uncommittedChanges.some(change =>
-            change.file_path === path
-            || change.file_path.endsWith(path)
-            || path.endsWith(change.file_path)
-        );
-    }, [uncommittedChanges]);
-
-    const appBarTabs = useMemo(() => tabs.map(t => {
-        const isFileTab = t.type === 'file' && !!t.path;
-        const path = t.path;
-
-        return {
-            id: t.id,
-            title: t.title,
-            isEphemeral: t.type === 'ephemeral',
-            isDirty: false,
-            hasVirtualChanges: isFileTab ? hasPendingVirtualChanges(path) : false,
-            isAiEdited: isFileTab ? aiEditedFilePaths.has(path!) : false,
-            hasUnreadAiEdit: isFileTab ? unseenAiEditedFilePaths.has(path!) : false,
-        };
-    }), [tabs, hasPendingVirtualChanges, aiEditedFilePaths, unseenAiEditedFilePaths]);
-
-    const handleTabClick = useCallback((tabId: string) => {
-        setActiveTabId(tabId);
-    }, []);
-
-    // Research progress state
-    const [researchProgress, setResearchProgress] = useState<{
-        message: string;
-        stage: string;
-        percent: number;
-        isActive: boolean;
-    } | null>(null);
+    // Tauri event listeners (file open, research progress, change-applied, etc.)
+    const { researchProgress, finalizeResearchActivities } = useLayoutEvents({
+        setTabs,
+        setActiveTabId,
+        setAiEditedFilePaths,
+        setUnseenAiEditedFilePaths,
+        processingFilesRef,
+        setConversation: chat.setConversation,
+    });
 
     // Settings modal state
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -262,16 +120,6 @@ const AppLayoutInner: React.FC = () => {
         const segments = normalized.split(/[/\\]/).filter(Boolean);
         return segments.length > 0 ? segments[segments.length - 1] : null;
     }, [workspacePath]);
-
-    const activeTab = useMemo(() => tabs.find(t => t.id === activeTabId) ?? null, [tabs, activeTabId]);
-    const activeFilename = useMemo(() => {
-        if (!activeTab) return null;
-        if (activeTab.path) {
-            const parts = activeTab.path.split(/[/\\]/).filter(Boolean);
-            return parts.length > 0 ? parts[parts.length - 1] : activeTab.title;
-        }
-        return activeTab.title;
-    }, [activeTab]);
 
     useEffect(() => {
         const titleParts = ['Zaguán Blade'];
@@ -364,6 +212,15 @@ const AppLayoutInner: React.FC = () => {
         checkZbladeDir();
     }, [workspacePath, hasCheckedZblade]);
 
+    // Resize handlers (terminal + chat panel drag) — must be before handleStateLoaded
+    const editorColumnRef = useRef<HTMLDivElement>(null);
+    const {
+        terminalHeight, setTerminalHeight,
+        chatPanelWidth, setChatPanelWidth,
+        isTerminalDragging, isChatDragging,
+        handleTerminalMouseDown, handleChatMouseDown,
+    } = useResizeHandlers({ editorColumnRef });
+
     // Handle project state restoration
     const handleStateLoaded = useCallback((state: ProjectState) => {
         console.debug('[Layout] Restoring project state:', state);
@@ -380,9 +237,9 @@ const AppLayoutInner: React.FC = () => {
 
             // Restore active tab
             if (state.active_file) {
-                const activeTab = restoredTabs.find(t => t.path === state.active_file);
-                if (activeTab) {
-                    setActiveTabId(activeTab.id);
+                const restoredActive = restoredTabs.find(t => t.path === state.active_file);
+                if (restoredActive) {
+                    setActiveTabId(restoredActive.id);
                 }
             } else if (restoredTabs.length > 0) {
                 setActiveTabId(restoredTabs[0].id);
@@ -415,7 +272,7 @@ const AppLayoutInner: React.FC = () => {
         // Project state load can restore pending uncommitted AI changes in backend state.
         // Notify all hook instances to refresh and show accept/reject prompts after startup.
         window.dispatchEvent(new CustomEvent('uncommitted-changes-updated'));
-    }, [setSelectedModelId]);
+    }, [setSelectedModelId, setTerminalHeight, setChatPanelWidth, setTabs, setActiveTabId]);
 
     // Get terminal state for persistence
     const getTerminalState = useCallback(() => {
@@ -445,534 +302,18 @@ const AppLayoutInner: React.FC = () => {
     // Wait for stateLoaded to prevent multiple warmups during initialization
     const { trackActivity } = useWarmup(workspacePath, selectedModelId, stateLoaded);
 
-
-
-    // Auto-open files when edit proposals arrive (without stealing focus)
-    useEffect(() => {
-        if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
-
-        const unlistenPromise = listen<{ id: string; path: string; old_content: string; new_content: string }[]>('propose-edit', (event) => {
-            if (event.payload.length === 0) return;
-
-            const editedPaths = event.payload.map(edit => edit.path);
-
-            setAiEditedFilePaths(prev => {
-                const next = new Set(prev);
-                for (const path of editedPaths) next.add(path);
-                return next;
-            });
-
-            setUnseenAiEditedFilePaths(prev => {
-                const next = new Set(prev);
-                for (const path of editedPaths) next.add(path);
-                return next;
-            });
-
-            setTabs(prev => {
-                let next = prev;
-
-                for (const path of editedPaths) {
-                    const existingTab = next.find(t => t.type === 'file' && t.path === path);
-                    if (existingTab) continue;
-
-                    const filename = path.split('/').pop() || path;
-                    const newTab: Tab = {
-                        id: `file-${path}`,
-                        title: filename,
-                        type: 'file',
-                        path,
-                    };
-
-                    if (next === prev) {
-                        next = [...prev, newTab];
-                    } else {
-                        next.push(newTab);
-                    }
-                }
-
-                return next;
-            });
-        });
-
-        return () => {
-            unlistenPromise
-                .then(unlisten => unlisten())
-                .catch(console.error);
-        };
-    }, []);
-
-    const handleFileSelect = (path: string) => {
-        // Add to tabs if not already open
-        const existingTab = tabs.find(t => t.type === 'file' && t.path === path);
-        if (!existingTab) {
-            const filename = path.split('/').pop() || path;
-            const tabId = `file-${path}`;
-
-            // If backend authority, dispatch to backend (it will emit TabOpened event)
-            if (isTabsBackendAuthoritative()) {
-                EditorFacade.openTab(tabId, filename, path, 'file').catch(console.error);
-                EditorFacade.setActiveTab(tabId).catch(console.error);
-            } else {
-                // Legacy: update local state directly
-                const newTab: Tab = {
-                    id: tabId,
-                    title: filename,
-                    type: 'file',
-                    path,
-                };
-                setTabs(prev => [...prev, newTab]);
-                setActiveTabId(tabId);
-            }
-        } else {
-            // Tab exists, just activate it
-            if (isTabsBackendAuthoritative()) {
-                EditorFacade.setActiveTab(existingTab.id).catch(console.error);
-            } else {
-                setActiveTabId(existingTab.id);
-            }
-        }
-    };
-
-    const handleTabClose = (tabId: string) => {
-        if (isTabsBackendAuthoritative()) {
-            EditorFacade.closeTab(tabId).catch(console.error);
-        } else {
-            if (activeTabId === tabId) {
-                setActiveTabId(popTabHistory(tabId, tabs));
-            }
-            setTabs(prev => prev.filter(t => t.id !== tabId));
-        }
-    };
-
-    const handleEphemeralSave = async (ephemeralTabId: string, savedPath: string) => {
-        console.debug('[Layout] handleEphemeralSave called:', { ephemeralTabId, savedPath });
-        
-        // Convert ephemeral tab to regular file tab
-        setTabs(prev => {
-            const ephemeralTab = prev.find(t => t.id === ephemeralTabId);
-            if (!ephemeralTab) {
-                console.debug('[Layout] Ephemeral tab not found:', ephemeralTabId);
-                return prev;
-            }
-
-            console.debug('[Layout] Found ephemeral tab:', ephemeralTab);
-            const filename = savedPath.split('/').pop() || savedPath;
-            const newTab: Tab = {
-                id: `file-${savedPath}`,
-                title: filename,
-                type: 'file',
-                path: savedPath,
-            };
-
-            console.debug('[Layout] Creating new file tab:', newTab);
-            // Remove ephemeral tab and add file tab
-            return [...prev.filter(t => t.id !== ephemeralTabId), newTab];
-        });
-
-        // Switch to the new file tab
-        const newTabId = `file-${savedPath}`;
-        console.debug('[Layout] Switching to new tab:', newTabId);
-        setActiveTabId(newTabId);
-
-        // Trigger backend to open the file so it loads in the editor
-        try {
-            console.debug('[Layout] Calling open_file_in_editor:', savedPath);
-            await invoke('open_file_in_editor', { path: savedPath });
-            console.debug('[Layout] open_file_in_editor completed successfully');
-        } catch (error) {
-            console.error('[Layout] Failed to open saved file:', error);
-        }
-    };
-
-    // Terminal panel resize handler
-    const handleTerminalMouseDown = (e: React.MouseEvent) => {
-        if (e.button !== 0) return;
-        setIsTerminalDragging(true);
-        e.preventDefault();
-    };
-
-    useEffect(() => {
-        const handleTerminalMouseMove = (e: MouseEvent) => {
-            if (!isTerminalDragging) return;
-            const col = editorColumnRef.current;
-            if (!col) return;
-            const rect = col.getBoundingClientRect();
-            const newHeight = rect.bottom - e.clientY;
-            if (newHeight >= 80 && newHeight <= rect.height - 60) {
-                setTerminalHeight(newHeight);
-            }
-        };
-
-        const handleTerminalMouseUp = () => {
-            setIsTerminalDragging(false);
-        };
-
-        if (isTerminalDragging) {
-            document.addEventListener('mousemove', handleTerminalMouseMove);
-            document.addEventListener('mouseup', handleTerminalMouseUp);
-            document.body.classList.add('resize-y-cursor');
-        }
-
-        return () => {
-            document.removeEventListener('mousemove', handleTerminalMouseMove);
-            document.removeEventListener('mouseup', handleTerminalMouseUp);
-            document.body.classList.remove('resize-y-cursor');
-        };
-    }, [isTerminalDragging]);
-
-    // Chat panel resize handler
-    const handleChatMouseDown = (e: React.MouseEvent) => {
-        if (e.button !== 0) return;
-        setIsChatDragging(true);
-        e.preventDefault();
-    };
-
-    useEffect(() => {
-        const handleChatMouseMove = (e: MouseEvent) => {
-            if (!isChatDragging) return;
-            // Calculate new width from right edge
-            const newWidth = window.innerWidth - e.clientX;
-            // Clamp width between 280 and 800
-            if (newWidth >= 280 && newWidth <= 800) {
-                setChatPanelWidth(newWidth);
-            }
-        };
-
-        const handleChatMouseUp = () => {
-            setIsChatDragging(false);
-        };
-
-        if (isChatDragging) {
-            document.addEventListener('mousemove', handleChatMouseMove);
-            document.addEventListener('mouseup', handleChatMouseUp);
-            document.body.classList.add('resize-x-cursor');
-        }
-
-        return () => {
-            document.removeEventListener('mousemove', handleChatMouseMove);
-            document.removeEventListener('mouseup', handleChatMouseUp);
-            document.body.classList.remove('resize-x-cursor');
-        };
-    }, [isChatDragging]);
-
-    // Keyboard shortcuts for tab management
-    useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            // Ctrl-W to close current tab
-            if (e.ctrlKey && e.key === 'w') {
-                e.preventDefault();
-                if (activeTabId) {
-                    handleTabClose(activeTabId);
-                }
-            }
-
-            // F12 to toggle DevTools
-            if (e.key === 'F12') {
-                e.preventDefault();
-                invoke('toggle_devtools').catch(err => console.error('Failed to toggle devtools:', err));
-                return;
-            }
-
-            // Ctrl-Tab to cycle right through tabs
-            if (e.ctrlKey && e.key === 'Tab') {
-                e.preventDefault();
-                if (tabs.length > 1 && activeTabId) {
-                    const currentIndex = tabs.findIndex(t => t.id === activeTabId);
-                    if (e.shiftKey) {
-                        // Ctrl-Shift-Tab: cycle left
-                        const prevIndex = (currentIndex - 1 + tabs.length) % tabs.length;
-                        setActiveTabId(tabs[prevIndex].id);
-                    } else {
-                        // Ctrl-Tab: cycle right
-                        const nextIndex = (currentIndex + 1) % tabs.length;
-                        setActiveTabId(tabs[nextIndex].id);
-                    }
-                }
-            }
-        };
-
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [activeTabId, tabs]);
-
-    // Listen for open-file and open-ephemeral-document events
-    useEffect(() => {
-        if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
-        const unlistenPromises: Promise<() => void>[] = [];
-            const handleOpenFile = (path: string, sourceEvent: string) => {
-                console.debug(`Opening file from backend (${sourceEvent}):`, path);
-                const tabId = `file-${path}`;
-
-                // Prevent duplicate processing
-                if (processingFilesRef.current.has(path)) {
-                    console.debug('[LAYOUT] Ignoring duplicate file open event for:', path);
-                    return;
-                }
-                processingFilesRef.current.add(path);
-
-                setTabs(prev => {
-                    const existingTab = prev.find(t => t.type === 'file' && t.path === path);
-                    if (existingTab) {
-                        processingFilesRef.current.delete(path);
-                        return prev;
-                    }
-                    const filename = path.split('/').pop() || path;
-                    const newTab: Tab = {
-                        id: tabId,
-                        title: filename,
-                        type: 'file',
-                        path,
-                    };
-                    processingFilesRef.current.delete(path);
-                    return [...prev, newTab];
-                });
-                // Keep current focus while allowing backend/AI-opened files to appear in background tabs.
-                setActiveTabId(prev => prev ?? tabId);
-            };
-
-            // Current backend event name (Rust emits this)
-            unlistenPromises.push(listen<string>('open-file', (event) => {
-                handleOpenFile(event.payload, 'open-file');
-            }));
-
-            // Backwards-compatible alias (kept for older emitters)
-            unlistenPromises.push(listen<string>('file-opened', (event) => {
-                handleOpenFile(event.payload, 'file-opened');
-            }));
-
-            unlistenPromises.push(listen<{ path: string; start_line: number; end_line: number }>('open-file-with-highlight', (event) => {
-                console.debug('Opening file with highlight from backend:', event.payload);
-                const { path, start_line, end_line } = event.payload;
-                const tabId = `file-${path}`;
-                setTabs(prev => {
-                    const existingTab = prev.find(t => t.type === 'file' && t.path === path);
-                    if (existingTab) {
-                        return prev.map(t =>
-                            t.id === existingTab.id
-                                ? { ...t, highlightLines: { startLine: start_line, endLine: end_line } }
-                                : t
-                        );
-                    }
-                    const filename = path.split('/').pop() || path;
-                    const newTab: Tab = {
-                        id: tabId,
-                        title: filename,
-                        type: 'file',
-                        path,
-                        highlightLines: { startLine: start_line, endLine: end_line },
-                    };
-                    return [...prev, newTab];
-                });
-                // Do not steal editor focus; only activate if no file is currently active.
-                setActiveTabId(prev => prev ?? tabId);
-            }));
-
-            unlistenPromises.push(listen<{ id: string; title: string; content: string; suggestedName: string }>('open-ephemeral-document', (event) => {
-                console.debug('[LAYOUT] 📥 Received open-ephemeral-document event:', {
-                    id: event.payload.id,
-                    title: event.payload.title,
-                    contentLength: event.payload.content.length,
-                    suggestedName: event.payload.suggestedName
-                });
-
-                // Clear research progress when result arrives
-                setResearchProgress(null);
-
-                const { id, title, content, suggestedName } = event.payload;
-
-                setTabs(prev => {
-                    // Check if tab already exists
-                    const existingTab = prev.find(t => t.id === id);
-                    if (existingTab) {
-                        console.debug('[LAYOUT] ⚠️ Tab already exists, just activating:', id);
-                        return prev;
-                    }
-
-                    console.debug('[LAYOUT] ✅ Creating new tab with ID:', id);
-                    const newTab: Tab = {
-                        id,
-                        title,
-                        type: 'ephemeral',
-                        content,
-                        suggestedName,
-                    };
-                    console.debug('[LAYOUT] Adding tab to existing tabs:', prev.length, '→', prev.length + 1);
-                    return [...prev, newTab];
-                });
-                setActiveTabId(id);
-            }));
-
-            // Listen for research progress events
-            unlistenPromises.push(listen<{ message: string; stage: string; percent: number }>('research-progress', (event) => {
-                console.debug('[LAYOUT] Research progress:', event.payload);
-                
-                // Set temporary state for active indicator
-                setResearchProgress({
-                    ...event.payload,
-                    isActive: true
-                });
-
-                // Persist research activity in message history
-                chat.setConversation(prev => {
-                    const updated = [...prev];
-                    // Find the last assistant message to attach research activity
-                    for (let i = updated.length - 1; i >= 0; i--) {
-                        if (updated[i].role === 'Assistant') {
-                            const msg = updated[i];
-                            const activityId = crypto.randomUUID();
-                            const newActivity = {
-                                id: activityId,
-                                message: event.payload.message,
-                                stage: event.payload.stage,
-                                percent: event.payload.percent,
-                                timestamp: Date.now(),
-                            };
-
-                            // Add or update research activity
-                            const existingActivities = msg.researchActivities || [];
-                            const newActivities = [...existingActivities, newActivity];
-                            
-                            // Update blocks to include research_progress block
-                            const newBlocks = [...(msg.blocks || [])];
-                            if (!newBlocks.some(b => b.type === 'research_progress' && b.id === activityId)) {
-                                newBlocks.push({ type: 'research_progress', id: activityId });
-                            }
-
-                            updated[i] = {
-                                ...msg,
-                                researchActivities: newActivities,
-                                blocks: newBlocks
-                            };
-                            break;
-                        }
-                    }
-                    return updated;
-                });
-            }));
-
-            // Listen for chat errors to clear progress
-            unlistenPromises.push(listen('chat-error', () => {
-                setResearchProgress(null);
-            }));
-
-            // NOTE: context-length-exceeded is now handled in useChat.ts where it belongs
-
-            // Listen for change-applied events to convert ephemeral tabs to file tabs
-            unlistenPromises.push(listen<{ change_id: string; file_path: string }>('change-applied', (event) => {
-                console.debug('[LAYOUT] Change applied:', event.payload);
-                const { change_id, file_path } = event.payload;
-
-                // Find any ephemeral tab that might be associated with this change
-                // 1. Check for explicit "new-file-toolId" tabs
-                // 2. Check for generic ephemeral tabs that match the filename
-                const filename = file_path.split('/').pop() || file_path;
-
-                // Mark this file as being processed
-                processingFilesRef.current.add(file_path);
-
-                setTabs(prev => {
-                    const ephemeralTab = prev.find(t =>
-                        t.id === `new-file-${change_id}` ||
-                        (t.type === 'ephemeral' && (
-                            t.suggestedName === filename ||
-                            t.title === filename ||
-                            t.suggestedName?.includes(filename)
-                        ))
-                    );
-
-                    if (!ephemeralTab) {
-                        // Even if no ephemeral tab matches, we might still want to open the file 
-                        // if it's a new file or important. But for now, we only replace if found.
-                        processingFilesRef.current.delete(file_path);
-                        return prev;
-                    }
-
-                    console.debug('[LAYOUT] Found matching ephemeral tab, converting to file tab:', ephemeralTab.id, '→', file_path);
-                    const fileTab: Tab = {
-                        id: `file-${file_path}`,
-                        title: filename,
-                        type: 'file',
-                        path: file_path,
-                    };
-
-                    // Remove the ephemeral tab and add the new file tab
-                    // We try to keep the same position in the tab bar
-                    const newTabs = prev.filter(t => t.id !== ephemeralTab.id);
-                    return [...newTabs, fileTab];
-                });
-
-                // Keep current focus while surfacing the converted file tab in the background.
-                setActiveTabId(prev => prev ?? `file-${file_path}`);
-
-                // Clear the processing flag after a short delay to allow the open-file event to be ignored
-                setTimeout(() => {
-                    processingFilesRef.current.delete(file_path);
-                }, 500);
-            }));
-
-        return () => {
-            for (const unlistenPromise of unlistenPromises) {
-                unlistenPromise
-                    .then(unlisten => unlisten())
-                    .catch(console.error);
-            }
-        };
-    }, [chat.setConversation]);
-
     useEffect(() => {
         if (chat.loading) {
             setWasStoppedByUser(false);
         }
     }, [chat.loading]);
 
-    // Clear active indicator when chat stops loading and finalize any lingering
-    // non-terminal research activity cards so they don't keep spinning forever.
+    // Finalize research activities when chat stops loading
     useEffect(() => {
-        if (!chat.loading) {
-            setResearchProgress(prev => prev ? { ...prev, isActive: false } : null);
-            const finalStage = wasStoppedByUser ? 'STOPPED' : 'COMPLETE';
-
-            chat.setConversation(prev => {
-                let changed = false;
-                const next = prev.map(msg => {
-                    const activities = msg.researchActivities;
-                    if (!activities || activities.length === 0) return msg;
-
-                    const updatedActivities = activities.map(activity => {
-                        const stage = activity.stage.toLowerCase();
-                        const isTerminalStage =
-                            stage.includes('complete')
-                            || stage.includes('done')
-                            || stage.includes('error')
-                            || stage.includes('fail')
-                            || stage.includes('cancel')
-                            || stage.includes('stop');
-
-                        if (isTerminalStage) return activity;
-
-                        changed = true;
-                        return {
-                            ...activity,
-                            stage: finalStage,
-                            percent: 100,
-                        };
-                    });
-
-                    if (!changed) return msg;
-
-                    return {
-                        ...msg,
-                        researchActivities: updatedActivities,
-                    };
-                });
-
-                return changed ? next : prev;
-            });
-        }
-    }, [chat.loading, chat.setConversation, wasStoppedByUser]);
+        finalizeResearchActivities(chat.loading, wasStoppedByUser);
+    }, [chat.loading, wasStoppedByUser, finalizeResearchActivities]);
 
     // Measure editor column width so AppBar can constrain the tab strip to it
-    const editorColumnRef = useRef<HTMLDivElement>(null);
     const [editorColumnWidth, setEditorColumnWidth] = useState<number | undefined>(undefined);
     useEffect(() => {
         const el = editorColumnRef.current;
@@ -1005,14 +346,7 @@ const AppLayoutInner: React.FC = () => {
                 projectName={projectName}
                 onTabClick={handleTabClick}
                 onTabClose={handleTabClose}
-                onReorder={(fromIndex, toIndex) => {
-                    setTabs(prev => {
-                        const newTabs = [...prev];
-                        const [movedTab] = newTabs.splice(fromIndex, 1);
-                        newTabs.splice(toIndex, 0, movedTab);
-                        return newTabs;
-                    });
-                }}
+                onReorder={handleTabReorder}
                 tabStripMaxWidth={editorColumnWidth}
             />
 
@@ -1033,8 +367,8 @@ const AppLayoutInner: React.FC = () => {
                 >
                     <div
                         onClick={() => toggleSidebar('explorer')}
-                        title="Explorer"
-                        aria-label="Explorer"
+                        title={t('activityBar.explorer')}
+                        aria-label={t('activityBar.explorer')}
                         className={`relative p-2 rounded-md cursor-pointer transition-all duration-[var(--transition-fast)] ${isSidebarOpen && activeSidebar === 'explorer'
                             ? 'text-[var(--fg-bright)] bg-[var(--bg-surface)]'
                             : 'text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]'}
@@ -1049,8 +383,8 @@ const AppLayoutInner: React.FC = () => {
                     </div>
                     <div
                         onClick={() => toggleSidebar('git')}
-                        title="Git"
-                        aria-label="Git"
+                        title={t('activityBar.git')}
+                        aria-label={t('activityBar.git')}
                         className={`relative p-2 rounded-md cursor-pointer transition-all duration-[var(--transition-fast)] ${isSidebarOpen && activeSidebar === 'git'
                             ? 'text-[var(--fg-bright)] bg-[var(--bg-surface)]'
                             : 'text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]'}
@@ -1068,8 +402,8 @@ const AppLayoutInner: React.FC = () => {
                     </div>
                     <div
                         onClick={() => toggleSidebar('history')}
-                        title="File History"
-                        aria-label="File History"
+                        title={t('activityBar.fileHistory')}
+                        aria-label={t('activityBar.fileHistory')}
                         className={`relative p-2 rounded-md cursor-pointer transition-all duration-[var(--transition-fast)] ${isSidebarOpen && activeSidebar === 'history'
                             ? 'text-[var(--fg-bright)] bg-[var(--bg-surface)]'
                             : 'text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]'}
@@ -1081,8 +415,8 @@ const AppLayoutInner: React.FC = () => {
                         <Clock className="w-5 h-5" />
                     </div>
                     <div
-                        title="Search (coming soon)"
-                        aria-label="Search"
+                        title={t('activityBar.searchComingSoon')}
+                        aria-label={t('activityBar.search')}
                         className="hidden relative p-2 rounded-md text-[var(--fg-nav)] opacity-40 cursor-not-allowed transition-all duration-[var(--transition-fast)]"
                     >
                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1091,8 +425,8 @@ const AppLayoutInner: React.FC = () => {
                     </div>
                     <div
                         onClick={() => setIsSettingsOpen(true)}
-                        title="Settings"
-                        aria-label="Settings"
+                        title={t('activityBar.settings')}
+                        aria-label={t('activityBar.settings')}
                         className="relative mt-auto p-2 rounded-md text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)] transition-all duration-[var(--transition-fast)] cursor-pointer"
                     >
                         <Settings className="w-5 h-5" />
@@ -1121,7 +455,7 @@ const AppLayoutInner: React.FC = () => {
                         <ExplorerPanel onFileSelect={handleFileSelect} activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
                     )}
                     {activeSidebar === 'git' && (
-                        <Suspense fallback={<div className="h-full flex items-center justify-center text-[var(--fg-subtle)]">Loading Git...</div>}>
+                        <Suspense fallback={<div className="h-full flex items-center justify-center text-[var(--fg-subtle)]">{t('sidebar.loadingGit')}</div>}>
                             <GitPanel
                                 status={gitStatus}
                                 files={gitFiles}
@@ -1142,7 +476,7 @@ const AppLayoutInner: React.FC = () => {
                         </Suspense>
                     )}
                     {activeSidebar === 'history' && (
-                        <Suspense fallback={<div className="h-full flex items-center justify-center text-[var(--fg-subtle)]">Loading History...</div>}>
+                        <Suspense fallback={<div className="h-full flex items-center justify-center text-[var(--fg-subtle)]">{t('sidebar.loadingHistory')}</div>}>
                             <FileHistoryPanel activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
                         </Suspense>
                     )}
@@ -1337,13 +671,13 @@ const AppLayoutInner: React.FC = () => {
                 <div className="flex items-center gap-1.5">
                     <span className="flex items-center gap-1.5 hover:text-[var(--fg-secondary)] cursor-pointer transition-colors duration-[var(--transition-fast)]">
                         <GitBranch className="w-3 h-3" />
-                        {gitStatus?.branch ?? 'no branch'}{gitStatus?.dirty ? '*' : ''}
+                        {gitStatus?.branch ?? t('statusBar.noBranch')}{gitStatus?.dirty ? '*' : ''}
                     </span>
                 </div>
                 <div className="flex items-center gap-4 opacity-70">
                     {/* Saving Indicator */}
                     {isClosing && (
-                        <span className="text-emerald-500 animate-pulse font-semibold">Saving...</span>
+                        <span className="text-emerald-500 animate-pulse font-semibold">{t('statusBar.saving')}</span>
                     )}
                     <span>{t('editor.encoding')}</span>
                     <span>{(() => {

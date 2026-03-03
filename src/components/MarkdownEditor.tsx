@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import CodeEditor, { type CodeEditorHandle } from './CodeEditor';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { Eye, Edit3 } from 'lucide-react';
@@ -18,6 +19,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
     onSave,
     filename
 }) => {
+    const { t } = useTranslation();
     const [mode, setMode] = useState<'edit' | 'view'>('edit');
     const editorRef = React.useRef<CodeEditorHandle>(null);
 
@@ -57,7 +59,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
             <div className="h-10 bg-zinc-900/50 border-b border-zinc-800 flex items-center justify-between px-4">
                 <div className="flex items-center gap-2">
                     <span className="text-xs text-zinc-500 font-mono">
-                        {filename?.split('/').pop() || 'Untitled.md'}
+                        {filename?.split('/').pop() || t('editor.untitled')}
                     </span>
                 </div>
 
@@ -68,17 +70,17 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
                                 ? 'bg-zinc-700 text-zinc-100 shadow-sm border border-zinc-600'
                                 : 'bg-emerald-900/40 text-emerald-200 shadow-sm border border-emerald-800/50'
                             }`}
-                        title="Toggle Edit/View Mode (Ctrl+E)"
+                        title={t('editor.toggleEditView')}
                     >
                         {mode === 'edit' ? (
                             <>
                                 <Edit3 className="w-3.5 h-3.5" />
-                                <span>Editing</span>
+                                <span>{t('editor.editing')}</span>
                             </>
                         ) : (
                             <>
                                 <Eye className="w-3.5 h-3.5" />
-                                <span>Viewing</span>
+                                <span>{t('editor.viewing')}</span>
                             </>
                         )}
                     </button>

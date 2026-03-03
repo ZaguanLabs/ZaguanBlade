@@ -6,10 +6,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { ContextMenuProvider } from './components/ui/ContextMenu';
 import './index.css';
 import './i18n'; // Initialize i18n
-import "@fontsource/fira-code"; // Defaults to weight 400
-import "@fontsource/fira-code/500.css"; // Medium
-import "@fontsource/fira-code/600.css"; // Semi-bold
-import "@fontsource/fira-code/700.css"; // Bold
+import "@fontsource/fira-code"; // Defaults to weight 400 (terminal fallback font)
 
 // Wrapper to handle window visibility
 const AppWrapper = () => {

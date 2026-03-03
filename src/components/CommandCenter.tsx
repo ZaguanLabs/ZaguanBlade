@@ -161,11 +161,11 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
         event.preventDefault();
 
         if (isLocalOnly) {
-            setAttachmentError('Image support requires a subscription. Go to Settings.');
+            setAttachmentError(t('chat.imageNoSubscription'));
             return;
         }
         if (isGlmModel) {
-            setAttachmentError('GLM models do not support image attachments. Please select a different model.');
+            setAttachmentError(t('chat.imageNotSupported'));
             return;
         }
 
@@ -245,11 +245,11 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
 
     const handleWindowCapture = useCallback(async () => {
         if (isLocalOnly) {
-            setAttachmentError('Image support requires a subscription. Go to Settings.');
+            setAttachmentError(t('chat.imageNoSubscription'));
             return;
         }
         if (isGlmModel) {
-            setAttachmentError('GLM models do not support image attachments. Please select a different model.');
+            setAttachmentError(t('chat.imageNotSupported'));
             return;
         }
         setWindowPickerMode('capture');
@@ -269,11 +269,11 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
 
     const handleRegionCapture = useCallback(async () => {
         if (isLocalOnly) {
-            setAttachmentError('Image support requires a subscription. Go to Settings.');
+            setAttachmentError(t('chat.imageNoSubscription'));
             return;
         }
         if (isGlmModel) {
-            setAttachmentError('GLM models do not support image attachments. Please select a different model.');
+            setAttachmentError(t('chat.imageNotSupported'));
             return;
         }
         setWindowPickerMode('region');
@@ -301,11 +301,11 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
 
     const handleUploadImage = useCallback(async () => {
         if (isLocalOnly) {
-            setAttachmentError('Image support requires a subscription. Go to Settings.');
+            setAttachmentError(t('chat.imageNoSubscription'));
             return;
         }
         if (isGlmModel) {
-            setAttachmentError('GLM models do not support image attachments. Please select a different model.');
+            setAttachmentError(t('chat.imageNotSupported'));
             return;
         }
         try {
@@ -541,11 +541,11 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             if (isLocalOnly && attachments.length > 0) {
-                setAttachmentError('Image support requires a subscription. Go to Settings.');
+                setAttachmentError(t('chat.imageNoSubscription'));
                 return;
             }
             if (isGlmModel && attachments.length > 0) {
-                setAttachmentError('GLM models do not support image attachments. Please select a different model.');
+                setAttachmentError(t('chat.imageNotSupported'));
                 return;
             }
             if ((text.trim() || attachments.length > 0) && !disabled) {
@@ -632,9 +632,9 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                 if (showStop && onStop) {
                                     onStop();
                                 } else if (isLocalOnly && attachments.length > 0) {
-                                    setAttachmentError('Image support requires a subscription. Go to Settings.');
+                                    setAttachmentError(t('chat.imageNoSubscription'));
                                 } else if (isGlmModel && attachments.length > 0) {
-                                    setAttachmentError('GLM models do not support image attachments. Please select a different model.');
+                                    setAttachmentError(t('chat.imageNotSupported'));
                                 } else if ((text.trim() || attachments.length > 0) && !disabled) {
                                     onSend(text, attachments);
                                     setText('');
@@ -663,8 +663,8 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                 isOpen={windowPickerOpen}
                 windows={capturableWindows}
                 loading={windowPickerLoading}
-                title={windowPickerMode === 'region' ? 'Select Window for Region Capture' : 'Capture Window'}
-                subtitle={windowPickerMode === 'region' ? 'Pick a window, then select a region to crop' : 'Select a window to capture'}
+                title={windowPickerMode === 'region' ? t('screenshot.regionPickerTitle') : t('screenshot.windowPickerTitle')}
+                subtitle={windowPickerMode === 'region' ? t('screenshot.regionPickerSubtitle') : t('screenshot.windowPickerSubtitle')}
                 onSelect={handleWindowSelect}
                 onCancel={() => setWindowPickerOpen(false)}
             />
