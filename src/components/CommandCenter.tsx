@@ -19,7 +19,6 @@ import {
     getBase64ByteLength,
     validateImageByteLength,
     validateImageMimeType,
-    validateImageSize
 } from '../utils/imageUtils';
 
 const COMMANDS = [
@@ -131,34 +130,8 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
         onPrefillConsumed?.();
     }, [prefillRequest, onPrefillConsumed, resizeTextarea]);
 
-    const handlePaste = useCallback(async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
-        const items = Array.from(event.clipboardData.items);
-        const filesFromItems = items
-            .map((item) => item.getAsFile())
-            .filter((file): file is File => !!file);
-        const filesFromClipboard = Array.from(event.clipboardData.files);
-
-        const dedupeKey = (file: File) => `${file.name}:${file.size}:${file.lastModified}`;
-        const fileMap = new Map<string, File>();
-        [...filesFromItems, ...filesFromClipboard].forEach((file) => {
-            fileMap.set(dedupeKey(file), file);
-        });
-
-        const looksLikeImageFile = (file: File) => {
-            if (file.type.startsWith('image/')) return true;
-            const lowerName = file.name.toLowerCase();
-            return lowerName.endsWith('.png')
-                || lowerName.endsWith('.jpg')
-                || lowerName.endsWith('.jpeg')
-                || lowerName.endsWith('.webp')
-                || lowerName.endsWith('.gif')
-                || file.type === '';
-        };
-
-        const pastedFiles = Array.from(fileMap.values()).filter(looksLikeImageFile);
-        if (pastedFiles.length === 0) return;
-
-        event.preventDefault();
+    const appendImageFiles = useCallback(async (inputFiles: File[]) => {
+        if (inputFiles.length === 0) return;
 
         if (isLocalOnly) {
             setAttachmentError(t('chat.imageNoSubscription'));
@@ -171,42 +144,116 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
 
         const newAttachments: ImageAttachment[] = [];
         const errors: string[] = [];
-        for (const file of pastedFiles) {
-            const sizeError = validateImageSize(file);
-            if (sizeError) {
-                errors.push(sizeError);
-                continue;
-            }
 
-            const dataUrl = await fileToDataUrl(file);
-            const mimeType = extractMimeTypeFromDataUrl(dataUrl) || file.type || 'image/png';
-            const mimeError = validateImageMimeType(mimeType);
-            if (mimeError) {
-                errors.push(mimeError);
-                continue;
-            }
+        for (const file of inputFiles) {
+            try {
+                const dataUrl = await fileToDataUrl(file);
+                const base64 = extractBase64FromDataUrl(dataUrl);
+                const actualBytes = getBase64ByteLength(base64);
 
-            const thumbnailUrl = await createThumbnailDataUrl(dataUrl, 64, 64);
-            newAttachments.push({
-                id: crypto.randomUUID(),
-                dataUrl,
-                data: extractBase64FromDataUrl(dataUrl),
-                mime_type: mimeType,
-                thumbnailUrl,
-                name: file.name,
-                size: file.size,
-            });
+                const sizeError = validateImageByteLength(actualBytes);
+                if (sizeError) {
+                    errors.push(sizeError);
+                    continue;
+                }
+
+                const mimeType = extractMimeTypeFromDataUrl(dataUrl) || file.type || 'image/png';
+                const mimeError = validateImageMimeType(mimeType);
+                if (mimeError) {
+                    errors.push(mimeError);
+                    continue;
+                }
+
+                const thumbnailUrl = await createThumbnailDataUrl(dataUrl, 64, 64);
+                newAttachments.push({
+                    id: crypto.randomUUID(),
+                    dataUrl,
+                    data: base64,
+                    mime_type: mimeType,
+                    thumbnailUrl,
+                    name: file.name || 'clipboard-image.png',
+                    size: actualBytes,
+                });
+            } catch {
+                errors.push(t('chat.imageReadFailed'));
+            }
         }
 
         if (newAttachments.length > 0) {
             setAttachments((prev) => [...prev, ...newAttachments]);
+            setAttachmentError(null);
+            return;
         }
+
         if (errors.length > 0) {
             setAttachmentError(errors[0]);
-        } else if (newAttachments.length > 0) {
-            setAttachmentError(null);
         }
-    }, [isLocalOnly, isGlmModel]);
+    }, [isLocalOnly, isGlmModel, t]);
+
+    const handlePaste = useCallback(async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+        const items = Array.from(event.clipboardData.items);
+        const filesFromItems = items
+            .filter((item) => item.kind === 'file')
+            .map((item) => item.getAsFile())
+            .filter((file): file is File => !!file);
+        const filesFromClipboard = Array.from(event.clipboardData.files);
+
+        const dedupeKey = (file: File) => `${file.name}:${file.size}:${file.lastModified}:${file.type}`;
+        const fileMap = new Map<string, File>();
+
+        const looksLikeImageFile = (file: File) => (
+            file.type.startsWith('image/')
+            || file.name.toLowerCase().endsWith('.png')
+            || file.name.toLowerCase().endsWith('.jpg')
+            || file.name.toLowerCase().endsWith('.jpeg')
+            || file.name.toLowerCase().endsWith('.webp')
+            || file.name.toLowerCase().endsWith('.gif')
+            || file.type === ''
+        );
+
+        for (const file of [...filesFromItems, ...filesFromClipboard]) {
+            if (looksLikeImageFile(file)) {
+                fileMap.set(dedupeKey(file), file);
+            }
+        }
+
+        // Primary path: use DataTransfer from paste event.
+        if (fileMap.size > 0) {
+            event.preventDefault();
+            await appendImageFiles(Array.from(fileMap.values()));
+            return;
+        }
+
+        // Fallback path: some WebView environments expose no files in paste
+        // DataTransfer, but Clipboard API read() still returns image blobs.
+        if (!navigator.clipboard?.read) {
+            return;
+        }
+
+        try {
+            const clipboardItems = await navigator.clipboard.read();
+            const clipboardFiles: File[] = [];
+
+            for (const item of clipboardItems) {
+                const imageTypes = item.types.filter((type) => type.startsWith('image/'));
+                for (const imageType of imageTypes) {
+                    const blob = await item.getType(imageType);
+                    const ext = imageType.split('/')[1] || 'png';
+                    clipboardFiles.push(new File([blob], `clipboard-image.${ext}`, {
+                        type: imageType,
+                        lastModified: Date.now(),
+                    }));
+                }
+            }
+
+            if (clipboardFiles.length > 0) {
+                event.preventDefault();
+                await appendImageFiles(clipboardFiles);
+            }
+        } catch {
+            // Ignore Clipboard API errors and preserve default text paste behavior.
+        }
+    }, [appendImageFiles]);
 
     const handleRemoveAttachment = useCallback((id: string) => {
         setAttachments((prev) => prev.filter((attachment) => attachment.id !== id));
