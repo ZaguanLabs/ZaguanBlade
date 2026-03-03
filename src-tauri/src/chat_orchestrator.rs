@@ -78,29 +78,59 @@ pub async fn handle_send_message<R: Runtime>(
 ) -> Result<(), String> {
     println!("Received message from frontend: {}", message);
 
+    let workspace_root = {
+        let workspace = state
+            .workspace
+            .lock()
+            .map_err(|e| format!("Failed to lock workspace: {}", e))?;
+        workspace.workspace.clone()
+    };
+
+    let normalize_to_workspace = |path: String| -> String {
+        if std::path::Path::new(&path).is_absolute() {
+            path
+        } else if let Some(root) = workspace_root.as_ref() {
+            root.join(path).to_string_lossy().to_string()
+        } else {
+            path
+        }
+    };
+
     // Parse @commands and convert to tool calls
-    let (actual_message, forced_tool) = parse_command(&message);
+    let (parsed_message, forced_tool) = parse_command(&message);
 
     // Check for pending error feedback from previous turn (e.g. message too large)
     // Prepend it as a system note so the model knows what happened
-    let mut actual_message = {
+    let mut actual_message: String = {
         let mut feedback = state
             .pending_error_feedback
             .lock()
             .map_err(|e| format!("Failed to lock pending_error_feedback: {}", e))?;
         if let Some(hint) = feedback.take() {
             eprintln!("[SEND MSG] Prepending error feedback to message: {}", hint);
-            format!("[SYSTEM NOTE: {}]\n\n{}", hint, actual_message)
+            format!("[SYSTEM NOTE: {}]\n\n{}", hint, parsed_message)
         } else {
-            actual_message
+            parsed_message
         }
     };
 
     // If there is no editor context, infer likely relevant files from indexed symbols.
     // This prevents the model from defaulting to generic project summaries.
-    let mut effective_open_files = open_files.clone().unwrap_or_default();
+    let mut effective_open_files = open_files
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|path| normalize_to_workspace(path))
+        .collect::<Vec<_>>();
+    let mut effective_active_file = active_file
+        .clone()
+        .map(|path| normalize_to_workspace(path));
+
     if active_file.is_none() && effective_open_files.is_empty() {
-        effective_open_files = infer_context_files_from_query(&state, &actual_message, 6);
+        effective_open_files = infer_context_files_from_query(&state, actual_message.as_str(), 6)
+            .into_iter()
+            .map(|path| normalize_to_workspace(path))
+            .collect();
 
         if effective_open_files.is_empty() {
             actual_message = format!(
@@ -110,7 +140,26 @@ pub async fn handle_send_message<R: Runtime>(
         }
     }
 
-    let active_in_open = active_file
+    if effective_active_file.is_none() {
+        effective_active_file = effective_open_files.first().cloned();
+    }
+
+    if let Some(active) = effective_active_file.clone() {
+        if !effective_open_files.iter().any(|path| path == &active) {
+            effective_open_files.insert(0, active);
+        }
+    }
+
+    let mut deduped_open_files = Vec::new();
+    let mut seen_files = HashSet::new();
+    for path in effective_open_files {
+        if seen_files.insert(path.clone()) {
+            deduped_open_files.push(path);
+        }
+    }
+    effective_open_files = deduped_open_files;
+
+    let active_in_open = effective_active_file
         .as_ref()
         .map(|active| effective_open_files.iter().any(|path| path == active))
         .unwrap_or(false);
@@ -133,7 +182,7 @@ pub async fn handle_send_message<R: Runtime>(
 
     eprintln!(
         "[SEND MSG] active_file={:?}, open_files_count={}, active_in_open={}, open_files_preview=[{}{}], cursor_line={:?}, cursor_column={:?}",
-        active_file,
+        effective_active_file,
         effective_open_files.len(),
         active_in_open,
         open_preview.join(", "),
@@ -147,7 +196,8 @@ pub async fn handle_send_message<R: Runtime>(
         *state
             .active_file
             .lock()
-            .map_err(|e| format!("Failed to lock active_file: {}", e))? = active_file.clone();
+            .map_err(|e| format!("Failed to lock active_file: {}", e))? =
+            effective_active_file.clone();
         *state
             .open_files
             .lock()
@@ -273,6 +323,8 @@ pub async fn handle_send_message<R: Runtime>(
             .unwrap_or_else(|| "local".to_string()),
         );
 
+        let composite_tools_enabled = state.feature_flags.composite_tools_enabled();
+
         mgr.start_stream(
             message,
             &mut conversation,
@@ -280,12 +332,13 @@ pub async fn handle_send_message<R: Runtime>(
             &models,
             selected_model,
             ws,
-            active_file.clone(),
+            effective_active_file.clone(),
             Some(effective_open_files.clone()),
             cursor_line,
             cursor_column,
             http,
             storage_mode,
+            composite_tools_enabled,
         )
         .map_err(|e| e.to_string())?;
     }

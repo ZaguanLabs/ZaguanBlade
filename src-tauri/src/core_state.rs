@@ -111,6 +111,10 @@ impl CoreStateSnapshot {
             "headless-v1".to_string(),
             "editor-sync".to_string(),
             "state-recovery".to_string(),
+            "composite-tools-v1".to_string(),
+            "tool:read_many_files".to_string(),
+            "tool:batch".to_string(),
+            "tool:codebase_investigator".to_string(),
         ]
     }
 }

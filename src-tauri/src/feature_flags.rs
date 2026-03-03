@@ -16,6 +16,10 @@ pub struct FeatureFlags {
     /// When true, tab state (open tabs, tab order) is authoritative in Rust.
     /// Frontend should react to TabEvent rather than owning state.
     tabs_backend_authority: AtomicBool,
+
+    /// When true, expose advanced composite tools (read_many_files, batch,
+    /// codebase_investigator) for supported model families.
+    composite_tools_enabled: AtomicBool,
 }
 
 impl Default for FeatureFlags {
@@ -25,6 +29,8 @@ impl Default for FeatureFlags {
             editor_backend_authority: AtomicBool::new(true),
             // Backend authority enabled for tab state
             tabs_backend_authority: AtomicBool::new(true),
+            // Composite tool support enabled (still model-family gated)
+            composite_tools_enabled: AtomicBool::new(true),
         }
     }
 }
@@ -54,11 +60,22 @@ impl FeatureFlags {
         self.tabs_backend_authority.store(value, Ordering::Relaxed);
     }
 
+    // Composite tools
+
+    pub fn composite_tools_enabled(&self) -> bool {
+        self.composite_tools_enabled.load(Ordering::Relaxed)
+    }
+
+    pub fn set_composite_tools_enabled(&self, value: bool) {
+        self.composite_tools_enabled.store(value, Ordering::Relaxed);
+    }
+
     /// Returns a serializable snapshot of current flag values
     pub fn snapshot(&self) -> FeatureFlagsSnapshot {
         FeatureFlagsSnapshot {
             editor_backend_authority: self.editor_backend_authority(),
             tabs_backend_authority: self.tabs_backend_authority(),
+            composite_tools_enabled: self.composite_tools_enabled(),
         }
     }
 }
@@ -68,4 +85,5 @@ impl FeatureFlags {
 pub struct FeatureFlagsSnapshot {
     pub editor_backend_authority: bool,
     pub tabs_backend_authority: bool,
+    pub composite_tools_enabled: bool,
 }

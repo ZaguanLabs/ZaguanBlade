@@ -16,7 +16,7 @@ use crate::tool_execution::ToolExecutionContext;
 use crate::tools;
 use tauri::Emitter;
 
-pub use tool_defs::get_tool_definitions;
+pub use tool_defs::{get_tool_definitions, get_tool_definitions_for_model};
 
 #[derive(Clone, Debug)]
 pub struct CommandSpec {

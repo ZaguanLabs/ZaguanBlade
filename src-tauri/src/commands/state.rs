@@ -101,6 +101,10 @@ pub fn set_feature_flag(
             state.feature_flags.set_tabs_backend_authority(value);
             Ok(())
         }
+        "composite_tools_enabled" => {
+            state.feature_flags.set_composite_tools_enabled(value);
+            Ok(())
+        }
         _ => Err(format!("Unknown feature flag: {}", flag)),
     }
 }

@@ -181,6 +181,7 @@ pub trait AiProviderRuntime {
         cursor_line: Option<usize>,
         cursor_column: Option<usize>,
         storage_mode: Option<String>,
+        composite_tools_enabled: bool,
     ) -> Result<ProviderSessionHandle, String>;
 
     fn continue_after_tools(
@@ -218,6 +219,7 @@ impl AiProviderRuntime for OllamaRuntime {
         _cursor_line: Option<usize>,
         _cursor_column: Option<usize>,
         _storage_mode: Option<String>,
+        composite_tools_enabled: bool,
     ) -> Result<ProviderSessionHandle, String> {
         manager.start_ollama_stream(
             conversation,
@@ -226,6 +228,7 @@ impl AiProviderRuntime for OllamaRuntime {
             http,
             workspace,
             active_file,
+            composite_tools_enabled,
         )?;
 
         Ok(ProviderSessionHandle { started: true })
@@ -242,7 +245,15 @@ impl AiProviderRuntime for OllamaRuntime {
         workspace: Option<&PathBuf>,
         _is_local_mode: bool,
     ) -> Result<ProviderSessionHandle, String> {
-        manager.start_ollama_stream(conversation, api_config, model_id, http, workspace, None)?;
+        manager.start_ollama_stream(
+            conversation,
+            api_config,
+            model_id,
+            http,
+            workspace,
+            None,
+            manager.composite_tools_enabled(),
+        )?;
         Ok(ProviderSessionHandle { started: true })
     }
 }
@@ -265,6 +276,7 @@ impl AiProviderRuntime for OpenAiCompatRuntime {
         _cursor_line: Option<usize>,
         _cursor_column: Option<usize>,
         _storage_mode: Option<String>,
+        composite_tools_enabled: bool,
     ) -> Result<ProviderSessionHandle, String> {
         manager.start_openai_compat_stream(
             conversation,
@@ -273,6 +285,7 @@ impl AiProviderRuntime for OpenAiCompatRuntime {
             http,
             workspace,
             active_file,
+            composite_tools_enabled,
         )?;
 
         Ok(ProviderSessionHandle { started: true })
@@ -289,7 +302,15 @@ impl AiProviderRuntime for OpenAiCompatRuntime {
         workspace: Option<&PathBuf>,
         _is_local_mode: bool,
     ) -> Result<ProviderSessionHandle, String> {
-        manager.start_openai_compat_stream(conversation, api_config, model_id, http, workspace, None)?;
+        manager.start_openai_compat_stream(
+            conversation,
+            api_config,
+            model_id,
+            http,
+            workspace,
+            None,
+            manager.composite_tools_enabled(),
+        )?;
         Ok(ProviderSessionHandle { started: true })
     }
 }
@@ -312,6 +333,7 @@ impl AiProviderRuntime for ZaguanRuntime {
         cursor_line: Option<usize>,
         cursor_column: Option<usize>,
         storage_mode: Option<String>,
+        _composite_tools_enabled: bool,
     ) -> Result<ProviderSessionHandle, String> {
         manager.start_zaguan_stream(
             conversation,

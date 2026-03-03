@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex};
 
 use crate::agentic_loop::AgenticLoop;
-use crate::ai_workflow::get_tool_definitions;
+use crate::ai_workflow::get_tool_definitions_for_model;
 use crate::ai_workflow::{AiWorkflow, PendingToolBatch};
 use crate::blade_ws_client::BladeWsClient;
 use crate::chat::handler::merge_tool_call_deltas;
@@ -169,6 +169,7 @@ pub struct ChatManager {
     stream_xml_tool_fallback: bool,
     stream_auto_start_loop_on_tools: bool,
     pending_done_without_tools: bool,
+    composite_tools_enabled: bool,
     ws_conversation_messages: Arc<Mutex<Vec<serde_json::Value>>>,
 }
 
@@ -204,8 +205,13 @@ impl ChatManager {
             stream_xml_tool_fallback: false,
             stream_auto_start_loop_on_tools: false,
             pending_done_without_tools: false,
+            composite_tools_enabled: true,
             ws_conversation_messages: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    pub(crate) fn composite_tools_enabled(&self) -> bool {
+        self.composite_tools_enabled
     }
 
     fn to_blade_conversation_messages(
@@ -346,6 +352,7 @@ impl ChatManager {
         cursor_column: Option<usize>,
         http: reqwest::Client,
         storage_mode: Option<String>,
+        composite_tools_enabled: bool,
     ) -> Result<(), String> {
         self.reasoning_parser.reset();
         self.xml_buffer.clear();
@@ -353,6 +360,7 @@ impl ChatManager {
         self.updated_assistant_message = None;
         self.message_seq = 0; // v1.1: reset sequence counter for new message
         self.pending_done_without_tools = false;
+        self.composite_tools_enabled = composite_tools_enabled;
 
         let selected = resolve_model_selection(models, selected_model);
         self.update_stream_profile(selected.provider, &selected.model_id_for_request);
@@ -371,6 +379,7 @@ impl ChatManager {
                     None,
                     None,
                     None,
+                    composite_tools_enabled,
                 )
                 .map(|_| ()),
             ProviderId::OpenAiCompat => OpenAiCompatRuntime
@@ -386,6 +395,7 @@ impl ChatManager {
                     None,
                     None,
                     None,
+                    composite_tools_enabled,
                 )
                 .map(|_| ()),
             ProviderId::Zaguan => ZaguanRuntime
@@ -401,6 +411,7 @@ impl ChatManager {
                     cursor_line,
                     cursor_column,
                     storage_mode,
+                    composite_tools_enabled,
                 )
                 .map(|_| ()),
         }
@@ -827,6 +838,7 @@ impl ChatManager {
         http: reqwest::Client,
         workspace: Option<&PathBuf>,
         active_file: Option<String>,
+        composite_tools_enabled: bool,
     ) -> Result<(), String> {
         let model_name = model_id
             .strip_prefix("ollama/")
@@ -955,7 +967,10 @@ impl ChatManager {
             model: model_name.clone(),
             messages,
             stream: true,
-            tools: Some(get_tool_definitions()),
+            tools: Some(get_tool_definitions_for_model(
+                &model_name,
+                composite_tools_enabled,
+            )),
         };
 
         let (tx, rx) = mpsc::channel();
@@ -1194,6 +1209,7 @@ impl ChatManager {
         http: reqwest::Client,
         workspace: Option<&PathBuf>,
         active_file: Option<String>,
+        composite_tools_enabled: bool,
     ) -> Result<(), String> {
         let model_name = model_id
             .strip_prefix("openai-compat/")
@@ -1345,7 +1361,10 @@ impl ChatManager {
             model: model_name.clone(),
             messages,
             stream: true,
-            tools: Some(get_tool_definitions()),
+            tools: Some(get_tool_definitions_for_model(
+                &model_name,
+                composite_tools_enabled,
+            )),
         };
 
         // OpenAI-compatible servers follow the /v1/chat/completions path; base URL should be versionless
@@ -2510,6 +2529,7 @@ mod tests {
                 None, // cursor_column
                 http,
                 None, // storage_mode
+                true,
             );
 
             // Verify conversation has Assistant placeholder

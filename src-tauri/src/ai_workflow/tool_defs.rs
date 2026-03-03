@@ -1,5 +1,21 @@
 use serde_json::Value;
 
+fn is_composite_tool(name: &str) -> bool {
+    matches!(name, "read_many_files" | "batch" | "codebase_investigator")
+}
+
+fn is_reliable_composite_tool_model(model_id: &str) -> bool {
+    let model = model_id.to_ascii_lowercase();
+    model.contains("gpt")
+        || model.contains("o3")
+        || model.contains("o4")
+        || model.contains("claude")
+        || model.contains("codex")
+        || model.contains("qwen")
+        || model.contains("deepseek")
+        || model.contains("gemini")
+}
+
 /// Tool definitions for zblade's internal tool execution.
 ///
 /// NOTE: These are NOT prompts for the AI model - prompting is zcoderd's responsibility.
@@ -136,6 +152,129 @@ pub fn get_tool_definitions() -> Vec<Value> {
         }),
         serde_json::json!({
             "type": "function",
+            "name": "read_many_files",
+            "function": {
+                "name": "read_many_files",
+                "description": "Read many files by glob patterns in a single bounded, parallelized call. Returns per-file errors and truncation metadata.",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "paths": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Glob patterns to include"
+                        },
+                        "exclude": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Optional glob patterns to exclude"
+                        },
+                        "max_files": {
+                            "type": "integer",
+                            "description": "Maximum number of files to return"
+                        },
+                        "max_bytes_per_file": {
+                            "type": "integer",
+                            "description": "Maximum bytes to read per file"
+                        },
+                        "include_line_numbers": {
+                            "type": "boolean",
+                            "description": "Include line numbers in rendered content"
+                        }
+                    },
+                    "required": ["paths"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "name": "batch",
+            "function": {
+                "name": "batch",
+                "description": "Execute multiple read-only tool calls concurrently with all-settled semantics and ordered aggregation.",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "calls": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "tool": { "type": "string" },
+                                    "arguments": { "type": "object" }
+                                },
+                                "required": ["tool", "arguments"],
+                                "additionalProperties": false
+                            }
+                        },
+                        "max_parallel": {
+                            "type": "integer",
+                            "description": "Maximum concurrent calls"
+                        },
+                        "fail_fast": {
+                            "type": "boolean",
+                            "description": "Stop remaining queued calls after first failure"
+                        },
+                        "ordered": {
+                            "type": "boolean",
+                            "description": "Preserve input order in results"
+                        },
+                        "cancel_after_ms": {
+                            "type": "integer",
+                            "description": "Optional time budget in milliseconds before cancelling queued calls"
+                        }
+                    },
+                    "required": ["calls"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "name": "codebase_investigator",
+            "function": {
+                "name": "codebase_investigator",
+                "description": "Run a bounded read-only investigation pass and return structured findings with evidence references.",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "objective": {
+                            "type": "string",
+                            "description": "Investigation goal"
+                        },
+                        "scope": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Optional glob scope for files"
+                        },
+                        "max_turns": {
+                            "type": "integer",
+                            "description": "Upper bound for investigation turns"
+                        },
+                        "max_tool_calls": {
+                            "type": "integer",
+                            "description": "Upper bound for internal read calls"
+                        },
+                        "output_format": {
+                            "type": "string",
+                            "description": "Output format: json (default) or markdown"
+                        },
+                        "cancel_after_ms": {
+                            "type": "integer",
+                            "description": "Optional time budget in milliseconds"
+                        }
+                    },
+                    "required": ["objective"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
             "name": "write_file",
             "function": {
                 "name": "write_file",
@@ -214,4 +353,79 @@ pub fn get_tool_definitions() -> Vec<Value> {
         }),
         // Note: todo_write is server-side only (handled by zcoderd)
     ]
+}
+
+pub fn get_tool_definitions_for_model(model_id: &str, composite_tools_enabled: bool) -> Vec<Value> {
+    let include_composite = composite_tools_enabled && is_reliable_composite_tool_model(model_id);
+    if include_composite {
+        return get_tool_definitions();
+    }
+
+    get_tool_definitions()
+        .into_iter()
+        .filter(|def| {
+            !def
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(is_composite_tool)
+                .unwrap_or(false)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{get_tool_definitions, get_tool_definitions_for_model};
+
+    #[test]
+    fn includes_composite_tool_definitions() {
+        let defs = get_tool_definitions();
+        let names = defs
+            .iter()
+            .filter_map(|value| value.get("name").and_then(|v| v.as_str()))
+            .collect::<Vec<&str>>();
+
+        assert!(names.contains(&"read_many_files"));
+        assert!(names.contains(&"batch"));
+        assert!(names.contains(&"codebase_investigator"));
+    }
+
+    #[test]
+    fn excludes_composite_tools_for_unqualified_model() {
+        let defs = get_tool_definitions_for_model("tiny-random-model", true);
+        let names = defs
+            .iter()
+            .filter_map(|value| value.get("name").and_then(|v| v.as_str()))
+            .collect::<Vec<&str>>();
+
+        assert!(!names.contains(&"read_many_files"));
+        assert!(!names.contains(&"batch"));
+        assert!(!names.contains(&"codebase_investigator"));
+    }
+
+    #[test]
+    fn includes_composite_tools_for_reliable_model_when_enabled() {
+        let defs = get_tool_definitions_for_model("gpt-5.2", true);
+        let names = defs
+            .iter()
+            .filter_map(|value| value.get("name").and_then(|v| v.as_str()))
+            .collect::<Vec<&str>>();
+
+        assert!(names.contains(&"read_many_files"));
+        assert!(names.contains(&"batch"));
+        assert!(names.contains(&"codebase_investigator"));
+    }
+
+    #[test]
+    fn excludes_composite_tools_when_flag_disabled() {
+        let defs = get_tool_definitions_for_model("gpt-5.2", false);
+        let names = defs
+            .iter()
+            .filter_map(|value| value.get("name").and_then(|v| v.as_str()))
+            .collect::<Vec<&str>>();
+
+        assert!(!names.contains(&"read_many_files"));
+        assert!(!names.contains(&"batch"));
+        assert!(!names.contains(&"codebase_investigator"));
+    }
 }
