@@ -119,7 +119,7 @@ pub fn run() {
                         "[LanguageService] Triggering startup indexing for: {}",
                         path_str
                     );
-                    let service = state.language_service.clone();
+                    let service = state.language_service.read().unwrap().clone();
 
                     match service.index_directory(".") {
                         Ok(stats) => {

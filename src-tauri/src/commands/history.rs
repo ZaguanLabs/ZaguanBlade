@@ -8,7 +8,8 @@ pub fn get_file_history(
     state: State<'_, AppState>,
 ) -> Result<Vec<crate::history::HistoryEntry>, String> {
     let path_buf = PathBuf::from(path);
-    Ok(state.history_service.get_history(&path_buf))
+    let history_service = state.history_service.read().unwrap().clone();
+    Ok(history_service.get_history(&path_buf))
 }
 
 #[tauri::command]
@@ -16,10 +17,12 @@ pub fn revert_file_to_snapshot(
     snapshot_id: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    state.history_service.revert_to(&snapshot_id)
+    let history_service = state.history_service.read().unwrap().clone();
+    history_service.revert_to(&snapshot_id)
 }
 
 #[tauri::command]
 pub fn undo_batch(group_id: String, state: State<'_, AppState>) -> Result<Vec<String>, String> {
-    state.history_service.undo_batch(&group_id)
+    let history_service = state.history_service.read().unwrap().clone();
+    history_service.undo_batch(&group_id)
 }

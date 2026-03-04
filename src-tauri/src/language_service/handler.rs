@@ -17,6 +17,7 @@ use tauri::async_runtime::spawn_blocking;
 use tauri::State;
 
 /// Handler for language intents
+#[derive(Clone)]
 pub struct LanguageHandler {
     service: Arc<LanguageService>,
 }

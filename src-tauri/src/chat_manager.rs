@@ -1812,22 +1812,13 @@ impl ChatManager {
             return DrainResult::None;
         };
 
-        // Drain a bounded number of events per cycle.
-        // Draining the entire channel in one pass can buffer most (or all) of a response
-        // before we emit the first UI delta, which makes streaming appear "stuck" until end.
-        const MAX_EVENTS_PER_DRAIN: usize = 64;
+        // Consume at most one provider event per drain call.
+        // This keeps processing incremental and avoids pull-style channel scanning work.
         let mut events: Vec<ProviderEvent> = Vec::new();
-        loop {
-            match rx.try_recv() {
-                Ok(ev) => {
-                    events.push(ev);
-                    if events.len() >= MAX_EVENTS_PER_DRAIN {
-                        break;
-                    }
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
-            }
+        match rx.try_recv() {
+            Ok(ev) => events.push(ev),
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
         }
 
         if events.is_empty() {

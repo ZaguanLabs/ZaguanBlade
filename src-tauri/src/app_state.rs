@@ -14,6 +14,13 @@ use notify::RecommendedWatcher;
 use std::sync::{atomic::AtomicBool, Arc, Mutex, RwLock};
 use std::path::PathBuf;
 
+fn project_data_root(workspace_root: Option<&PathBuf>) -> PathBuf {
+    workspace_root
+        .cloned()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".zblade")
+}
+
 pub struct AppState {
     pub chat_manager: Mutex<ChatManager>,
     pub conversation: Mutex<ConversationHistory>,
@@ -42,9 +49,9 @@ pub struct AppState {
     pub user_id: Mutex<Option<String>>, // Authenticated user ID from WebSocket
     pub protocol_version_emitted: AtomicBool, // Track protocol version broadcast
     pub fs_watcher: Mutex<Option<RecommendedWatcher>>, // Workspace file watcher
-    pub history_service: std::sync::Arc<crate::history::HistoryService>, // File history service
-    pub language_service: std::sync::Arc<crate::language_service::LanguageService>, // v1.3: Unified Language Service
-    pub language_handler: crate::language_service::LanguageHandler, // v1.3: Language Intent Handler
+    pub history_service: RwLock<std::sync::Arc<crate::history::HistoryService>>, // File history service
+    pub language_service: RwLock<std::sync::Arc<crate::language_service::LanguageService>>, // v1.3: Unified Language Service
+    pub language_handler: RwLock<crate::language_service::LanguageHandler>, // v1.3: Language Intent Handler
     pub uncommitted_changes: UncommittedChangeTracker, // Track AI changes pending accept/reject
     pub indexer_manager: Mutex<Option<crate::indexer::IndexerManager>>, // Project indexer
     pub feature_flags: FeatureFlags, // Headless migration feature flags
@@ -90,33 +97,37 @@ impl AppState {
         // The actual index will be corrected when models are fetched or when set_selected_model is called
         let initial_model_index = 0;
 
-        // Initialize conversation store
-        let storage_path = dirs::data_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("zaguan")
-            .join("conversations");
-
-        let conversation_store = conversation_store::ConversationStore::new(storage_path.clone())
-            .unwrap_or_else(|e| {
-                eprintln!("Failed to initialize conversation store: {}", e);
-                // Fallback to temp directory
-                conversation_store::ConversationStore::new(
-                    std::env::temp_dir().join("zaguan_conversations"),
-                )
-                .expect("Failed to create conversation store in temp directory")
-            });
-
-        // Initialize History Service
-        // Use zaguan/history in data dir
-        let history_service = std::sync::Arc::new(crate::history::HistoryService::new(
-            &storage_path.parent().unwrap(),
-        ));
-
         let mut workspace_manager = WorkspaceManager::new();
         // Override workspace if provided via CLI
         if let Some(path_str) = &initial_path {
             workspace_manager.set_workspace(std::path::PathBuf::from(path_str));
         }
+
+        // Ensure project-local .zblade exists and use it for project-scoped persistence.
+        if let Some(ws_root) = workspace_manager.workspace.as_ref() {
+            if let Err(e) = crate::project_settings::init_zblade_dir(ws_root) {
+                eprintln!("[INIT] Failed to initialize .zblade directory: {}", e);
+            }
+        }
+
+        let project_data_dir = project_data_root(workspace_manager.workspace.as_ref());
+
+        // Initialize conversation store
+        let storage_path = project_data_dir.join("artifacts").join("conversations");
+
+        let conversation_store = conversation_store::ConversationStore::new(storage_path.clone())
+            .unwrap_or_else(|e| {
+                eprintln!("Failed to initialize conversation store: {}", e);
+                // Fallback to temp directory
+                conversation_store::ConversationStore::new(std::env::temp_dir().join("zblade_conversations"))
+                .expect("Failed to create conversation store in temp directory")
+            });
+
+        // Initialize History Service
+        // Keep project history under <workspace>/.zblade/history
+        let history_service = std::sync::Arc::new(crate::history::HistoryService::new(
+            &project_data_dir,
+        ));
 
         // Discover git repository from workspace path
         let git_dir = workspace_manager
@@ -147,14 +158,14 @@ impl AppState {
         );
 
         // Initialize Language Service
-        let db_path = dirs::data_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("zaguan")
-            .join("symbols.db");
+        let db_path = project_data_dir.join("index").join("symbols.db");
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent).ok();
         }
-        let ls_root = initial_path.as_deref().unwrap_or(".");
+        let ls_root = workspace_manager
+            .workspace
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("."));
 
         let symbol_store = std::sync::Arc::new(
             crate::symbol_index::store::SymbolStore::new(&db_path)
@@ -163,7 +174,7 @@ impl AppState {
 
         let language_service = std::sync::Arc::new(
             crate::language_service::LanguageService::new(
-                std::path::PathBuf::from(ls_root),
+                ls_root,
                 symbol_store,
             )
             .expect("Failed to initialize Language Service"),
@@ -209,9 +220,9 @@ impl AppState {
             warmup_client, // v2.1: Cache warmup
             fs_watcher: Mutex::new(None),
             protocol_version_emitted: AtomicBool::new(false),
-            history_service,
-            language_service,
-            language_handler,
+            history_service: RwLock::new(history_service),
+            language_service: RwLock::new(language_service),
+            language_handler: RwLock::new(language_handler),
             uncommitted_changes: UncommittedChangeTracker::new(),
             indexer_manager: Mutex::new(indexer_manager),
             feature_flags: FeatureFlags::new(),

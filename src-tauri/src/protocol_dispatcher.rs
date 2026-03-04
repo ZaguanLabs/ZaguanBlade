@@ -1133,8 +1133,11 @@ pub async fn dispatch(
                 }
                 other => {
                     eprintln!("[Language] Intent received: {:?}", other);
-                    let maybe_event = state
-                        .language_handler
+                    let handler = {
+                        let guard = state.language_handler.read().unwrap();
+                        (*guard).clone()
+                    };
+                    let maybe_event = handler
                         .handle(other, intent_id, Some(&state))
                         .await
                         .map_err(|e| blade_protocol::BladeError::Internal {

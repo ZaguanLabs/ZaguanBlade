@@ -431,10 +431,9 @@ impl AiWorkflow {
                         if let Some(app) = &context.app_handle {
                             use tauri::Manager;
                             let state = app.state::<crate::app_state::AppState>();
+                            let history_service = state.history_service.read().unwrap().clone();
                             if full_path.exists() {
-                                match state
-                                    .history_service
-                                    .create_snapshot(&full_path, Some(call.id.clone()))
+                                match history_service.create_snapshot(&full_path, Some(call.id.clone()))
                                 {
                                     Ok(entry) => {
                                         println!("[HISTORY] Snapshot created for {}", change.path);
@@ -522,8 +521,9 @@ impl AiWorkflow {
                                         // cumulative diff (instead of only the most recent edit).
                                         let (change_id, base_snapshot_id, base_content) =
                                             if let Some(existing_change) = existing {
-                                                let baseline = state
-                                                    .history_service
+                                                let history_service =
+                                                    state.history_service.read().unwrap().clone();
+                                                let baseline = history_service
                                                     .get_snapshot_content(&existing_change.snapshot_id)
                                                     .unwrap_or_else(|_| original_content.clone());
                                                 (
@@ -614,10 +614,9 @@ impl AiWorkflow {
                         if let Some(app) = &context.app_handle {
                             use tauri::Manager;
                             let state = app.state::<crate::app_state::AppState>();
+                            let history_service = state.history_service.read().unwrap().clone();
                             if full_path.exists() {
-                                match state
-                                    .history_service
-                                    .create_snapshot(&full_path, Some(call.id.clone()))
+                                match history_service.create_snapshot(&full_path, Some(call.id.clone()))
                                 {
                                     Ok(entry) => {
                                         println!("[HISTORY] Snapshot created for {}", change.path);

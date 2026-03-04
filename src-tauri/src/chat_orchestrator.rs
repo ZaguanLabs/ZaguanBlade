@@ -14,7 +14,7 @@ fn infer_context_files_from_query(
     let mut files = Vec::new();
     let mut seen = HashSet::new();
 
-    let service = state.language_service.clone();
+    let service = state.language_service.read().unwrap().clone();
 
     if let Ok(results) = service.search_symbols(query, limit.saturating_mul(4)) {
         for result in results {
@@ -356,6 +356,9 @@ pub async fn handle_send_message<R: Runtime>(
         };
 
         loop {
+            // Register for the *next* provider event before draining so we don't miss
+            // notifications that arrive between processing and waiting.
+            let next_event = event_notifier.notified();
             let state = app_handle.state::<AppState>();
 
             let (result, is_streaming, session_id, has_rx, has_pending) = {
@@ -487,11 +490,7 @@ pub async fn handle_send_message<R: Runtime>(
                 }
 
                 if !has_pending {
-                    let _ = tokio::time::timeout(
-                        std::time::Duration::from_millis(250),
-                        event_notifier.notified(),
-                    )
-                    .await;
+                    next_event.await;
                 }
                 continue;
             } else if let DrainResult::Research {
