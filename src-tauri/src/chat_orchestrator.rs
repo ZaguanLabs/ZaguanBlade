@@ -349,39 +349,26 @@ pub async fn handle_send_message<R: Runtime>(
 
     tauri::async_runtime::spawn(async move {
         let mut last_session_id: Option<String> = None;
+        let event_notifier = {
+            let state = app_handle.state::<AppState>();
+            let mgr = state.chat_manager.lock().unwrap();
+            mgr.event_notifier()
+        };
 
         loop {
-            // Check if we're actually streaming before processing
-            let (is_streaming, has_rx, has_pending) = {
-                let state = app_handle.state::<AppState>();
-                let mgr = state.chat_manager.lock().unwrap();
-                (mgr.streaming, mgr.rx.is_some(), !mgr.pending_results.is_empty())
-            };
-
-            // If not streaming and no receiver AND no pending results, sleep longer to reduce CPU usage
-            // IMPORTANT: We must check pending_results because drain_events may have queued results
-            // (e.g., ToolCalls) that need to be processed even after rx is cleared
-            if !is_streaming && !has_rx && !has_pending {
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                continue;
-            }
-
-            // If we have a receiver but not actively streaming (e.g., waiting for tool results),
-            // check less frequently to avoid CPU spike
-            if !is_streaming && has_rx && !has_pending {
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await; // 20 FPS when waiting
-            } else if is_streaming && !has_pending {
-                tokio::time::sleep(std::time::Duration::from_millis(16)).await; // ~60 FPS when active
-            }
-            // If has_pending, process immediately without sleeping
-
             let state = app_handle.state::<AppState>();
 
-            let (result, is_streaming, session_id) = {
+            let (result, is_streaming, session_id, has_rx, has_pending) = {
                 let mut mgr = state.chat_manager.lock().unwrap();
                 let mut conversation = state.conversation.lock().unwrap();
                 let res = mgr.drain_events(&mut conversation);
-                (res, mgr.streaming, mgr.session_id.clone())
+                (
+                    res,
+                    mgr.streaming,
+                    mgr.session_id.clone(),
+                    mgr.rx.is_some(),
+                    !mgr.pending_results.is_empty(),
+                )
             };
 
             // If the backend session_id changes, reset loop detection history.
@@ -411,11 +398,6 @@ pub async fn handle_send_message<R: Runtime>(
                 // 2. No active receiver channel (no WebSocket connection waiting for events)
                 // This fixes the bug where the loop would break after continue_tool_batch
                 // because streaming=false but rx=Some(channel) - we're still waiting for events!
-                let has_rx = {
-                    let mgr = state.chat_manager.lock().unwrap();
-                    mgr.rx.is_some()
-                };
-                
                 if !is_streaming && !has_rx {
                     // Auto-save conversation before emitting done
                     {
@@ -503,6 +485,15 @@ pub async fn handle_send_message<R: Runtime>(
                     window.emit("chat-done", ()).unwrap_or_default();
                     break;
                 }
+
+                if !has_pending {
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_millis(250),
+                        event_notifier.notified(),
+                    )
+                    .await;
+                }
+                continue;
             } else if let DrainResult::Research {
                 content,
                 suggested_name,

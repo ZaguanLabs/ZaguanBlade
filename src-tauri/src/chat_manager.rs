@@ -67,33 +67,45 @@ pub enum DrainResult {
 
 struct ProviderEventSender {
     tx: mpsc::Sender<ProviderEvent>,
+    notify: Arc<tokio::sync::Notify>,
 }
 
 impl ProviderEventSender {
-    fn new(tx: mpsc::Sender<ProviderEvent>) -> Self {
-        Self { tx }
+    fn new(tx: mpsc::Sender<ProviderEvent>, notify: Arc<tokio::sync::Notify>) -> Self {
+        Self { tx, notify }
+    }
+
+    fn send_provider_event(
+        &self,
+        event: ProviderEvent,
+    ) -> Result<(), mpsc::SendError<ProviderEvent>> {
+        let res = self.tx.send(event);
+        if res.is_ok() {
+            self.notify.notify_one();
+        }
+        res
     }
 
     fn send(&self, event: ChatEvent) -> Result<(), mpsc::SendError<ProviderEvent>> {
-        self.tx.send(event.into())
+        self.send_provider_event(event.into())
     }
 
     fn send_chunk(&self, chunk: String) -> Result<(), mpsc::SendError<ProviderEvent>> {
-        self.tx.send(ProviderEvent::Chunk(chunk))
+        self.send_provider_event(ProviderEvent::Chunk(chunk))
     }
 
     fn send_reasoning_chunk(
         &self,
         chunk: String,
     ) -> Result<(), mpsc::SendError<ProviderEvent>> {
-        self.tx.send(ProviderEvent::ReasoningChunk(chunk))
+        self.send_provider_event(ProviderEvent::ReasoningChunk(chunk))
     }
 
     fn send_tool_activity(
         &self,
         payload: ToolActivityPayload,
     ) -> Result<(), mpsc::SendError<ProviderEvent>> {
-        self.tx.send(ProviderEvent::ToolActivity(payload))
+        self.send_provider_event(ProviderEvent::ToolActivity(payload))
     }
 }
 
@@ -162,6 +174,7 @@ pub struct ChatManager {
     pub pending_results: std::collections::VecDeque<DrainResult>,
     ws_client: Option<Arc<BladeWsClient>>, // Persistent connection for the conversation
     pending_tool_progress: HashMap<String, String>, // tool_call_id -> tool_name from tool_progress (cleared when tool_call arrives)
+    event_notify: Arc<tokio::sync::Notify>,
     active_provider: ProviderId,
     active_model_id: String,
     stream_plain_text: bool,
@@ -198,6 +211,7 @@ impl ChatManager {
             pending_results: std::collections::VecDeque::new(),
             ws_client: None,
             pending_tool_progress: HashMap::new(),
+            event_notify: Arc::new(tokio::sync::Notify::new()),
             active_provider: ProviderId::Zaguan,
             active_model_id: String::new(),
             stream_plain_text: false,
@@ -212,6 +226,10 @@ impl ChatManager {
 
     pub(crate) fn composite_tools_enabled(&self) -> bool {
         self.composite_tools_enabled
+    }
+
+    pub fn event_notifier(&self) -> Arc<tokio::sync::Notify> {
+        self.event_notify.clone()
     }
 
     fn to_blade_conversation_messages(
@@ -501,7 +519,7 @@ impl ChatManager {
 
         // Convert WebSocket events to ChatEvent channel
         let (tx, rx) = mpsc::channel();
-        let tx = ProviderEventSender::new(tx);
+        let tx = ProviderEventSender::new(tx, self.event_notify.clone());
 
         // Create a channel to send session_id back to main thread
         let (session_tx, session_rx) = std::sync::mpsc::channel();
@@ -967,14 +985,11 @@ impl ChatManager {
             model: model_name.clone(),
             messages,
             stream: true,
-            tools: Some(get_tool_definitions_for_model(
-                &model_name,
-                composite_tools_enabled,
-            )),
+            tools: Some(get_tool_definitions_for_model(&model_name, composite_tools_enabled)),
         };
 
         let (tx, rx) = mpsc::channel();
-        let tx = ProviderEventSender::new(tx);
+        let tx = ProviderEventSender::new(tx, self.event_notify.clone());
         let url = format!(
             "{}/api/chat",
             api_config.ollama_url.trim_end_matches('/')
@@ -1373,7 +1388,7 @@ impl ChatManager {
             api_config.openai_compat_url.trim_end_matches('/')
         );
         let (tx, rx) = mpsc::channel();
-        let tx = ProviderEventSender::new(tx);
+        let tx = ProviderEventSender::new(tx, self.event_notify.clone());
 
         let task = tokio::spawn(async move {
             #[derive(Deserialize)]
@@ -1797,11 +1812,19 @@ impl ChatManager {
             return DrainResult::None;
         };
 
-        // Aggressively drain all available events from the channel
+        // Drain a bounded number of events per cycle.
+        // Draining the entire channel in one pass can buffer most (or all) of a response
+        // before we emit the first UI delta, which makes streaming appear "stuck" until end.
+        const MAX_EVENTS_PER_DRAIN: usize = 64;
         let mut events: Vec<ProviderEvent> = Vec::new();
         loop {
             match rx.try_recv() {
-                Ok(ev) => events.push(ev),
+                Ok(ev) => {
+                    events.push(ev);
+                    if events.len() >= MAX_EVENTS_PER_DRAIN {
+                        break;
+                    }
+                }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
             }
