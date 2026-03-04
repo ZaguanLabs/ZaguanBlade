@@ -232,6 +232,10 @@ impl ChatManager {
         self.event_notify.clone()
     }
 
+    pub fn has_pending_done_without_tools(&self) -> bool {
+        self.pending_done_without_tools
+    }
+
     fn to_blade_conversation_messages(
         conversation: &ConversationHistory,
     ) -> Vec<serde_json::Value> {

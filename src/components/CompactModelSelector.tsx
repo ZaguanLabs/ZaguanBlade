@@ -46,9 +46,19 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
     useEffect(() => {
         if (isOpen && dropdownRef.current && selectedId) {
             requestAnimationFrame(() => {
-                const selectedButton = dropdownRef.current?.querySelector(`[data-model-id="${selectedId}"]`);
-                if (selectedButton) {
-                    selectedButton.scrollIntoView({ behavior: 'auto', block: 'nearest' });
+                const container = dropdownRef.current;
+                const selectedButton = container?.querySelector<HTMLElement>(`[data-model-id="${selectedId}"]`);
+                if (container && selectedButton) {
+                    const itemTop = selectedButton.offsetTop;
+                    const itemBottom = itemTop + selectedButton.offsetHeight;
+                    const viewportTop = container.scrollTop;
+                    const viewportBottom = viewportTop + container.clientHeight;
+
+                    if (itemTop < viewportTop) {
+                        container.scrollTop = itemTop;
+                    } else if (itemBottom > viewportBottom) {
+                        container.scrollTop = itemBottom - container.clientHeight;
+                    }
                 }
             });
         }
@@ -87,7 +97,15 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
             </button>
 
             {isOpen && (
-                <div ref={dropdownRef} className="fixed bottom-[60px] right-3 w-80 py-1 bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded-lg shadow-xl z-[100] max-h-[300px] overflow-y-auto flex flex-col gap-0.5 animate-in fade-in zoom-in-95 duration-100 origin-bottom-right" style={{ boxShadow: '0 8px 30px rgba(0, 0, 0, 0.4), 0 0 1px rgba(255, 255, 255, 0.1)' }}>
+                <div
+                    ref={dropdownRef}
+                    onWheel={(event) => event.stopPropagation()}
+                    className="fixed bottom-[60px] right-3 w-80 py-1 bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded-lg shadow-xl z-[100] max-h-[300px] overflow-y-auto overscroll-contain flex flex-col gap-0.5 animate-in fade-in zoom-in-95 duration-100 origin-bottom-right"
+                    style={{
+                        boxShadow: '0 8px 30px rgba(0, 0, 0, 0.4), 0 0 1px rgba(255, 255, 255, 0.1)',
+                        overscrollBehavior: 'contain',
+                    }}
+                >
                     {models.length === 0 && (
                         <div className="px-2 py-1.5 text-[10px] text-[var(--fg-tertiary)] text-center italic">
                             No models available

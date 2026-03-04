@@ -361,7 +361,14 @@ pub async fn handle_send_message<R: Runtime>(
             let next_event = event_notifier.notified();
             let state = app_handle.state::<AppState>();
 
-            let (result, is_streaming, session_id, has_rx, has_pending) = {
+            let (
+                result,
+                is_streaming,
+                session_id,
+                has_rx,
+                has_pending,
+                has_pending_done_without_tools,
+            ) = {
                 let mut mgr = state.chat_manager.lock().unwrap();
                 let mut conversation = state.conversation.lock().unwrap();
                 let res = mgr.drain_events(&mut conversation);
@@ -371,6 +378,7 @@ pub async fn handle_send_message<R: Runtime>(
                     mgr.session_id.clone(),
                     mgr.rx.is_some(),
                     !mgr.pending_results.is_empty(),
+                    mgr.has_pending_done_without_tools(),
                 )
             };
 
@@ -489,7 +497,7 @@ pub async fn handle_send_message<R: Runtime>(
                     break;
                 }
 
-                if !has_pending {
+                if !has_pending && !has_pending_done_without_tools {
                     next_event.await;
                 }
                 continue;
