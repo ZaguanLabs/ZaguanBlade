@@ -1818,7 +1818,12 @@ impl ChatManager {
         match rx.try_recv() {
             Ok(ev) => events.push(ev),
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                // Terminal state: producer side is gone, so this turn cannot emit more events.
+                // Clear receiver + streaming so orchestrator can finalize instead of waiting forever.
+                self.rx = None;
+                self.streaming = false;
+            }
         }
 
         if events.is_empty() {

@@ -1172,6 +1172,7 @@ export function useChat() {
                 payload: { model: selectedModelIdRef.current }
             });
             resetStreamingState();
+            firstDispatchRef.current = true;
             setMessages([]);
             setActiveTodos([]);
             setMessageQueue([]);
@@ -1211,6 +1212,7 @@ export function useChat() {
         setConversation: setMessages,
         loadConversation: useCallback((msgs: ChatMessage[]) => {
             resetStreamingState();
+            firstDispatchRef.current = true;
             setMessages(msgs);
             setActiveTodos([]);
             setMessageQueue([]);

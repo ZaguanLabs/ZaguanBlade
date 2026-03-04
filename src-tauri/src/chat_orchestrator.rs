@@ -326,7 +326,7 @@ pub async fn handle_send_message<R: Runtime>(
         let composite_tools_enabled = state.feature_flags.composite_tools_enabled();
 
         mgr.start_stream(
-            message,
+            actual_message,
             &mut conversation,
             &config,
             &models,

@@ -19,6 +19,18 @@ interface ResearchProgress {
     isActive: boolean;
 }
 
+const isTerminalResearchStage = (stage: string): boolean => {
+    const normalized = stage.toLowerCase();
+    return (
+        normalized.includes('complete')
+        || normalized.includes('done')
+        || normalized.includes('error')
+        || normalized.includes('fail')
+        || normalized.includes('cancel')
+        || normalized.includes('stop')
+    );
+};
+
 export function useLayoutEvents({
     setTabs,
     setActiveTabId,
@@ -202,8 +214,23 @@ export function useLayoutEvents({
                 for (let i = updated.length - 1; i >= 0; i--) {
                     if (updated[i].role === 'Assistant') {
                         const msg = updated[i];
-                        const activityId = crypto.randomUUID();
-                        const newActivity = {
+                        const existingActivities = msg.researchActivities || [];
+                        const lastActivity = existingActivities.length > 0
+                            ? existingActivities[existingActivities.length - 1]
+                            : null;
+
+                        const shouldUpdateLast = !!lastActivity && (
+                            !isTerminalResearchStage(lastActivity.stage)
+                            || (
+                                lastActivity.stage === event.payload.stage
+                                && lastActivity.message === event.payload.message
+                            )
+                        );
+
+                        const activityId = shouldUpdateLast && lastActivity
+                            ? lastActivity.id
+                            : crypto.randomUUID();
+                        const nextActivity = {
                             id: activityId,
                             message: event.payload.message,
                             stage: event.payload.stage,
@@ -211,8 +238,15 @@ export function useLayoutEvents({
                             timestamp: Date.now(),
                         };
 
-                        const existingActivities = msg.researchActivities || [];
-                        const newActivities = [...existingActivities, newActivity];
+                        const newActivities = shouldUpdateLast
+                            ? [
+                                ...existingActivities.slice(0, -1),
+                                {
+                                    ...lastActivity!,
+                                    ...nextActivity,
+                                }
+                            ]
+                            : [...existingActivities, nextActivity];
 
                         const newBlocks = [...(msg.blocks || [])];
                         if (!newBlocks.some(b => b.type === 'research_progress' && b.id === activityId)) {
@@ -301,16 +335,7 @@ export function useLayoutEvents({
                     if (!activities || activities.length === 0) return msg;
 
                     const updatedActivities = activities.map(activity => {
-                        const stage = activity.stage.toLowerCase();
-                        const isTerminalStage =
-                            stage.includes('complete')
-                            || stage.includes('done')
-                            || stage.includes('error')
-                            || stage.includes('fail')
-                            || stage.includes('cancel')
-                            || stage.includes('stop');
-
-                        if (isTerminalStage) return activity;
+                        if (isTerminalResearchStage(activity.stage)) return activity;
 
                         changed = true;
                         return {
