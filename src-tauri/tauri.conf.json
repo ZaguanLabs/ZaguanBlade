@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Zaguán Blade (alpha)",
+        "title": "Zaguán Blade",
         "width": 1920,
         "height": 1080,
         "resizable": true,
