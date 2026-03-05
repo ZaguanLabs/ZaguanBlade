@@ -105,6 +105,10 @@ pub fn set_feature_flag(
             state.feature_flags.set_composite_tools_enabled(value);
             Ok(())
         }
+        "grep_timeout_enforced" => {
+            state.feature_flags.set_grep_timeout_enforced(value);
+            Ok(())
+        }
         _ => Err(format!("Unknown feature flag: {}", flag)),
     }
 }

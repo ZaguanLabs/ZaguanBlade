@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use regex::Regex;
 use serde::Deserialize;
@@ -186,6 +186,11 @@ const INVESTIGATOR_MAX_TURNS_CAP: usize = 16;
 const INVESTIGATOR_DEFAULT_MAX_TOOL_CALLS: usize = 40;
 const INVESTIGATOR_MAX_TOOL_CALLS_CAP: usize = 120;
 
+const GREP_TIMEOUT_DEFAULT_MS: u64 = 8_000;
+const GREP_TIMEOUT_MIN_MS: u64 = 500;
+const GREP_TIMEOUT_MAX_MS: u64 = 30_000;
+const DEPENDENCY_DIRS: &[&str] = &["node_modules", "vendor"];
+
 const TOOL_METRICS_SAMPLE_CAP: usize = 512;
 
 #[derive(Default, Clone)]
@@ -195,8 +200,19 @@ struct ToolMetricState {
     failures: u64,
 }
 
+#[derive(Default, Clone)]
+struct GrepSearchMetricState {
+    total_calls: u64,
+    timeout_count: u64,
+    total_duration_ms: u64,
+    total_results_returned: u64,
+    durations_ms: Vec<u64>,
+}
+
 lazy_static! {
     static ref TOOL_METRICS: Mutex<HashMap<String, ToolMetricState>> = Mutex::new(HashMap::new());
+    static ref GREP_SEARCH_METRICS: Mutex<GrepSearchMetricState> =
+        Mutex::new(GrepSearchMetricState::default());
 }
 
 fn percentile(sorted: &[u64], p: f64) -> u64 {
@@ -254,6 +270,58 @@ fn metric_snapshot(tool_name: &str) -> serde_json::Value {
     })
 }
 
+fn record_grep_search_metric(elapsed_ms: u64, timed_out: bool, result_count: usize) {
+    if let Ok(mut metrics) = GREP_SEARCH_METRICS.lock() {
+        metrics.total_calls += 1;
+        if timed_out {
+            metrics.timeout_count += 1;
+        }
+        metrics.total_duration_ms += elapsed_ms;
+        metrics.total_results_returned += result_count as u64;
+        metrics.durations_ms.push(elapsed_ms);
+        if metrics.durations_ms.len() > TOOL_METRICS_SAMPLE_CAP {
+            let drop_count = metrics.durations_ms.len() - TOOL_METRICS_SAMPLE_CAP;
+            metrics.durations_ms.drain(0..drop_count);
+        }
+    }
+}
+
+fn grep_search_metric_snapshot() -> serde_json::Value {
+    let Ok(metrics) = GREP_SEARCH_METRICS.lock() else {
+        return serde_json::json!({
+            "available": false
+        });
+    };
+
+    if metrics.total_calls == 0 {
+        return serde_json::json!({
+            "grep_search.total": 0,
+            "grep_search.timeout_count": 0,
+            "grep_search.timeout_rate": 0.0,
+            "grep_search.avg_duration_ms": 0.0,
+            "grep_search.p95_duration_ms": 0,
+            "grep_search.avg_results_returned": 0.0
+        });
+    }
+
+    let mut lats = metrics.durations_ms.clone();
+    lats.sort_unstable();
+
+    let total = metrics.total_calls;
+    let timeout_rate = metrics.timeout_count as f64 / total as f64;
+    let avg_duration_ms = metrics.total_duration_ms as f64 / total as f64;
+    let avg_results_returned = metrics.total_results_returned as f64 / total as f64;
+
+    serde_json::json!({
+        "grep_search.total": total,
+        "grep_search.timeout_count": metrics.timeout_count,
+        "grep_search.timeout_rate": timeout_rate,
+        "grep_search.avg_duration_ms": avg_duration_ms,
+        "grep_search.p95_duration_ms": percentile(&lats, 0.95),
+        "grep_search.avg_results_returned": avg_results_returned
+    })
+}
+
 impl ToolResult {
     pub fn ok(content: impl Into<String>) -> Self {
         Self {
@@ -306,8 +374,12 @@ impl ToolResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_patch_to_string, execute_tool};
+    use super::{
+        apply_patch_to_string, execute_tool, grep_search, parse_grep_timeout_ms, GREP_TIMEOUT_DEFAULT_MS,
+        GREP_TIMEOUT_MAX_MS, GREP_TIMEOUT_MIN_MS,
+    };
     use std::fs;
+    use std::collections::HashMap;
     use tempfile::tempdir;
 
     #[test]
@@ -366,6 +438,104 @@ mod tests {
         assert!(metrics["calls"].as_u64().unwrap_or(0) >= 1);
         assert!(metrics["latency_ms"]["p50"].is_number());
         assert!(metrics["latency_ms"]["p95"].is_number());
+    }
+
+    #[test]
+    fn grep_timeout_clamps_min_default_max() {
+        let empty = HashMap::new();
+        assert_eq!(parse_grep_timeout_ms(&empty), GREP_TIMEOUT_DEFAULT_MS);
+
+        let below_min = serde_json::from_str::<HashMap<String, serde_json::Value>>(
+            r#"{"timeout_ms":100}"#,
+        )
+        .expect("parse args");
+        assert_eq!(parse_grep_timeout_ms(&below_min), GREP_TIMEOUT_MIN_MS);
+
+        let above_max = serde_json::from_str::<HashMap<String, serde_json::Value>>(
+            r#"{"timeout_ms":999999}"#,
+        )
+        .expect("parse args");
+        assert_eq!(parse_grep_timeout_ms(&above_max), GREP_TIMEOUT_MAX_MS);
+    }
+
+    #[test]
+    fn grep_timeout_returns_structured_partial_payload() {
+        let workspace = tempdir().expect("tempdir");
+        let file_path = workspace.path().join("sample.txt");
+        fs::write(&file_path, "needle one\nneedle two\nneedle three\n").expect("write test file");
+
+        let result = grep_search(
+            workspace.path(),
+            &serde_json::from_str::<HashMap<String, serde_json::Value>>(
+                r#"{"pattern":"needle","path":".","timeout_ms":500,"include_dependencies":false,"__test_force_timeout":true}"#,
+            )
+            .expect("parse args"),
+            true,
+        );
+
+        assert!(result.success, "timeout path should be graceful");
+        let payload: serde_json::Value =
+            serde_json::from_str(&result.content).expect("timeout payload json");
+        assert_eq!(payload["timed_out"].as_bool(), Some(true));
+        assert_eq!(payload["timeout_ms"].as_u64(), Some(GREP_TIMEOUT_MIN_MS));
+        assert!(payload["partial_results"].is_array());
+        assert!(payload["result_count"].is_u64());
+        assert_eq!(payload["searched_path"].as_str(), Some("."));
+        assert!(payload["next_step_hint"]
+            .as_str()
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .contains("narrow"));
+    }
+
+    #[test]
+    fn grep_non_timeout_behavior_is_unchanged_plain_output() {
+        let workspace = tempdir().expect("tempdir");
+        let file_path = workspace.path().join("alpha.txt");
+        fs::write(&file_path, "first\nneedle\nlast\n").expect("write test file");
+
+        let result = grep_search(
+            workspace.path(),
+            &serde_json::from_str::<HashMap<String, serde_json::Value>>(
+                r#"{"pattern":"needle","path":".","timeout_ms":8000}"#,
+            )
+            .expect("parse args"),
+            true,
+        );
+
+        assert!(result.success);
+        assert!(result.content.contains("needle"));
+        assert!(!result.content.trim_start().starts_with('{'));
+    }
+
+    #[test]
+    fn grep_dependency_opt_in_respected() {
+        let workspace = tempdir().expect("tempdir");
+        let dep_dir = workspace.path().join("node_modules").join("pkg");
+        fs::create_dir_all(&dep_dir).expect("create dependency dir");
+        fs::write(dep_dir.join("index.js"), "const token = 'dep-hit';\n").expect("write dep file");
+
+        let without_opt_in = grep_search(
+            workspace.path(),
+            &serde_json::from_str::<HashMap<String, serde_json::Value>>(
+                r#"{"pattern":"dep-hit","path":".","timeout_ms":8000,"include_dependencies":false}"#,
+            )
+            .expect("parse args"),
+            true,
+        );
+        assert!(without_opt_in.success);
+        assert!(!without_opt_in.content.contains("dep-hit"));
+
+        let with_opt_in = grep_search(
+            workspace.path(),
+            &serde_json::from_str::<HashMap<String, serde_json::Value>>(
+                r#"{"pattern":"dep-hit","path":".","timeout_ms":8000,"include_dependencies":true}"#,
+            )
+            .expect("parse args"),
+            true,
+        );
+        assert!(with_opt_in.success);
+        assert!(with_opt_in.content.contains("dep-hit"));
     }
 }
 
@@ -456,7 +626,7 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
     tool_name: &str,
     raw_args: &str,
     editor_state: Option<&EditorState>,
-    _app_handle: Option<&tauri::AppHandle<R>>,
+    app_handle: Option<&tauri::AppHandle<R>>,
 ) -> ToolResult {
     // Claude models sometimes prefix arguments with {} - strip it
     // But don't strip if the entire string is just "{}"
@@ -481,12 +651,22 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
             }
         };
 
+    let grep_timeout_enforced = app_handle
+        .map(|handle| {
+            use tauri::Manager;
+            handle
+                .state::<crate::app_state::AppState>()
+                .feature_flags
+                .grep_timeout_enforced()
+        })
+        .unwrap_or(false);
+
     match tool_name {
         // Legacy tools (kept for compatibility)
         "read_file" => read_file(workspace_root, &args),
         "write_file" | "create_file" => write_file(workspace_root, &args),
         "edit_file" => edit_file(workspace_root, &args),
-        "grep_search" | "rg" => grep_search(workspace_root, &args),
+        "grep_search" | "rg" => grep_search(workspace_root, &args, grep_timeout_enforced),
         "codebase_search" => codebase_search(workspace_root, &args),
         "list_directory" | "list_dir" => list_directory(workspace_root, &args),
 
@@ -1482,13 +1662,42 @@ fn list_directory(workspace_root: &Path, args: &HashMap<String, serde_json::Valu
     get_workspace_structure(workspace_root, &new_args)
 }
 
-fn grep_search(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {
+fn parse_grep_timeout_ms(args: &HashMap<String, serde_json::Value>) -> u64 {
+    let timeout_ms = args
+        .get("timeout_ms")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(GREP_TIMEOUT_DEFAULT_MS);
+    timeout_ms.clamp(GREP_TIMEOUT_MIN_MS, GREP_TIMEOUT_MAX_MS)
+}
+
+fn is_dependency_path(path: &Path) -> bool {
+    path.components().any(|component| {
+        let value = component.as_os_str().to_string_lossy();
+        DEPENDENCY_DIRS.iter().any(|dir| value == *dir)
+    })
+}
+
+fn build_grep_next_step_hint(include_dependencies: bool) -> String {
+    if include_dependencies {
+        "Search timed out. Narrow your path to a focused subtree (for example src/internal or node_modules/<pkg>) and retry with a targeted pattern.".to_string()
+    } else {
+        "Search timed out. Narrow your path to src/internal or, for dependency code, retry with include_dependencies=true and a targeted dependency path like node_modules/<pkg>.".to_string()
+    }
+}
+
+fn grep_search(workspace_root: &Path, args: &HashMap<String, serde_json::Value>, enforce_timeout: bool) -> ToolResult {
     let Some(pattern) = get_str_arg(args, &["pattern", "query", "regex"]) else {
         return ToolResult::err(
             "grep_search requires a 'pattern' argument. Example: {\"pattern\": \"Priority\"}",
         );
     };
     let path = get_str_arg(args, &["path", "dir", "directory"]).unwrap_or_else(|| ".".to_string());
+    let include_dependencies = get_bool_arg(args, &["include_dependencies"], false);
+    let timeout_ms = if enforce_timeout {
+        Some(parse_grep_timeout_ms(args))
+    } else {
+        None
+    };
 
     let abs = match validate_path_under_workspace(workspace_root, Path::new(&path)) {
         Ok(p) => p,
@@ -1503,17 +1712,44 @@ fn grep_search(workspace_root: &Path, args: &HashMap<String, serde_json::Value>)
     // Load gitignore filter
     let gitignore_filter = create_gitignore_filter(workspace_root);
 
+    let started_at = Instant::now();
+    #[cfg(test)]
+    let force_timeout = get_bool_arg(args, &["__test_force_timeout"], false);
+    #[cfg(not(test))]
+    let force_timeout = false;
+
+    let mut timed_out = false;
     let mut out = String::new();
-    for entry in WalkDir::new(abs)
+    let mut partial_results: Vec<String> = Vec::new();
+    let deadline = if force_timeout {
+        Some(started_at)
+    } else {
+        timeout_ms.map(|ms| started_at + Duration::from_millis(ms))
+    };
+
+    let mut result_count = 0usize;
+
+    'file_loop: for entry in WalkDir::new(abs)
         .follow_links(false)
         .into_iter()
         .filter_map(Result::ok)
     {
+        if let Some(limit) = deadline {
+            if Instant::now() >= limit {
+                timed_out = true;
+                break 'file_loop;
+            }
+        }
+
         if !entry.file_type().is_file() {
             continue;
         }
 
         let path = entry.path();
+
+        if !include_dependencies && is_dependency_path(path) {
+            continue;
+        }
 
         // Check gitignore filter
         if let Some(ref filter) = gitignore_filter {
@@ -1527,16 +1763,62 @@ fn grep_search(workspace_root: &Path, args: &HashMap<String, serde_json::Value>)
         };
 
         for (idx, line) in text.lines().enumerate() {
+            if let Some(limit) = deadline {
+                if Instant::now() >= limit {
+                    timed_out = true;
+                    break 'file_loop;
+                }
+            }
+
             if re.is_match(line) {
-                out.push_str(&format!(
-                    "{}:{}:{}\n",
+                let hit = format!(
+                    "{}:{}:{}",
                     path.to_string_lossy(),
                     idx + 1,
                     line
-                ));
+                );
+                out.push_str(&hit);
+                out.push('\n');
+                partial_results.push(hit);
+                result_count += 1;
             }
         }
     }
+
+    let elapsed_ms = started_at.elapsed().as_millis() as u64;
+    record_grep_search_metric(elapsed_ms, timed_out, result_count);
+
+    if timed_out {
+        let effective_timeout_ms = timeout_ms.unwrap_or(GREP_TIMEOUT_DEFAULT_MS);
+        let payload = serde_json::json!({
+            "timed_out": true,
+            "timeout_ms": effective_timeout_ms,
+            "partial_results": partial_results,
+            "result_count": result_count,
+            "searched_path": path,
+            "next_step_hint": build_grep_next_step_hint(include_dependencies),
+            "metrics": grep_search_metric_snapshot(),
+        });
+
+        eprintln!(
+            "[TOOLS][grep_search] timed_out=true timeout_ms={} include_dependencies={} result_count={} elapsed_ms={} telemetry={}",
+            effective_timeout_ms,
+            include_dependencies,
+            result_count,
+            elapsed_ms,
+            grep_search_metric_snapshot(),
+        );
+
+        return ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default());
+    }
+
+    eprintln!(
+        "[TOOLS][grep_search] timed_out=false include_dependencies={} result_count={} elapsed_ms={} telemetry={}",
+        include_dependencies,
+        result_count,
+        elapsed_ms,
+        grep_search_metric_snapshot(),
+    );
 
     ToolResult::ok(out)
 }

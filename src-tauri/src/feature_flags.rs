@@ -20,6 +20,9 @@ pub struct FeatureFlags {
     /// When true, expose advanced composite tools (read_many_files, batch,
     /// codebase_investigator) for supported model families.
     composite_tools_enabled: AtomicBool,
+
+    /// When true, grep_search timeout bounds are enforced in executor.
+    grep_timeout_enforced: AtomicBool,
 }
 
 impl Default for FeatureFlags {
@@ -31,6 +34,8 @@ impl Default for FeatureFlags {
             tabs_backend_authority: AtomicBool::new(true),
             // Composite tool support enabled (still model-family gated)
             composite_tools_enabled: AtomicBool::new(true),
+            // Rollout flag: disabled by default until validated in staging
+            grep_timeout_enforced: AtomicBool::new(false),
         }
     }
 }
@@ -70,12 +75,23 @@ impl FeatureFlags {
         self.composite_tools_enabled.store(value, Ordering::Relaxed);
     }
 
+    // grep_search timeout enforcement
+
+    pub fn grep_timeout_enforced(&self) -> bool {
+        self.grep_timeout_enforced.load(Ordering::Relaxed)
+    }
+
+    pub fn set_grep_timeout_enforced(&self, value: bool) {
+        self.grep_timeout_enforced.store(value, Ordering::Relaxed);
+    }
+
     /// Returns a serializable snapshot of current flag values
     pub fn snapshot(&self) -> FeatureFlagsSnapshot {
         FeatureFlagsSnapshot {
             editor_backend_authority: self.editor_backend_authority(),
             tabs_backend_authority: self.tabs_backend_authority(),
             composite_tools_enabled: self.composite_tools_enabled(),
+            grep_timeout_enforced: self.grep_timeout_enforced(),
         }
     }
 }
@@ -86,4 +102,5 @@ pub struct FeatureFlagsSnapshot {
     pub editor_backend_authority: bool,
     pub tabs_backend_authority: bool,
     pub composite_tools_enabled: bool,
+    pub grep_timeout_enforced: bool,
 }
