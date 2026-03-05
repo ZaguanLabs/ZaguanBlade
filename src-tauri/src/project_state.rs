@@ -112,7 +112,12 @@ pub fn load_project_state(project_path: &str) -> Option<ProjectState> {
             return false; // Don't restore ephemeral tabs
         }
         if let Some(ref path) = tab.path {
-            let full_path = project_root.join(path);
+            // Check if path is absolute or relative
+            let full_path = if Path::new(path).is_absolute() {
+                Path::new(path).to_path_buf()
+            } else {
+                project_root.join(path)
+            };
             full_path.exists()
         } else {
             false
@@ -121,7 +126,12 @@ pub fn load_project_state(project_path: &str) -> Option<ProjectState> {
 
     // Update active_file if it no longer exists
     if let Some(ref active) = state.active_file {
-        let full_path = project_root.join(active);
+        // Check if active_file is absolute or relative
+        let full_path = if Path::new(active).is_absolute() {
+            Path::new(active).to_path_buf()
+        } else {
+            project_root.join(active)
+        };
         if !full_path.exists() {
             state.active_file = state.open_tabs.first().and_then(|t| t.path.clone());
         }

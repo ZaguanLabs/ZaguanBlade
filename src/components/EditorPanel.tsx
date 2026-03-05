@@ -1,10 +1,11 @@
 'use client';
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Suspense } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import CodeEditor, { type CodeEditorHandle } from './CodeEditor';
-import { MarkdownEditor } from './MarkdownEditor';
-import { PdfViewer } from './PdfViewer';
+const MarkdownEditor = React.lazy(() =>
+    import('./MarkdownEditor').then((module) => ({ default: module.MarkdownEditor }))
+);
+import type { CodeEditorHandle } from './CodeEditor';
 import { useEditorActions } from '../contexts/EditorContext';
 import { BladeDispatcher } from '../services/blade';
 import { BladeEvent, FileEvent } from '../types/blade';
@@ -13,6 +14,11 @@ import zbladeLogoUrl from '../assets/zblade-in-app-logo.png';
 import { FileChangeBar } from './editor/FileChangeBar';
 import { Breadcrumb } from './editor/Breadcrumb';
 import { useUncommittedChanges } from '../hooks/useUncommittedChanges';
+
+const CodeEditor = React.lazy(() => import('./CodeEditor'));
+const PdfViewer = React.lazy(() =>
+    import('./PdfViewer').then((module) => ({ default: module.PdfViewer }))
+);
 
 const WelcomePage: React.FC<{ onOpenSettings?: () => void }> = ({ onOpenSettings }) => {
     const [hasApiKey, setHasApiKey] = useState<boolean>(false);
@@ -315,7 +321,9 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             )}
             <div className="flex-1 min-h-0 relative w-full">
                 {isPdfFile ? (
-                    <PdfViewer filePath={activeFile} />
+                    <Suspense fallback={<div className="h-full w-full bg-[var(--bg-app)]" />}>
+                        <PdfViewer filePath={activeFile} />
+                    </Suspense>
                 ) : isMarkdownFile ? (
                     <MarkdownEditor
                         content={content}
@@ -376,16 +384,18 @@ const EditorWithChangeBar: React.FC<EditorWithChangeBarProps> = ({
 
     return (
         <div className="relative h-full w-full">
-            <CodeEditor
-                ref={editorRef}
-                content={content}
-                onChange={setContent}
-                onSave={handleSave}
-                filename={activeFile}
-                highlightLines={highlightLines || undefined}
-                onNavigate={handleNavigate}
-                unifiedDiff={change?.unified_diff}
-            />
+            <Suspense fallback={<div className="h-full w-full bg-[var(--bg-editor)]" />}>
+                <CodeEditor
+                    ref={editorRef}
+                    content={content}
+                    onChange={setContent}
+                    onSave={handleSave}
+                    filename={activeFile}
+                    highlightLines={highlightLines || undefined}
+                    onNavigate={handleNavigate}
+                    unifiedDiff={change?.unified_diff}
+                />
+            </Suspense>
             {change && (
                 <FileChangeBar
                     change={change}
