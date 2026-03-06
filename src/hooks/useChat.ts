@@ -13,13 +13,47 @@ import { getOrCreateIdempotencyKey, IDEMPOTENT_OPERATIONS } from '../utils/idemp
 import { ensureMessagesHaveBlocks } from '../utils/messageBlocks';
 
 const MAX_DELTA_OVERLAP_CHECK = 512;
+const MIN_SNAPSHOT_PREFIX = 48;
 
-function normalizeStreamDelta(previous: string, incoming: string): string {
-    if (!incoming) return '';
-    if (!previous) return incoming;
+function commonPrefixLength(a: string, b: string): number {
+    const max = Math.min(a.length, b.length);
+    let i = 0;
+    while (i < max && a.charCodeAt(i) === b.charCodeAt(i)) i++;
+    return i;
+}
+
+type StreamMergeResult = {
+    next: string;
+    append: string;
+    changed: boolean;
+    replaced: boolean;
+};
+
+function mergeStreamChunk(previous: string, incoming: string): StreamMergeResult {
+    if (!incoming) {
+        return { next: previous, append: '', changed: false, replaced: false };
+    }
+
+    if (!previous) {
+        return { next: incoming, append: incoming, changed: true, replaced: false };
+    }
 
     // Exact duplicate of the just-emitted suffix; drop it.
-    if (previous.endsWith(incoming)) return '';
+    if (previous.endsWith(incoming)) {
+        return { next: previous, append: '', changed: false, replaced: false };
+    }
+
+    // Some providers emit cumulative snapshots instead of strict deltas.
+    // Keep only the newly extended suffix.
+    if (incoming.startsWith(previous)) {
+        const delta = incoming.slice(previous.length);
+        return { next: incoming, append: delta, changed: delta.length > 0, replaced: false };
+    }
+
+    // Late/stale replay of an earlier contiguous segment.
+    if (previous.includes(incoming)) {
+        return { next: previous, append: '', changed: false, replaced: false };
+    }
 
     // Some providers occasionally emit overlapping snapshots/chunks.
     // Keep only the non-overlapping suffix so text doesn't become garbled.
@@ -29,11 +63,46 @@ function normalizeStreamDelta(previous: string, incoming: string): string {
 
     for (let overlap = maxOverlap; overlap > 0; overlap--) {
         if (prevTail.slice(-overlap) === incomingHead.slice(0, overlap)) {
-            return incoming.slice(overlap);
+            const delta = incoming.slice(overlap);
+            return {
+                next: previous + delta,
+                append: delta,
+                changed: delta.length > 0,
+                replaced: false,
+            };
         }
     }
 
-    return incoming;
+    // Snapshot-with-revision case: provider resent a near-complete authoritative snapshot
+    // and revised text earlier in the response. Replace instead of append to avoid gibberish.
+    const prefixLen = commonPrefixLength(previous, incoming);
+    if (incoming.length >= Math.max(64, Math.floor(previous.length * 0.7)) && prefixLen >= 12) {
+        return {
+            next: incoming,
+            append: '',
+            changed: incoming !== previous,
+            replaced: true,
+        };
+    }
+
+    // We have a strong shared prefix but this is not a full snapshot replacement.
+    // Keep only rewritten tail to avoid duplicate prefixes.
+    if (prefixLen >= MIN_SNAPSHOT_PREFIX) {
+        const rewrittenTail = incoming.slice(prefixLen);
+        return {
+            next: previous + rewrittenTail,
+            append: rewrittenTail,
+            changed: rewrittenTail.length > 0,
+            replaced: false,
+        };
+    }
+
+    return {
+        next: previous + incoming,
+        append: incoming,
+        changed: true,
+        replaced: false,
+    };
 }
 
 export function useChat() {
@@ -449,6 +518,7 @@ export function useChat() {
 
                     // Accumulate content/reasoning in refs (no re-render)
                     // When ID changes, this indicates a new message stream - clear stale blocks
+                    let mergedChunk: StreamMergeResult;
                     if (type === 'reasoning') {
                         if (accumulatedReasoningRef.current.id !== id) {
                             accumulatedReasoningRef.current = { id, content: '' };
@@ -459,8 +529,8 @@ export function useChat() {
                                 blocksRef.current.set(id, nonReasoningBlocks);
                             }
                         }
-                        const delta = normalizeStreamDelta(accumulatedReasoningRef.current.content, chunk);
-                        if (!delta) {
+                        mergedChunk = mergeStreamChunk(accumulatedReasoningRef.current.content, chunk);
+                        if (!mergedChunk.changed) {
                             queueMessageUpdate(
                                 id,
                                 accumulatedContentRef.current.id === id ? accumulatedContentRef.current.content : '',
@@ -470,8 +540,7 @@ export function useChat() {
                             );
                             return;
                         }
-                        chunk = delta;
-                        accumulatedReasoningRef.current.content += delta;
+                        accumulatedReasoningRef.current.content = mergedChunk.next;
                     } else {
                         if (accumulatedContentRef.current.id !== id) {
                             accumulatedContentRef.current = { id, content: '' };
@@ -484,8 +553,8 @@ export function useChat() {
                                 blocksRef.current.set(id, nonTextBlocks);
                             }
                         }
-                        const delta = normalizeStreamDelta(accumulatedContentRef.current.content, chunk);
-                        if (!delta) {
+                        mergedChunk = mergeStreamChunk(accumulatedContentRef.current.content, chunk);
+                        if (!mergedChunk.changed) {
                             queueMessageUpdate(
                                 id,
                                 accumulatedContentRef.current.id === id ? accumulatedContentRef.current.content : '',
@@ -495,8 +564,7 @@ export function useChat() {
                             );
                             return;
                         }
-                        chunk = delta;
-                        accumulatedContentRef.current.content += delta;
+                        accumulatedContentRef.current.content = mergedChunk.next;
                     }
 
                     // Build blocks structure using existing message order (includes tool_call blocks)
@@ -516,24 +584,60 @@ export function useChat() {
                     const lastBlock = blocks[blocks.length - 1];
                     
                     if (type === 'reasoning') {
+                        const fullReasoning = accumulatedReasoningRef.current.id === id
+                            ? accumulatedReasoningRef.current.content
+                            : mergedChunk.next;
                         // Create new reasoning block if:
                         // 1. No blocks exist yet
                         // 2. Last block is not reasoning (text or tool_call)
                         // This ensures reasoning after tool calls gets its own block
-                        if (lastBlock && lastBlock.type === 'reasoning') {
+                        if (mergedChunk.replaced) {
+                            const lastReasoningIdx = (() => {
+                                for (let i = blocks.length - 1; i >= 0; i--) {
+                                    if (blocks[i].type === 'reasoning') return i;
+                                }
+                                return -1;
+                            })();
+                            if (lastReasoningIdx >= 0) {
+                                const targetBlock = blocks[lastReasoningIdx];
+                                if (targetBlock && targetBlock.type === 'reasoning') {
+                                    blocks[lastReasoningIdx] = { ...targetBlock, content: fullReasoning };
+                                }
+                            } else {
+                                blocks = [...blocks, { type: 'reasoning', content: fullReasoning, id: crypto.randomUUID() }];
+                            }
+                        } else if (lastBlock && lastBlock.type === 'reasoning') {
                             // Append to existing reasoning block (continuous reasoning)
-                            blocks[blocks.length - 1] = { ...lastBlock, content: lastBlock.content + chunk };
+                            blocks[blocks.length - 1] = { ...lastBlock, content: lastBlock.content + mergedChunk.append };
                         } else {
                             // Create new reasoning block (after text, tool_call, or first block)
-                            blocks = [...blocks, { type: 'reasoning', content: chunk, id: crypto.randomUUID() }];
+                            blocks = [...blocks, { type: 'reasoning', content: mergedChunk.append, id: crypto.randomUUID() }];
                         }
                     } else {
-                        if (lastBlock && lastBlock.type === 'text') {
+                        const fullContent = accumulatedContentRef.current.id === id
+                            ? accumulatedContentRef.current.content
+                            : mergedChunk.next;
+                        if (mergedChunk.replaced) {
+                            const lastTextIdx = (() => {
+                                for (let i = blocks.length - 1; i >= 0; i--) {
+                                    if (blocks[i].type === 'text') return i;
+                                }
+                                return -1;
+                            })();
+                            if (lastTextIdx >= 0) {
+                                const targetBlock = blocks[lastTextIdx];
+                                if (targetBlock && targetBlock.type === 'text') {
+                                    blocks[lastTextIdx] = { ...targetBlock, content: fullContent };
+                                }
+                            } else {
+                                blocks = [...blocks, { type: 'text', content: fullContent, id: crypto.randomUUID() }];
+                            }
+                        } else if (lastBlock && lastBlock.type === 'text') {
                             // Append to existing text block
-                            blocks[blocks.length - 1] = { ...lastBlock, content: lastBlock.content + chunk };
+                            blocks[blocks.length - 1] = { ...lastBlock, content: lastBlock.content + mergedChunk.append };
                         } else {
                             // Create new text block
-                            blocks = [...blocks, { type: 'text', content: chunk, id: crypto.randomUUID() }];
+                            blocks = [...blocks, { type: 'text', content: mergedChunk.append, id: crypto.randomUUID() }];
                         }
                     }
                     blocksRef.current.set(id, blocks);
