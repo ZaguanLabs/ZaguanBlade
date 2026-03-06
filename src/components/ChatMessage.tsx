@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import type { ChatMessage as ChatMessageType, ChatImage, ImageAttachment } from '../types/chat';
 import { User, Bot, Terminal, Brain, ChevronDown, ChevronRight, Loader2, Copy, RotateCcw, Pencil, MessageSquare, Check } from 'lucide-react';
 import { ToolCallDisplay } from './ToolCallDisplay';
-import { ProgressIndicator } from './ProgressIndicator';
 import { CommandOutputDisplay } from './CommandOutputDisplay';
 import { CommandApprovalCard } from './CommandApprovalCard';
 import { useContextMenu, ContextMenuItem } from './ui/ContextMenu';
@@ -355,11 +354,6 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                     </div>
                 )}
 
-                {/* Progress indicator from zcoderd */}
-                {message.progress && (
-                    <ProgressIndicator progress={message.progress} />
-                )}
-
                 {imageAttachments.length > 0 && (
                     <div className="mb-2">
                         <div className="flex flex-wrap gap-2">
@@ -498,18 +492,8 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                     />
                                 );
                             } else if (block.type === 'research_progress') {
-                                // Render research progress activity
-                                const activity = message.researchActivities?.find(a => a.id === block.id);
-                                if (!activity) return null;
-                                return (
-                                    <div key={block.id} className="mb-3">
-                                        <ProgressIndicator progress={{
-                                            message: activity.message,
-                                            stage: activity.stage,
-                                            percent: activity.percent
-                                        }} />
-                                    </div>
-                                );
+                                // Progress is rendered in the bottom chat panel indicator only.
+                                return null;
                             }
                             return null;
                             });

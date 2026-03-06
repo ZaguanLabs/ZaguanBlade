@@ -205,7 +205,7 @@ export function useLayoutEvents({
 
             setResearchProgress({
                 ...event.payload,
-                isActive: true
+                isActive: !isTerminalResearchStage(event.payload.stage)
             });
 
             // Persist research activity in message history

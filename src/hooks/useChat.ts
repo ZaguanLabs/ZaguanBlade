@@ -12,6 +12,30 @@ import type { BladeEventEnvelope } from '../types/blade';
 import { getOrCreateIdempotencyKey, IDEMPOTENT_OPERATIONS } from '../utils/idempotency';
 import { ensureMessagesHaveBlocks } from '../utils/messageBlocks';
 
+const MAX_DELTA_OVERLAP_CHECK = 512;
+
+function normalizeStreamDelta(previous: string, incoming: string): string {
+    if (!incoming) return '';
+    if (!previous) return incoming;
+
+    // Exact duplicate of the just-emitted suffix; drop it.
+    if (previous.endsWith(incoming)) return '';
+
+    // Some providers occasionally emit overlapping snapshots/chunks.
+    // Keep only the non-overlapping suffix so text doesn't become garbled.
+    const prevTail = previous.slice(-MAX_DELTA_OVERLAP_CHECK);
+    const incomingHead = incoming.slice(0, MAX_DELTA_OVERLAP_CHECK);
+    const maxOverlap = Math.min(prevTail.length, incomingHead.length);
+
+    for (let overlap = maxOverlap; overlap > 0; overlap--) {
+        if (prevTail.slice(-overlap) === incomingHead.slice(0, overlap)) {
+            return incoming.slice(overlap);
+        }
+    }
+
+    return incoming;
+}
+
 export function useChat() {
     const editorState = useEditorState();
     const editorStateRef = useRef(editorState);
@@ -435,7 +459,19 @@ export function useChat() {
                                 blocksRef.current.set(id, nonReasoningBlocks);
                             }
                         }
-                        accumulatedReasoningRef.current.content += chunk;
+                        const delta = normalizeStreamDelta(accumulatedReasoningRef.current.content, chunk);
+                        if (!delta) {
+                            queueMessageUpdate(
+                                id,
+                                accumulatedContentRef.current.id === id ? accumulatedContentRef.current.content : '',
+                                accumulatedReasoningRef.current.id === id ? accumulatedReasoningRef.current.content : '',
+                                blocksRef.current.get(id) || [],
+                                streaming,
+                            );
+                            return;
+                        }
+                        chunk = delta;
+                        accumulatedReasoningRef.current.content += delta;
                     } else {
                         if (accumulatedContentRef.current.id !== id) {
                             accumulatedContentRef.current = { id, content: '' };
@@ -448,7 +484,19 @@ export function useChat() {
                                 blocksRef.current.set(id, nonTextBlocks);
                             }
                         }
-                        accumulatedContentRef.current.content += chunk;
+                        const delta = normalizeStreamDelta(accumulatedContentRef.current.content, chunk);
+                        if (!delta) {
+                            queueMessageUpdate(
+                                id,
+                                accumulatedContentRef.current.id === id ? accumulatedContentRef.current.content : '',
+                                accumulatedReasoningRef.current.id === id ? accumulatedReasoningRef.current.content : '',
+                                blocksRef.current.get(id) || [],
+                                streaming,
+                            );
+                            return;
+                        }
+                        chunk = delta;
+                        accumulatedContentRef.current.content += delta;
                     }
 
                     // Build blocks structure using existing message order (includes tool_call blocks)

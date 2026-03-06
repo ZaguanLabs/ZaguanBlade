@@ -391,7 +391,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                         {shouldShowPendingResponseIndicator && <PendingResponseIndicator />}
 
                         {/* Research progress indicator */}
-                        {researchProgress?.isActive && (
+                        {loading && researchProgress?.isActive && (
                             <div className="px-4">
                                 <ProgressIndicator progress={researchProgress} />
                             </div>

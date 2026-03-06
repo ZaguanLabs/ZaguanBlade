@@ -45,16 +45,16 @@ export class EventBuffer<T> {
             this.nextSeq = seq;
         }
 
-        // CRITICAL FIX: If we receive seq 0 but nextSeq > 0, this is a new stream
-        // Reset the buffer to avoid dropping chunks from the new stream
-        if (this.nextSeq !== null && seq === 0 && this.nextSeq > 0) {
-            console.debug(`[EventBuffer] New stream detected (seq=0, nextSeq=${this.nextSeq}), resetting buffer`);
-            this.clear();
-            this.nextSeq = seq;
+        // Drop stale/already-applied chunks (late delivery or duplicate replay).
+        // A true new stream should use a new message ID or explicitly clear the buffer.
+        if (this.nextSeq !== null && seq < this.nextSeq) {
+            return;
         }
 
-        // Store the chunk
-        this.chunks.set(seq, { seq, data, is_final });
+        // Avoid re-buffering exact same sequence key repeatedly.
+        if (!this.chunks.has(seq)) {
+            this.chunks.set(seq, { seq, data, is_final });
+        }
 
         // Apply all sequential chunks starting from nextSeq
         while (this.nextSeq !== null && this.chunks.has(this.nextSeq)) {
