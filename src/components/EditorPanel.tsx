@@ -325,12 +325,14 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                         <PdfViewer filePath={activeFile} />
                     </Suspense>
                 ) : isMarkdownFile ? (
-                    <MarkdownEditor
-                        content={content}
-                        onChange={setContent}
-                        onSave={handleSave}
-                        filename={activeFile}
-                    />
+                    <Suspense fallback={<div className="h-full w-full bg-[var(--bg-editor)]" />}>
+                        <MarkdownEditor
+                            content={content}
+                            onChange={setContent}
+                            onSave={handleSave}
+                            filename={activeFile}
+                        />
+                    </Suspense>
                 ) : (
                     <EditorWithChangeBar
                         editorRef={editorRef}
