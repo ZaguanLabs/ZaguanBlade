@@ -24,6 +24,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
+fn stream_debug_preview(value: &str) -> String {
+    let normalized = value.replace('\n', "\\n").replace('\r', "\\r");
+    let mut chars = normalized.chars();
+    let preview: String = chars.by_ref().take(160).collect();
+    if chars.next().is_some() {
+        format!("{}…", preview)
+    } else {
+        preview
+    }
+}
+
 pub enum DrainResult {
     None,
     Update(String, String), // (message_id, delta) - streaming text chunk
@@ -65,6 +76,7 @@ pub enum DrainResult {
     },
 }
 
+#[derive(Clone)]
 struct ProviderEventSender {
     tx: mpsc::Sender<ProviderEvent>,
     notify: Arc<tokio::sync::Notify>,
@@ -173,6 +185,7 @@ pub struct ChatManager {
     pub message_seq: u64, // v1.1: sequence number for MessageDelta events
     pub pending_results: std::collections::VecDeque<DrainResult>,
     ws_client: Option<Arc<BladeWsClient>>, // Persistent connection for the conversation
+    provider_event_tx: Option<ProviderEventSender>,
     pending_tool_progress: HashMap<String, String>, // tool_call_id -> tool_name from tool_progress (cleared when tool_call arrives)
     event_notify: Arc<tokio::sync::Notify>,
     active_provider: ProviderId,
@@ -210,6 +223,7 @@ impl ChatManager {
             message_seq: 0,
             pending_results: std::collections::VecDeque::new(),
             ws_client: None,
+            provider_event_tx: None,
             pending_tool_progress: HashMap::new(),
             event_notify: Arc::new(tokio::sync::Notify::new()),
             active_provider: ProviderId::Zaguan,
@@ -374,6 +388,7 @@ impl ChatManager {
         cursor_column: Option<usize>,
         http: reqwest::Client,
         storage_mode: Option<String>,
+        mode: Option<String>,
         composite_tools_enabled: bool,
     ) -> Result<(), String> {
         self.reasoning_parser.reset();
@@ -401,6 +416,7 @@ impl ChatManager {
                     None,
                     None,
                     None,
+                    None,
                     composite_tools_enabled,
                 )
                 .map(|_| ()),
@@ -413,6 +429,7 @@ impl ChatManager {
                     http,
                     workspace,
                     active_file,
+                    None,
                     None,
                     None,
                     None,
@@ -433,6 +450,7 @@ impl ChatManager {
                     cursor_line,
                     cursor_column,
                     storage_mode,
+                    mode,
                     composite_tools_enabled,
                 )
                 .map(|_| ()),
@@ -450,6 +468,7 @@ impl ChatManager {
         cursor_line: Option<usize>,
         cursor_column: Option<usize>,
         storage_mode: Option<String>,
+        mode: Option<String>,
     ) -> Result<(), String> {
         // Build workspace info for Blade Protocol
         let open_file_infos = open_files
@@ -524,6 +543,7 @@ impl ChatManager {
         // Convert WebSocket events to ChatEvent channel
         let (tx, rx) = mpsc::channel();
         let tx = ProviderEventSender::new(tx, self.event_notify.clone());
+        self.provider_event_tx = Some(tx.clone());
 
         // Create a channel to send session_id back to main thread
         let (session_tx, session_rx) = std::sync::mpsc::channel();
@@ -566,6 +586,7 @@ impl ChatManager {
                                         user_images.clone(),
                                         Some(workspace_info.clone()),
                                         storage_mode.clone(),
+                                        mode.clone(),
                                     )
                                     .await
                                 {
@@ -591,11 +612,17 @@ impl ChatManager {
                                 let _ = session_tx.send(session_id);
                             }
                             crate::blade_ws_client::BladeWsEvent::TextChunk(text) => {
-                                // eprintln!("[CHAT MGR] Text chunk: {}", text);
+                                eprintln!(
+                                    "[stream-debug][ws->rust][text] len={} preview=\"{}\"",
+                                    text.len(),
+                                    stream_debug_preview(&text)
+                                );
                                 if last_reasoning_chunk.as_deref() == Some(text.as_str()) {
-                                    // eprintln!(
-                                    //     "[CHAT MGR] Skipping duplicate text chunk (already emitted as reasoning)"
-                                    // );
+                                    eprintln!(
+                                        "[stream-debug][ws->rust][text-skip-duplicate-reasoning] len={} preview=\"{}\"",
+                                        text.len(),
+                                        stream_debug_preview(&text)
+                                    );
                                     last_reasoning_chunk = None;
                                     continue;
                                 }
@@ -604,7 +631,11 @@ impl ChatManager {
                                 let _ = tx.send_chunk(text);
                             }
                             crate::blade_ws_client::BladeWsEvent::ReasoningChunk(text) => {
-                                // eprintln!("[CHAT MGR] Reasoning chunk: {}", text);
+                                eprintln!(
+                                    "[stream-debug][ws->rust][reasoning] len={} preview=\"{}\"",
+                                    text.len(),
+                                    stream_debug_preview(&text)
+                                );
                                 last_reasoning_chunk = Some(text.clone());
                                 saw_content = true;
                                 let _ = tx.send_reasoning_chunk(text);
@@ -1748,6 +1779,7 @@ impl ChatManager {
             .clone();
         let results = batch.file_results.clone(); // Clone for the task
         let is_local_mode_clone = is_local_mode; // Clone for async task
+        let provider_event_tx = self.provider_event_tx.clone();
         let _ = workspace;
 
         self.sync_ws_conversation_messages(conversation);
@@ -1776,7 +1808,12 @@ impl ChatManager {
                     error: if result.success {
                         None
                     } else {
-                        Some("Tool execution failed".to_string())
+                        Some(
+                            result
+                                .error
+                                .clone()
+                                .unwrap_or_else(|| "Tool execution failed".to_string()),
+                        )
                     },
                 };
 
@@ -1788,11 +1825,13 @@ impl ChatManager {
                     )
                     .await
                 {
-                    // eprintln!(
-                    //     "[CHAT MGR] Failed to send tool result {}: {}",
-                    //     call.id, e
-                    // );
-                    let _ = e;
+                    if let Some(tx) = &provider_event_tx {
+                        let _ = tx.send(ChatEvent::Error(format!(
+                            "Failed to send tool result for {}: {}",
+                            call.function.name, e
+                        )));
+                    }
+                    break;
                 }
             }
             // eprintln!("[CHAT MGR] All {} tool results sent", results.len());
@@ -2552,6 +2591,7 @@ mod tests {
                 None, // cursor_column
                 http,
                 None, // storage_mode
+                None, // mode
                 true,
             );
 

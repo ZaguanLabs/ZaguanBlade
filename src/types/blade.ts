@@ -1,4 +1,6 @@
 // v1.1: Semantic versioning
+import type { ChatMode } from './chat';
+
 export type Version = {
     major: number;
     minor: number;
@@ -47,7 +49,7 @@ export type ChatMention = {
 };
 
 export type ChatIntent =
-    | { type: "SendMessage"; payload: { content: string; model: string; images?: ChatImagePayload[]; context?: EditorContext; mentions?: ChatMention[] } }
+    | { type: "SendMessage"; payload: { content: string; model: string; images?: ChatImagePayload[]; context?: EditorContext; mentions?: ChatMention[]; mode?: ChatMode } }
     | { type: "StopGeneration"; payload: Record<string, never> }
     | { type: "ClearHistory"; payload: Record<string, never> }
     | { type: "NewConversation"; payload: { model: string } }

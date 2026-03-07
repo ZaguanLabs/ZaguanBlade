@@ -1,5 +1,7 @@
 import { TodoItem } from './events';
 
+export type ChatMode = 'code' | 'planning';
+
 export interface ChatImage {
     data: string;
     mime_type: string;
@@ -23,6 +25,7 @@ export interface QueuedRequest {
     text: string;
     attachments?: ImageAttachment[];
     mentions?: ComposerMention[];
+    mode: ChatMode;
 }
 
 export interface ChatMessage {

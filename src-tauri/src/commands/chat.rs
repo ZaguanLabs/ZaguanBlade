@@ -30,6 +30,7 @@ pub async fn send_message<R: Runtime>(
         selection_start_line,
         selection_end_line,
         None,
+        None,
         window,
         state,
         app,

@@ -181,6 +181,7 @@ pub trait AiProviderRuntime {
         cursor_line: Option<usize>,
         cursor_column: Option<usize>,
         storage_mode: Option<String>,
+        mode: Option<String>,
         composite_tools_enabled: bool,
     ) -> Result<ProviderSessionHandle, String>;
 
@@ -219,6 +220,7 @@ impl AiProviderRuntime for OllamaRuntime {
         _cursor_line: Option<usize>,
         _cursor_column: Option<usize>,
         _storage_mode: Option<String>,
+        _mode: Option<String>,
         composite_tools_enabled: bool,
     ) -> Result<ProviderSessionHandle, String> {
         manager.start_ollama_stream(
@@ -276,6 +278,7 @@ impl AiProviderRuntime for OpenAiCompatRuntime {
         _cursor_line: Option<usize>,
         _cursor_column: Option<usize>,
         _storage_mode: Option<String>,
+        _mode: Option<String>,
         composite_tools_enabled: bool,
     ) -> Result<ProviderSessionHandle, String> {
         manager.start_openai_compat_stream(
@@ -333,6 +336,7 @@ impl AiProviderRuntime for ZaguanRuntime {
         cursor_line: Option<usize>,
         cursor_column: Option<usize>,
         storage_mode: Option<String>,
+        mode: Option<String>,
         _composite_tools_enabled: bool,
     ) -> Result<ProviderSessionHandle, String> {
         manager.start_zaguan_stream(
@@ -345,6 +349,7 @@ impl AiProviderRuntime for ZaguanRuntime {
             cursor_line,
             cursor_column,
             storage_mode,
+            mode,
         )?;
 
         Ok(ProviderSessionHandle { started: true })

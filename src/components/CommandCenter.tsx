@@ -3,13 +3,13 @@ import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readFile } from '@tauri-apps/plugin-fs';
-import { Send, Square, BookOpen, Globe, FileText, Folder } from 'lucide-react';
+import { Send, Square, BookOpen, Globe, FileText, Folder, Code2, Map as MapIcon } from 'lucide-react';
 import { CompactModelSelector } from './CompactModelSelector';
 import { FeatureMenu } from './FeatureMenu';
 import { ImageAttachmentBar } from './ImageAttachmentBar';
 import { WindowPicker } from './WindowPicker';
 import { RegionSelector } from './RegionSelector';
-import type { ComposerMention, ImageAttachment, ModelInfo, QueuedRequest } from '../types/chat';
+import type { ChatMode, ComposerMention, ImageAttachment, ModelInfo, QueuedRequest } from '../types/chat';
 import type { CaptureResult, WindowInfo } from '../types/screenshot';
 import {
     createThumbnailDataUrl,
@@ -37,14 +37,36 @@ const COMMANDS = [
     },
 ];
 
+const CHAT_MODE_OPTIONS: Array<{
+    value: ChatMode;
+    label: string;
+    description: string;
+    icon: typeof Code2;
+}> = [
+    {
+        value: 'code',
+        label: 'Code',
+        description: 'Implement and execute',
+        icon: Code2,
+    },
+    {
+        value: 'planning',
+        label: 'Planning',
+        description: 'Investigate and plan first',
+        icon: MapIcon,
+    },
+];
+
 interface CommandCenterProps {
-    onSend: (text: string, attachments?: ImageAttachment[], mentions?: ComposerMention[]) => void;
+    onSend: (text: string, attachments?: ImageAttachment[], mentions?: ComposerMention[], mode?: ChatMode) => void;
     onStop?: () => void;
     disabled?: boolean;
     loading?: boolean;
     models: ModelInfo[];
     selectedModelId: string;
     setSelectedModelId: (modelId: string) => void;
+    chatMode: ChatMode;
+    setChatMode: (mode: ChatMode) => void;
     prefillRequest?: QueuedRequest | null;
     onPrefillConsumed?: () => void;
 }
@@ -76,6 +98,8 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
     models,
     selectedModelId,
     setSelectedModelId,
+    chatMode,
+    setChatMode,
     prefillRequest,
     onPrefillConsumed,
 }) => {
@@ -166,6 +190,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
         if (!prefillRequest) return;
         setText(prefillRequest.text);
         setAttachments(prefillRequest.attachments || []);
+        setChatMode(prefillRequest.mode);
         setSelectedPathMentions(
             Object.fromEntries(
                 (prefillRequest.mentions || []).map((mention) => [
@@ -185,7 +210,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
         });
 
         onPrefillConsumed?.();
-    }, [prefillRequest, onPrefillConsumed, resizeTextarea]);
+    }, [prefillRequest, onPrefillConsumed, resizeTextarea, setChatMode]);
 
     useEffect(() => {
         if (!showSuggestions) {
@@ -680,7 +705,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
             }
             if ((text.trim() || attachments.length > 0) && !disabled) {
                 const mentions = collectActivePathMentions(text, Object.values(selectedPathMentions));
-                onSend(text, attachments, mentions);
+                onSend(text, attachments, mentions, chatMode);
                 setText('');
                 setAttachments([]);
                 setSelectedPathMentions({});
@@ -696,11 +721,44 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
         <>
             <div className="shrink-0 border-t border-[var(--border-subtle)] bg-[var(--bg-app)]/95 backdrop-blur-md">
                 <div className="px-2 pb-2 pt-2">
-                    <div className="relative rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/85 shadow-[0_16px_44px_rgba(0,0,0,0.22)]">
-                    <div className="relative z-[70] border-b border-[var(--border-subtle)]/50 px-2 py-1.5">
+                    <div className={`relative rounded-xl border shadow-[0_16px_44px_rgba(0,0,0,0.22)] transition-colors ${chatMode === 'planning'
+                        ? 'border-sky-500/35 bg-[var(--bg-surface)]/85'
+                        : 'border-[var(--border-subtle)] bg-[var(--bg-surface)]/85'
+                        }`}>
+                    <div className={`relative z-[70] border-b px-2 py-1.5 transition-colors ${chatMode === 'planning'
+                        ? 'border-sky-500/25'
+                        : 'border-[var(--border-subtle)]/50'
+                        }`}>
                         <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-1.5">
                                 <FeatureMenu onScreenshot={handleScreenshot} onUploadImage={handleUploadImage} disabled={disabled} />
+                                <div className={`inline-flex items-center gap-1 rounded-lg border p-1 ${chatMode === 'planning'
+                                    ? 'border-sky-500/25 bg-[var(--bg-app)]/70'
+                                    : 'border-[var(--border-subtle)] bg-[var(--bg-app)]/70'
+                                    }`}>
+                                    {CHAT_MODE_OPTIONS.map((option) => {
+                                        const Icon = option.icon;
+                                        const isActive = option.value === chatMode;
+                                        return (
+                                            <button
+                                                key={option.value}
+                                                type="button"
+                                                onClick={() => setChatMode(option.value)}
+                                                disabled={disabled}
+                                                title={option.description}
+                                                className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[10px] font-semibold transition-colors ${isActive
+                                                    ? chatMode === 'planning'
+                                                        ? 'bg-sky-500/20 text-sky-100'
+                                                        : 'bg-[var(--accent-primary)]/16 text-[var(--fg-primary)]'
+                                                    : 'text-[var(--fg-tertiary)] hover:text-[var(--fg-primary)]'
+                                                    }`}
+                                            >
+                                                <Icon className="h-3 w-3" />
+                                                <span>{option.label}</span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
                             </div>
                             <div className="w-[164px] max-w-[46%] shrink-0">
                                 <CompactModelSelector
@@ -801,14 +859,21 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                 })}
                             </div>
                         )}
-                        <div className={`relative overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-app)] transition-colors shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] ${loading ? 'border-[var(--border-focus)] bg-[var(--bg-surface)]/70' : 'focus-within:border-[var(--accent-primary)]/60'}`}>
+                        <div className={`relative overflow-hidden rounded-lg border bg-[var(--bg-app)] transition-colors shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] ${chatMode === 'planning'
+                            ? loading
+                                ? 'border-sky-400/40'
+                                : 'border-sky-500/25 focus-within:border-sky-400/50'
+                            : loading
+                                ? 'border-[var(--border-focus)] bg-[var(--bg-surface)]/70'
+                                : 'border-[var(--border-subtle)] focus-within:border-[var(--accent-primary)]/60'
+                            }`}>
                             <textarea
                                 ref={textareaRef}
                                 value={text}
                                 onChange={handleTextChange}
                                 onPaste={handlePaste}
                                 onKeyDown={handleKeyDown}
-                                placeholder={t('chat.inputPlaceholder')}
+                                placeholder={chatMode === 'planning' ? 'Investigate the codebase, ask clarifying questions, and build a concrete plan before coding…' : t('chat.inputPlaceholder')}
                                 className="relative z-10 min-h-[88px] max-h-[360px] w-full resize-none overflow-y-auto bg-transparent px-3 pb-3 pt-2.5 pr-14 text-[13px] font-medium leading-6 text-[var(--fg-primary)] outline-none placeholder-[var(--fg-tertiary)]"
                                 rows={1}
                                 disabled={disabled}
@@ -824,7 +889,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                         setAttachmentError(t('chat.imageNotSupported'));
                                     } else if ((text.trim() || attachments.length > 0) && !disabled) {
                                         const mentions = collectActivePathMentions(text, Object.values(selectedPathMentions));
-                                        onSend(text, attachments, mentions);
+                                        onSend(text, attachments, mentions, chatMode);
                                         setText('');
                                         setAttachments([]);
                                         setSelectedPathMentions({});
@@ -837,7 +902,9 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                 disabled={(!text.trim() && attachments.length === 0 && !loading) || disabled}
                                 className={`absolute bottom-2 right-2 z-20 inline-flex h-9 w-9 items-center justify-center rounded-lg border transition-colors ${loading && !text.trim()
                                     ? 'border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20'
-                                    : 'border-[var(--border-subtle)] bg-[var(--bg-surface)] text-[var(--fg-tertiary)] hover:border-[var(--accent-primary)]/40 hover:text-[var(--fg-primary)] disabled:cursor-not-allowed disabled:opacity-30'
+                                    : chatMode === 'planning'
+                                        ? 'border-sky-500/25 bg-sky-500/10 text-sky-100 hover:border-sky-400/40 hover:bg-sky-500/15 disabled:cursor-not-allowed disabled:opacity-30'
+                                        : 'border-[var(--border-subtle)] bg-[var(--bg-surface)] text-[var(--fg-tertiary)] hover:border-[var(--accent-primary)]/40 hover:text-[var(--fg-primary)] disabled:cursor-not-allowed disabled:opacity-30'
                                     }`}
                             >
                                 {loading && !text.trim() ? (
@@ -848,8 +915,8 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                             </button>
                         </div>
                         <div className="flex items-center justify-between border-t border-[var(--border-subtle)]/40 px-2 py-1 text-[10px] text-[var(--fg-tertiary)]">
-                            <span>Enter to send</span>
-                            <span>Shift+Enter for newline</span>
+                            <span>{chatMode === 'planning' ? 'Planning mode is read-only' : 'Enter to send'}</span>
+                            <span>{chatMode === 'planning' ? 'No edits or commands should run' : 'Shift+Enter for newline'}</span>
                         </div>
                     </div>
                 </div>
@@ -884,11 +951,13 @@ export const CommandCenter = React.memo(CommandCenterComponent, (prevProps, next
     if (prevProps.disabled !== nextProps.disabled) return false;
     if (prevProps.loading !== nextProps.loading) return false;
     if (prevProps.selectedModelId !== nextProps.selectedModelId) return false;
+    if (prevProps.chatMode !== nextProps.chatMode) return false;
     
     // Check callback references (should be stable with useCallback in parent)
     if (prevProps.onSend !== nextProps.onSend) return false;
     if (prevProps.onStop !== nextProps.onStop) return false;
     if (prevProps.setSelectedModelId !== nextProps.setSelectedModelId) return false;
+    if (prevProps.setChatMode !== nextProps.setChatMode) return false;
     if (prevProps.onPrefillConsumed !== nextProps.onPrefillConsumed) return false;
 
     // Prefill state (queue item edit)
@@ -897,11 +966,8 @@ export const CommandCenter = React.memo(CommandCenterComponent, (prevProps, next
     if ((prevPrefill?.text ?? '') !== (nextPrefill?.text ?? '')) return false;
     if ((prevPrefill?.attachments?.length ?? 0) !== (nextPrefill?.attachments?.length ?? 0)) return false;
     if ((prevPrefill?.mentions?.length ?? 0) !== (nextPrefill?.mentions?.length ?? 0)) return false;
-    const prevMentionSignature = (prevPrefill?.mentions || []).map((mention) => `${mention.kind}:${mention.path}:${mention.is_dir}`).join('|');
-    const nextMentionSignature = (nextPrefill?.mentions || []).map((mention) => `${mention.kind}:${mention.path}:${mention.is_dir}`).join('|');
-    if (prevMentionSignature !== nextMentionSignature) return false;
-    
-    // Check models array - compare by length and IDs
+    if ((prevPrefill?.mode ?? 'code') !== (nextPrefill?.mode ?? 'code')) return false;
+
     if (prevProps.models.length !== nextProps.models.length) return false;
     for (let i = 0; i < prevProps.models.length; i++) {
         if (prevProps.models[i].id !== nextProps.models[i].id) return false;

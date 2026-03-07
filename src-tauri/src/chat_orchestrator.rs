@@ -7,6 +7,72 @@ use crate::{blade_protocol, local_artifacts};
 use std::collections::HashSet;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
+fn stream_debug_preview(value: &str) -> String {
+    let normalized = value.replace('\n', "\\n").replace('\r', "\\r");
+    let mut chars = normalized.chars();
+    let preview: String = chars.by_ref().take(160).collect();
+    if chars.next().is_some() {
+        format!("{}…", preview)
+    } else {
+        preview
+    }
+}
+
+fn extract_explicit_output_path(message: &str) -> Option<String> {
+    message
+        .split_whitespace()
+        .map(|token| token.trim_matches(|c: char| matches!(c, '`' | '"' | '\'' | ',' | '.' | ':' | ';' | ')' | '(' | '[' | ']')))
+        .find(|token| token.contains('/') && token.contains('.'))
+        .map(|token| token.to_string())
+}
+
+fn is_planning_artifact_path(path: &str) -> bool {
+    let normalized = path.trim().trim_matches('/').to_ascii_lowercase();
+    (normalized.starts_with("docs/")
+        || normalized.ends_with(".md")
+        || normalized.ends_with(".txt")
+        || normalized.ends_with(".rst"))
+        && !normalized.ends_with(".rs")
+        && !normalized.ends_with(".ts")
+        && !normalized.ends_with(".tsx")
+        && !normalized.ends_with(".js")
+        && !normalized.ends_with(".jsx")
+        && !normalized.ends_with(".py")
+        && !normalized.ends_with(".go")
+        && !normalized.ends_with(".java")
+        && !normalized.ends_with(".c")
+        && !normalized.ends_with(".cpp")
+        && !normalized.ends_with(".h")
+        && !normalized.ends_with(".hpp")
+}
+
+fn should_allow_planning_artifact_write(mode: Option<&str>, message: &str) -> Option<String> {
+    let is_planning = mode
+        .map(|value| value.eq_ignore_ascii_case("planning"))
+        .unwrap_or(false);
+    if !is_planning {
+        return None;
+    }
+
+    let lowercase = message.to_ascii_lowercase();
+    let requests_write = ["write", "create", "save", "put"]
+        .iter()
+        .any(|verb| lowercase.contains(verb));
+    let requests_plan_artifact = ["plan", "implementation plan", "roadmap", "spec", "specification", "design doc"]
+        .iter()
+        .any(|keyword| lowercase.contains(keyword));
+    if !requests_write || !requests_plan_artifact {
+        return None;
+    }
+
+    let output_path = extract_explicit_output_path(message)?;
+    if !is_planning_artifact_path(&output_path) {
+        return None;
+    }
+
+    Some(output_path)
+}
+
 fn infer_context_files_from_query(
     state: &State<'_, AppState>,
     query: &str,
@@ -74,6 +140,7 @@ pub async fn handle_send_message<R: Runtime>(
     selection_start_line: Option<usize>,
     selection_end_line: Option<usize>,
     mentions: Option<Vec<ChatMention>>,
+    mode: Option<String>,
     window: tauri::Window<R>,
     state: State<'_, AppState>,
     app: AppHandle<R>,
@@ -144,6 +211,17 @@ pub async fn handle_send_message<R: Runtime>(
             actual_message
         );
     }
+
+    let effective_mode = if let Some(output_path) = should_allow_planning_artifact_write(mode.as_deref(), actual_message.as_str()) {
+        actual_message = format!(
+            "[SYSTEM NOTE: The user explicitly requested a planning artifact to be written to {}. You may create or update that planning/documentation file while staying focused on planning. Avoid unrelated source-code edits unless the user also asked for implementation.]\n\n{}",
+            output_path,
+            actual_message
+        );
+        None
+    } else {
+        mode.clone()
+    };
 
     // If there is no editor context, infer likely relevant files from indexed symbols.
     // This prevents the model from defaulting to generic project summaries.
@@ -392,6 +470,7 @@ pub async fn handle_send_message<R: Runtime>(
             cursor_column,
             http,
             storage_mode,
+            effective_mode,
             composite_tools_enabled,
         )
         .map_err(|e| e.to_string())?;
@@ -520,33 +599,6 @@ pub async fn handle_send_message<R: Runtime>(
                             }
                         }
                     }
-
-                    // v1.1: Emit MessageCompleted event for explicit end-of-stream
-                    let msg_id = {
-                        let conversation = state.conversation.lock().unwrap();
-                        conversation
-                            .last_assistant()
-                            .and_then(|msg| msg.id.clone())
-                            .or_else(|| Some(uuid::Uuid::new_v4().to_string()))
-                    };
-
-                    if let Some(id) = msg_id {
-                        let _ = window.emit(
-                            "blade-event",
-                            blade_protocol::BladeEventEnvelope {
-                                id: uuid::Uuid::new_v4(),
-                                timestamp: std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_millis() as u64,
-                                causality_id: None,
-                                event: blade_protocol::BladeEvent::Chat(
-                                    blade_protocol::ChatEvent::MessageCompleted { id },
-                                ),
-                            },
-                        );
-                    }
-
                     window.emit("chat-done", ()).unwrap_or_default();
                     break;
                 }
@@ -597,6 +649,13 @@ pub async fn handle_send_message<R: Runtime>(
                 mgr.message_seq += 1;
                 drop(mgr);
                 let msg_id = if msg_id.is_empty() { "streaming-msg".to_string() } else { msg_id };
+                eprintln!(
+                    "[stream-debug][rust->ui][text] id={} seq={} len={} preview=\"{}\"",
+                    msg_id,
+                    seq,
+                    chunk.len(),
+                    stream_debug_preview(&chunk)
+                );
 
                 // 2. Emit Blade v1.1 MessageDelta
                 let _ = window.emit(
@@ -624,6 +683,13 @@ pub async fn handle_send_message<R: Runtime>(
                 mgr.message_seq += 1;
                 drop(mgr);
                 let msg_id = if msg_id.is_empty() { "streaming-msg".to_string() } else { msg_id };
+                eprintln!(
+                    "[stream-debug][rust->ui][reasoning] id={} seq={} len={} preview=\"{}\"",
+                    msg_id,
+                    seq,
+                    chunk.len(),
+                    stream_debug_preview(&chunk)
+                );
 
                 let _ = window.emit(
                     "blade-event",
@@ -789,8 +855,6 @@ pub async fn handle_send_message<R: Runtime>(
                         ),
                     },
                 );
-                // Also emit chat-done so legacy listeners reset loading/Stop state
-                window.emit("chat-done", ()).unwrap_or_default();
             } else if let DrainResult::ContextLengthExceeded { message, token_count, max_tokens, excess, recoverable, recovery_hint } = result {
                 // RFC: Context Length Recovery - emit context-length-exceeded event to frontend
                 eprintln!("[LIB] Context length exceeded: {} (tokens: {:?}/{:?})", message, token_count, max_tokens);

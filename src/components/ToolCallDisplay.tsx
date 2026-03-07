@@ -53,15 +53,15 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     const getStatusColor = () => {
         switch (status) {
             case 'executing':
-                return 'border-blue-500/20 bg-[#0d1117]';
+                return 'border-l-blue-400';
             case 'complete':
-                return 'border-emerald-500/20 bg-[#0d1117]';
+                return 'border-l-emerald-400';
             case 'error':
-                return 'border-red-500/30 bg-[#0d1117]';
+                return 'border-l-red-400';
             case 'skipped':
-                return 'border-yellow-500/30 bg-[#0d1117]';
+                return 'border-l-yellow-400';
             default:
-                return 'border-zinc-700/50 bg-[#0d1117]';
+                return 'border-l-zinc-600';
         }
     };
 
@@ -140,7 +140,18 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     // For run_command, extract the command for display and copy
     const commandText = isRunCommand ? (parsedArgs.command as string || parsedArgs.CommandLine as string || '') : '';
     const cwdText = isRunCommand ? (parsedArgs.cwd as string || parsedArgs.Cwd as string || '') : '';
-    const pathText = (parsedArgs.path as string || parsedArgs.Path as string || '');
+    const pathText = (
+        parsedArgs.path as string
+        || parsedArgs.Path as string
+        || parsedArgs.file_path as string
+        || parsedArgs.filePath as string
+        || parsedArgs.filepath as string
+        || parsedArgs.filename as string
+        || parsedArgs.TargetFile as string
+        || parsedArgs.target_file as string
+        || parsedArgs.absolute_path as string
+        || ''
+    );
     
     // For search tools, extract the search query
     const searchQuery = (parsedArgs.pattern as string || parsedArgs.query as string || parsedArgs.regex as string || parsedArgs.Query as string || '');
@@ -178,15 +189,15 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     // Compact inline display for most tools, expanded for run_command
     if (!isRunCommand) {
         return (
-            <div className={`group/tool overflow-hidden rounded-xl border text-[11px] shadow-[0_10px_28px_rgba(0,0,0,0.16)] ${getStatusColor()}`}>
-                <div className="flex items-start gap-2.5 px-3 py-2.5">
-                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/5 bg-black/10">
+            <div className={`group/tool border-l-2 pl-2.5 text-[11px] ${getStatusColor()}`}>
+                <div className="flex items-start gap-2 py-1.5">
+                    <div className="flex h-5 w-5 shrink-0 items-center justify-center text-zinc-500">
                         {getStatusIcon()}
                     </div>
-                    <div className="min-w-0 flex-1 space-y-1.5">
+                    <div className="min-w-0 flex-1 space-y-1">
                         <div className="flex items-start gap-2">
                             <div className="min-w-0 flex flex-1 items-center gap-2">
-                                <span className="shrink-0 text-[11px] font-semibold text-zinc-100">
+                                <span className="shrink-0 text-[11px] font-medium text-zinc-200">
                                     {getFriendlyToolName(toolCall.function.name, parsedArgs)}
                                 </span>
                                 {displayPathText && (
@@ -194,9 +205,9 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                                         type="button"
                                         onClick={() => onOpenFile?.(pathText || displayPathText)}
                                         disabled={!onOpenFile}
-                                        className={`min-w-0 flex-1 truncate rounded-md border px-1.5 py-0.5 text-left text-[10px] transition-colors ${onOpenFile
-                                            ? 'border-zinc-800/90 bg-zinc-900/45 text-zinc-300 hover:border-zinc-700 hover:bg-zinc-800/55'
-                                            : 'border-zinc-800/90 bg-zinc-900/45 text-zinc-400'
+                                        className={`min-w-0 flex-1 truncate text-left text-[10px] transition-colors ${onOpenFile
+                                            ? 'text-zinc-400 hover:text-zinc-200'
+                                            : 'text-zinc-500'
                                             }`}
                                         title={pathText || displayPathText}
                                     >
@@ -205,14 +216,14 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                                 )}
                                 {!displayPathText && searchQuery && (
                                     <span
-                                        className="min-w-0 flex-1 truncate text-[10px] font-mono text-zinc-400"
+                                        className="min-w-0 flex-1 truncate text-[10px] font-mono text-zinc-500"
                                         title={searchQuery}
                                     >
                                         {searchQuery}
                                     </span>
                                 )}
                             </div>
-                            <div className="ml-auto flex shrink-0 items-center gap-1.5 pl-2">
+                            <div className="ml-auto flex shrink-0 items-center gap-1 pl-2">
                                 <span className={`text-[9px] font-semibold uppercase tracking-[0.14em] ${status === 'complete'
                                     ? 'text-emerald-300'
                                     : status === 'executing'
@@ -228,7 +239,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                                 {detailItems.length > 0 && (
                                     <button
                                         onClick={() => setIsExpanded(!isExpanded)}
-                                        className="rounded-md p-0.5 text-zinc-500 transition-colors hover:bg-zinc-800/80 hover:text-zinc-300"
+                                        className="rounded p-0.5 text-zinc-600 transition-colors hover:text-zinc-300"
                                         title={isExpanded ? 'Hide details' : 'Show details'}
                                     >
                                         {isExpanded ? (
@@ -243,7 +254,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                         <div className="flex flex-wrap items-center gap-2 pl-0.5">
                             {searchQuery && displayPathText && (
                                 <span
-                                    className="min-w-0 max-w-full truncate text-[10px] font-mono text-zinc-400"
+                                    className="min-w-0 max-w-full truncate text-[10px] font-mono text-zinc-500"
                                     title={searchQuery}
                                 >
                                     {searchQuery}
@@ -255,7 +266,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                                         e.stopPropagation();
                                         onUndo();
                                     }}
-                                    className="flex items-center gap-1 rounded-md border border-zinc-800 bg-zinc-900/55 px-1.5 py-0.5 text-[9px] text-zinc-400 transition-all hover:border-zinc-700 hover:bg-zinc-800/70 hover:text-red-300"
+                                    className="flex items-center gap-1 rounded px-1 py-0.5 text-[9px] text-zinc-500 transition-colors hover:text-red-300"
                                     title="Undo changes"
                                 >
                                     <RotateCcw className="w-2.5 h-2.5" />
@@ -266,7 +277,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                     </div>
                 </div>
                 {isExpanded && detailItems.length > 0 && (
-                    <div className="border-t border-zinc-800/60 bg-black/10 px-3 py-2.5">
+                    <div className="ml-7 border-l border-zinc-800/70 pl-3 pb-1 pt-1.5">
                         <div className="space-y-2">
                             {detailItems.map((item) => (
                                 <div key={item.label} className="space-y-1">
@@ -286,26 +297,26 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     }
 
     return (
-        <div className={`overflow-hidden rounded-xl border transition-all duration-200 shadow-[0_10px_28px_rgba(0,0,0,0.16)] ${getStatusColor()}`}>
-            <div className="flex items-center justify-between bg-zinc-900/45 px-3 py-2">
-                <div className="flex min-w-0 items-center gap-2.5">
-                    <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/5 bg-black/10">
+        <div className={`border-l-2 pl-2.5 ${getStatusColor()}`}>
+            <div className="flex items-center justify-between gap-2 py-1.5">
+                <div className="flex min-w-0 items-center gap-2">
+                    <div className="flex h-5 w-5 items-center justify-center text-zinc-500">
                         {getStatusIcon()}
                     </div>
                     <div className="min-w-0">
-                        <span className="block truncate text-[11px] font-semibold text-zinc-200">
+                        <span className="block truncate text-[11px] font-medium text-zinc-200">
                             {getFriendlyToolName(toolCall.function.name, parsedArgs)}
                         </span>
                     </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5">
                     {isRunCommand && status === 'executing' && onStopCommand && (
                         <button
                             onClick={(e) => {
                                 e.stopPropagation();
                                 onStopCommand();
                             }}
-                            className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-red-500/40 bg-red-500/10 text-red-400 transition-colors hover:bg-red-500/20"
+                            className="inline-flex h-5 w-5 items-center justify-center rounded text-red-400 transition-colors hover:text-red-300"
                             title={t('toolCall.stopCommand')}
                             aria-label={t('toolCall.stopCommand')}
                         >
@@ -323,7 +334,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
             </div>
 
             {commandText && (
-                <div className="border-t border-zinc-800/40 bg-zinc-950/55 px-3 py-2.5">
+                <div className="ml-7 border-l border-zinc-800/70 pl-3 pb-1 pt-1.5">
                     <div className="flex items-start gap-2">
                         <code className="flex-1 break-all text-[12px] font-mono leading-6 text-zinc-200 select-text">
                             {cwdText && <span className="text-zinc-500">{cwdText}$ </span>}
@@ -331,7 +342,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                         </code>
                         <button
                             onClick={() => handleCopyCommand(commandText)}
-                            className="group/copy shrink-0 rounded-lg border border-zinc-800 bg-zinc-900/70 p-1.5 transition-colors hover:border-zinc-700 hover:bg-zinc-800"
+                            className="group/copy shrink-0 rounded p-1 text-zinc-500 transition-colors hover:text-zinc-300"
                             title={t('toolCall.copyCommand')}
                         >
                             {copied ? (

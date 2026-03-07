@@ -109,6 +109,7 @@ pub async fn dispatch(
                     images,
                     context,
                     mentions,
+                    mode,
                 } => {
                     // Extract context if available
                     let (
@@ -143,6 +144,7 @@ pub async fn dispatch(
                         selection_start,
                         selection_end,
                         mentions,
+                        mode,
                         window.clone(),
                         state.clone(),
                         app_handle.clone(),

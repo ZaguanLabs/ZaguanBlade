@@ -8,10 +8,12 @@ import { MessageBuffer } from '../utils/eventBuffer';
 import { ensureMessagesHaveBlocks } from '../utils/messageBlocks';
 import { EventNames, type RequestConfirmationPayload, type StructuredAction, type ToolExecutionCompletedPayload, type TodoItem } from '../types/events';
 import type { BladeEventEnvelope, ChatMention } from '../types/blade';
-import type { ChatMessage, ComposerMention, CommandExecution, ImageAttachment, MessageBlock, ModelInfo, QueuedRequest, StreamingState, ToolActivityState, ToolCall } from '../types/chat';
+import type { ChatMessage, ChatMode, ComposerMention, CommandExecution, ImageAttachment, MessageBlock, ModelInfo, QueuedRequest, StreamingState, ToolActivityState, ToolCall } from '../types/chat';
 
 const MAX_DELTA_OVERLAP_CHECK = 512;
 const MIN_SNAPSHOT_PREFIX = 48;
+const MIN_SUFFIX_REPLAY_LENGTH = 8;
+const MIN_STALE_REPLAY_LENGTH = 24;
 const FLUSH_INTERVAL_MS = 80;
 const TOOL_ACTIVITY_DISPATCH_INTERVAL_MS = 120;
 
@@ -38,12 +40,24 @@ type StreamMergeResult = {
     replaced: boolean;
 };
 
+function streamDebugPreview(value: string): string {
+    const normalized = value.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+    return normalized.length > 160 ? `${normalized.slice(0, 160)}…` : normalized;
+}
+
+function streamDebugLog(tag: string, payload: Record<string, unknown>): void {
+    const message = `${tag} ${JSON.stringify(payload)}`;
+    console.debug(message);
+    void invoke('log_frontend', { message }).catch(() => undefined);
+}
+
 type ChatState = {
     messages: ChatMessage[];
     loading: boolean;
     error: string | null;
     models: ModelInfo[];
     selectedModelId: string;
+    chatMode: ChatMode;
     pendingActions: StructuredAction[] | null;
     toolActivity: ToolActivityState | null;
     activeTodos: TodoItem[];
@@ -57,6 +71,7 @@ type ChatAction =
     | { type: 'error/set'; error: string | null }
     | { type: 'models/set'; models: ModelInfo[] }
     | { type: 'model/set'; modelId: string }
+    | { type: 'mode/set'; mode: ChatMode }
     | { type: 'pending-actions/set'; actions: StructuredAction[] | null }
     | { type: 'tool-activity/set'; activity: ToolActivityState | null }
     | { type: 'todos/set'; todos: TodoItem[] }
@@ -71,6 +86,7 @@ const initialState: ChatState = {
     error: null,
     models: [],
     selectedModelId: 'anthropic/claude-sonnet-4-5-20250929',
+    chatMode: 'code',
     pendingActions: null,
     toolActivity: null,
     activeTodos: [],
@@ -91,6 +107,8 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
             return { ...state, models: action.models };
         case 'model/set':
             return { ...state, selectedModelId: action.modelId };
+        case 'mode/set':
+            return { ...state, chatMode: action.mode };
         case 'pending-actions/set':
             return { ...state, pendingActions: action.actions };
         case 'tool-activity/set':
@@ -133,7 +151,7 @@ function mergeStreamChunk(previous: string, incoming: string): StreamMergeResult
         return { next: incoming, append: incoming, changed: true, replaced: false };
     }
 
-    if (previous.endsWith(incoming)) {
+    if (incoming.length >= MIN_SUFFIX_REPLAY_LENGTH && previous.endsWith(incoming)) {
         return { next: previous, append: '', changed: false, replaced: false };
     }
 
@@ -142,7 +160,7 @@ function mergeStreamChunk(previous: string, incoming: string): StreamMergeResult
         return { next: incoming, append: delta, changed: delta.length > 0, replaced: false };
     }
 
-    if (previous.includes(incoming)) {
+    if (incoming.length >= MIN_STALE_REPLAY_LENGTH && previous.includes(incoming)) {
         return { next: previous, append: '', changed: false, replaced: false };
     }
 
@@ -225,6 +243,7 @@ export function useChatV2() {
     const toolCallOwnerMessageIdRef = useRef<Map<string, string>>(new Map());
     const pendingActionsRef = useRef<StructuredAction[] | null>(null);
     const selectedModelIdRef = useRef(state.selectedModelId);
+    const chatModeRef = useRef(state.chatMode);
     const activeTodosRef = useRef<TodoItem[]>(state.activeTodos);
     const toolActivityRef = useRef<ToolActivityState | null>(state.toolActivity);
     const hasExplicitModelRef = useRef(false);
@@ -232,6 +251,7 @@ export function useChatV2() {
     const messageBufferRef = useRef<MessageBuffer | null>(null);
     const accumulatedContentRef = useRef<{ id: string; content: string }>({ id: '', content: '' });
     const accumulatedReasoningRef = useRef<{ id: string; content: string }>({ id: '', content: '' });
+    const dispatchInFlightRef = useRef(false);
     const pendingUpdatesRef = useRef<Map<string, { content: string; reasoning: string; blocks: MessageBlock[]; streaming?: StreamingState }>>(new Map());
     const flushScheduledRef = useRef<number | null>(null);
     const streamingStatesRef = useRef<Map<string, StreamingState>>(new Map());
@@ -329,6 +349,10 @@ export function useChatV2() {
     useEffect(() => {
         selectedModelIdRef.current = state.selectedModelId;
     }, [state.selectedModelId]);
+
+    useEffect(() => {
+        chatModeRef.current = state.chatMode;
+    }, [state.chatMode]);
 
     useEffect(() => {
         activeTodosRef.current = state.activeTodos;
@@ -446,6 +470,7 @@ export function useChatV2() {
         }
         clearPendingTimers();
         setToolActivity(null);
+        dispatchInFlightRef.current = false;
         dispatch({ type: 'loading/set', loading: false });
         dispatch({ type: 'pending-actions/set', actions: null });
     }, [clearPendingTimers, setToolActivity]);
@@ -651,6 +676,10 @@ export function useChatV2() {
                     };
                     streamingStatesRef.current.set(id, streaming);
 
+                    const previousValue = type === 'reasoning'
+                        ? (accumulatedReasoningRef.current.id === id ? accumulatedReasoningRef.current.content : '')
+                        : (accumulatedContentRef.current.id === id ? accumulatedContentRef.current.content : '');
+
                     let mergedChunk: StreamMergeResult;
                     if (type === 'reasoning') {
                         if (accumulatedReasoningRef.current.id !== id) {
@@ -661,6 +690,18 @@ export function useChatV2() {
                             }
                         }
                         mergedChunk = mergeStreamChunk(accumulatedReasoningRef.current.content, chunk);
+                        streamDebugLog('[stream-debug][ui-merge][reasoning]', {
+                            id,
+                            seq,
+                            incomingLength: chunk.length,
+                            previousLength: previousValue.length,
+                            appendLength: mergedChunk.append.length,
+                            changed: mergedChunk.changed,
+                            replaced: mergedChunk.replaced,
+                            incomingPreview: streamDebugPreview(chunk),
+                            previousPreview: streamDebugPreview(previousValue),
+                            nextPreview: streamDebugPreview(mergedChunk.next),
+                        });
                         if (!mergedChunk.changed) {
                             queueMessageUpdate(
                                 id,
@@ -681,6 +722,18 @@ export function useChatV2() {
                             }
                         }
                         mergedChunk = mergeStreamChunk(accumulatedContentRef.current.content, chunk);
+                        streamDebugLog('[stream-debug][ui-merge][text]', {
+                            id,
+                            seq,
+                            incomingLength: chunk.length,
+                            previousLength: previousValue.length,
+                            appendLength: mergedChunk.append.length,
+                            changed: mergedChunk.changed,
+                            replaced: mergedChunk.replaced,
+                            incomingPreview: streamDebugPreview(chunk),
+                            previousPreview: streamDebugPreview(previousValue),
+                            nextPreview: streamDebugPreview(mergedChunk.next),
+                        });
                         if (!mergedChunk.changed) {
                             queueMessageUpdate(
                                 id,
@@ -784,7 +837,6 @@ export function useChatV2() {
                     );
                     flushPendingUpdates();
                     blocksRef.current.delete(id);
-                    dispatch({ type: 'loading/set', loading: false });
                 },
             );
         }
@@ -811,6 +863,7 @@ export function useChatV2() {
                     updateToolCallsStatusLocally(inFlightToolCallIds, 'complete', 'Completed after conversation ended');
                 }
 
+                dispatchInFlightRef.current = false;
                 dispatch({ type: 'loading/set', loading: false });
                 dispatch({ type: 'pending-actions/set', actions: null });
 
@@ -831,6 +884,15 @@ export function useChatV2() {
             });
 
             unlistenError = await listen<string>('chat-error', (event) => {
+                const inFlightToolCallIds = Array.from(new Set(
+                    messagesRef.current.flatMap((message) => (message.tool_calls || [])
+                        .filter((toolCall) => toolCall.status === undefined || toolCall.status === 'pending' || toolCall.status === 'executing')
+                        .map((toolCall) => toolCall.id)),
+                ));
+                if (inFlightToolCallIds.length > 0) {
+                    updateToolCallsStatusLocally(inFlightToolCallIds, 'error', event.payload);
+                }
+                dispatchInFlightRef.current = false;
                 dispatch({ type: 'loading/set', loading: false });
                 dispatch({ type: 'pending-actions/set', actions: null });
                 dispatch({ type: 'error/set', error: event.payload });
@@ -846,6 +908,7 @@ export function useChatV2() {
             }>('context-length-exceeded', (event) => {
                 const { message, token_count, max_tokens, recoverable, recovery_hint } = event.payload;
                 const tokenInfo = token_count && max_tokens ? ` (${token_count.toLocaleString()} / ${max_tokens.toLocaleString()} tokens)` : '';
+                dispatchInFlightRef.current = false;
                 dispatch({ type: 'loading/set', loading: false });
                 dispatch({ type: 'pending-actions/set', actions: null });
                 updateMessages((messages) => [
@@ -863,6 +926,7 @@ export function useChatV2() {
                 message: string;
                 recovery_hint: string;
             }>('message-too-large', (event) => {
+                dispatchInFlightRef.current = false;
                 dispatch({ type: 'loading/set', loading: false });
                 updateMessages((messages) => [
                     ...messages,
@@ -997,6 +1061,13 @@ export function useChatV2() {
 
                 const chatEvent = envelope.event.payload as { type: string; payload: any };
                 if (chatEvent.type === 'MessageDelta') {
+                    streamDebugLog('[stream-debug][ui-recv][text]', {
+                        id: chatEvent.payload.id,
+                        seq: chatEvent.payload.seq,
+                        isFinal: chatEvent.payload.is_final,
+                        length: chatEvent.payload.chunk.length,
+                        preview: streamDebugPreview(chatEvent.payload.chunk),
+                    });
                     messageBufferRef.current?.addMessageDelta(
                         chatEvent.payload.id,
                         chatEvent.payload.seq,
@@ -1007,6 +1078,13 @@ export function useChatV2() {
                 }
 
                 if (chatEvent.type === 'ReasoningDelta') {
+                    streamDebugLog('[stream-debug][ui-recv][reasoning]', {
+                        id: chatEvent.payload.id,
+                        seq: chatEvent.payload.seq,
+                        isFinal: chatEvent.payload.is_final,
+                        length: chatEvent.payload.chunk.length,
+                        preview: streamDebugPreview(chatEvent.payload.chunk),
+                    });
                     messageBufferRef.current?.addReasoningDelta(
                         chatEvent.payload.id,
                         chatEvent.payload.seq,
@@ -1025,7 +1103,6 @@ export function useChatV2() {
                     if (accumulatedReasoningRef.current.id === id) {
                         accumulatedReasoningRef.current = { id: '', content: '' };
                     }
-                    dispatch({ type: 'loading/set', loading: false });
                     toolChunkCountsRef.current.clear();
                     setToolActivity(null);
                     return;
@@ -1188,8 +1265,9 @@ export function useChatV2() {
         };
     }, [clearPendingTimers, flushPendingUpdates, queueMessageUpdate, setMessages, setToolActivity, updateMessages, updateToolCallsStatusLocally]);
 
-    const dispatchToBackend = useCallback(async (text: string, attachments?: ImageAttachment[], mentions?: ComposerMention[]) => {
+    const dispatchToBackend = useCallback(async (text: string, attachments?: ImageAttachment[], mentions?: ComposerMention[], mode?: ChatMode) => {
         try {
+            dispatchInFlightRef.current = true;
             dispatch({ type: 'loading/set', loading: true });
             dispatch({ type: 'error/set', error: null });
 
@@ -1207,26 +1285,30 @@ export function useChatV2() {
                     })),
                     context,
                     mentions: toChatMentions(mentions),
+                    mode: mode ?? chatModeRef.current,
                 },
             });
             firstDispatchRef.current = false;
         } catch (error) {
             console.error('[useChatV2] Failed to send message:', error);
+            dispatchInFlightRef.current = false;
             dispatch({ type: 'error/set', error: error instanceof Error ? error.message : String(error) });
             dispatch({ type: 'loading/set', loading: false });
         }
     }, [requestFreshEditorContext, toChatMentions]);
 
     useEffect(() => {
-        if (state.loading || state.messageQueue.length === 0) {
+        if (state.loading || dispatchInFlightRef.current || state.messageQueue.length === 0) {
             return;
         }
+        dispatchInFlightRef.current = true;
         const nextMessage = state.messageQueue[0];
         dispatch({ type: 'queue/shift' });
-        void dispatchToBackend(nextMessage.text, nextMessage.attachments, nextMessage.mentions);
+        void dispatchToBackend(nextMessage.text, nextMessage.attachments, nextMessage.mentions, nextMessage.mode);
     }, [dispatchToBackend, state.loading, state.messageQueue]);
 
-    const sendMessage = useCallback((text: string, attachments?: ImageAttachment[], mentions?: ComposerMention[]) => {
+    const sendMessage = useCallback((text: string, attachments?: ImageAttachment[], mentions?: ComposerMention[], mode?: ChatMode) => {
+        const requestMode = mode ?? chatModeRef.current;
         const userMessage: ChatMessage = {
             id: crypto.randomUUID(),
             role: 'User',
@@ -1235,8 +1317,12 @@ export function useChatV2() {
             mentions,
         };
         updateMessages((messages) => [...messages, userMessage]);
-        dispatch({ type: 'queue/enqueue', request: { text, attachments, mentions } });
+        dispatch({ type: 'queue/enqueue', request: { text, attachments, mentions, mode: requestMode } });
     }, [updateMessages]);
+
+    const setChatMode = useCallback((mode: ChatMode) => {
+        dispatch({ type: 'mode/set', mode });
+    }, []);
 
     const deleteQueuedRequest = useCallback((index: number) => {
         dispatch({ type: 'queue/delete', index });
@@ -1260,6 +1346,7 @@ export function useChatV2() {
 
         try {
             await BladeDispatcher.chat({ type: 'StopGeneration', payload: {} });
+            dispatchInFlightRef.current = false;
             dispatch({ type: 'loading/set', loading: false });
         } catch (error) {
             console.error('[useChatV2] Failed to stop generation:', error);
@@ -1364,6 +1451,8 @@ export function useChatV2() {
         refreshModels,
         selectedModelId: state.selectedModelId,
         setSelectedModelId,
+        chatMode: state.chatMode,
+        setChatMode,
         pendingActions: state.pendingActions,
         approveTool,
         approveToolDecision,

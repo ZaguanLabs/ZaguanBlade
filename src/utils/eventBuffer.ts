@@ -23,31 +23,30 @@ export interface TerminalChunk {
 
 export class EventBuffer<T> {
     private chunks: Map<number, BufferedChunk<T>>;
-    private nextSeq: number | null;
+    private nextSeq: number;
     private onApply: (data: T, is_final?: boolean, seq?: number) => void;
     private onComplete?: () => void;
+    private initialSeq: number;
 
     constructor(
         onApply: (data: T, is_final?: boolean, seq?: number) => void,
-        onComplete?: () => void
+        onComplete?: () => void,
+        initialSeq = 0,
     ) {
         this.chunks = new Map();
-        this.nextSeq = null;
+        this.nextSeq = initialSeq;
         this.onApply = onApply;
         this.onComplete = onComplete;
+        this.initialSeq = initialSeq;
     }
 
     /**
      * Add a chunk to the buffer and apply all sequential chunks
      */
     add(seq: number, data: T, is_final?: boolean): void {
-        if (this.nextSeq === null) {
-            this.nextSeq = seq;
-        }
-
         // Drop stale/already-applied chunks (late delivery or duplicate replay).
         // A true new stream should use a new message ID or explicitly clear the buffer.
-        if (this.nextSeq !== null && seq < this.nextSeq) {
+        if (seq < this.nextSeq) {
             return;
         }
 
@@ -57,7 +56,7 @@ export class EventBuffer<T> {
         }
 
         // Apply all sequential chunks starting from nextSeq
-        while (this.nextSeq !== null && this.chunks.has(this.nextSeq)) {
+        while (this.chunks.has(this.nextSeq)) {
             const chunk = this.chunks.get(this.nextSeq)!;
             this.onApply(chunk.data, chunk.is_final, chunk.seq);
             this.chunks.delete(this.nextSeq);
@@ -77,7 +76,7 @@ export class EventBuffer<T> {
      */
     clear(): void {
         this.chunks.clear();
-        this.nextSeq = null;
+        this.nextSeq = this.initialSeq;
     }
 
     /**
@@ -91,7 +90,7 @@ export class EventBuffer<T> {
      * Get the next expected sequence number
      */
     getNextSeq(): number {
-        return this.nextSeq ?? -1;
+        return this.nextSeq;
     }
 }
 
@@ -102,14 +101,17 @@ export class BufferManager<T> {
     private buffers: Map<string, EventBuffer<T>>;
     private onApply: (id: string, data: T, is_final?: boolean, seq?: number) => void;
     private onComplete?: (id: string) => void;
+    private initialSeq: number;
 
     constructor(
         onApply: (id: string, data: T, is_final?: boolean, seq?: number) => void,
-        onComplete?: (id: string) => void
+        onComplete?: (id: string) => void,
+        initialSeq = 0,
     ) {
         this.buffers = new Map();
         this.onApply = onApply;
         this.onComplete = onComplete;
+        this.initialSeq = initialSeq;
     }
 
     /**
@@ -127,7 +129,8 @@ export class BufferManager<T> {
                         }
                         // Clean up completed buffer
                         this.buffers.delete(id);
-                    }
+                    },
+                    this.initialSeq,
                 )
             );
         }

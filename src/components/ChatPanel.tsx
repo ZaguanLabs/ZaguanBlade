@@ -2,10 +2,10 @@ import React, { useEffect, useRef, useCallback, useState, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useTranslation } from 'react-i18next';
-import { ArrowDown, Check, X, Settings, Key, Loader2, ChevronDown, ChevronRight } from 'lucide-react';
+import { ArrowDown, Check, X, Settings, Key, Loader2 } from 'lucide-react';
 import { useCommandExecution } from '../hooks/useCommandExecution';
 import { useHistory } from '../hooks/useHistory';
-import type { ChatMessage as ChatMessageType, ComposerMention, ImageAttachment, ModelInfo, QueuedRequest, ToolActivityState } from '../types/chat';
+import type { ChatMessage as ChatMessageType, ChatMode, ComposerMention, ImageAttachment, ModelInfo, QueuedRequest, ToolActivityState } from '../types/chat';
 
 import type { StructuredAction, TodoItem } from '../types/events';
 import type { RemoteAiConfig } from '../types/settings';
@@ -31,11 +31,13 @@ interface ChatPanelProps {
     messages: ChatMessageType[];
     loading: boolean;
     error: string | null;
-    sendMessage: (text: string, attachments?: ImageAttachment[], mentions?: ComposerMention[]) => void;
+    sendMessage: (text: string, attachments?: ImageAttachment[], mentions?: ComposerMention[], mode?: ChatMode) => void;
     stopGeneration: () => void;
     models: ModelInfo[];
     selectedModelId: string;
     setSelectedModelId: (modelId: string) => void;
+    chatMode: ChatMode;
+    setChatMode: (mode: ChatMode) => void;
     pendingActions: StructuredAction[] | null;
     approveToolDecision: (decision: string) => void;
     skipSingleCommand: (callId: string) => void;
@@ -105,6 +107,8 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     models,
     selectedModelId,
     setSelectedModelId,
+    chatMode,
+    setChatMode,
     pendingActions,
     approveToolDecision,
     skipSingleCommand,
@@ -132,7 +136,6 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     const [hasApiKey, setHasApiKey] = useState<boolean>(true);
     const [composerPrefill, setComposerPrefill] = useState<QueuedRequest | null>(null);
     const [showScrollToBottom, setShowScrollToBottom] = useState(false);
-    const [isToolActivityExpanded, setIsToolActivityExpanded] = useState(false);
     const showScrollToBottomRef = useRef(false);
 
     // Check API Key
@@ -164,9 +167,6 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     const lastMessageReasoning = lastMessage?.reasoning ?? '';
     const lastMessageBlockCount = lastMessage?.blocks?.length ?? 0;
     const shouldShowPendingResponseIndicator = loading && lastMessage?.role !== 'Assistant';
-    const toolActivityKey = toolActivity
-        ? `${toolActivity.toolCallId || `${toolActivity.toolName}:${toolActivity.filePath}`}:${toolActivity.action}`
-        : null;
     const chatRows = useMemo(() => deriveChatRows(messages, loading, pendingActions), [loading, messages, pendingActions]);
     const streamingSignature = useMemo(() => {
         if (!lastMessage) return '';
@@ -177,10 +177,6 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
             lastMessageBlockCount,
         ].join('|');
     }, [lastMessageBlockCount, lastMessageContent, lastMessageId, lastMessageReasoning, messageCount]);
-
-    useEffect(() => {
-        setIsToolActivityExpanded(false);
-    }, [toolActivityKey]);
 
     const scrollToBottom = useCallback(() => {
         const container = scrollContainerRef.current;
@@ -301,6 +297,10 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         setComposerPrefill(null);
     }, []);
 
+    const showProgressIndicator = loading
+        && researchProgress?.isActive
+        && researchProgress.stage.toLowerCase() !== 'considering_next_steps';
+
     return (
         <div className="flex flex-col h-full bg-[var(--bg-app)] text-[var(--fg-primary)] font-sans tracking-tight" onContextMenu={handleContextMenu}>
             {/* Tab Bar */}
@@ -359,135 +359,11 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                         {shouldShowPendingResponseIndicator && <PendingResponseIndicator />}
 
                         {/* Research progress indicator */}
-                        {loading && researchProgress?.isActive && (
+                        {showProgressIndicator && (
                             <div className="px-4">
                                 <ProgressIndicator progress={researchProgress} />
                             </div>
                         )}
-
-                        {/* Tool activity indicator - shows streaming tool progress, styled like ToolCallDisplay */}
-                        {toolActivity && (() => {
-                            const prettyToolNames: Record<string, string> = {
-                                'write_file': 'Writing File',
-                                'read_file': 'Reading File',
-                                'apply_patch': 'Applying Code Changes',
-                                'create_file': 'Creating File',
-                                'edit_file': 'Editing File',
-                                'delete_file': 'Deleting File',
-                                'execute_command': 'Running Command',
-                                'run_command': 'Running Command',
-                                'search_files': 'Searching Code',
-                                'list_files': 'Listing Files',
-                                'grep_search': 'Searching Code',
-                                'find_by_name': 'Finding Files',
-                                'multi_edit': 'Multi-Edit File',
-                                'list_dir': 'Listing Directory',
-                                'list_directory': 'Listing Directory',
-                                'codebase_search': 'Searching Codebase',
-                                'get_workspace_structure': 'Analyzing Workspace',
-                                'view_file': 'Viewing File',
-                                'replace_file_content': 'Replacing Content',
-                                'multi_replace_file_content': 'Multi-Edit File',
-                                'write_to_file': 'Writing to File',
-                            };
-                            const writingTools = new Set([
-                                'write_file',
-                                'apply_patch',
-                                'create_file',
-                                'edit_file',
-                                'delete_file',
-                                'multi_edit',
-                                'replace_file_content',
-                                'multi_replace_file_content',
-                                'write_to_file',
-                            ]);
-                            const isWriteTool = writingTools.has(toolActivity.toolName);
-                            const isStreaming = toolActivity.action === 'streaming';
-                            if (!isWriteTool || !isStreaming) {
-                                return null;
-                            }
-
-                            const prettyName = prettyToolNames[toolActivity.toolName] || toolActivity.toolName;
-                            const displayPath = toolActivity.filePath.split('/').pop() || toolActivity.filePath;
-                            const elapsedSeconds = Math.max(0, (toolActivity.lastChunkAt - toolActivity.startedAt) / 1000);
-                            const detailItems = [
-                                { label: 'Path', value: toolActivity.filePath },
-                                { label: 'State', value: 'Streaming file changes' },
-                                { label: 'Duration', value: `${elapsedSeconds.toFixed(1)}s` },
-                                toolActivity.toolCallId ? { label: 'Call ID', value: toolActivity.toolCallId } : null,
-                            ].filter((item): item is { label: string; value: string } => !!item);
-
-                            return (
-                                <div className="px-4">
-                                    <div className="inline-flex min-w-[320px] max-w-full flex-col overflow-hidden rounded-xl border border-zinc-800/80 bg-zinc-950/70 text-[11px] text-zinc-500 shadow-[0_12px_32px_rgba(0,0,0,0.16)]">
-                                        <div className="flex items-start gap-2.5 px-3 py-2.5">
-                                            <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/5 bg-black/10">
-                                                <Loader2 className="h-4 w-4 animate-spin text-blue-300" />
-                                            </div>
-                                            <div className="flex min-w-0 flex-1 flex-col items-start gap-1.5">
-                                                <div className="flex w-full items-start gap-2">
-                                                    <div className="min-w-0 flex flex-1 items-center gap-2">
-                                                        <div className="shrink-0 text-[11px] font-semibold text-zinc-100">
-                                                            {prettyName}
-                                                        </div>
-                                                        {displayPath && (
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => onOpenFile(toolActivity.filePath)}
-                                                                className="min-w-0 flex-1 truncate rounded-md border border-zinc-800/90 bg-zinc-900/45 px-1.5 py-0.5 text-left text-[10px] text-zinc-300 transition-colors hover:border-zinc-700 hover:bg-zinc-800/55"
-                                                                title={toolActivity.filePath}
-                                                            >
-                                                                {displayPath}
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                    <div className="ml-auto flex shrink-0 items-center gap-1.5 pl-2">
-                                                        <span className="text-[9px] font-semibold uppercase tracking-[0.14em] text-blue-300">
-                                                            Streaming
-                                                        </span>
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => setIsToolActivityExpanded((prev) => !prev)}
-                                                            className="rounded-md p-0.5 text-zinc-500 transition-colors hover:bg-zinc-800/80 hover:text-zinc-300"
-                                                            title={isToolActivityExpanded ? 'Hide details' : 'Show details'}
-                                                        >
-                                                            {isToolActivityExpanded ? (
-                                                                <ChevronDown className="h-3 w-3" />
-                                                            ) : (
-                                                                <ChevronRight className="h-3 w-3" />
-                                                            )}
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                                <div className="flex flex-wrap items-center gap-2 pl-0.5">
-                                                    {toolActivity.chunkCount > 0 && (
-                                                        <span className="text-[10px] font-medium text-blue-300">
-                                                            {toolActivity.chunkCount} chunks streamed
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        </div>
-                                        {isToolActivityExpanded && detailItems.length > 0 && (
-                                            <div className="border-t border-zinc-800/60 bg-black/10 px-3 py-2.5">
-                                                <div className="space-y-2">
-                                                    {detailItems.map((item) => (
-                                                        <div key={item.label} className="space-y-1">
-                                                            <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
-                                                                {item.label}
-                                                            </div>
-                                                            <div className="wrap-break-word text-[11px] leading-5 text-zinc-300">
-                                                                {item.value}
-                                                            </div>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-                            );
-                        })()}
 
                         <div className="h-4" />
                     </div>
@@ -538,6 +414,8 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                 models={models}
                 selectedModelId={selectedModelId}
                 setSelectedModelId={setSelectedModelId}
+                chatMode={chatMode}
+                setChatMode={setChatMode}
                 disabled={!hasApiKey}
                 prefillRequest={composerPrefill}
                 onPrefillConsumed={handleComposerPrefillConsumed}

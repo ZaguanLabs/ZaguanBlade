@@ -158,10 +158,11 @@ impl WsConnectionManager {
         images: Option<Vec<crate::protocol::ChatImage>>,
         workspace: Option<WorkspaceInfo>,
         storage_mode: Option<String>,
+        mode: Option<String>,
     ) -> Result<(), String> {
         let client_lock = self.client.lock().await;
         let client = client_lock.as_ref().ok_or("Not connected")?;
-        client.send_message_with_storage_mode(session_id, model_id, message, images, workspace, storage_mode).await
+        client.send_message_with_storage_mode(session_id, model_id, message, images, workspace, storage_mode, mode).await
     }
 
     /// Send a tool result

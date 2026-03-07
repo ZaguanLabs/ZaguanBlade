@@ -682,6 +682,8 @@ const AppLayoutInner: React.FC = () => {
                                 models={chat.models}
                                 selectedModelId={chat.selectedModelId}
                                 setSelectedModelId={chat.setSelectedModelId}
+                                chatMode={chat.chatMode}
+                                setChatMode={chat.setChatMode}
                                 pendingActions={chat.pendingActions}
                                 approveToolDecision={chat.approveToolDecision}
                                 skipSingleCommand={chat.skipSingleCommand}

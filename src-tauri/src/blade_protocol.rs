@@ -92,6 +92,8 @@ pub enum ChatIntent {
         context: Option<EditorContext>,
         #[serde(default)]
         mentions: Option<Vec<ChatMention>>,
+        #[serde(default)]
+        mode: Option<String>,
     },
     StopGeneration {},
     ClearHistory {},
@@ -647,6 +649,7 @@ mod tests {
             images: None,
             context: None,
             mentions: None,
+            mode: None,
         });
 
         let envelope = BladeIntentEnvelope {

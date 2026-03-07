@@ -14,6 +14,8 @@ import { ensureMessagesHaveBlocks } from '../utils/messageBlocks';
 
 const MAX_DELTA_OVERLAP_CHECK = 512;
 const MIN_SNAPSHOT_PREFIX = 48;
+const MIN_SUFFIX_REPLAY_LENGTH = 8;
+const MIN_STALE_REPLAY_LENGTH = 24;
 
 function commonPrefixLength(a: string, b: string): number {
     const max = Math.min(a.length, b.length);
@@ -39,7 +41,7 @@ function mergeStreamChunk(previous: string, incoming: string): StreamMergeResult
     }
 
     // Exact duplicate of the just-emitted suffix; drop it.
-    if (previous.endsWith(incoming)) {
+    if (incoming.length >= MIN_SUFFIX_REPLAY_LENGTH && previous.endsWith(incoming)) {
         return { next: previous, append: '', changed: false, replaced: false };
     }
 
@@ -51,7 +53,7 @@ function mergeStreamChunk(previous: string, incoming: string): StreamMergeResult
     }
 
     // Late/stale replay of an earlier contiguous segment.
-    if (previous.includes(incoming)) {
+    if (incoming.length >= MIN_STALE_REPLAY_LENGTH && previous.includes(incoming)) {
         return { next: previous, append: '', changed: false, replaced: false };
     }
 
@@ -112,6 +114,7 @@ export function useChatLegacy() {
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const messagesRef = useRef<ChatMessage[]>([]);
     const blocksRef = useRef<Map<string, import('../types/chat').MessageBlock[]>>(new Map());
+    const dispatchInFlightRef = useRef(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     
@@ -234,6 +237,7 @@ export function useChatLegacy() {
             pendingTimeoutsRef.current = [];
         }
         setToolActivity(null);
+        dispatchInFlightRef.current = false;
         setLoading(false);
         setPendingActions(null);
     }, []);
@@ -677,7 +681,6 @@ export function useChatLegacy() {
                     // Message completed - flush immediately and cleanup
                     flushPendingUpdates();
                     blocksRef.current.delete(id);
-                    setLoading(false);
                 }
             );
         }
@@ -714,6 +717,7 @@ export function useChatLegacy() {
                     );
                 }
 
+                dispatchInFlightRef.current = false;
                 setLoading(false);
                 setPendingActions(null); // Clear any hanging dialogs
 
@@ -752,6 +756,7 @@ export function useChatLegacy() {
             unlistenDone = u2;
 
             const u3 = await listen<string>('chat-error', (event) => {
+                dispatchInFlightRef.current = false;
                 setLoading(false);
                 setPendingActions(null);
                 setError(event.payload);
@@ -770,6 +775,7 @@ export function useChatLegacy() {
                 console.debug('[useChat] Context length exceeded:', event.payload);
                 const { message, token_count, max_tokens, recoverable, recovery_hint } = event.payload;
                 
+                dispatchInFlightRef.current = false;
                 setLoading(false);
                 setPendingActions(null);
                 
@@ -804,6 +810,7 @@ export function useChatLegacy() {
                 console.debug('[useChat] Message too large:', event.payload);
                 const { message, recovery_hint } = event.payload;
                 
+                dispatchInFlightRef.current = false;
                 setLoading(false);
                 
                 // Add a system message to the chat to inform the user
@@ -1006,7 +1013,6 @@ export function useChatLegacy() {
                             accumulatedReasoningRef.current = { id: '', content: '' };
                         }
 
-                        setLoading(false);
                         toolChunkCountsRef.current.clear();
                         setToolActivity(null);
                         // Buffer will auto-clear on is_final, but this provides explicit confirmation
@@ -1181,6 +1187,7 @@ export function useChatLegacy() {
 
     const dispatchToBackend = useCallback(async (text: string, attachments?: ImageAttachment[]) => {
         try {
+            dispatchInFlightRef.current = true;
             setLoading(true);
             setError(null);
 
@@ -1206,6 +1213,7 @@ export function useChatLegacy() {
 
         } catch (e) {
             console.error('Failed to send message:', e);
+            dispatchInFlightRef.current = false;
             setError(e instanceof Error ? e.message : String(e));
             setLoading(false); // Ensure loading is cleared on immediate error
         }
@@ -1215,7 +1223,8 @@ export function useChatLegacy() {
 
     // Queue processing effect
     useEffect(() => {
-        if (!loading && messageQueue.length > 0) {
+        if (!loading && !dispatchInFlightRef.current && messageQueue.length > 0) {
+            dispatchInFlightRef.current = true;
             const nextMessage = messageQueue[0];
             setMessageQueue(prev => prev.slice(1));
             dispatchToBackend(nextMessage.text, nextMessage.attachments);
@@ -1233,7 +1242,7 @@ export function useChatLegacy() {
         setMessages(prev => [...prev, userMsg]);
 
         // Add to queue for processing
-        setMessageQueue(prev => [...prev, { text, attachments }]);
+        setMessageQueue(prev => [...prev, { text, attachments, mode: 'code' }]);
     }, [loading]);
 
     const deleteQueuedRequest = useCallback((index: number) => {
@@ -1260,6 +1269,7 @@ export function useChatLegacy() {
 
         try {
             await BladeDispatcher.chat({ type: 'StopGeneration', payload: {} });
+            dispatchInFlightRef.current = false;
             setLoading(false);
         } catch (e) {
             console.error("Failed to stop generation:", e);

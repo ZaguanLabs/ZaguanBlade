@@ -30,6 +30,12 @@ const QueuePanelComponent: React.FC<QueuePanelProps> = ({ requests, onEditReques
                             <span className="font-mono text-[10px] text-zinc-600 w-4 text-right shrink-0">
                                 {index + 1}.
                             </span>
+                            <span className={`inline-flex shrink-0 items-center rounded-md border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] ${request.mode === 'planning'
+                                ? 'border-sky-500/20 bg-sky-500/10 text-sky-200'
+                                : 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200'
+                                }`}>
+                                {request.mode}
+                            </span>
                             <span className="truncate flex-1" title={preview}>
                                 {preview}
                             </span>

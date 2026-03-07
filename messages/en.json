@@ -49,6 +49,9 @@
   "chat": {
     "title": "AI Chat",
     "inputPlaceholder": "Ask anything or attach a screenshot...",
+    "imageNoSubscription": "Images are not supported for your current model setup.",
+    "imageNotSupported": "Images are not supported by the selected model.",
+    "imageReadFailed": "Failed to read image attachment.",
     "send": "Send",
     "stop": "Stop",
     "thinking": "Thinking...",
@@ -306,7 +309,7 @@
     "viewLogs": "View Logs",
     "checkForUpdates": "Check for Updates",
     "about": "About Zaguán Blade",
-    "version": "Version {version}",
+    "version": "Version {{version}}",
     "license": "License",
     "privacyPolicy": "Privacy Policy",
     "termsOfService": "Terms of Service"
@@ -334,11 +337,19 @@
     "captured": "Screenshot captured",
     "failed": "Screenshot capture failed",
     "cancelled": "Screenshot cancelled",
+    "windowPickerTitle": "Choose a window",
+    "windowPickerSubtitle": "Select a window to capture.",
+    "regionPickerTitle": "Choose a window for region capture",
+    "regionPickerSubtitle": "Pick the source window, then select a region.",
     "noToolFound": "No screenshot tool found. Install flameshot or gnome-screenshot.",
     "permissionDenied": "Screen recording permission denied",
     "attachmentAdded": "Screenshot attached",
     "attachmentRemoved": "Screenshot removed",
     "multipleAttachments": "{count} screenshots attached"
+  },
+  "toolCall": {
+    "stopCommand": "Stop command",
+    "copyCommand": "Copy command"
   },
   "workspace": {
     "title": "Workspace",

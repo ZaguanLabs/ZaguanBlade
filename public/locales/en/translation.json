@@ -269,7 +269,7 @@
     "aboutSection": {
       "appName": "Zaguán Blade",
       "appTagline": "AI-native code editor",
-      "version": "Version {version}",
+      "version": "Version {{version}}",
       "runtime": "Runtime",
       "runtimeValue": "Tauri Desktop",
       "engine": "Engine",

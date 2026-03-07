@@ -229,72 +229,48 @@ type RenderSegment =
 
 const ActivityGroupDisplay: React.FC<{
     items: ActivityGroupItem[];
-    pendingActions?: import('../types/events').StructuredAction[];
     onUndoTool?: (toolCallId: string) => void;
     onStopCommand?: (callId: string) => void;
     onOpenFile?: (path: string) => void;
-}> = ({ items, pendingActions, onUndoTool, onStopCommand, onOpenFile }) => {
-    const [isExpanded, setIsExpanded] = useState(false);
-    const hiddenCount = Math.max(0, items.length - 1);
-    const summaryLabel = items.length === 1 ? 'Activity' : `Activity (${items.length})`;
-
+}> = ({ items, onUndoTool, onStopCommand, onOpenFile }) => {
     return (
-        <div className="mb-3 overflow-hidden rounded-lg border border-zinc-800/70 bg-zinc-950/35">
-            <button
-                type="button"
-                onClick={() => setIsExpanded((prev) => !prev)}
-                className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-zinc-900/35"
-            >
-                <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
-                    {summaryLabel}
-                </span>
-                {hiddenCount > 0 && !isExpanded && (
-                    <span className="text-[10px] text-zinc-500">
-                        {hiddenCount} more
-                    </span>
-                )}
-                <span className="ml-auto text-zinc-500">
-                    {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                </span>
-            </button>
-            <div className={isExpanded ? 'border-t border-zinc-800/60 px-2.5 py-2.5 space-y-2' : 'border-t border-zinc-800/60 px-2.5 py-2.5'}>
-                {(isExpanded ? items : items.slice(0, 1)).map((item) => {
-                    if (item.kind === 'tool_call') {
-                        const toolCall = item.toolCall;
-                        return (
-                            <ToolCallDisplay
-                                key={item.id}
-                                toolCall={toolCall}
-                                status={toolCall.status || 'executing'}
-                                result={toolCall.result}
-                                onStopCommand={
-                                    toolCall.function.name === 'run_command' && onStopCommand
-                                        ? (() => onStopCommand(toolCall.id))
-                                        : undefined
-                                }
-                                onUndo={
-                                    onUndoTool && REVERTIBLE_TOOLS.has(toolCall.function.name)
-                                        ? (() => onUndoTool(toolCall.id))
-                                        : undefined
-                                }
-                                onOpenFile={onOpenFile}
-                            />
-                        );
-                    }
-
+        <div className="mb-2 space-y-1.5">
+            {items.map((item) => {
+                if (item.kind === 'tool_call') {
+                    const toolCall = item.toolCall;
                     return (
-                        <CommandOutputDisplay
+                        <ToolCallDisplay
                             key={item.id}
-                            command={item.commandExecution.command}
-                            cwd={item.commandExecution.cwd}
-                            output={item.commandExecution.output}
-                            exitCode={item.commandExecution.exitCode}
-                            duration={item.commandExecution.duration}
+                            toolCall={toolCall}
+                            status={toolCall.status || 'executing'}
+                            result={toolCall.result}
+                            onStopCommand={
+                                toolCall.function.name === 'run_command' && onStopCommand
+                                    ? (() => onStopCommand(toolCall.id))
+                                    : undefined
+                            }
+                            onUndo={
+                                onUndoTool && REVERTIBLE_TOOLS.has(toolCall.function.name)
+                                    ? (() => onUndoTool(toolCall.id))
+                                    : undefined
+                            }
+                            onOpenFile={onOpenFile}
                         />
                     );
-                })}
+                }
+
+                return (
+                    <CommandOutputDisplay
+                        key={item.id}
+                        command={item.commandExecution.command}
+                        cwd={item.commandExecution.cwd}
+                        output={item.commandExecution.output}
+                        exitCode={item.commandExecution.exitCode}
+                        duration={item.commandExecution.duration}
+                    />
+                );
+            })}
             </div>
-        </div>
     );
 };
 
@@ -623,7 +599,6 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                         <ActivityGroupDisplay
                                             key={segment.id}
                                             items={segment.items}
-                                            pendingActions={pendingActions}
                                             onUndoTool={onUndoTool}
                                             onStopCommand={onStopCommand}
                                             onOpenFile={onOpenFile}

@@ -188,6 +188,10 @@ struct ChatRequestPayload {
     api_key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     storage_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    planning_mode: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -488,7 +492,7 @@ impl BladeWsClient {
         images: Option<Vec<crate::protocol::ChatImage>>,
         workspace: Option<WorkspaceInfo>,
     ) -> Result<(), String> {
-        self.send_message_with_storage_mode(session_id, model_id, message, images, workspace, None)
+        self.send_message_with_storage_mode(session_id, model_id, message, images, workspace, None, None)
             .await
     }
 
@@ -501,9 +505,12 @@ impl BladeWsClient {
         images: Option<Vec<crate::protocol::ChatImage>>,
         workspace: Option<WorkspaceInfo>,
         storage_mode: Option<String>,
+        mode: Option<String>,
     ) -> Result<(), String> {
         let conn = self.connection.lock().await;
         let conn = conn.as_ref().ok_or("Not connected")?;
+
+        let planning_mode = mode.as_deref().map(|value| value.eq_ignore_ascii_case("planning"));
 
         let payload = ChatRequestPayload {
             session_id,
@@ -513,6 +520,8 @@ impl BladeWsClient {
             workspace,
             api_key: self.api_key.clone(),
             storage_mode,
+            mode,
+            planning_mode,
         };
 
         let msg = WsBaseMessage {
