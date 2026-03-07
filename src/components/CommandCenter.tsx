@@ -3,13 +3,13 @@ import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readFile } from '@tauri-apps/plugin-fs';
-import { Send, Square, BookOpen, Globe } from 'lucide-react';
+import { Send, Square, BookOpen, Globe, FileText, Folder } from 'lucide-react';
 import { CompactModelSelector } from './CompactModelSelector';
 import { FeatureMenu } from './FeatureMenu';
 import { ImageAttachmentBar } from './ImageAttachmentBar';
 import { WindowPicker } from './WindowPicker';
 import { RegionSelector } from './RegionSelector';
-import type { ImageAttachment, ModelInfo, QueuedRequest } from '../types/chat';
+import type { ComposerMention, ImageAttachment, ModelInfo, QueuedRequest } from '../types/chat';
 import type { CaptureResult, WindowInfo } from '../types/screenshot';
 import {
     createThumbnailDataUrl,
@@ -20,6 +20,7 @@ import {
     validateImageByteLength,
     validateImageMimeType,
 } from '../utils/imageUtils';
+import { detectComposerTrigger, replaceTextRange } from '../utils/composerTriggers';
 
 const COMMANDS = [
     { 
@@ -37,7 +38,7 @@ const COMMANDS = [
 ];
 
 interface CommandCenterProps {
-    onSend: (text: string, attachments?: ImageAttachment[]) => void;
+    onSend: (text: string, attachments?: ImageAttachment[], mentions?: ComposerMention[]) => void;
     onStop?: () => void;
     disabled?: boolean;
     loading?: boolean;
@@ -47,6 +48,25 @@ interface CommandCenterProps {
     prefillRequest?: QueuedRequest | null;
     onPrefillConsumed?: () => void;
 }
+
+interface WorkspacePathMatch {
+    path: string;
+    is_dir: boolean;
+}
+
+function collectActivePathMentions(text: string, entries: WorkspacePathMatch[]): ComposerMention[] {
+    return entries
+        .filter((entry) => text.includes(`@${entry.path}`))
+        .map((entry) => ({
+            kind: 'path' as const,
+            path: entry.path,
+            is_dir: entry.is_dir,
+        }));
+}
+
+type ComposerSuggestion =
+    | { kind: 'command'; key: string; name: string; description: string; tooltip: string; icon: typeof Globe }
+    | { kind: 'path'; key: string; path: string; isDir: boolean };
 
 const CommandCenterComponent: React.FC<CommandCenterProps> = ({
     onSend,
@@ -61,9 +81,11 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
 }) => {
     const { t } = useTranslation();
     const [text, setText] = useState('');
-    const [showCommands, setShowCommands] = useState(false);
-    const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
-    const [commandFilter, setCommandFilter] = useState('');
+    const [showSuggestions, setShowSuggestions] = useState(false);
+    const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(0);
+    const [mentionQuery, setMentionQuery] = useState('');
+    const [pathSuggestions, setPathSuggestions] = useState<WorkspacePathMatch[]>([]);
+    const [selectedPathMentions, setSelectedPathMentions] = useState<Record<string, WorkspacePathMatch>>({});
     const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
     const [attachmentError, setAttachmentError] = useState<string | null>(null);
     const [windowPickerOpen, setWindowPickerOpen] = useState(false);
@@ -103,6 +125,33 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
         const id = selectedModelId.toLowerCase();
         return id.includes('glm-4') || id.includes('glm-5') || id.includes('glm4') || id.includes('glm5');
     }, [selectedModelId]);
+    const activePathMentions = useMemo(
+        () => collectActivePathMentions(text, Object.values(selectedPathMentions)),
+        [selectedPathMentions, text]
+    );
+    const filteredCommands = useMemo(() =>
+        COMMANDS.filter(cmd =>
+            cmd.name.toLowerCase().startsWith(mentionQuery.toLowerCase())
+        ),
+    [mentionQuery]);
+    const suggestions = useMemo<ComposerSuggestion[]>(() => {
+        const commandSuggestions: ComposerSuggestion[] = filteredCommands.map((cmd) => ({
+            kind: 'command',
+            key: `command:${cmd.name}`,
+            name: cmd.name,
+            description: cmd.description,
+            tooltip: cmd.tooltip,
+            icon: cmd.icon,
+        }));
+        const fileSuggestions: ComposerSuggestion[] = pathSuggestions.map((entry) => ({
+            kind: 'path',
+            key: `path:${entry.path}`,
+            path: entry.path,
+            isDir: entry.is_dir,
+        }));
+
+        return [...commandSuggestions, ...fileSuggestions];
+    }, [filteredCommands, pathSuggestions]);
 
     // Cleanup pending resize RAF on unmount.
     useEffect(() => {
@@ -117,6 +166,14 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
         if (!prefillRequest) return;
         setText(prefillRequest.text);
         setAttachments(prefillRequest.attachments || []);
+        setSelectedPathMentions(
+            Object.fromEntries(
+                (prefillRequest.mentions || []).map((mention) => [
+                    mention.path,
+                    { path: mention.path, is_dir: mention.is_dir },
+                ])
+            )
+        );
         setAttachmentError(null);
 
         requestAnimationFrame(() => {
@@ -129,6 +186,42 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
 
         onPrefillConsumed?.();
     }, [prefillRequest, onPrefillConsumed, resizeTextarea]);
+
+    useEffect(() => {
+        if (!showSuggestions) {
+            setPathSuggestions([]);
+            return;
+        }
+
+        let cancelled = false;
+        const timeoutId = window.setTimeout(async () => {
+            try {
+                const results = await invoke<WorkspacePathMatch[]>('search_workspace_paths', {
+                    query: mentionQuery,
+                    limit: 12,
+                });
+                if (!cancelled) {
+                    setPathSuggestions(results);
+                }
+            } catch (error) {
+                if (!cancelled) {
+                    console.error('[CommandCenter] Failed to search workspace paths:', error);
+                    setPathSuggestions([]);
+                }
+            }
+        }, 120);
+
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timeoutId);
+        };
+    }, [mentionQuery, showSuggestions]);
+
+    useEffect(() => {
+        if (selectedSuggestionIndex >= suggestions.length) {
+            setSelectedSuggestionIndex(0);
+        }
+    }, [selectedSuggestionIndex, suggestions.length]);
 
     const appendImageFiles = useCallback(async (inputFiles: File[]) => {
         if (inputFiles.length === 0) return;
@@ -473,13 +566,6 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
         }
     }, [addCaptureAttachment, regionSourceWindowId]);
 
-    // Filter commands based on what user typed after @
-    const filteredCommands = React.useMemo(() =>
-        COMMANDS.filter(cmd =>
-            cmd.name.toLowerCase().startsWith(commandFilter.toLowerCase())
-        ),
-        [commandFilter]);
-
     // Detect @ and show command popup
     const handleTextChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
         const newText = e.target.value;
@@ -488,47 +574,44 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
         setText(newText);
         scheduleTextareaResize(e.currentTarget);
 
-        // Find if we're typing a command (@ at start or after space)
         const cursorPos = e.target.selectionStart;
-        const textBeforeCursor = newText.slice(0, cursorPos);
-        const lastAtIndex = textBeforeCursor.lastIndexOf('@');
+        const trigger = detectComposerTrigger(newText, cursorPos);
 
-        if (lastAtIndex !== -1) {
-            // Check if @ is at start or after whitespace
-            const charBefore = lastAtIndex > 0 ? textBeforeCursor[lastAtIndex - 1] : ' ';
-            if (charBefore === ' ' || charBefore === '\n' || lastAtIndex === 0) {
-                const afterAt = textBeforeCursor.slice(lastAtIndex + 1);
-                // Only show if no space after the partial command
-                if (!afterAt.includes(' ')) {
-                    setCommandFilter(afterAt);
-                    setShowCommands(true);
-                    setSelectedCommandIndex(0);
-                    return;
-                }
-            }
+        if (trigger?.kind === 'path') {
+            setMentionQuery(trigger.query);
+            setShowSuggestions(true);
+            setSelectedSuggestionIndex(0);
+            return;
         }
-        setShowCommands(false);
+
+        setShowSuggestions(false);
+        setMentionQuery('');
     }, [scheduleTextareaResize]);
 
-    // Insert selected command
-    const insertCommand = useCallback((commandName: string) => {
+    const insertSuggestion = useCallback((suggestion: ComposerSuggestion) => {
         const cursorPos = textareaRef.current?.selectionStart || 0;
-        const textBeforeCursor = text.slice(0, cursorPos);
-        const textAfterCursor = text.slice(cursorPos);
-        const lastAtIndex = textBeforeCursor.lastIndexOf('@');
+        const trigger = detectComposerTrigger(text, cursorPos);
 
-        if (lastAtIndex !== -1) {
-            const newText = textBeforeCursor.slice(0, lastAtIndex) + `@${commandName} ` + textAfterCursor;
-            setText(newText);
+        if (trigger?.kind === 'path') {
+            const replacement = suggestion.kind === 'command'
+                ? `@${suggestion.name} `
+                : `@${suggestion.path}${suggestion.isDir ? '/' : ' '}`;
+            const nextState = replaceTextRange(text, trigger.rangeStart, trigger.rangeEnd, replacement);
+            setText(nextState.text);
             scheduleTextareaResize(textareaRef.current);
-            setShowCommands(false);
+            if (suggestion.kind === 'path') {
+                setSelectedPathMentions((prev) => ({
+                    ...prev,
+                    [suggestion.path]: { path: suggestion.path, is_dir: suggestion.isDir },
+                }));
+            }
+            setMentionQuery(suggestion.kind === 'path' && suggestion.isDir ? `${suggestion.path}/` : '');
+            setShowSuggestions(suggestion.kind === 'path' && suggestion.isDir);
 
-            // Focus and set cursor position after command
             setTimeout(() => {
                 if (textareaRef.current) {
-                    const newCursorPos = lastAtIndex + commandName.length + 2;
                     textareaRef.current.focus();
-                    textareaRef.current.setSelectionRange(newCursorPos, newCursorPos);
+                    textareaRef.current.setSelectionRange(nextState.cursor, nextState.cursor);
                 }
             }, 0);
         }
@@ -536,29 +619,29 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         // Handle command popup navigation
-        if (showCommands && filteredCommands.length > 0) {
+        if (showSuggestions && suggestions.length > 0) {
             if (e.key === 'ArrowDown') {
                 e.preventDefault();
-                setSelectedCommandIndex(prev =>
-                    prev < filteredCommands.length - 1 ? prev + 1 : 0
+                setSelectedSuggestionIndex(prev =>
+                    prev < suggestions.length - 1 ? prev + 1 : 0
                 );
                 return;
             }
             if (e.key === 'ArrowUp') {
                 e.preventDefault();
-                setSelectedCommandIndex(prev =>
-                    prev > 0 ? prev - 1 : filteredCommands.length - 1
+                setSelectedSuggestionIndex(prev =>
+                    prev > 0 ? prev - 1 : suggestions.length - 1
                 );
                 return;
             }
             if (e.key === 'Enter' || e.key === 'Tab') {
                 e.preventDefault();
-                insertCommand(filteredCommands[selectedCommandIndex].name);
+                insertSuggestion(suggestions[selectedSuggestionIndex]);
                 return;
             }
             if (e.key === 'Escape') {
                 e.preventDefault();
-                setShowCommands(false);
+                setShowSuggestions(false);
                 return;
             }
         }
@@ -573,7 +656,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
             const nextText = `${text.slice(0, start)}\n${text.slice(end)}`;
 
             setText(nextText);
-            setShowCommands(false);
+            setShowSuggestions(false);
 
             requestAnimationFrame(() => {
                 if (!textareaRef.current) return;
@@ -596,10 +679,14 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                 return;
             }
             if ((text.trim() || attachments.length > 0) && !disabled) {
-                onSend(text, attachments);
+                const mentions = collectActivePathMentions(text, Object.values(selectedPathMentions));
+                onSend(text, attachments, mentions);
                 setText('');
                 setAttachments([]);
+                setSelectedPathMentions({});
                 setAttachmentError(null);
+                setShowSuggestions(false);
+                setMentionQuery('');
                 scheduleTextareaResize(textareaRef.current);
             }
         }
@@ -607,15 +694,15 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
 
     return (
         <>
-            <div className="shrink-0 border-t border-[var(--border-subtle)] bg-[var(--bg-app)]">
-                <div className="px-2 pt-3 pb-2">
-                    <div className="glass-panel rounded-md shadow-[var(--shadow-lg)]">
-                    {/* Header */}
-                    <div className="border-b border-[var(--border-subtle)]/50 px-2 py-1">
+            <div className="shrink-0 border-t border-[var(--border-subtle)] bg-[var(--bg-app)]/95 backdrop-blur-md">
+                <div className="px-2 pb-2 pt-2">
+                    <div className="relative rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/85 shadow-[0_16px_44px_rgba(0,0,0,0.22)]">
+                    <div className="relative z-[70] border-b border-[var(--border-subtle)]/50 px-2 py-1.5">
                         <div className="flex items-center justify-between gap-2">
-                            <FeatureMenu onScreenshot={handleScreenshot} onUploadImage={handleUploadImage} disabled={disabled} />
-                            <div className="flex-1" />
-                            <div className="w-[170px] max-w-[45%] shrink-0">
+                            <div className="flex items-center gap-1">
+                                <FeatureMenu onScreenshot={handleScreenshot} onUploadImage={handleUploadImage} disabled={disabled} />
+                            </div>
+                            <div className="w-[164px] max-w-[46%] shrink-0">
                                 <CompactModelSelector
                                     models={models}
                                     selectedId={selectedModelId || ''}
@@ -628,80 +715,142 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
 
                     <ImageAttachmentBar attachments={attachments} onRemove={handleRemoveAttachment} />
                     {attachmentError && (
-                        <div className="px-3 pb-2 text-[11px] text-red-400">
+                        <div className="px-2 pb-1 pt-1 text-[10px] text-red-400">
                             {attachmentError}
                         </div>
                     )}
+                    {activePathMentions.length > 0 && (
+                        <div className="px-2 pb-1">
+                            <div className="flex flex-wrap gap-1.5">
+                                {activePathMentions.map((mention) => (
+                                    <div
+                                        key={mention.path}
+                                        className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-emerald-500/20 bg-emerald-500/8 px-2 py-1 text-[10px] text-emerald-300"
+                                        title={mention.path}
+                                    >
+                                        {mention.is_dir ? (
+                                            <Folder className="h-3 w-3 shrink-0" />
+                                        ) : (
+                                            <FileText className="h-3 w-3 shrink-0" />
+                                        )}
+                                        <span className="font-medium uppercase tracking-[0.12em] text-emerald-400/80">
+                                            Ref
+                                        </span>
+                                        <span className="truncate text-zinc-200">
+                                            {mention.path}
+                                        </span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
 
-                    {/* Chat Input */}
-                    <div className={`relative transition-colors ${loading ? 'bg-[var(--bg-surface)]' : ''}`}>
-                        {/* Command Autocomplete Popup */}
-                        {showCommands && (
+                    <div className={`relative px-1.5 pb-0 pt-1.5 transition-colors ${loading ? 'bg-[var(--bg-surface)]/40' : ''}`}>
+                        {showSuggestions && suggestions.length > 0 && (
                             <div
-                                className="absolute bottom-full left-0 right-0 mb-1 mx-2 bg-[var(--bg-surface)] border border-[var(--border-subtle)] rounded-md shadow-lg overflow-hidden z-50"
+                                className="absolute bottom-full left-0 right-0 z-[80] mx-0.5 mb-1.5 overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-[0_16px_44px_rgba(0,0,0,0.34)] backdrop-blur-md"
                             >
-                                {filteredCommands.map((cmd, idx) => {
-                                    const Icon = cmd.icon;
+                                {suggestions.map((suggestion, idx) => {
+                                    const isActiveSuggestion = idx === selectedSuggestionIndex;
+                                    if (suggestion.kind === 'command') {
+                                        const Icon = suggestion.icon;
+                                        return (
+                                            <button
+                                                key={suggestion.key}
+                                                onClick={() => insertSuggestion(suggestion)}
+                                                title={suggestion.tooltip}
+                                                className={`w-full flex items-center gap-2 px-2 py-1.5 text-left transition-colors ${isActiveSuggestion
+                                                    ? 'bg-[var(--accent-primary)]/15 text-[var(--fg-primary)]'
+                                                    : 'text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)]'
+                                                    }`}
+                                            >
+                                                <div className="flex h-6 w-6 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-app)]">
+                                                    <Icon className="h-3 w-3 text-[var(--accent-primary)]" />
+                                                </div>
+                                                <div className="min-w-0 flex-1">
+                                                    <span className="text-[10px] font-semibold">@{suggestion.name}</span>
+                                                    <span className="ml-1 text-[9px] text-[var(--fg-tertiary)]">{suggestion.description}</span>
+                                                </div>
+                                            </button>
+                                        );
+                                    }
+
                                     return (
                                         <button
-                                            key={cmd.name}
-                                            onClick={() => insertCommand(cmd.name)}
-                                            title={cmd.tooltip}
-                                            className={`w-full flex items-center gap-3 px-3 py-2 text-left transition-colors ${idx === selectedCommandIndex
+                                            key={suggestion.key}
+                                            onClick={() => insertSuggestion(suggestion)}
+                                            className={`w-full flex items-center gap-2 px-2 py-1.5 text-left transition-colors ${isActiveSuggestion
                                                 ? 'bg-[var(--accent-primary)]/15 text-[var(--fg-primary)]'
                                                 : 'text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)]'
                                                 }`}
+                                            title={suggestion.path}
                                         >
-                                            <Icon className="w-4 h-4 text-[var(--accent-primary)]" />
-                                            <div className="flex-1">
-                                                <span className="text-xs font-semibold">@{cmd.name}</span>
-                                                <span className="text-xs text-[var(--fg-tertiary)] ml-2">- {cmd.description}</span>
+                                            <div className="flex h-6 w-6 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-app)]">
+                                                {suggestion.isDir ? (
+                                                    <Folder className="h-3 w-3 text-[var(--accent-primary)]" />
+                                                ) : (
+                                                    <FileText className="h-3 w-3 text-[var(--accent-primary)]" />
+                                                )}
+                                            </div>
+                                            <div className="min-w-0 flex-1">
+                                                <span className="block truncate text-[10px] font-semibold">@{suggestion.path}</span>
+                                                <span className="text-[9px] text-[var(--fg-tertiary)]">{suggestion.isDir ? 'Folder' : 'File'}</span>
                                             </div>
                                         </button>
                                     );
                                 })}
                             </div>
                         )}
-                        <textarea
-                            ref={textareaRef}
-                            value={text}
-                            onChange={handleTextChange}
-                            onPaste={handlePaste}
-                            onKeyDown={handleKeyDown}
-                            placeholder={t('chat.inputPlaceholder')}
-                            className="w-full bg-transparent p-3 pr-12 outline-none resize-none min-h-[42px] max-h-[400px] overflow-y-auto text-xs font-sans font-semibold placeholder-[var(--fg-tertiary)] leading-relaxed relative z-10 text-[var(--fg-secondary)]"
-                            rows={1}
-                            disabled={disabled}
-                        />
-                        <button
-                            onClick={() => {
-                                const showStop = loading && !text.trim();
-                                if (showStop && onStop) {
-                                    onStop();
-                                } else if (isLocalOnly && attachments.length > 0) {
-                                    setAttachmentError(t('chat.imageNoSubscription'));
-                                } else if (isGlmModel && attachments.length > 0) {
-                                    setAttachmentError(t('chat.imageNotSupported'));
-                                } else if ((text.trim() || attachments.length > 0) && !disabled) {
-                                    onSend(text, attachments);
-                                    setText('');
-                                    setAttachments([]);
-                                    setAttachmentError(null);
-                                    scheduleTextareaResize(textareaRef.current);
-                                }
-                            }}
-                            disabled={(!text.trim() && attachments.length === 0 && !loading) || disabled}
-                            className={`absolute right-2 bottom-2 p-1.5 transition-colors rounded hover:bg-[var(--bg-surface-hover)] z-20 ${loading && !text.trim()
-                                ? 'text-red-400'
-                                : 'text-[var(--fg-tertiary)] hover:text-[var(--fg-primary)] disabled:opacity-30 disabled:cursor-not-allowed'
-                                }`}
-                        >
-                            {loading && !text.trim() ? (
-                                <Square className="w-3.5 h-3.5 fill-current animate-pulse" />
-                            ) : (
-                                <Send className="w-3.5 h-3.5" />
-                            )}
-                        </button>
+                        <div className={`relative overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-app)] transition-colors shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] ${loading ? 'border-[var(--border-focus)] bg-[var(--bg-surface)]/70' : 'focus-within:border-[var(--accent-primary)]/60'}`}>
+                            <textarea
+                                ref={textareaRef}
+                                value={text}
+                                onChange={handleTextChange}
+                                onPaste={handlePaste}
+                                onKeyDown={handleKeyDown}
+                                placeholder={t('chat.inputPlaceholder')}
+                                className="relative z-10 min-h-[88px] max-h-[360px] w-full resize-none overflow-y-auto bg-transparent px-3 pb-3 pt-2.5 pr-14 text-[13px] font-medium leading-6 text-[var(--fg-primary)] outline-none placeholder-[var(--fg-tertiary)]"
+                                rows={1}
+                                disabled={disabled}
+                            />
+                            <button
+                                onClick={() => {
+                                    const showStop = loading && !text.trim();
+                                    if (showStop && onStop) {
+                                        onStop();
+                                    } else if (isLocalOnly && attachments.length > 0) {
+                                        setAttachmentError(t('chat.imageNoSubscription'));
+                                    } else if (isGlmModel && attachments.length > 0) {
+                                        setAttachmentError(t('chat.imageNotSupported'));
+                                    } else if ((text.trim() || attachments.length > 0) && !disabled) {
+                                        const mentions = collectActivePathMentions(text, Object.values(selectedPathMentions));
+                                        onSend(text, attachments, mentions);
+                                        setText('');
+                                        setAttachments([]);
+                                        setSelectedPathMentions({});
+                                        setAttachmentError(null);
+                                        setShowSuggestions(false);
+                                        setMentionQuery('');
+                                        scheduleTextareaResize(textareaRef.current);
+                                    }
+                                }}
+                                disabled={(!text.trim() && attachments.length === 0 && !loading) || disabled}
+                                className={`absolute bottom-2 right-2 z-20 inline-flex h-9 w-9 items-center justify-center rounded-lg border transition-colors ${loading && !text.trim()
+                                    ? 'border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20'
+                                    : 'border-[var(--border-subtle)] bg-[var(--bg-surface)] text-[var(--fg-tertiary)] hover:border-[var(--accent-primary)]/40 hover:text-[var(--fg-primary)] disabled:cursor-not-allowed disabled:opacity-30'
+                                    }`}
+                            >
+                                {loading && !text.trim() ? (
+                                    <Square className="h-4 w-4 fill-current animate-pulse" />
+                                ) : (
+                                    <Send className="h-4 w-4" />
+                                )}
+                            </button>
+                        </div>
+                        <div className="flex items-center justify-between border-t border-[var(--border-subtle)]/40 px-2 py-1 text-[10px] text-[var(--fg-tertiary)]">
+                            <span>Enter to send</span>
+                            <span>Shift+Enter for newline</span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -747,6 +896,10 @@ export const CommandCenter = React.memo(CommandCenterComponent, (prevProps, next
     const nextPrefill = nextProps.prefillRequest;
     if ((prevPrefill?.text ?? '') !== (nextPrefill?.text ?? '')) return false;
     if ((prevPrefill?.attachments?.length ?? 0) !== (nextPrefill?.attachments?.length ?? 0)) return false;
+    if ((prevPrefill?.mentions?.length ?? 0) !== (nextPrefill?.mentions?.length ?? 0)) return false;
+    const prevMentionSignature = (prevPrefill?.mentions || []).map((mention) => `${mention.kind}:${mention.path}:${mention.is_dir}`).join('|');
+    const nextMentionSignature = (nextPrefill?.mentions || []).map((mention) => `${mention.kind}:${mention.path}:${mention.is_dir}`).join('|');
+    if (prevMentionSignature !== nextMentionSignature) return false;
     
     // Check models array - compare by length and IDs
     if (prevProps.models.length !== nextProps.models.length) return false;

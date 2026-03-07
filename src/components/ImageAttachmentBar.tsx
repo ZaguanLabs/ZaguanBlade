@@ -11,12 +11,15 @@ export const ImageAttachmentBar: React.FC<ImageAttachmentBarProps> = ({ attachme
     if (attachments.length === 0) return null;
 
     return (
-        <div className="px-2 py-2 border-b border-[var(--border-subtle)]/60 bg-[var(--bg-app)]">
+        <div className="border-b border-[var(--border-subtle)]/60 bg-[var(--bg-app)]/60 px-3 py-3">
+            <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--fg-tertiary)]">
+                Attachments
+            </div>
             <div className="flex items-center gap-2 overflow-x-auto scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent">
                 {attachments.map((attachment) => (
                     <div
                         key={attachment.id}
-                        className="relative group w-12 h-12 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface)] overflow-hidden shrink-0"
+                        className="group relative h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-[0_10px_20px_rgba(0,0,0,0.18)]"
                     >
                         <img
                             src={attachment.thumbnailUrl}
@@ -26,7 +29,7 @@ export const ImageAttachmentBar: React.FC<ImageAttachmentBarProps> = ({ attachme
                         <button
                             type="button"
                             onClick={() => onRemove(attachment.id)}
-                            className="absolute top-0.5 right-0.5 p-0.5 rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                            className="absolute right-1 top-1 rounded-full bg-black/60 p-1 text-white opacity-0 transition-opacity group-hover:opacity-100"
                             aria-label="Remove image"
                         >
                             <X className="w-3 h-3" />

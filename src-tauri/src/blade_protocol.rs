@@ -90,11 +90,20 @@ pub enum ChatIntent {
         images: Option<Vec<crate::protocol::ChatImage>>,
         #[serde(default)]
         context: Option<EditorContext>,
+        #[serde(default)]
+        mentions: Option<Vec<ChatMention>>,
     },
     StopGeneration {},
     ClearHistory {},
     NewConversation { model: String },
     SetSelectedModel { model: String },
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ChatMention {
+    pub kind: String,
+    pub path: String,
+    pub is_dir: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -637,6 +646,7 @@ mod tests {
             model: "gwt-5".to_string(),
             images: None,
             context: None,
+            mentions: None,
         });
 
         let envelope = BladeIntentEnvelope {

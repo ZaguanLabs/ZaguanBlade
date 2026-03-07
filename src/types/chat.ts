@@ -13,9 +13,16 @@ export interface ImageAttachment extends ChatImage {
     thumbnailUrl: string;
 }
 
+export interface ComposerMention {
+    kind: 'path';
+    path: string;
+    is_dir: boolean;
+}
+
 export interface QueuedRequest {
     text: string;
     attachments?: ImageAttachment[];
+    mentions?: ComposerMention[];
 }
 
 export interface ChatMessage {
@@ -23,6 +30,7 @@ export interface ChatMessage {
     role: 'User' | 'Assistant' | 'System' | 'Tool';
     content: string;
     images?: ChatImage[];
+    mentions?: ComposerMention[];
     reasoning?: string;
     tool_call_id?: string;
     tool_calls?: ToolCall[];

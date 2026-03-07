@@ -10,6 +10,7 @@ interface ToolCallDisplayProps {
     result?: string;
     onStopCommand?: () => void;
     onUndo?: () => void;
+    onOpenFile?: (path: string) => void;
 }
 
 export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
@@ -17,7 +18,8 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     status = 'pending',
     result,
     onStopCommand,
-    onUndo
+    onUndo,
+    onOpenFile
 }) => {
     const { t } = useTranslation();
     const [copied, setCopied] = useState(false);
@@ -167,83 +169,134 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
         : filenameOnlyTools.has(toolCall.function.name)
             ? pathText.split(/[/\\]/).pop() || pathText
             : pathText;
+    const detailItems = [
+        pathText ? { label: 'Path', value: pathText } : null,
+        searchQuery ? { label: 'Query', value: searchQuery } : null,
+        result ? { label: status === 'error' ? 'Error' : 'Result', value: result } : null,
+    ].filter((item): item is { label: string; value: string } => !!item);
 
     // Compact inline display for most tools, expanded for run_command
     if (!isRunCommand) {
-        // Minimal inline display for non-command tools
         return (
-            <div className="flex items-center gap-2 py-1 text-[11px] text-zinc-500 group/tool">
-                {getStatusIcon()}
-                <span className="font-medium text-zinc-400">
-                    {getFriendlyToolName(toolCall.function.name, parsedArgs)}
-                </span>
-                {/* Show search query for search tools */}
-                {searchQuery && (
-                    <span
-                        className="text-[10px] text-amber-400/80 truncate max-w-[200px] font-mono"
-                        title={searchQuery}
-                    >
-                        "{searchQuery}"
-                    </span>
+            <div className={`group/tool overflow-hidden rounded-xl border text-[11px] shadow-[0_10px_28px_rgba(0,0,0,0.16)] ${getStatusColor()}`}>
+                <div className="flex items-start gap-2.5 px-3 py-2.5">
+                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/5 bg-black/10">
+                        {getStatusIcon()}
+                    </div>
+                    <div className="min-w-0 flex-1 space-y-1.5">
+                        <div className="flex items-start gap-2">
+                            <div className="min-w-0 flex flex-1 items-center gap-2">
+                                <span className="shrink-0 text-[11px] font-semibold text-zinc-100">
+                                    {getFriendlyToolName(toolCall.function.name, parsedArgs)}
+                                </span>
+                                {displayPathText && (
+                                    <button
+                                        type="button"
+                                        onClick={() => onOpenFile?.(pathText || displayPathText)}
+                                        disabled={!onOpenFile}
+                                        className={`min-w-0 flex-1 truncate rounded-md border px-1.5 py-0.5 text-left text-[10px] transition-colors ${onOpenFile
+                                            ? 'border-zinc-800/90 bg-zinc-900/45 text-zinc-300 hover:border-zinc-700 hover:bg-zinc-800/55'
+                                            : 'border-zinc-800/90 bg-zinc-900/45 text-zinc-400'
+                                            }`}
+                                        title={pathText || displayPathText}
+                                    >
+                                        {displayPathText}
+                                    </button>
+                                )}
+                                {!displayPathText && searchQuery && (
+                                    <span
+                                        className="min-w-0 flex-1 truncate text-[10px] font-mono text-zinc-400"
+                                        title={searchQuery}
+                                    >
+                                        {searchQuery}
+                                    </span>
+                                )}
+                            </div>
+                            <div className="ml-auto flex shrink-0 items-center gap-1.5 pl-2">
+                                <span className={`text-[9px] font-semibold uppercase tracking-[0.14em] ${status === 'complete'
+                                    ? 'text-emerald-300'
+                                    : status === 'executing'
+                                        ? 'text-blue-300'
+                                        : status === 'error'
+                                            ? 'text-red-300'
+                                            : status === 'skipped'
+                                                ? 'text-yellow-300'
+                                                : 'text-zinc-400'
+                                    }`}>
+                                    {getStatusText()}
+                                </span>
+                                {detailItems.length > 0 && (
+                                    <button
+                                        onClick={() => setIsExpanded(!isExpanded)}
+                                        className="rounded-md p-0.5 text-zinc-500 transition-colors hover:bg-zinc-800/80 hover:text-zinc-300"
+                                        title={isExpanded ? 'Hide details' : 'Show details'}
+                                    >
+                                        {isExpanded ? (
+                                            <ChevronDown className="w-3 h-3" />
+                                        ) : (
+                                            <ChevronRight className="w-3 h-3" />
+                                        )}
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 pl-0.5">
+                            {searchQuery && displayPathText && (
+                                <span
+                                    className="min-w-0 max-w-full truncate text-[10px] font-mono text-zinc-400"
+                                    title={searchQuery}
+                                >
+                                    {searchQuery}
+                                </span>
+                            )}
+                            {onUndo && status === 'complete' && (
+                                <button
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        onUndo();
+                                    }}
+                                    className="flex items-center gap-1 rounded-md border border-zinc-800 bg-zinc-900/55 px-1.5 py-0.5 text-[9px] text-zinc-400 transition-all hover:border-zinc-700 hover:bg-zinc-800/70 hover:text-red-300"
+                                    title="Undo changes"
+                                >
+                                    <RotateCcw className="w-2.5 h-2.5" />
+                                    Undo
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                </div>
+                {isExpanded && detailItems.length > 0 && (
+                    <div className="border-t border-zinc-800/60 bg-black/10 px-3 py-2.5">
+                        <div className="space-y-2">
+                            {detailItems.map((item) => (
+                                <div key={item.label} className="space-y-1">
+                                    <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                                        {item.label}
+                                    </div>
+                                    <div className="wrap-break-word text-[11px] leading-5 text-zinc-300">
+                                        {item.value}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
                 )}
-                {displayPathText && (
-                    <span
-                        className="text-[10px] text-zinc-500 truncate max-w-[260px]"
-                        title={displayPathText}
-                    >
-                        {displayPathText}
-                    </span>
-                )}
-                {status === 'executing' && (
-                    <span className="text-[9px] text-blue-400 animate-pulse">running...</span>
-                )}
-                {status === 'complete' && (
-                    <span className="text-[9px] text-emerald-500">✓</span>
-                )}
-                {status === 'error' && (
-                    <span className="text-[9px] text-red-400" title={result || 'Unknown error'}>
-                        failed {result && result.length < 60 ? `- ${result.replace('tool_error: ', '')}` : ''}
-                    </span>
-                )}
-                {/* Undo Button */}
-                {onUndo && status === 'complete' && (
-                    <button
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            onUndo();
-                        }}
-                        className="opacity-0 group-hover/tool:opacity-100 flex items-center gap-1 ml-2 px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[9px] text-zinc-400 hover:text-red-400 transition-all border border-zinc-700"
-                        title="Undo changes"
-                    >
-                        <RotateCcw className="w-2.5 h-2.5" />
-                        Undo
-                    </button>
-                )}
-                {/* Expand button for details */}
-                <button
-                    onClick={() => setIsExpanded(!isExpanded)}
-                    className="opacity-0 group-hover/tool:opacity-100 transition-opacity ml-auto"
-                >
-                    {isExpanded ? (
-                        <ChevronDown className="w-3 h-3 text-zinc-600" />
-                    ) : (
-                        <ChevronRight className="w-3 h-3 text-zinc-600" />
-                    )}
-                </button>
             </div>
         );
     }
 
-    // Expanded display for run_command with copy button
     return (
-        <div className={`border rounded-md overflow-hidden transition-all duration-200 ${getStatusColor()}`}>
-            {/* Header */}
-            <div className="flex items-center justify-between px-2.5 py-1.5 bg-zinc-900/40">
-                <div className="flex items-center gap-2">
-                    {getStatusIcon()}
-                    <span className="text-[11px] font-medium text-zinc-300">
-                        {getFriendlyToolName(toolCall.function.name, parsedArgs)}
-                    </span>
+        <div className={`overflow-hidden rounded-xl border transition-all duration-200 shadow-[0_10px_28px_rgba(0,0,0,0.16)] ${getStatusColor()}`}>
+            <div className="flex items-center justify-between bg-zinc-900/45 px-3 py-2">
+                <div className="flex min-w-0 items-center gap-2.5">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/5 bg-black/10">
+                        {getStatusIcon()}
+                    </div>
+                    <div className="min-w-0">
+                        <span className="block truncate text-[11px] font-semibold text-zinc-200">
+                            {getFriendlyToolName(toolCall.function.name, parsedArgs)}
+                        </span>
+                    </div>
                 </div>
                 <div className="flex items-center gap-2">
                     {isRunCommand && status === 'executing' && onStopCommand && (
@@ -259,7 +312,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                             <StopCircle className="h-3.5 w-3.5" />
                         </button>
                     )}
-                    <span className={`text-[9px] font-mono uppercase tracking-wider ${status === 'complete' ? 'text-emerald-400' :
+                    <span className={`text-[9px] font-semibold uppercase tracking-[0.14em] ${status === 'complete' ? 'text-emerald-300' :
                         status === 'executing' ? 'text-blue-400' :
                             status === 'error' ? 'text-red-400' :
                                 status === 'skipped' ? 'text-yellow-400' : 'text-zinc-500'
@@ -269,17 +322,16 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                 </div>
             </div>
 
-            {/* Command display with copy button */}
             {commandText && (
-                <div className="px-2.5 py-2 bg-zinc-950/50 border-t border-zinc-800/30">
+                <div className="border-t border-zinc-800/40 bg-zinc-950/55 px-3 py-2.5">
                     <div className="flex items-start gap-2">
-                        <code className="flex-1 text-[11px] font-mono text-zinc-300 break-all select-text leading-relaxed">
-                            {cwdText && <span className="text-zinc-600">{cwdText}$ </span>}
+                        <code className="flex-1 break-all text-[12px] font-mono leading-6 text-zinc-200 select-text">
+                            {cwdText && <span className="text-zinc-500">{cwdText}$ </span>}
                             {commandText}
                         </code>
                         <button
                             onClick={() => handleCopyCommand(commandText)}
-                            className="shrink-0 p-1 rounded hover:bg-zinc-800 transition-colors group/copy"
+                            className="group/copy shrink-0 rounded-lg border border-zinc-800 bg-zinc-900/70 p-1.5 transition-colors hover:border-zinc-700 hover:bg-zinc-800"
                             title={t('toolCall.copyCommand')}
                         >
                             {copied ? (

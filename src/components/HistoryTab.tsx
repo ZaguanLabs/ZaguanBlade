@@ -26,14 +26,8 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
     };
 
     useEffect(() => {
-        console.debug('[HistoryTab] projectId:', projectId);
-        console.debug('[HistoryTab] conversations.length:', conversations.length);
-
         if (projectId) {
-            console.debug('[HistoryTab] Fetching conversations...');
             fetchConversations(projectId);
-        } else {
-            console.warn('[HistoryTab] Missing projectId, not fetching');
         }
     }, [projectId, fetchConversations]);
 
@@ -67,10 +61,12 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
 
     if (loading && conversations.length === 0) {
         return (
-            <div className="flex-1 flex items-center justify-center bg-[var(--bg-app)]">
-                <div className="flex flex-col items-center gap-3 text-[var(--fg-tertiary)]">
-                    <Loader2 className="w-8 h-8 animate-spin" />
-                    <p className="text-xs">Loading conversations...</p>
+            <div className="flex flex-1 items-center justify-center bg-[var(--bg-app)] px-4">
+                <div className="flex flex-col items-center gap-4 rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/80 px-8 py-8 text-[var(--fg-tertiary)] shadow-[0_24px_70px_rgba(0,0,0,0.26)]">
+                    <div className="flex h-14 w-14 items-center justify-center rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-app)]">
+                        <Loader2 className="h-7 w-7 animate-spin" />
+                    </div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em]">Loading conversations...</p>
                 </div>
             </div>
         );
@@ -78,9 +74,9 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
 
     if (error) {
         return (
-            <div className="flex-1 flex items-center justify-center bg-[var(--bg-app)]">
-                <div className="flex flex-col items-center gap-3 text-red-400">
-                    <p className="text-xs">Failed to load conversations</p>
+            <div className="flex flex-1 items-center justify-center bg-[var(--bg-app)] px-4">
+                <div className="flex flex-col items-center gap-3 rounded-3xl border border-red-500/20 bg-red-500/5 px-8 py-8 text-red-300 shadow-[0_24px_70px_rgba(0,0,0,0.26)]">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em]">Failed to load conversations</p>
                     <p className="text-[10px] opacity-70">{error}</p>
                 </div>
             </div>
@@ -89,11 +85,13 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
 
     if (conversations.length === 0) {
         return (
-            <div className="flex-1 flex items-center justify-center bg-[var(--bg-app)]">
-                <div className="flex flex-col items-center gap-4 text-[var(--fg-tertiary)] select-none">
-                    <Clock className="w-12 h-12 opacity-20" />
+            <div className="flex flex-1 items-center justify-center bg-[var(--bg-app)] px-4">
+                <div className="select-none flex flex-col items-center gap-4 rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/80 px-8 py-8 text-[var(--fg-tertiary)] shadow-[0_24px_70px_rgba(0,0,0,0.26)]">
+                    <div className="flex h-16 w-16 items-center justify-center rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-app)]">
+                        <Clock className="h-8 w-8 opacity-50" />
+                    </div>
                     <div className="text-center">
-                        <h3 className="text-sm font-medium text-[var(--fg-secondary)] mb-1">
+                        <h3 className="mb-2 text-sm font-semibold uppercase tracking-[0.18em] text-[var(--fg-secondary)]">
                             No Conversations Yet
                         </h3>
                         <p className="text-xs opacity-70">
@@ -134,8 +132,16 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
 
     return (
         <div className="flex-1 overflow-y-auto bg-[var(--bg-app)]">
-            <div className="max-w-4xl mx-auto py-3 px-3">
-                <div className="space-y-4">
+            <div className="mx-auto max-w-4xl px-4 py-4">
+                <div className="mb-4 rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/70 px-5 py-4 shadow-[0_18px_50px_rgba(0,0,0,0.18)]">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--fg-tertiary)]">
+                        Conversation History
+                    </div>
+                    <div className="mt-1 text-sm font-semibold text-[var(--fg-primary)]">
+                        Resume previous sessions and revisit older agent runs.
+                    </div>
+                </div>
+                <div className="space-y-5">
                     {orderedBuckets.map((bucket) => {
                         const items = grouped[bucket] || [];
                         if (items.length === 0) {
@@ -143,27 +149,31 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
                         }
 
                         return (
-                            <div key={bucket} className="space-y-1.5">
-                                <div className="text-[11px] uppercase tracking-wide text-[var(--fg-tertiary)] px-1">
+                            <div key={bucket} className="space-y-2">
+                                <div className="px-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--fg-tertiary)]">
                                     {bucket}
                                 </div>
                                 {items.map((conversation) => (
                                     <button
                                         key={conversation.id}
                                         onClick={() => onSelectConversation(conversation.id)}
-                                        className="w-full text-left px-3 py-2 rounded-md bg-[var(--bg-surface)] hover:bg-[var(--bg-surface-hover)] border border-[var(--border-subtle)] transition-colors group"
+                                        className="group w-full rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/80 px-4 py-3 text-left transition-colors hover:bg-[var(--bg-surface-hover)] shadow-[0_12px_30px_rgba(0,0,0,0.12)]"
                                     >
-                                        <div className="flex items-center gap-2.5">
-                                            <div className="shrink-0">
-                                                <MessageSquare className="w-3.5 h-3.5 text-[var(--fg-tertiary)] group-hover:text-[var(--fg-secondary)]" />
+                                        <div className="flex items-center gap-3">
+                                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-app)]">
+                                                <MessageSquare className="h-4 w-4 text-[var(--fg-tertiary)] group-hover:text-[var(--fg-secondary)]" />
                                             </div>
                                             <div className="flex-1 min-w-0">
                                                 <h4 className="text-sm font-medium text-[var(--fg-primary)] truncate">
                                                     {getConversationTitle(conversation)}
                                                 </h4>
+                                                <div className="mt-1 text-[11px] text-[var(--fg-tertiary)] truncate">
+                                                    {conversation.preview || 'No preview available'}
+                                                </div>
                                             </div>
-                                            <div className="flex items-center gap-2.5 text-[10px] text-[var(--fg-tertiary)] shrink-0">
-                                                <span>{conversation.message_count} msgs</span>
+                                            <div className="shrink-0 text-right text-[10px] text-[var(--fg-tertiary)]">
+                                                <div>{formatTimestamp(conversation.last_active_at)}</div>
+                                                <div className="mt-1">{conversation.message_count} msgs</div>
                                             </div>
                                         </div>
                                     </button>

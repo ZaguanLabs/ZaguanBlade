@@ -13,17 +13,19 @@ const QueuePanelComponent: React.FC<QueuePanelProps> = ({ requests, onEditReques
 
     return (
         <div className="border-t border-(--border-subtle) bg-(--bg-surface)/70 backdrop-blur-sm">
-            <div className="flex items-center gap-2 px-3 py-1.5 text-[11px] text-(--fg-secondary)">
-                <ListOrdered className="w-3 h-3 text-zinc-400" />
-                <span className="font-medium">Queued requests ({requests.length})</span>
+            <div className="flex items-center gap-3 px-3 py-2.5 text-[11px] text-(--fg-secondary)">
+                <div className="flex h-7 w-7 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950/40">
+                    <ListOrdered className="h-3.5 w-3.5 text-zinc-400" />
+                </div>
+                <span className="font-semibold uppercase tracking-[0.16em]">Queued requests ({requests.length})</span>
             </div>
-            <div className="px-3 pb-2 space-y-1 max-h-[170px] overflow-auto">
+            <div className="max-h-[200px] space-y-1 overflow-auto px-3 pb-3">
                 {requests.map((request, index) => {
                     const preview = request.text.trim() || '(image-only request)';
                     return (
                         <div
                             key={`queued-${index}`}
-                            className="flex items-center gap-2 text-[11px] text-zinc-400"
+                            className="flex items-center gap-2 rounded-xl border border-zinc-800/70 bg-zinc-950/30 px-2.5 py-2 text-[11px] text-zinc-400"
                         >
                             <span className="font-mono text-[10px] text-zinc-600 w-4 text-right shrink-0">
                                 {index + 1}.

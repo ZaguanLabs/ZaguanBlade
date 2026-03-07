@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import type { ChatMessage as ChatMessageType, ChatImage, ImageAttachment } from '../types/chat';
-import { User, Bot, Terminal, Brain, ChevronDown, ChevronRight, Loader2, Copy, RotateCcw, Pencil, MessageSquare, Check } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import type { ChatMessage as ChatMessageType, ChatImage, ImageAttachment, ToolCall, CommandExecution, MessageBlock } from '../types/chat';
+import { User, Bot, Terminal, Brain, ChevronDown, ChevronRight, Loader2, Copy, RotateCcw, Pencil, MessageSquare, Check, FileText, Folder } from 'lucide-react';
 import { ToolCallDisplay } from './ToolCallDisplay';
 import { CommandOutputDisplay } from './CommandOutputDisplay';
 import { CommandApprovalCard } from './CommandApprovalCard';
@@ -162,6 +162,142 @@ const PlanSummaryDisplay: React.FC<{ todos: import('../types/events').TodoItem[]
     );
 };
 
+const ReferencedPathsDisplay: React.FC<{
+    mentions: NonNullable<ChatMessageType['mentions']>;
+    onOpenFile?: (path: string) => void;
+}> = ({ mentions, onOpenFile }) => {
+    if (mentions.length === 0) {
+        return null;
+    }
+
+    return (
+        <div className="mb-2 overflow-hidden rounded-lg border border-emerald-500/15 bg-emerald-500/6">
+            <div className="flex items-center gap-2 border-b border-emerald-500/10 px-3 py-1.5 text-[10px] text-emerald-300/90">
+                <span className="font-semibold uppercase tracking-[0.16em]">Referenced paths</span>
+                <span className="text-emerald-400/60">{mentions.length}</span>
+            </div>
+            <div className="flex flex-wrap gap-1.5 px-3 py-2">
+                {mentions.map((mention) => {
+                    const isClickable = !mention.is_dir && !!onOpenFile;
+                    const content = (
+                        <>
+                            {mention.is_dir ? (
+                                <Folder className="h-3 w-3 shrink-0 text-emerald-300/80" />
+                            ) : (
+                                <FileText className="h-3 w-3 shrink-0 text-emerald-300/80" />
+                            )}
+                            <span className="truncate">{mention.path}</span>
+                        </>
+                    );
+
+                    if (!isClickable) {
+                        return (
+                            <div
+                                key={`${mention.kind}:${mention.path}`}
+                                className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-emerald-500/15 bg-zinc-950/30 px-2 py-1 text-[10px] text-zinc-300"
+                                title={mention.path}
+                            >
+                                {content}
+                            </div>
+                        );
+                    }
+
+                    return (
+                        <button
+                            key={`${mention.kind}:${mention.path}`}
+                            type="button"
+                            onClick={() => onOpenFile?.(mention.path)}
+                            className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-emerald-500/15 bg-zinc-950/30 px-2 py-1 text-[10px] text-zinc-300 transition-colors hover:bg-emerald-500/10 hover:text-emerald-200"
+                            title={`Open ${mention.path}`}
+                        >
+                            {content}
+                        </button>
+                    );
+                })}
+            </div>
+        </div>
+    );
+};
+
+type ActivityGroupItem =
+    | { kind: 'tool_call'; id: string; toolCall: ToolCall }
+    | { kind: 'command_execution'; id: string; commandExecution: CommandExecution };
+
+type RenderSegment =
+    | { kind: 'block'; block: MessageBlock; index: number }
+    | { kind: 'activity_group'; id: string; items: ActivityGroupItem[] };
+
+const ActivityGroupDisplay: React.FC<{
+    items: ActivityGroupItem[];
+    pendingActions?: import('../types/events').StructuredAction[];
+    onUndoTool?: (toolCallId: string) => void;
+    onStopCommand?: (callId: string) => void;
+    onOpenFile?: (path: string) => void;
+}> = ({ items, pendingActions, onUndoTool, onStopCommand, onOpenFile }) => {
+    const [isExpanded, setIsExpanded] = useState(false);
+    const hiddenCount = Math.max(0, items.length - 1);
+    const summaryLabel = items.length === 1 ? 'Activity' : `Activity (${items.length})`;
+
+    return (
+        <div className="mb-3 overflow-hidden rounded-lg border border-zinc-800/70 bg-zinc-950/35">
+            <button
+                type="button"
+                onClick={() => setIsExpanded((prev) => !prev)}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-zinc-900/35"
+            >
+                <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
+                    {summaryLabel}
+                </span>
+                {hiddenCount > 0 && !isExpanded && (
+                    <span className="text-[10px] text-zinc-500">
+                        {hiddenCount} more
+                    </span>
+                )}
+                <span className="ml-auto text-zinc-500">
+                    {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                </span>
+            </button>
+            <div className={isExpanded ? 'border-t border-zinc-800/60 px-2.5 py-2.5 space-y-2' : 'border-t border-zinc-800/60 px-2.5 py-2.5'}>
+                {(isExpanded ? items : items.slice(0, 1)).map((item) => {
+                    if (item.kind === 'tool_call') {
+                        const toolCall = item.toolCall;
+                        return (
+                            <ToolCallDisplay
+                                key={item.id}
+                                toolCall={toolCall}
+                                status={toolCall.status || 'executing'}
+                                result={toolCall.result}
+                                onStopCommand={
+                                    toolCall.function.name === 'run_command' && onStopCommand
+                                        ? (() => onStopCommand(toolCall.id))
+                                        : undefined
+                                }
+                                onUndo={
+                                    onUndoTool && REVERTIBLE_TOOLS.has(toolCall.function.name)
+                                        ? (() => onUndoTool(toolCall.id))
+                                        : undefined
+                                }
+                                onOpenFile={onOpenFile}
+                            />
+                        );
+                    }
+
+                    return (
+                        <CommandOutputDisplay
+                            key={item.id}
+                            command={item.commandExecution.command}
+                            cwd={item.commandExecution.cwd}
+                            output={item.commandExecution.output}
+                            exitCode={item.commandExecution.exitCode}
+                            duration={item.commandExecution.duration}
+                        />
+                    );
+                })}
+            </div>
+        </div>
+    );
+};
+
 interface ChatMessageProps {
     message: ChatMessageType;
     pendingActions?: import('../types/events').StructuredAction[];
@@ -173,10 +309,11 @@ interface ChatMessageProps {
     isActive?: boolean; // Is this the currently streaming message?
     onUndoTool?: (toolCallId: string) => void;
     onStopCommand?: (callId: string) => void;
+    onOpenFile?: (path: string) => void;
 }
 
 const StreamingTextPreview: React.FC<{ content: string }> = ({ content }) => (
-    <div className="text-[12px] font-medium text-zinc-300 leading-relaxed whitespace-pre-wrap break-words">
+    <div className="whitespace-pre-wrap break-words text-[13px] font-medium leading-7 text-zinc-200">
         {content}
     </div>
 );
@@ -192,6 +329,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     isActive = false,
     onUndoTool,
     onStopCommand,
+    onOpenFile,
 }) => {
     const isUser = message.role === 'User';
     const isSystem = message.role === 'System';
@@ -249,6 +387,64 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
             name: name || `Attachment ${index + 1}`
         }];
     });
+    const renderSegments = useMemo<RenderSegment[]>(() => {
+        if (!message.blocks || message.blocks.length === 0) {
+            return [];
+        }
+
+        const segments: RenderSegment[] = [];
+        let index = 0;
+
+        while (index < message.blocks.length) {
+            const block = message.blocks[index];
+            if (block.type !== 'tool_call' && block.type !== 'command_execution') {
+                segments.push({ kind: 'block', block, index });
+                index += 1;
+                continue;
+            }
+
+            const items: ActivityGroupItem[] = [];
+            let cursor = index;
+
+            while (cursor < message.blocks.length) {
+                const candidate = message.blocks[cursor];
+                if (candidate.type === 'tool_call') {
+                    const toolCall = message.tool_calls?.find((tc) => tc.id === candidate.id);
+                    const isRunCommand = toolCall?.function.name === 'run_command';
+                    const hasPendingApproval = !!pendingActions && pendingActions.length > 0;
+                    const hasExecutionBlock = message.blocks?.some((b) => b.type === 'command_execution' && b.id === candidate.id);
+                    if (toolCall && !(isRunCommand && hasPendingApproval) && !(isRunCommand && hasExecutionBlock)) {
+                        items.push({ kind: 'tool_call', id: candidate.id, toolCall });
+                    }
+                    cursor += 1;
+                    continue;
+                }
+
+                if (candidate.type === 'command_execution') {
+                    const commandExecution = message.commandExecutions?.find((execution) => execution.id === candidate.id);
+                    if (commandExecution) {
+                        items.push({ kind: 'command_execution', id: candidate.id, commandExecution });
+                    }
+                    cursor += 1;
+                    continue;
+                }
+
+                break;
+            }
+
+            if (items.length > 0) {
+                segments.push({
+                    kind: 'activity_group',
+                    id: items.map((item) => item.id).join(':'),
+                    items,
+                });
+            }
+
+            index = cursor;
+        }
+
+        return segments;
+    }, [message.blocks, message.commandExecutions, message.tool_calls, pendingActions]);
 
     // Context menu for chat messages
     const handleContextMenu = useCallback((e: React.MouseEvent) => {
@@ -264,7 +460,6 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                 onClick: async () => {
                     try {
                         await navigator.clipboard.writeText(message.content);
-                        console.debug('[Context] Copied message');
                     } catch (err) {
                         console.error('[Context] Failed to copy:', err);
                     }
@@ -278,7 +473,6 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                     try {
                         const markdown = `**${message.role}:**\n\n${message.content}`;
                         await navigator.clipboard.writeText(markdown);
-                        console.debug('[Context] Copied as markdown');
                     } catch (err) {
                         console.error('[Context] Failed to copy:', err);
                     }
@@ -295,7 +489,6 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                     icon: <Pencil className="w-4 h-4" />,
                     onClick: () => {
                         // TODO: Implement edit message functionality
-                        console.debug('[Context] Edit message');
                     }
                 }
             );
@@ -310,7 +503,6 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                     icon: <RotateCcw className="w-4 h-4" />,
                     onClick: () => {
                         // TODO: Implement regenerate
-                        console.debug('[Context] Regenerate response');
                     }
                 }
             );
@@ -321,38 +513,56 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
 
     return (
         <div
-            className={`flex gap-3 px-4 group ${isContinued ? 'pt-1 pb-2' : 'pt-4 pb-4'} ${isUser ? 'bg-zinc-800/10' : ''} ${isTool ? 'opacity-70' : ''}`}
+            className={`group px-3 ${isContinued ? 'pt-0.5 pb-1.5' : 'pt-3 pb-3'} ${isTool ? 'opacity-70' : ''}`}
             onContextMenu={handleContextMenu}
         >
-            {/* Avatar Column */}
-            <div className="w-5 shrink-0 flex flex-col items-center">
-                {!isContinued && (
-                    <div className="mt-0.5 opacity-80 group-hover:opacity-100 transition-opacity">
-                        {isUser && <div className="w-5 h-5 rounded-full bg-zinc-700/50 flex items-center justify-center"><User className="w-3 h-3 text-zinc-300" /></div>}
-                        {isAssistant && <div className="w-5 h-5 rounded-full bg-emerald-500/10 flex items-center justify-center"><Bot className="w-3.5 h-3.5 text-emerald-500" /></div>}
-                        {isSystem && <Terminal className="w-4 h-4 text-yellow-600" />}
-                        {isTool && <Terminal className="w-4 h-4 text-purple-500/80" />}
-                    </div>
-                )}
-                {/* Visual connector line for continued messages */}
-                {isContinued && (
-                    <div className="w-px h-full bg-zinc-800/50" />
-                )}
-            </div>
+            <div className={`relative flex gap-2.5 rounded-xl border px-3 py-2.5 transition-colors ${
+                isUser
+                    ? 'border-zinc-800/80 bg-zinc-900/55 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]'
+                    : isAssistant
+                        ? 'border-zinc-800/70 bg-zinc-950/35 shadow-[0_12px_32px_rgba(0,0,0,0.12)]'
+                        : 'border-zinc-800/70 bg-zinc-950/40'
+            }`}>
+                <div className="w-7 shrink-0 flex flex-col items-center pt-0.5">
+                    {!isContinued ? (
+                        <div className="opacity-90 transition-opacity group-hover:opacity-100">
+                            {isUser && <div className="flex h-7 w-7 items-center justify-center rounded-xl border border-zinc-700/80 bg-zinc-800/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"><User className="h-3.5 w-3.5 text-zinc-200" /></div>}
+                            {isAssistant && <div className="flex h-7 w-7 items-center justify-center rounded-xl border border-zinc-700/70 bg-zinc-900/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"><Bot className="h-3.5 w-3.5 text-zinc-200" /></div>}
+                            {isSystem && <div className="flex h-7 w-7 items-center justify-center rounded-xl border border-yellow-500/20 bg-yellow-500/10"><Terminal className="h-3.5 w-3.5 text-yellow-500" /></div>}
+                            {isTool && <div className="flex h-7 w-7 items-center justify-center rounded-xl border border-purple-500/20 bg-purple-500/10"><Terminal className="h-3.5 w-3.5 text-purple-400" /></div>}
+                        </div>
+                    ) : (
+                        <div className="h-full w-px rounded-full bg-zinc-800/70" />
+                    )}
+                </div>
 
-            <div className="flex-1 min-w-0 space-y-0.5 overflow-hidden">
-                {!isContinued && (
-                    <div className="flex items-center gap-2 h-4 mb-0.5">
-                        <span className="font-semibold text-[10px] text-zinc-400">
-                            {isUser ? 'User' : (isAssistant ? 'Assistant' : message.role)}
-                        </span>
-                        {isTool && message.tool_call_id && (
-                            <span className="text-[10px] font-mono text-zinc-600 bg-zinc-900 border border-zinc-800 px-1.5 rounded-sm">
-                                {message.tool_call_id.slice(0, 8)}
+                <div className="min-w-0 flex-1 overflow-hidden space-y-1.5">
+                    {!isContinued && (
+                        <div className="mb-0.5 flex min-h-5 items-center gap-2">
+                            <span className={`rounded-md border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] ${
+                                isUser
+                                    ? 'border-zinc-700/80 bg-zinc-800/70 text-zinc-300'
+                                    : isAssistant
+                                        ? 'border-zinc-800/80 bg-zinc-900/50 text-zinc-400'
+                                        : isSystem
+                                            ? 'border-yellow-500/20 bg-yellow-500/10 text-yellow-300'
+                                            : 'border-purple-500/20 bg-purple-500/10 text-purple-300'
+                            }`}>
+                                {isUser ? 'You' : (isAssistant ? 'Assistant' : message.role)}
                             </span>
-                        )}
-                    </div>
-                )}
+                            {isActive && isAssistant && (
+                                <span className="inline-flex items-center gap-1 rounded-md border border-zinc-800/80 bg-zinc-900/50 px-1.5 py-0.5 text-[9px] font-medium text-zinc-400">
+                                    <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                                    Live
+                                </span>
+                            )}
+                            {isTool && message.tool_call_id && (
+                                <span className="rounded-md border border-zinc-800 bg-zinc-950 px-1.5 py-0.5 text-[9px] font-mono text-zinc-500">
+                                    {message.tool_call_id.slice(0, 8)}
+                                </span>
+                            )}
+                        </div>
+                    )}
 
                 {imageAttachments.length > 0 && (
                     <div className="mb-2">
@@ -384,6 +594,10 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                     </div>
                 )}
 
+                {isUser && message.mentions && message.mentions.length > 0 && (
+                    <ReferencedPathsDisplay mentions={message.mentions} onOpenFile={onOpenFile} />
+                )}
+
                 {/* Thinking indicator for slow models - show when active but no content yet */}
                 {/* DISABLED: Investigating raw reasoning output
                 {isActive && isAssistant && !hasContent && !hasReasoning && !message.progress && (
@@ -403,7 +617,21 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 return block.type === 'reasoning' ? idx : lastIdx;
                             }, -1);
                             
-                            return message.blocks!.map((block, idx) => {
+                            return renderSegments.map((segment) => {
+                                if (segment.kind === 'activity_group') {
+                                    return (
+                                        <ActivityGroupDisplay
+                                            key={segment.id}
+                                            items={segment.items}
+                                            pendingActions={pendingActions}
+                                            onUndoTool={onUndoTool}
+                                            onStopCommand={onStopCommand}
+                                            onOpenFile={onOpenFile}
+                                        />
+                                    );
+                                }
+
+                                const { block, index: idx } = segment;
                                 if (block.type === 'reasoning') {
                                     // Only the last reasoning block is active
                                     const isReasoningActive = isActive && idx === lastReasoningIdx;
@@ -423,60 +651,6 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                         ) : (
                                             <MarkdownRenderer content={block.content} />
                                         )}
-                                    </div>
-                                );
-                            } else if (block.type === 'tool_call') {
-                                const toolCall = message.tool_calls?.find(tc => tc.id === block.id);
-                                if (!toolCall) return null;
-
-                                // Skip showing ToolCallDisplay for run_command when it's pending approval
-                                // The CommandApprovalCard will show it instead with Run/Skip buttons
-                                const isRunCommand = toolCall.function.name === 'run_command';
-                                const hasPendingApproval = pendingActions && pendingActions.length > 0;
-                                if (isRunCommand && hasPendingApproval) {
-                                    return null;  // CommandApprovalCard will render this
-                                }
-
-                                // Skip showing ToolCallDisplay if we have a corresponding command_execution block
-                                // This prevents duplicate display (one for request, one for result)
-                                const hasExecutionBlock = message.blocks?.some(b => b.type === 'command_execution' && b.id === block.id);
-                                if (isRunCommand && hasExecutionBlock) {
-                                    return null;
-                                }
-
-                                return (
-                                    <div key={block.id} className="mb-3 space-y-2">
-                                        <ToolCallDisplay
-                                            toolCall={toolCall}
-                                            status={toolCall.status || 'executing'}
-                                            result={toolCall.result}
-                                            onStopCommand={
-                                                toolCall.function.name === 'run_command' && onStopCommand
-                                                    ? (() => onStopCommand(toolCall.id))
-                                                    : undefined
-                                            }
-                                            onUndo={
-                                                onUndoTool && REVERTIBLE_TOOLS.has(toolCall.function.name)
-                                                    ? (() => onUndoTool(toolCall.id))
-                                                    : undefined
-                                            }
-                                        />
-                                    </div>
-                                );
-                            } else if (block.type === 'command_execution') {
-                                // Find the command execution by ID
-                                const cmdExec = message.commandExecutions?.find(c => c.id === block.id);
-                                if (!cmdExec) return null;
-
-                                return (
-                                    <div key={block.id} className="mb-3">
-                                        <CommandOutputDisplay
-                                            command={cmdExec.command}
-                                            cwd={cmdExec.cwd}
-                                            output={cmdExec.output}
-                                            exitCode={cmdExec.exitCode}
-                                            duration={cmdExec.duration}
-                                        />
                                     </div>
                                 );
                             } else if (block.type === 'todo') {
@@ -614,6 +788,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                                             ? (() => onUndoTool(call.id))
                                                             : undefined
                                                     }
+                                                    onOpenFile={onOpenFile}
                                                 />
                                             ))}
                                     </div>
@@ -647,9 +822,9 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                 )}
 
                 {hasChunkCounter && (
-                    <div className="mt-2 text-[10px] font-mono text-zinc-500">
+                    <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-zinc-800/80 bg-zinc-950/70 px-2.5 py-1 text-[10px] font-mono text-zinc-500">
                         <span>{stream!.seq} chunks</span>
-                        <span className="mx-1.5">·</span>
+                        <span className="text-zinc-700">•</span>
                         <span>
                             {stream!.endTime
                                 ? `${streamElapsedSec.toFixed(1)}s`
@@ -658,6 +833,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                     </div>
                 )}
             </div>
+        </div>
         </div>
     );
 };
@@ -676,6 +852,9 @@ export const ChatMessage = React.memo(ChatMessageComponent, (prevProps, nextProp
     if (prevMsg.reasoning !== nextMsg.reasoning) return false;
     if ((prevMsg.streaming?.seq ?? null) !== (nextMsg.streaming?.seq ?? null)) return false;
     if ((prevMsg.streaming?.endTime ?? null) !== (nextMsg.streaming?.endTime ?? null)) return false;
+    const prevMentionSignature = (prevMsg.mentions || []).map((mention) => `${mention.kind}:${mention.path}:${mention.is_dir}`).join('|');
+    const nextMentionSignature = (nextMsg.mentions || []).map((mention) => `${mention.kind}:${mention.path}:${mention.is_dir}`).join('|');
+    if (prevMentionSignature !== nextMentionSignature) return false;
     if (prevMsg.tool_calls?.length !== nextMsg.tool_calls?.length) return false;
     if (prevMsg.blocks?.length !== nextMsg.blocks?.length) return false;
     

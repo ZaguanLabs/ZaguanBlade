@@ -1,3 +1,12 @@
+```
+My thoughts:
+Fast Context/Quick Search
+
+Creating the symbol index will give us the correct reference points that the model can use to more accurately fetch the correct data. To make this look like "magick", I also propse that zcoderd extends its System Prompts with new instructions to use this new tool call that we could call fast_context and instruct the models to understand the user's request and then craft a proper search.
+
+I've seen WIndsurf use "Fast Context" that takes between 2-6 seconds and before doing this, it "thinks" and then does 5-15 different searches related to the request.
+```
+
 # Zaguán Blade Symbol DB Implementation Plan
 
 ## Summary

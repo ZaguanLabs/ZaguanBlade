@@ -40,8 +40,14 @@ export type BladeIntent =
     | { type: "System"; payload: SystemIntent }
     | { type: "Language"; payload: LanguageIntent };
 
+export type ChatMention = {
+    kind: "path";
+    path: string;
+    is_dir: boolean;
+};
+
 export type ChatIntent =
-    | { type: "SendMessage"; payload: { content: string; model: string; images?: ChatImagePayload[]; context?: EditorContext } }
+    | { type: "SendMessage"; payload: { content: string; model: string; images?: ChatImagePayload[]; context?: EditorContext; mentions?: ChatMention[] } }
     | { type: "StopGeneration"; payload: Record<string, never> }
     | { type: "ClearHistory"; payload: Record<string, never> }
     | { type: "NewConversation"; payload: { model: string } }
@@ -252,6 +258,7 @@ export interface ChatMessage {
     role: "User" | "Assistant" | "System" | "Tool";
     content: string;
     images?: ChatImagePayload[];
+    mentions?: ChatMention[];
     reasoning?: string;
     tool_call_id?: string;
     // ... complete as needed based on Rust struct

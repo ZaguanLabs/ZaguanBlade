@@ -26,6 +26,47 @@ const FileHistoryPanel = React.lazy(() => import('./FileHistoryPanel').then(modu
 const SettingsModal = React.lazy(() => import('./SettingsModal').then(module => ({ default: module.SettingsModal })));
 const ProtocolExplorer = React.lazy(() => import('./dev/ProtocolExplorer').then(module => ({ default: module.ProtocolExplorer })));
 
+function normalizePath(value: string): string {
+    return value.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
+}
+
+function isBoundarySuffixMatch(full: string, suffix: string): boolean {
+    if (!full.endsWith(suffix)) return false;
+    if (full.length === suffix.length) return true;
+    return full[full.length - suffix.length - 1] === '/';
+}
+
+function findMatchingChangeRange(
+    filePath: string,
+    changes: { file_path: string; unified_diff: string; timestamp: number }[]
+): { startLine: number; endLine: number } | null {
+    const target = normalizePath(filePath);
+    const matches = changes
+        .filter((change) => {
+            const candidate = normalizePath(change.file_path);
+            return candidate === target
+                || isBoundarySuffixMatch(candidate, target)
+                || isBoundarySuffixMatch(target, candidate);
+        })
+        .sort((a, b) => b.timestamp - a.timestamp);
+
+    const change = matches.find((item) => item.unified_diff.trim().length > 0) ?? matches[0];
+    if (!change) return null;
+
+    const hunkMatch = change.unified_diff.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/m);
+    if (!hunkMatch) return null;
+
+    const startLine = Number.parseInt(hunkMatch[1], 10);
+    const lineCount = Number.parseInt(hunkMatch[2] ?? '1', 10);
+    if (Number.isNaN(startLine) || Number.isNaN(lineCount)) return null;
+
+    const safeLineCount = Math.max(1, lineCount);
+    return {
+        startLine,
+        endLine: startLine + safeLineCount - 1,
+    };
+}
+
 const AppLayoutInner: React.FC = () => {
     const { t } = useTranslation();
     const appWindow = getCurrentWindow();
@@ -85,6 +126,15 @@ const AppLayoutInner: React.FC = () => {
             .map(t => t.path!);
         setOpenFiles(filePaths);
     }, [tabs, setOpenFiles]);
+
+    const handleOpenChatFile = useCallback((path: string) => {
+        const highlightLines = findMatchingChangeRange(path, uncommittedChanges);
+        handleFileSelect(path, highlightLines);
+    }, [handleFileSelect, uncommittedChanges]);
+
+    const handleExplorerFileSelect = useCallback((path: string, _line?: number, _character?: number) => {
+        handleFileSelect(path);
+    }, [handleFileSelect]);
 
     // Tauri event listeners (file open, research progress, change-applied, etc.)
     const { researchProgress, finalizeResearchActivities } = useLayoutEvents({
@@ -452,7 +502,7 @@ const AppLayoutInner: React.FC = () => {
                     }}
                 >
                     {activeSidebar === 'explorer' && (
-                        <ExplorerPanel onFileSelect={handleFileSelect} activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
+                        <ExplorerPanel onFileSelect={handleExplorerFileSelect} activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
                     )}
                     {activeSidebar === 'git' && (
                         <Suspense fallback={<div className="h-full flex items-center justify-center text-[var(--fg-subtle)]">{t('sidebar.loadingGit')}</div>}>
@@ -641,12 +691,12 @@ const AppLayoutInner: React.FC = () => {
                                 researchProgress={researchProgress}
                                 onNewConversation={chat.newConversation}
                                 onUndoTool={chat.undoTool}
+                                onOpenFile={handleOpenChatFile}
                                 uncommittedChanges={uncommittedChanges}
                                 onAcceptAllChanges={acceptAllChanges}
                                 onRejectAllChanges={rejectAllChanges}
                                 toolActivity={chat.toolActivity}
                                 activeTodos={chat.activeTodos}
-                                setActiveTodos={chat.setActiveTodos}
                                 queuedRequests={chat.messageQueue}
                                 deleteQueuedRequest={chat.deleteQueuedRequest}
                             />

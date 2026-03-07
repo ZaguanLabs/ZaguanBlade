@@ -2,10 +2,10 @@ import React, { useEffect, useRef, useCallback, useState, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useTranslation } from 'react-i18next';
-import { Check, X, Settings, Key, Loader2 } from 'lucide-react';
+import { ArrowDown, Check, X, Settings, Key, Loader2, ChevronDown, ChevronRight } from 'lucide-react';
 import { useCommandExecution } from '../hooks/useCommandExecution';
 import { useHistory } from '../hooks/useHistory';
-import type { ChatMessage as ChatMessageType, ImageAttachment, ModelInfo, QueuedRequest, ToolActivityState } from '../types/chat';
+import type { ChatMessage as ChatMessageType, ComposerMention, ImageAttachment, ModelInfo, QueuedRequest, ToolActivityState } from '../types/chat';
 
 import type { StructuredAction, TodoItem } from '../types/events';
 import type { RemoteAiConfig } from '../types/settings';
@@ -18,6 +18,7 @@ import { GlobalChangeActions } from './editor/GlobalChangeActions';
 import { TaskPanel } from './TaskPanel';
 import { QueuePanel } from './QueuePanel';
 import type { UncommittedChange } from '../types/uncommitted';
+import { deriveChatRows } from '../utils/chatTimeline';
 
 interface ResearchProgress {
     message: string;
@@ -30,7 +31,7 @@ interface ChatPanelProps {
     messages: ChatMessageType[];
     loading: boolean;
     error: string | null;
-    sendMessage: (text: string, attachments?: ImageAttachment[]) => void;
+    sendMessage: (text: string, attachments?: ImageAttachment[], mentions?: ComposerMention[]) => void;
     stopGeneration: () => void;
     models: ModelInfo[];
     selectedModelId: string;
@@ -43,12 +44,12 @@ interface ChatPanelProps {
     researchProgress?: ResearchProgress | null;
     onNewConversation: () => void;
     onUndoTool: (toolCallId: string) => void;
+    onOpenFile: (path: string) => void;
     uncommittedChanges: UncommittedChange[];
     onAcceptAllChanges: () => void;
     onRejectAllChanges: () => void;
     toolActivity?: ToolActivityState | null;
     activeTodos: TodoItem[];
-    setActiveTodos: React.Dispatch<React.SetStateAction<TodoItem[]>>;
     queuedRequests: QueuedRequest[];
     deleteQueuedRequest: (index: number) => void;
 }
@@ -66,18 +67,30 @@ const PendingResponseIndicator: React.FC = () => {
     useEffect(() => {
         const intervalId = window.setInterval(() => {
             setWordIndex((prev) => (prev + 1) % pendingResponseWords.length);
-        }, 6500);
+        }, 1800);
 
         return () => window.clearInterval(intervalId);
     }, []);
 
     return (
-        <div className="px-4 py-2">
-            <div className="inline-flex items-center gap-2 rounded-md border border-(--border-subtle) bg-(--bg-surface)/70 px-3 py-1.5 text-[11px] font-medium text-(--fg-secondary)">
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-(--fg-tertiary)" />
-                <span key={pendingResponseWords[wordIndex]} className="pending-response-word">
-                    {pendingResponseWords[wordIndex]}
-                </span>
+        <div className="px-4 py-3">
+            <div className="inline-flex items-center gap-3 rounded-2xl border border-emerald-500/15 bg-[linear-gradient(180deg,rgba(16,185,129,0.08),rgba(24,24,27,0.7))] px-4 py-3 text-[11px] font-medium text-(--fg-secondary) shadow-[0_16px_40px_rgba(0,0,0,0.18)] backdrop-blur-md">
+                <div className="flex h-8 w-8 items-center justify-center rounded-2xl border border-emerald-500/20 bg-emerald-500/10">
+                    <Loader2 className="h-4 w-4 animate-spin text-emerald-300" />
+                </div>
+                <div className="flex flex-col items-start">
+                    <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-300/80">
+                        Assistant is responding
+                    </span>
+                    <span key={pendingResponseWords[wordIndex]} className="pending-response-word text-sm font-semibold text-(--fg-primary)">
+                        {pendingResponseWords[wordIndex]}
+                    </span>
+                </div>
+                <div className="ml-1 flex items-center gap-1">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400/80 animate-pulse" />
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400/60 animate-pulse [animation-delay:180ms]" />
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400/40 animate-pulse [animation-delay:360ms]" />
+                </div>
             </div>
         </div>
     );
@@ -100,12 +113,12 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     researchProgress,
     onNewConversation,
     onUndoTool,
+    onOpenFile,
     uncommittedChanges,
     onAcceptAllChanges,
     onRejectAllChanges,
     toolActivity,
     activeTodos,
-    setActiveTodos,
     queuedRequests,
     deleteQueuedRequest,
 }) => {
@@ -118,6 +131,9 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     const [activeTab, setActiveTab] = useState<'chat' | 'history'>('chat');
     const [hasApiKey, setHasApiKey] = useState<boolean>(true);
     const [composerPrefill, setComposerPrefill] = useState<QueuedRequest | null>(null);
+    const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+    const [isToolActivityExpanded, setIsToolActivityExpanded] = useState(false);
+    const showScrollToBottomRef = useRef(false);
 
     // Check API Key
     const checkApiKey = useCallback(async () => {
@@ -137,55 +153,73 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         };
     }, [checkApiKey]);
 
-    // Track visible range for virtualization
-    const [visibleRange, setVisibleRange] = useState({ start: 0, end: 50 });
     const scrollContainerRef = useRef<HTMLDivElement>(null);
 
+    const messageCount = messages.length;
+    const firstMessageId = messages[0]?.id;
     const lastMessage = messages[messages.length - 1];
+    const lastMessageId = lastMessage?.id;
+    const lastMessageRole = lastMessage?.role;
+    const lastMessageContent = lastMessage?.content ?? '';
+    const lastMessageReasoning = lastMessage?.reasoning ?? '';
+    const lastMessageBlockCount = lastMessage?.blocks?.length ?? 0;
     const shouldShowPendingResponseIndicator = loading && lastMessage?.role !== 'Assistant';
+    const toolActivityKey = toolActivity
+        ? `${toolActivity.toolCallId || `${toolActivity.toolName}:${toolActivity.filePath}`}:${toolActivity.action}`
+        : null;
+    const chatRows = useMemo(() => deriveChatRows(messages, loading, pendingActions), [loading, messages, pendingActions]);
     const streamingSignature = useMemo(() => {
         if (!lastMessage) return '';
         return [
-            lastMessage.id ?? messages.length,
-            lastMessage.content ?? '',
-            lastMessage.reasoning ?? '',
-            lastMessage.blocks?.length ?? 0,
+            lastMessageId ?? messageCount,
+            lastMessageContent,
+            lastMessageReasoning,
+            lastMessageBlockCount,
         ].join('|');
-    }, [lastMessage, messages.length]);
+    }, [lastMessageBlockCount, lastMessageContent, lastMessageId, lastMessageReasoning, messageCount]);
+
+    useEffect(() => {
+        setIsToolActivityExpanded(false);
+    }, [toolActivityKey]);
 
     const scrollToBottom = useCallback(() => {
         const container = scrollContainerRef.current;
         if (!container) return;
         container.scrollTop = container.scrollHeight;
+        isUserAtBottomRef.current = true;
+        if (showScrollToBottomRef.current) {
+            showScrollToBottomRef.current = false;
+            setShowScrollToBottom(false);
+        }
     }, []);
 
     // Scroll to bottom when a different conversation is loaded (or on initial mount).
     // Detect conversation change by tracking the first message's ID.
     const prevFirstMsgIdRef = useRef<string | undefined>(undefined);
     useEffect(() => {
-        const firstId = messages[0]?.id;
-        if (messages.length > 0 && firstId !== prevFirstMsgIdRef.current) {
-            prevFirstMsgIdRef.current = firstId;
-            // Reset "at bottom" tracking so streaming auto-scroll works for the new conversation
+        if (messageCount > 0 && firstMessageId !== prevFirstMsgIdRef.current) {
+            prevFirstMsgIdRef.current = firstMessageId;
             isUserAtBottomRef.current = true;
-            prevMessageCountRef.current = messages.length;
-            // Delay to ensure DOM has rendered the loaded messages
+            if (showScrollToBottomRef.current) {
+                showScrollToBottomRef.current = false;
+                setShowScrollToBottom(false);
+            }
+            prevMessageCountRef.current = messageCount;
             const timer = setTimeout(scrollToBottom, 50);
             return () => clearTimeout(timer);
         }
-    }, [messages, scrollToBottom]);
+    }, [firstMessageId, messageCount, scrollToBottom]);
 
     // Scroll when a new message is appended (or user sends a message)
     useEffect(() => {
-        const currentCount = messages.length;
+        const currentCount = messageCount;
 
         if (currentCount === prevMessageCountRef.current) {
             return;
         }
 
         prevMessageCountRef.current = currentCount;
-        const lastMsg = messages[currentCount - 1];
-        const justSent = lastMsg?.role === 'User';
+        const justSent = lastMessageRole === 'User';
 
         if (justSent || isUserAtBottomRef.current) {
             const rafId = requestAnimationFrame(scrollToBottom);
@@ -193,7 +227,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         }
 
         return;
-    }, [messages.length, messages, scrollToBottom]);
+    }, [lastMessageRole, messageCount, scrollToBottom]);
 
     // Scroll during streaming updates only while user stays at bottom
     useEffect(() => {
@@ -208,58 +242,16 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         e.preventDefault();
     }, []);
 
-    // Scroll handler - memoized to prevent recreation on every render
     const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
         const target = e.target as HTMLDivElement;
-        // Use a larger threshold (100px) to be more resilient to large appends (e.g. code blocks)
         const isBottom = Math.abs(target.scrollHeight - target.scrollTop - target.clientHeight) < 100;
         isUserAtBottomRef.current = isBottom;
-        
-        // Update visible range for virtualization (throttled)
-        // Estimate ~150px per message on average
-        const estimatedMessageHeight = 150;
-        const scrollTop = target.scrollTop;
-        const viewportHeight = target.clientHeight;
-        const buffer = 5; // Render 5 extra messages above/below viewport
-        
-        const startIdx = Math.max(0, Math.floor(scrollTop / estimatedMessageHeight) - buffer);
-        const endIdx = Math.ceil((scrollTop + viewportHeight) / estimatedMessageHeight) + buffer;
-        
-        setVisibleRange(prev => {
-            // Only update if significantly different to avoid excessive re-renders
-            if (Math.abs(prev.start - startIdx) > 2 || Math.abs(prev.end - endIdx) > 2) {
-                return { start: startIdx, end: endIdx };
-            }
-            return prev;
-        });
-    }, []);
-    
-    // Compute which messages to render (virtualization)
-    // Always render last 10 messages + messages in visible range
-    const messagesToRender = useMemo(() => {
-        const totalMessages = messages.length;
-        if (totalMessages <= 20) {
-            // Small conversation - render all
-            return messages.map((msg, idx) => ({ msg, idx, isPlaceholder: false }));
+        const nextShowScrollToBottom = !isBottom && messageCount > 0;
+        if (showScrollToBottomRef.current !== nextShowScrollToBottom) {
+            showScrollToBottomRef.current = nextShowScrollToBottom;
+            setShowScrollToBottom(nextShowScrollToBottom);
         }
-        
-        const result: { msg: ChatMessageType | null; idx: number; isPlaceholder: boolean }[] = [];
-        const lastMessagesStart = Math.max(0, totalMessages - 10);
-        
-        for (let i = 0; i < totalMessages; i++) {
-            const inVisibleRange = i >= visibleRange.start && i <= visibleRange.end;
-            const inLastMessages = i >= lastMessagesStart;
-            
-            if (inVisibleRange || inLastMessages) {
-                result.push({ msg: messages[i], idx: i, isPlaceholder: false });
-            } else {
-                // Placeholder for virtualized message
-                result.push({ msg: null, idx: i, isPlaceholder: true });
-            }
-        }
-        
-        return result;
-    }, [messages, visibleRange]);
+    }, [messageCount]);
 
     const handleNewConversation = () => {
         onNewConversation();
@@ -322,71 +314,47 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
             {activeTab === 'chat' ? (
                 <div
                     ref={scrollContainerRef}
-                    className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent"
+                    className="relative flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent"
                     onScroll={handleScroll}
                 >
-                    <div className="max-w-4xl mx-auto py-6">
+                    <div className="mx-auto flex max-w-4xl flex-col gap-1 px-3 py-5 md:px-4">
                         {messages.length === 0 && (
-                            <div className="flex flex-col items-center justify-center p-12 text-[var(--fg-tertiary)] text-center space-y-4 select-none">
-                                <div className="text-4xl opacity-20 filter grayscale">
+                            <div className="mx-4 mt-10 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/70 px-6 py-8 text-center shadow-[0_24px_80px_rgba(0,0,0,0.25)] backdrop-blur-md">
+                                <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-emerald-500/20 bg-emerald-500/10 text-2xl shadow-[0_0_40px_rgba(16,185,129,0.15)]">
                                     🗡️
                                 </div>
-                                <h2 className="text-sm font-medium text-[var(--fg-secondary)] tracking-wide uppercase">System Ready</h2>
-                                <p className="max-w-xs text-xs font-mono opacity-50">
-                                    Awaiting input. Surgical precision engaged.
+                                <h2 className="text-sm font-semibold uppercase tracking-[0.24em] text-[var(--fg-secondary)]">Zaguán Blade</h2>
+                                <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-[var(--fg-tertiary)]">
+                                    Ask for a fix, paste a task, or describe what you want to build. The assistant can inspect the files you have open, explain unfamiliar code, suggest edits, and help you move from idea to finished change without losing the thread.
+                                </p>
+                                <div className="mt-5 flex flex-wrap items-center justify-center gap-2 text-[11px] text-[var(--fg-tertiary)]">
+                                    <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-app)] px-3 py-1">Understand this file</span>
+                                    <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-app)] px-3 py-1">Plan the next change</span>
+                                    <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-app)] px-3 py-1">Review command output</span>
+                                    <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-app)] px-3 py-1">Attach screenshots</span>
+                                </div>
+                                <p className="mt-5 text-xs font-mono uppercase tracking-[0.2em] text-[var(--fg-tertiary)]/70">
+                                    Start with a goal, question, or bug
                                 </p>
                             </div>
                         )}
 
-                        {messagesToRender.map(({ msg, idx, isPlaceholder }) => {
-                            // Render placeholder for virtualized messages
-                            if (isPlaceholder || !msg) {
-                                return (
-                                    <div 
-                                        key={`placeholder-${idx}`} 
-                                        className="h-[100px]"
-                                        aria-hidden="true"
-                                    />
-                                );
-                            }
-                            
-                            // Show pending actions on the last assistant message
-                            const isLast = idx === messages.length - 1;
-                            const isLastAssistant = isLast && msg.role === 'Assistant';
-                            const showPendingActions = isLastAssistant && pendingActions && pendingActions.length > 0;
-
-                            // Calculate visual grouping props
-                            const prevMsg = idx > 0 ? messages[idx - 1] : null;
-
-                            // Treat "Tool" messages (if any visible) as part of Assistant flow if previous was Assistant
-                            // Currently we hide Tool messages in ChatMessage, but if they were shown or if we have
-                            // consecutive Assistant messages (split reasoning/tool calls), we group them.
-                            const isAssistant = msg.role === 'Assistant';
-                            const prevWasAssistant = prevMsg?.role === 'Assistant';
-
-                            // Simple grouping: If current is assistant and previous was assistant
-                            const isContinued = isAssistant && prevWasAssistant;
-
-                            // Determine if this message is actively streaming/reasoning
-                            // We assume the last message is active if global loading state is true
-                            const isActive = isLast && loading;
-
-                            return (
-                                <ChatMessage
-                                    key={msg.id || idx}
-                                    message={msg}
-                                    pendingActions={showPendingActions ? pendingActions : undefined}
-                                    onApproveCommand={showPendingActions ? handleApproveCommand : undefined}
-                                    onSkipCommand={showPendingActions ? handleSkipCommand : undefined}
-                                    onApproveSingleCommand={showPendingActions ? handleApproveSingleCommand : undefined}
-                                    onSkipSingleCommand={showPendingActions ? handleSkipSingleCommand : undefined}
-                                    isContinued={isContinued}
-                                    isActive={isActive}
-                                    onUndoTool={onUndoTool}
-                                    onStopCommand={handleStopCommand}
-                                />
-                            );
-                        })}
+                        {chatRows.map((row) => (
+                            <ChatMessage
+                                key={row.key}
+                                message={row.message}
+                                pendingActions={row.pendingActions}
+                                onApproveCommand={row.pendingActions ? handleApproveCommand : undefined}
+                                onSkipCommand={row.pendingActions ? handleSkipCommand : undefined}
+                                onApproveSingleCommand={row.pendingActions ? handleApproveSingleCommand : undefined}
+                                onSkipSingleCommand={row.pendingActions ? handleSkipSingleCommand : undefined}
+                                isContinued={row.isContinued}
+                                isActive={row.isActive}
+                                onUndoTool={onUndoTool}
+                                onStopCommand={handleStopCommand}
+                                onOpenFile={onOpenFile}
+                            />
+                        ))}
 
                         {shouldShowPendingResponseIndicator && <PendingResponseIndicator />}
 
@@ -441,39 +409,100 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
 
                             const prettyName = prettyToolNames[toolActivity.toolName] || toolActivity.toolName;
                             const displayPath = toolActivity.filePath.split('/').pop() || toolActivity.filePath;
+                            const elapsedSeconds = Math.max(0, (toolActivity.lastChunkAt - toolActivity.startedAt) / 1000);
+                            const detailItems = [
+                                { label: 'Path', value: toolActivity.filePath },
+                                { label: 'State', value: 'Streaming file changes' },
+                                { label: 'Duration', value: `${elapsedSeconds.toFixed(1)}s` },
+                                toolActivity.toolCallId ? { label: 'Call ID', value: toolActivity.toolCallId } : null,
+                            ].filter((item): item is { label: string; value: string } => !!item);
+
                             return (
                                 <div className="px-4">
-                                    <div className="flex items-center gap-2 py-1 text-[11px] text-zinc-500">
-                                        <Loader2 className="w-3.5 h-3.5 text-emerald-400 animate-spin" />
-                                        <span className="font-medium text-zinc-400">
-                                            {prettyName}
-                                        </span>
-                                        {displayPath && (
-                                            <span
-                                                className="text-[10px] text-zinc-500 truncate max-w-[260px]"
-                                                title={toolActivity.filePath}
-                                            >
-                                                {displayPath}
-                                            </span>
-                                        )}
-                                        {toolActivity.chunkCount > 0 && (
-                                            <span className="text-[10px] font-medium text-emerald-400">
-                                                {toolActivity.chunkCount} chunks
-                                            </span>
+                                    <div className="inline-flex min-w-[320px] max-w-full flex-col overflow-hidden rounded-xl border border-zinc-800/80 bg-zinc-950/70 text-[11px] text-zinc-500 shadow-[0_12px_32px_rgba(0,0,0,0.16)]">
+                                        <div className="flex items-start gap-2.5 px-3 py-2.5">
+                                            <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/5 bg-black/10">
+                                                <Loader2 className="h-4 w-4 animate-spin text-blue-300" />
+                                            </div>
+                                            <div className="flex min-w-0 flex-1 flex-col items-start gap-1.5">
+                                                <div className="flex w-full items-start gap-2">
+                                                    <div className="min-w-0 flex flex-1 items-center gap-2">
+                                                        <div className="shrink-0 text-[11px] font-semibold text-zinc-100">
+                                                            {prettyName}
+                                                        </div>
+                                                        {displayPath && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => onOpenFile(toolActivity.filePath)}
+                                                                className="min-w-0 flex-1 truncate rounded-md border border-zinc-800/90 bg-zinc-900/45 px-1.5 py-0.5 text-left text-[10px] text-zinc-300 transition-colors hover:border-zinc-700 hover:bg-zinc-800/55"
+                                                                title={toolActivity.filePath}
+                                                            >
+                                                                {displayPath}
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                    <div className="ml-auto flex shrink-0 items-center gap-1.5 pl-2">
+                                                        <span className="text-[9px] font-semibold uppercase tracking-[0.14em] text-blue-300">
+                                                            Streaming
+                                                        </span>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setIsToolActivityExpanded((prev) => !prev)}
+                                                            className="rounded-md p-0.5 text-zinc-500 transition-colors hover:bg-zinc-800/80 hover:text-zinc-300"
+                                                            title={isToolActivityExpanded ? 'Hide details' : 'Show details'}
+                                                        >
+                                                            {isToolActivityExpanded ? (
+                                                                <ChevronDown className="h-3 w-3" />
+                                                            ) : (
+                                                                <ChevronRight className="h-3 w-3" />
+                                                            )}
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                <div className="flex flex-wrap items-center gap-2 pl-0.5">
+                                                    {toolActivity.chunkCount > 0 && (
+                                                        <span className="text-[10px] font-medium text-blue-300">
+                                                            {toolActivity.chunkCount} chunks streamed
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        {isToolActivityExpanded && detailItems.length > 0 && (
+                                            <div className="border-t border-zinc-800/60 bg-black/10 px-3 py-2.5">
+                                                <div className="space-y-2">
+                                                    {detailItems.map((item) => (
+                                                        <div key={item.label} className="space-y-1">
+                                                            <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                                                                {item.label}
+                                                            </div>
+                                                            <div className="wrap-break-word text-[11px] leading-5 text-zinc-300">
+                                                                {item.value}
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
                                         )}
                                     </div>
                                 </div>
                             );
                         })()}
 
-                        {error && (
-                            <div className="p-3 mx-4 mb-4 bg-red-500/5 border border-red-500/20 text-red-400 rounded-sm text-xs font-mono">
-                                ERR: {error}
-                            </div>
-                        )}
-
                         <div className="h-4" />
                     </div>
+
+                    {showScrollToBottom && activeTab === 'chat' && (
+                        <div className="pointer-events-none sticky bottom-0 z-10 flex justify-center px-4 pb-4">
+                            <button
+                                onClick={scrollToBottom}
+                                className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-surface)]/95 px-4 py-2 text-xs font-medium text-[var(--fg-secondary)] shadow-[0_18px_48px_rgba(0,0,0,0.25)] backdrop-blur-md transition-colors hover:text-[var(--fg-primary)]"
+                            >
+                                <ArrowDown className="h-3.5 w-3.5" />
+                                Jump to latest
+                            </button>
+                        </div>
+                    )}
                 </div>
             ) : (
                 <HistoryTab

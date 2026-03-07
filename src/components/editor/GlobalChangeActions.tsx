@@ -1,5 +1,5 @@
 import React from 'react';
-import { Check, X, FileCode } from 'lucide-react';
+import { Check, X } from 'lucide-react';
 import type { UncommittedChange } from '../../types/uncommitted';
 
 interface GlobalChangeActionsProps {
@@ -24,21 +24,20 @@ export const GlobalChangeActions: React.FC<GlobalChangeActionsProps> = ({
   const fileCount = new Set(changes.map(c => c.file_path)).size;
 
   return (
-    <div className="flex items-center justify-end gap-2 px-3 py-1.5 text-xs">
-      <div className="flex items-center gap-1.5 text-[var(--fg-secondary)]">
-        <FileCode className="w-3 h-3" />
-        <span>{fileCount} file{fileCount !== 1 ? 's' : ''}</span>
+    <div className="mx-3 mb-2 flex items-center justify-between gap-3 px-1 py-1.5 text-xs">
+      <div className="flex items-baseline gap-2 text-sm font-medium text-[var(--fg-primary)]">
+        <span>
+          {fileCount} file{fileCount !== 1 ? 's' : ''}
+        </span>
         <span style={{ color: 'var(--accent-secondary)' }}>+{totalAdded}</span>
         <span style={{ color: 'var(--accent-error)' }}>-{totalRemoved}</span>
       </div>
 
-      <div className="w-px h-4 bg-[var(--border-primary)]" />
-
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-3 text-[11px] font-medium">
         <button
           onClick={onAcceptAll}
           disabled={disabled}
-          className="flex items-center gap-1 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          className="flex items-center gap-1 px-1 py-0.5 transition-colors disabled:cursor-not-allowed disabled:opacity-50 hover:opacity-80"
           style={{ color: 'var(--accent-secondary)' }}
           title="Accept all AI changes"
         >
@@ -48,7 +47,7 @@ export const GlobalChangeActions: React.FC<GlobalChangeActionsProps> = ({
         <button
           onClick={onRejectAll}
           disabled={disabled}
-          className="flex items-center gap-1 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          className="flex items-center gap-1 px-1 py-0.5 transition-colors disabled:cursor-not-allowed disabled:opacity-50 hover:opacity-80"
           style={{ color: 'var(--accent-error)' }}
           title="Reject all AI changes (revert to original)"
         >

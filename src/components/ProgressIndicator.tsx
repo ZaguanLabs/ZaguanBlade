@@ -96,26 +96,27 @@ export const ProgressIndicator: React.FC<ProgressIndicatorProps> = ({ progress }
     };
 
     return (
-        <div className={`border-l-2 rounded-r-lg pl-3 py-2.5 my-2 transition-all duration-300 ${getStageColor()}`}>
-            <div className="flex items-center gap-2 mb-1.5">
-                <div className="animate-pulse">
+        <div className={`my-3 overflow-hidden rounded-2xl border px-4 py-3 transition-all duration-300 shadow-[0_16px_40px_rgba(0,0,0,0.18)] ${getStageColor()}`}>
+            <div className="mb-2 flex items-center gap-3">
+                <div className="flex h-8 w-8 items-center justify-center rounded-2xl border border-white/5 bg-black/10 animate-pulse">
                     {getStageIcon()}
                 </div>
-                <span className="font-mono text-xs text-zinc-200 uppercase tracking-wider font-semibold">
-                    {getPrettyStageLabel()}
-                </span>
-                <div className="ml-auto flex items-center gap-2">
-                    <span className="text-xs text-zinc-400 font-mono">
+                <div className="min-w-0 flex-1">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-400">
+                        {getPrettyStageLabel()}
+                    </div>
+                    <div className="truncate text-sm font-semibold text-zinc-100">
+                        {progress.message}
+                    </div>
+                </div>
+                <div className="ml-auto flex items-center gap-2 rounded-full border border-white/5 bg-black/10 px-2.5 py-1">
+                    <span className="font-mono text-xs text-zinc-300">
                         {progress.percent}%
                     </span>
                 </div>
             </div>
-            
-            <div className="text-[11px] leading-relaxed text-zinc-300/90 font-medium mb-2">
-                {progress.message}
-            </div>
-            
-            <div className="relative h-1.5 bg-zinc-900/50 rounded-full overflow-hidden">
+
+            <div className="relative h-2 rounded-full bg-zinc-950/45 overflow-hidden">
                 <div 
                     className={`absolute inset-y-0 left-0 bg-gradient-to-r ${getProgressBarColor()} transition-all duration-500 ease-out rounded-full`}
                     style={{ width: `${progress.percent}%` }}

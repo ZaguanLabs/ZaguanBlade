@@ -1,4 +1,5 @@
 use crate::app_state::AppState;
+use crate::blade_protocol::ChatMention;
 use crate::chat_manager::DrainResult;
 use crate::project_settings;
 use crate::utils::{extract_root_command, is_cwd_outside_workspace, parse_command};
@@ -72,6 +73,7 @@ pub async fn handle_send_message<R: Runtime>(
     cursor_column: Option<usize>,
     selection_start_line: Option<usize>,
     selection_end_line: Option<usize>,
+    mentions: Option<Vec<ChatMention>>,
     window: tauri::Window<R>,
     state: State<'_, AppState>,
     app: AppHandle<R>,
@@ -95,9 +97,20 @@ pub async fn handle_send_message<R: Runtime>(
             path
         }
     };
+    let normalized_mentions = mentions
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|mention| mention.kind == "path")
+        .map(|mention| ChatMention {
+            kind: mention.kind,
+            path: normalize_to_workspace(mention.path),
+            is_dir: mention.is_dir,
+        })
+        .collect::<Vec<_>>();
 
     // Parse @commands and convert to tool calls
     let (parsed_message, forced_tool) = parse_command(&message);
+    let visible_user_message = parsed_message.clone();
 
     // Check for pending error feedback from previous turn (e.g. message too large)
     // Prepend it as a system note so the model knows what happened
@@ -113,6 +126,24 @@ pub async fn handle_send_message<R: Runtime>(
             parsed_message
         }
     };
+    if !normalized_mentions.is_empty() {
+        let mention_preview = normalized_mentions
+            .iter()
+            .map(|mention| {
+                if mention.is_dir {
+                    format!("{} (dir)", mention.path)
+                } else {
+                    mention.path.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        actual_message = format!(
+            "[SYSTEM NOTE: The user explicitly referenced these workspace paths: {}]\n\n{}",
+            mention_preview,
+            actual_message
+        );
+    }
 
     // If there is no editor context, infer likely relevant files from indexed symbols.
     // This prevents the model from defaulting to generic project summaries.
@@ -122,9 +153,20 @@ pub async fn handle_send_message<R: Runtime>(
         .into_iter()
         .map(|path| normalize_to_workspace(path))
         .collect::<Vec<_>>();
+    for mention in normalized_mentions.iter().filter(|mention| !mention.is_dir) {
+        if !effective_open_files.iter().any(|path| path == &mention.path) {
+            effective_open_files.insert(0, mention.path.clone());
+        }
+    }
     let mut effective_active_file = active_file
         .clone()
         .map(|path| normalize_to_workspace(path));
+    if effective_active_file.is_none() {
+        effective_active_file = normalized_mentions
+            .iter()
+            .find(|mention| !mention.is_dir)
+            .map(|mention| mention.path.clone());
+    }
 
     if active_file.is_none() && effective_open_files.is_empty() {
         effective_open_files = infer_context_files_from_query(&state, actual_message.as_str(), 6)
@@ -231,9 +273,21 @@ pub async fn handle_send_message<R: Runtime>(
             .map_err(|e| format!("Failed to lock conversation: {}", e))?;
         let mut chat_msg = crate::protocol::ChatMessage::new(
             crate::protocol::ChatRole::User,
-            actual_message.clone(),
+            visible_user_message,
         );
         chat_msg.images = images.clone();
+        if !normalized_mentions.is_empty() {
+            chat_msg.mentions = Some(
+                normalized_mentions
+                    .iter()
+                    .map(|mention| crate::protocol::ChatMention {
+                        kind: mention.kind.clone(),
+                        path: mention.path.clone(),
+                        is_dir: mention.is_dir,
+                    })
+                    .collect(),
+            );
+        }
         conversation.push(chat_msg);
     }
 

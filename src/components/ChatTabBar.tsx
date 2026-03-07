@@ -9,15 +9,15 @@ interface ChatTabBarProps {
 
 export const ChatTabBar: React.FC<ChatTabBarProps> = ({ activeTab, onTabChange, onNewConversation }) => {
     return (
-        <div className="h-9 border-b border-[var(--border-subtle)] flex items-center justify-between px-2 bg-[var(--bg-app)] select-none shrink-0">
-            <div className="flex items-center gap-1">
+        <div className="flex h-12 shrink-0 items-center justify-between border-b border-[var(--border-subtle)] bg-[var(--bg-app)]/90 px-3 select-none backdrop-blur-md">
+            <div className="flex items-center gap-2 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/60 p-1">
                 <button
                     onClick={() => onTabChange('chat')}
                     className={`
-                        px-3 py-1 text-[11px] font-medium rounded transition-colors
+                        rounded-xl px-3 py-1.5 text-[11px] font-semibold transition-colors
                         ${activeTab === 'chat'
-                            ? 'bg-[var(--bg-surface)] text-[var(--fg-primary)] border border-[var(--border-subtle)]'
-                            : 'text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]/50'
+                            ? 'border border-[var(--border-subtle)] bg-[var(--bg-app)] text-[var(--fg-primary)] shadow-[0_8px_20px_rgba(0,0,0,0.18)]'
+                            : 'text-[var(--fg-secondary)] hover:bg-[var(--bg-surface)]/70 hover:text-[var(--fg-primary)]'
                         }
                     `}
                 >
@@ -26,10 +26,10 @@ export const ChatTabBar: React.FC<ChatTabBarProps> = ({ activeTab, onTabChange, 
                 <button
                     onClick={() => onTabChange('history')}
                     className={`
-                        px-3 py-1 text-[11px] font-medium rounded transition-colors
+                        rounded-xl px-3 py-1.5 text-[11px] font-semibold transition-colors
                         ${activeTab === 'history'
-                            ? 'bg-[var(--bg-surface)] text-[var(--fg-primary)] border border-[var(--border-subtle)]'
-                            : 'text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]/50'
+                            ? 'border border-[var(--border-subtle)] bg-[var(--bg-app)] text-[var(--fg-primary)] shadow-[0_8px_20px_rgba(0,0,0,0.18)]'
+                            : 'text-[var(--fg-secondary)] hover:bg-[var(--bg-surface)]/70 hover:text-[var(--fg-primary)]'
                         }
                     `}
                 >
@@ -38,7 +38,7 @@ export const ChatTabBar: React.FC<ChatTabBarProps> = ({ activeTab, onTabChange, 
             </div>
             <button
                 onClick={onNewConversation}
-                className="p-1 rounded hover:bg-[var(--bg-surface)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] transition-colors"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] text-[var(--fg-secondary)] transition-colors hover:border-[var(--accent-primary)]/30 hover:text-[var(--fg-primary)]"
                 title="New Conversation"
             >
                 <Plus className="w-4 h-4" />

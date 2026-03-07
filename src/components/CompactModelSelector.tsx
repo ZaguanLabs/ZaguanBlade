@@ -79,35 +79,34 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
                 onClick={() => !disabled && setIsOpen(!isOpen)}
                 disabled={disabled}
                 className={`
-                    w-full flex items-center justify-between px-1.5 py-0.5 max-w-[120px]
-                    bg-transparent hover:bg-[var(--bg-surface-hover)]/30
-                    border-0 rounded transition-colors duration-150
+                    w-full flex items-center justify-between gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-app)] px-2 py-1
+                    transition-colors duration-150
                     ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
                 `}
             >
-                <div className="flex items-center gap-1.5 overflow-hidden">
-                    <div className="shrink-0">
+                <div className="flex items-center gap-1 overflow-hidden">
+                    <div className="flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-sm border border-[var(--border-subtle)] bg-[var(--bg-surface)]">
                         {selectedModel ? getModelIcon(selectedModel.id) : <Box className="w-3 h-3" />}
                     </div>
-                    <span className="text-[9px] font-medium text-[var(--fg-secondary)] truncate">
+                    <span className="truncate text-[10px] font-medium text-[var(--fg-secondary)]">
                         {selectedModel?.name || 'Select Model'}
                     </span>
                 </div>
-                <ChevronDown className={`w-2.5 h-2.5 text-[var(--fg-tertiary)] transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
+                <ChevronDown className={`h-2.5 w-2.5 text-[var(--fg-tertiary)] transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
             </button>
 
             {isOpen && (
                 <div
                     ref={dropdownRef}
                     onWheel={(event) => event.stopPropagation()}
-                    className="fixed bottom-[60px] right-3 w-80 py-1 bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded-lg shadow-xl z-[100] max-h-[300px] overflow-y-auto overscroll-contain flex flex-col gap-0.5 animate-in fade-in zoom-in-95 duration-100 origin-bottom-right"
+                    className="fixed bottom-[52px] right-2 z-110 flex max-h-[240px] w-64 flex-col gap-0.5 overflow-y-auto overscroll-contain rounded-lg border border-[var(--border-focus)] bg-[var(--bg-surface)] py-1 shadow-[0_20px_52px_rgba(0,0,0,0.35)] animate-in fade-in zoom-in-95 duration-100 origin-bottom-right"
                     style={{
                         boxShadow: '0 8px 30px rgba(0, 0, 0, 0.4), 0 0 1px rgba(255, 255, 255, 0.1)',
                         overscrollBehavior: 'contain',
                     }}
                 >
                     {models.length === 0 && (
-                        <div className="px-2 py-1.5 text-[10px] text-[var(--fg-tertiary)] text-center italic">
+                        <div className="px-2 py-1.5 text-center text-[9px] italic text-[var(--fg-tertiary)]">
                             No models available
                         </div>
                     )}
@@ -122,7 +121,7 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
                                     setIsOpen(false);
                                 }}
                                 className={`
-                                    flex items-center gap-1.5 px-2 py-0.5 mx-1 rounded-sm text-left
+                                    mx-1 flex items-center gap-1.5 rounded-md px-2 py-1.5 text-left
                                     transition-colors duration-150
                                     ${isSelected
                                         ? 'bg-[var(--accent-primary)]/10 text-[var(--fg-primary)]'
@@ -130,15 +129,15 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
                                     }
                                 `}
                             >
-                                <div className="shrink-0">
+                                <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-app)]">
                                     {getModelIcon(model.id)}
                                 </div>
                                 <div className="flex flex-col min-w-0 flex-1">
-                                    <span className="text-xs font-medium truncate">
+                                    <span className="truncate text-[10px] font-medium">
                                         {model.name}
                                     </span>
                                     {model.description && (
-                                        <span className="text-[10px] text-[var(--fg-tertiary)] truncate opacity-80">
+                                        <span className="text-[9px] text-[var(--fg-tertiary)] truncate opacity-80">
                                             {model.description}
                                         </span>
                                     )}
@@ -148,7 +147,7 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
                         );
                     })}
                     {ollamaModels.length > 0 && (
-                        <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--fg-tertiary)] border-t border-[var(--border-subtle)]">
+                        <div className="border-t border-[var(--border-subtle)] px-2 pt-2 text-[8px] font-semibold uppercase tracking-[0.16em] text-[var(--fg-tertiary)]">
                             Ollama
                         </div>
                     )}
@@ -163,7 +162,7 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
                                     setIsOpen(false);
                                 }}
                                 className={`
-                                    flex items-center gap-1.5 px-2 py-0.5 mx-1 rounded-sm text-left
+                                    mx-1 flex items-center gap-1.5 rounded-md px-2 py-1.5 text-left
                                     transition-colors duration-150
                                     ${isSelected
                                         ? 'bg-[var(--accent-primary)]/10 text-[var(--fg-primary)]'
@@ -171,15 +170,15 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
                                     }
                                 `}
                             >
-                                <div className="shrink-0">
+                                <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-app)]">
                                     {getModelIcon(model.id)}
                                 </div>
                                 <div className="flex flex-col min-w-0 flex-1">
-                                    <span className="text-xs font-medium truncate">
+                                    <span className="truncate text-[10px] font-medium">
                                         {model.name}
                                     </span>
                                     {model.description && (
-                                        <span className="text-[10px] text-[var(--fg-tertiary)] truncate opacity-80">
+                                        <span className="text-[9px] text-[var(--fg-tertiary)] truncate opacity-80">
                                             {model.description}
                                         </span>
                                     )}
@@ -189,7 +188,7 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
                         );
                     })}
                     {openaiCompatModels.length > 0 && (
-                        <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--fg-tertiary)] border-t border-[var(--border-subtle)]">
+                        <div className="border-t border-[var(--border-subtle)] px-2 pt-2 text-[8px] font-semibold uppercase tracking-[0.16em] text-[var(--fg-tertiary)]">
                             Local Server
                         </div>
                     )}
@@ -204,7 +203,7 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
                                     setIsOpen(false);
                                 }}
                                 className={`
-                                    flex items-center gap-1.5 px-2 py-0.5 mx-1 rounded-sm text-left
+                                    mx-1 flex items-center gap-1.5 rounded-md px-2 py-1.5 text-left
                                     transition-colors duration-150
                                     ${isSelected
                                         ? 'bg-[var(--accent-primary)]/10 text-[var(--fg-primary)]'
@@ -212,15 +211,15 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
                                     }
                                 `}
                             >
-                                <div className="shrink-0">
+                                <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-app)]">
                                     {getModelIcon(model.id)}
                                 </div>
                                 <div className="flex flex-col min-w-0 flex-1">
-                                    <span className="text-xs font-medium truncate">
+                                    <span className="truncate text-[10px] font-medium">
                                         {model.name}
                                     </span>
                                     {model.description && (
-                                        <span className="text-[10px] text-[var(--fg-tertiary)] truncate opacity-80">
+                                        <span className="text-[9px] text-[var(--fg-tertiary)] truncate opacity-80">
                                             {model.description}
                                         </span>
                                     )}

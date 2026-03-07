@@ -21,12 +21,21 @@ pub struct ChatImage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMention {
+    pub kind: String,
+    pub path: String,
+    pub is_dir: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub id: Option<String>,
     pub role: ChatRole,
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub images: Option<Vec<ChatImage>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mentions: Option<Vec<ChatMention>>,
     pub reasoning: Option<String>,
     pub tool_call_id: Option<String>,
     pub tool_calls: Option<Vec<ToolCall>>,
@@ -46,6 +55,7 @@ impl ChatMessage {
             role,
             content,
             images: None,
+            mentions: None,
             reasoning: None,
             tool_call_id: None,
             tool_calls: None,

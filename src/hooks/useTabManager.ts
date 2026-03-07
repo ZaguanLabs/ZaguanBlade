@@ -164,7 +164,7 @@ export function useTabManager(uncommittedChanges: UncommittedChange[]) {
         setActiveTabId(tabId);
     }, []);
 
-    const handleFileSelect = useCallback((path: string) => {
+    const handleFileSelect = useCallback((path: string, highlightLines?: { startLine: number; endLine: number } | null) => {
         const existingTab = tabs.find(t => t.type === 'file' && t.path === path);
         if (!existingTab) {
             const filename = path.split('/').pop() || path;
@@ -179,11 +179,19 @@ export function useTabManager(uncommittedChanges: UncommittedChange[]) {
                     title: filename,
                     type: 'file',
                     path,
+                    highlightLines: highlightLines ?? undefined,
                 };
                 setTabs(prev => [...prev, newTab]);
                 setActiveTabId(tabId);
             }
         } else {
+            if (highlightLines) {
+                setTabs(prev => prev.map(tab =>
+                    tab.id === existingTab.id
+                        ? { ...tab, highlightLines }
+                        : tab
+                ));
+            }
             if (isTabsBackendAuthoritative()) {
                 EditorFacade.setActiveTab(existingTab.id).catch(console.error);
             } else {

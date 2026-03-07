@@ -175,6 +175,7 @@ pub fn run() {
             // Files
             commands::files::open_workspace,
             commands::files::list_files,
+            commands::files::search_workspace_paths,
             commands::files::read_file_content,
             commands::files::write_file_content,
             commands::files::open_file_in_editor,

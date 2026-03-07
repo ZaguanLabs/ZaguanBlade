@@ -52,13 +52,14 @@ const TaskPanelComponent: React.FC<TaskPanelProps> = ({ todos, isCollapsed, onTo
             } ${allDoneState ? 'border-t-emerald-500/30' : ''}`}
             style={{ overflow: 'hidden' }}
         >
-            {/* Header row */}
             <button
                 onClick={onToggleCollapse}
-                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--bg-surface-hover)] transition-colors text-left"
+                className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-[var(--bg-surface-hover)] transition-colors text-left"
             >
-                <Zap className={`w-3 h-3 flex-shrink-0 ${allDoneState ? 'text-emerald-400' : 'text-indigo-400'}`} />
-                <span className={`text-[11px] font-medium flex-1 ${
+                <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-xl border ${allDoneState ? 'border-emerald-500/20 bg-emerald-500/10' : 'border-indigo-500/20 bg-indigo-500/10'}`}>
+                    <Zap className={`h-3.5 w-3.5 ${allDoneState ? 'text-emerald-400' : 'text-indigo-400'}`} />
+                </div>
+                <span className={`flex-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${
                     allDoneState ? 'text-emerald-400' : 'text-[var(--fg-secondary)]'
                 }`}>
                     {allDoneState
@@ -67,35 +68,34 @@ const TaskPanelComponent: React.FC<TaskPanelProps> = ({ todos, isCollapsed, onTo
                     }
                 </span>
                 {isCollapsed ? (
-                    <ChevronRight className="w-3 h-3 text-zinc-500 flex-shrink-0" />
+                    <ChevronRight className="w-3 h-3 text-zinc-500 shrink-0" />
                 ) : (
-                    <ChevronDown className="w-3 h-3 text-zinc-500 flex-shrink-0" />
+                    <ChevronDown className="w-3 h-3 text-zinc-500 shrink-0" />
                 )}
             </button>
 
-            {/* Task list - expanded state */}
             <div
                 className={`transition-all duration-200 ease-out ${
                     isCollapsed ? 'max-h-0 opacity-0' : 'max-h-[240px] opacity-100'
                 }`}
                 style={{ overflow: isCollapsed ? 'hidden' : 'auto' }}
             >
-                <div className="px-3 pb-2 space-y-0.5">
+                <div className="px-3 pb-3 space-y-1">
                     {todos.map((todo, index) => {
                         const text = todo.status === 'in_progress' ? todo.activeForm : todo.content;
                         return (
                             <div
                                 key={index}
-                                className={`flex items-center gap-2 py-0.5 text-[11px] leading-tight transition-all duration-200 ${
+                                className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-[11px] leading-tight transition-all duration-200 ${
                                     todo.status === 'completed'
-                                        ? 'text-zinc-600 line-through'
+                                        ? 'border-zinc-800/60 bg-zinc-950/30 text-zinc-600 line-through'
                                         : todo.status === 'in_progress'
-                                        ? 'text-[var(--fg-primary)] font-medium'
-                                        : 'text-zinc-500'
+                                        ? 'border-indigo-500/15 bg-indigo-500/5 text-[var(--fg-primary)] font-medium'
+                                        : 'border-zinc-800/60 bg-zinc-950/20 text-zinc-500'
                                 }`}
                             >
                                 <StatusIcon status={todo.status} />
-                                <span className="font-mono text-[10px] text-zinc-600 w-4 text-right flex-shrink-0">
+                                <span className="w-4 shrink-0 text-right font-mono text-[10px] text-zinc-600">
                                     {index + 1}.
                                 </span>
                                 <span className="truncate">{text}</span>

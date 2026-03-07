@@ -29,6 +29,7 @@ pub async fn send_message<R: Runtime>(
         cursor_column,
         selection_start_line,
         selection_end_line,
+        None,
         window,
         state,
         app,
