@@ -4,6 +4,8 @@ import { useTranslation } from 'react-i18next';
 import { ToolCall } from '../types/chat';
 import { Zap, CheckCircle2, XCircle, Loader2, Copy, Check, ChevronRight, ChevronDown, RotateCcw, StopCircle } from 'lucide-react';
 
+const COMPLETE_FADE_DELAY_MS = 250;
+
 interface ToolCallDisplayProps {
     toolCall: ToolCall;
     status?: 'pending' | 'executing' | 'complete' | 'error' | 'skipped';
@@ -219,7 +221,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     // Compact inline display for most tools, expanded for run_command
     if (!isRunCommand) {
         return (
-            <div className={`group/tool border-l-2 pl-2.5 text-[11px] ${getStatusColor()} ${isVisuallyComplete ? 'opacity-45' : ''}`}>
+            <div className={`group/tool border-l-2 pl-2.5 text-[11px] transition-opacity duration-1000 ease-out ${getStatusColor()} ${isVisuallyComplete ? 'opacity-45' : 'opacity-100'}`}>
                 <div className="flex items-start gap-2 py-1">
                     <div className="flex h-5 w-5 shrink-0 items-center justify-center text-zinc-500">
                         {getStatusIcon()}
@@ -329,7 +331,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     }
 
     return (
-        <div className={`border-l-2 pl-2.5 ${getStatusColor()} ${isVisuallyComplete ? 'opacity-45' : ''}`}>
+        <div className={`border-l-2 pl-2.5 transition-opacity duration-1000 ease-out ${getStatusColor()} ${isVisuallyComplete ? 'opacity-45' : 'opacity-100'}`}>
             <div className="flex items-center justify-between gap-2 py-1">
                 <div className="flex min-w-0 items-center gap-2">
                     <div className="flex h-5 w-5 items-center justify-center text-zinc-500">

@@ -27,6 +27,7 @@ const TaskPanelComponent: React.FC<TaskPanelProps> = ({ todos, isCollapsed, onTo
     const completedCount = todos.filter(t => t.status === 'completed').length;
     const totalCount = todos.length;
     const allCompleted = totalCount > 0 && completedCount === totalCount;
+    const summaryText = allDoneState ? 'All tasks completed' : `${completedCount}/${totalCount} completed`;
 
     // Slide-in animation on mount
     useEffect(() => {
@@ -54,18 +55,18 @@ const TaskPanelComponent: React.FC<TaskPanelProps> = ({ todos, isCollapsed, onTo
         >
             <button
                 onClick={onToggleCollapse}
-                className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-[var(--bg-surface-hover)] transition-colors text-left"
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-[var(--bg-surface-hover)] transition-colors text-left"
             >
-                <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-xl border ${allDoneState ? 'border-emerald-500/20 bg-emerald-500/10' : 'border-indigo-500/20 bg-indigo-500/10'}`}>
-                    <Zap className={`h-3.5 w-3.5 ${allDoneState ? 'text-emerald-400' : 'text-indigo-400'}`} />
+                <div className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border ${allDoneState ? 'border-emerald-500/20 bg-emerald-500/10' : 'border-indigo-500/20 bg-indigo-500/10'}`}>
+                    <Zap className={`h-3 w-3 ${allDoneState ? 'text-emerald-400' : 'text-indigo-400'}`} />
                 </div>
-                <span className={`flex-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${
+                <span className={`flex-1 truncate text-[10px] font-medium uppercase tracking-[0.12em] ${
                     allDoneState ? 'text-emerald-400' : 'text-[var(--fg-secondary)]'
                 }`}>
-                    {allDoneState
-                        ? `All tasks completed ✓`
-                        : `${completedCount} of ${totalCount} tasks completed`
-                    }
+                    {summaryText}
+                </span>
+                <span className="shrink-0 text-[10px] text-zinc-500">
+                    {totalCount} {totalCount === 1 ? 'item' : 'items'}
                 </span>
                 {isCollapsed ? (
                     <ChevronRight className="w-3 h-3 text-zinc-500 shrink-0" />
@@ -80,25 +81,25 @@ const TaskPanelComponent: React.FC<TaskPanelProps> = ({ todos, isCollapsed, onTo
                 }`}
                 style={{ overflow: isCollapsed ? 'hidden' : 'auto' }}
             >
-                <div className="px-3 pb-3 space-y-1">
+                <div className="px-2.5 pb-2 space-y-0.5">
                     {todos.map((todo, index) => {
                         const text = todo.status === 'in_progress' ? todo.activeForm : todo.content;
                         return (
                             <div
                                 key={index}
-                                className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-[11px] leading-tight transition-all duration-200 ${
+                                className={`flex items-center gap-1.5 border-l-2 px-1.5 py-1 text-[10px] leading-snug transition-colors ${
                                     todo.status === 'completed'
-                                        ? 'border-zinc-800/60 bg-zinc-950/30 text-zinc-600 line-through'
+                                        ? 'border-zinc-800 text-zinc-600 line-through'
                                         : todo.status === 'in_progress'
-                                        ? 'border-indigo-500/15 bg-indigo-500/5 text-[var(--fg-primary)] font-medium'
-                                        : 'border-zinc-800/60 bg-zinc-950/20 text-zinc-500'
+                                        ? 'border-indigo-400 text-[var(--fg-primary)] font-medium'
+                                        : 'border-zinc-800 text-zinc-500'
                                 }`}
                             >
                                 <StatusIcon status={todo.status} />
-                                <span className="w-4 shrink-0 text-right font-mono text-[10px] text-zinc-600">
+                                <span className="w-4 shrink-0 text-right font-mono text-[9px] text-zinc-600">
                                     {index + 1}.
                                 </span>
-                                <span className="truncate">{text}</span>
+                                <span className="min-w-0 flex-1 truncate">{text}</span>
                             </div>
                         );
                     })}

@@ -10,10 +10,6 @@ import { EventNames, type RequestConfirmationPayload, type StructuredAction, typ
 import type { BladeEventEnvelope, ChatMention } from '../types/blade';
 import type { ChatImage, ChatMessage, ChatMode, ComposerMention, CommandExecution, ImageAttachment, MessageBlock, ModelInfo, QueuedRequest, StreamingState, ToolActivityState, ToolCall } from '../types/chat';
 
-const MAX_DELTA_OVERLAP_CHECK = 512;
-const MIN_SNAPSHOT_PREFIX = 48;
-const MIN_SUFFIX_REPLAY_LENGTH = 8;
-const MIN_STALE_REPLAY_LENGTH = 24;
 const FLUSH_INTERVAL_MS = 80;
 const TOOL_ACTIVITY_DISPATCH_INTERVAL_MS = 120;
 const MESSAGE_COMPLETION_GRACE_MS = 1200;
@@ -37,13 +33,6 @@ function areToolActivitiesEqual(a: ToolActivityState | null, b: ToolActivityStat
 function isWhitespaceOnly(value: string): boolean {
     return value.trim().length === 0;
 }
-
-type StreamMergeResult = {
-    next: string;
-    append: string;
-    changed: boolean;
-    replaced: boolean;
-};
 
 function streamDebugPreview(value: string): string {
     const normalized = value.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
@@ -136,81 +125,6 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
         default:
             return state;
     }
-}
-
-function commonPrefixLength(a: string, b: string): number {
-    const max = Math.min(a.length, b.length);
-    let index = 0;
-    while (index < max && a.charCodeAt(index) === b.charCodeAt(index)) {
-        index += 1;
-    }
-    return index;
-}
-
-function mergeStreamChunk(previous: string, incoming: string): StreamMergeResult {
-    if (!incoming) {
-        return { next: previous, append: '', changed: false, replaced: false };
-    }
-
-    if (!previous) {
-        return { next: incoming, append: incoming, changed: true, replaced: false };
-    }
-
-    if (incoming.length >= MIN_SUFFIX_REPLAY_LENGTH && previous.endsWith(incoming)) {
-        return { next: previous, append: '', changed: false, replaced: false };
-    }
-
-    if (incoming.startsWith(previous)) {
-        const delta = incoming.slice(previous.length);
-        return { next: incoming, append: delta, changed: delta.length > 0, replaced: false };
-    }
-
-    if (incoming.length >= MIN_STALE_REPLAY_LENGTH && previous.includes(incoming)) {
-        return { next: previous, append: '', changed: false, replaced: false };
-    }
-
-    const previousTail = previous.slice(-MAX_DELTA_OVERLAP_CHECK);
-    const incomingHead = incoming.slice(0, MAX_DELTA_OVERLAP_CHECK);
-    const maxOverlap = Math.min(previousTail.length, incomingHead.length);
-
-    for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
-        if (previousTail.slice(-overlap) === incomingHead.slice(0, overlap)) {
-            const delta = incoming.slice(overlap);
-            return {
-                next: previous + delta,
-                append: delta,
-                changed: delta.length > 0,
-                replaced: false,
-            };
-        }
-    }
-
-    const prefixLen = commonPrefixLength(previous, incoming);
-    if (incoming.length >= Math.max(64, Math.floor(previous.length * 0.7)) && prefixLen >= 12) {
-        return {
-            next: incoming,
-            append: '',
-            changed: incoming !== previous,
-            replaced: true,
-        };
-    }
-
-    if (prefixLen >= MIN_SNAPSHOT_PREFIX) {
-        const rewrittenTail = incoming.slice(prefixLen);
-        return {
-            next: previous + rewrittenTail,
-            append: rewrittenTail,
-            changed: rewrittenTail.length > 0,
-            replaced: false,
-        };
-    }
-
-    return {
-        next: previous + incoming,
-        append: incoming,
-        changed: true,
-        replaced: false,
-    };
 }
 
 function buildSystemAssistantMessage(id: string, content: string): ChatMessage {
@@ -814,77 +728,45 @@ export function useChatV2() {
                     };
                     streamingStatesRef.current.set(id, streaming);
 
-                    const previousValue = type === 'reasoning'
-                        ? (accumulatedReasoningRef.current.id === id ? accumulatedReasoningRef.current.content : '')
-                        : (accumulatedContentRef.current.id === id ? accumulatedContentRef.current.content : '');
-
-                    let mergedChunk: StreamMergeResult;
+                    // Delta-mode append: the backend sends true deltas sequenced
+                    // via EventBuffer, so we simply append each chunk.
                     if (type === 'reasoning') {
                         if (accumulatedReasoningRef.current.id !== id) {
                             accumulatedReasoningRef.current = { id, content: '' };
-                            const existingBlocks = blocksRef.current.get(id) || [];
-                            if (existingBlocks.length > 0) {
-                                blocksRef.current.set(id, existingBlocks.filter((block) => block.type !== 'reasoning'));
-                            }
                         }
-                        mergedChunk = mergeStreamChunk(accumulatedReasoningRef.current.content, chunk);
+                        accumulatedReasoningRef.current.content += chunk;
                         streamDebugLog('[stream-debug][ui-merge][reasoning]', {
                             id,
                             seq,
                             incomingLength: chunk.length,
-                            previousLength: previousValue.length,
-                            appendLength: mergedChunk.append.length,
-                            changed: mergedChunk.changed,
-                            replaced: mergedChunk.replaced,
+                            previousLength: accumulatedReasoningRef.current.content.length - chunk.length,
+                            appendLength: chunk.length,
+                            changed: chunk.length > 0,
                             incomingPreview: streamDebugPreview(chunk),
-                            previousPreview: streamDebugPreview(previousValue),
-                            nextPreview: streamDebugPreview(mergedChunk.next),
+                            nextPreview: streamDebugPreview(accumulatedReasoningRef.current.content),
                         });
-                        if (!mergedChunk.changed) {
-                            queueMessageUpdate(
-                                id,
-                                accumulatedContentRef.current.id === id ? accumulatedContentRef.current.content : '',
-                                accumulatedReasoningRef.current.id === id ? accumulatedReasoningRef.current.content : '',
-                                blocksRef.current.get(id) || [],
-                                streaming,
-                            );
-                            return;
-                        }
-                        accumulatedReasoningRef.current.content = mergedChunk.next;
                     } else {
                         if (accumulatedContentRef.current.id !== id) {
                             accumulatedContentRef.current = { id, content: '' };
-                            const existingBlocks = blocksRef.current.get(id) || [];
-                            if (existingBlocks.length > 0) {
-                                blocksRef.current.set(id, existingBlocks.filter((block) => block.type !== 'text'));
-                            }
                         }
-                        mergedChunk = mergeStreamChunk(accumulatedContentRef.current.content, chunk);
+                        accumulatedContentRef.current.content += chunk;
                         streamDebugLog('[stream-debug][ui-merge][text]', {
                             id,
                             seq,
                             incomingLength: chunk.length,
-                            previousLength: previousValue.length,
-                            appendLength: mergedChunk.append.length,
-                            changed: mergedChunk.changed,
-                            replaced: mergedChunk.replaced,
+                            previousLength: accumulatedContentRef.current.content.length - chunk.length,
+                            appendLength: chunk.length,
+                            changed: chunk.length > 0,
                             incomingPreview: streamDebugPreview(chunk),
-                            previousPreview: streamDebugPreview(previousValue),
-                            nextPreview: streamDebugPreview(mergedChunk.next),
+                            nextPreview: streamDebugPreview(accumulatedContentRef.current.content),
                         });
-                        if (!mergedChunk.changed) {
-                            queueMessageUpdate(
-                                id,
-                                accumulatedContentRef.current.id === id ? accumulatedContentRef.current.content : '',
-                                accumulatedReasoningRef.current.id === id ? accumulatedReasoningRef.current.content : '',
-                                blocksRef.current.get(id) || [],
-                                streaming,
-                            );
-                            return;
-                        }
-                        accumulatedContentRef.current.content = mergedChunk.next;
                     }
 
+                    if (chunk.length === 0) {
+                        return;
+                    }
+
+                    // --- Block assembly ---
                     const existingMessage = messageByIdRef.current.get(id);
                     let blocks = blocksRef.current.get(id) || [];
 
@@ -892,42 +774,39 @@ export function useChatV2() {
                         blocks = existingMessage.blocks.filter((block) => block.type !== 'text' && block.type !== 'reasoning');
                     }
 
-                    const lastBlock = blocks[blocks.length - 1];
                     if (type === 'reasoning') {
+                        // Drop trailing whitespace-only text block before reasoning
+                        const lastBlock = blocks[blocks.length - 1];
                         if (lastBlock?.type === 'text' && isWhitespaceOnly(lastBlock.content)) {
                             blocks = blocks.slice(0, -1);
                         }
-                        const fullReasoning = accumulatedReasoningRef.current.id === id
-                            ? accumulatedReasoningRef.current.content
-                            : mergedChunk.next;
-                        if (mergedChunk.replaced) {
-                            let lastReasoningIndex = -1;
-                            for (let index = blocks.length - 1; index >= 0; index -= 1) {
-                                if (blocks[index].type === 'reasoning') {
-                                    lastReasoningIndex = index;
-                                    break;
-                                }
+                        // Find the last reasoning block to append to (may not be the very last block)
+                        let lastReasoningIndex = -1;
+                        for (let index = blocks.length - 1; index >= 0; index -= 1) {
+                            if (blocks[index].type === 'reasoning') {
+                                lastReasoningIndex = index;
+                                break;
                             }
-                            if (lastReasoningIndex >= 0) {
-                                const targetBlock = blocks[lastReasoningIndex];
-                                if (targetBlock.type === 'reasoning') {
-                                    blocks[lastReasoningIndex] = { ...targetBlock, content: fullReasoning };
-                                }
-                            } else {
-                                blocks = [...blocks, { type: 'reasoning', content: fullReasoning, id: crypto.randomUUID() }];
+                        }
+                        // If the last reasoning block is separated only by whitespace-only text blocks, continue it
+                        const lastBlock2 = blocks[blocks.length - 1];
+                        if (lastBlock2?.type === 'reasoning') {
+                            blocks[blocks.length - 1] = { ...lastBlock2, content: lastBlock2.content + chunk };
+                        } else if (lastReasoningIndex >= 0 && blocks.slice(lastReasoningIndex + 1).every((b) => b.type === 'text' && isWhitespaceOnly(b.content))) {
+                            // All blocks after last reasoning are whitespace text - continue the reasoning block
+                            const targetBlock = blocks[lastReasoningIndex];
+                            if (targetBlock.type === 'reasoning') {
+                                // Remove whitespace-only text blocks between reasoning blocks
+                                blocks = [...blocks.slice(0, lastReasoningIndex), { ...targetBlock, content: targetBlock.content + chunk }, ...blocks.slice(lastReasoningIndex + 1).filter((b) => !(b.type === 'text' && isWhitespaceOnly(b.content)))];
                             }
-                        } else if (lastBlock?.type === 'reasoning') {
-                            blocks[blocks.length - 1] = { ...lastBlock, content: lastBlock.content + mergedChunk.append };
                         } else {
-                            blocks = [...blocks, { type: 'reasoning', content: mergedChunk.append, id: crypto.randomUUID() }];
+                            blocks = [...blocks, { type: 'reasoning', content: chunk, id: crypto.randomUUID() }];
                         }
                     } else {
-                        const fullContent = accumulatedContentRef.current.id === id
-                            ? accumulatedContentRef.current.content
-                            : mergedChunk.next;
+                        const fullContent = accumulatedContentRef.current.content;
+                        // Defer creating a text block until we have non-whitespace content
                         const hasExistingTextBlock = blocks.some((block) => block.type === 'text');
-                        const shouldHoldWhitespaceOnlyBlock = !hasExistingTextBlock && isWhitespaceOnly(fullContent);
-                        if (shouldHoldWhitespaceOnlyBlock) {
+                        if (!hasExistingTextBlock && isWhitespaceOnly(fullContent)) {
                             blocksRef.current.set(id, blocks);
                             queueMessageUpdate(
                                 id,
@@ -938,26 +817,23 @@ export function useChatV2() {
                             );
                             return;
                         }
-                        if (mergedChunk.replaced) {
-                            let lastTextIndex = -1;
-                            for (let index = blocks.length - 1; index >= 0; index -= 1) {
-                                if (blocks[index].type === 'text') {
-                                    lastTextIndex = index;
-                                    break;
-                                }
+                        // Find the last text block to continue (not necessarily the very last block)
+                        let lastTextIndex = -1;
+                        for (let index = blocks.length - 1; index >= 0; index -= 1) {
+                            if (blocks[index].type === 'text') {
+                                lastTextIndex = index;
+                                break;
                             }
-                            if (lastTextIndex >= 0) {
-                                const targetBlock = blocks[lastTextIndex];
-                                if (targetBlock.type === 'text') {
-                                    blocks[lastTextIndex] = { ...targetBlock, content: fullContent };
-                                }
-                            } else {
-                                blocks = [...blocks, { type: 'text', content: fullContent, id: crypto.randomUUID() }];
+                        }
+                        if (lastTextIndex >= 0) {
+                            // Update existing text block with full accumulated content
+                            const targetBlock = blocks[lastTextIndex];
+                            if (targetBlock.type === 'text') {
+                                blocks[lastTextIndex] = { ...targetBlock, content: fullContent };
                             }
-                        } else if (lastBlock?.type === 'text') {
-                            blocks[blocks.length - 1] = { ...lastBlock, content: lastBlock.content + mergedChunk.append };
                         } else {
-                            blocks = [...blocks, { type: 'text', content: mergedChunk.append, id: crypto.randomUUID() }];
+                            // Create new text block with full accumulated content
+                            blocks = [...blocks, { type: 'text', content: fullContent, id: crypto.randomUUID() }];
                         }
                     }
 
