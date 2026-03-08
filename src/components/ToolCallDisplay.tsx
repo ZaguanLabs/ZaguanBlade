@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ToolCall } from '../types/chat';
 import { Zap, CheckCircle2, XCircle, Loader2, Copy, Check, ChevronRight, ChevronDown, RotateCcw, StopCircle } from 'lucide-react';
@@ -24,7 +24,33 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     const { t } = useTranslation();
     const [copied, setCopied] = useState(false);
     const [isExpanded, setIsExpanded] = useState(false);
+    const [shouldFadeComplete, setShouldFadeComplete] = useState(status === 'complete');
+    const previousStatusRef = useRef(status);
     const isRunCommand = toolCall.function.name === 'run_command';
+
+    useEffect(() => {
+        const previousStatus = previousStatusRef.current;
+        previousStatusRef.current = status;
+
+        if (status !== 'complete') {
+            setShouldFadeComplete(false);
+            return;
+        }
+
+        if (previousStatus === 'complete') {
+            setShouldFadeComplete(true);
+            return;
+        }
+
+        setShouldFadeComplete(false);
+        const timerId = window.setTimeout(() => {
+            setShouldFadeComplete(true);
+        }, 650);
+
+        return () => {
+            window.clearTimeout(timerId);
+        };
+    }, [status]);
 
     const handleCopyCommand = useCallback(async (command: string) => {
         try {
@@ -35,6 +61,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
             console.error('Failed to copy command:', err);
         }
     }, []);
+
     const getStatusIcon = () => {
         switch (status) {
             case 'executing':
@@ -81,6 +108,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     };
 
     const isComplete = status === 'complete';
+    const isVisuallyComplete = isComplete && shouldFadeComplete;
 
     // Get friendly tool name
     const getFriendlyToolName = (name: string, args?: Record<string, unknown>): string => {
@@ -191,7 +219,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     // Compact inline display for most tools, expanded for run_command
     if (!isRunCommand) {
         return (
-            <div className={`group/tool border-l-2 pl-2.5 text-[11px] ${getStatusColor()} ${isComplete ? 'opacity-45' : ''}`}>
+            <div className={`group/tool border-l-2 pl-2.5 text-[11px] ${getStatusColor()} ${isVisuallyComplete ? 'opacity-45' : ''}`}>
                 <div className="flex items-start gap-2 py-1">
                     <div className="flex h-5 w-5 shrink-0 items-center justify-center text-zinc-500">
                         {getStatusIcon()}
@@ -199,7 +227,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                     <div className="min-w-0 flex-1 space-y-0.5">
                         <div className="flex items-start gap-2">
                             <div className="min-w-0 flex flex-1 items-center gap-2">
-                                <span className={`shrink-0 text-[11px] font-medium ${isComplete ? 'text-zinc-500' : 'text-stone-300'}`}>
+                                <span className={`shrink-0 text-[11px] font-medium ${isVisuallyComplete ? 'text-zinc-500' : 'text-stone-300'}`}>
                                     {getFriendlyToolName(toolCall.function.name, parsedArgs)}
                                 </span>
                                 {displayPathText && (
@@ -208,7 +236,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                                         onClick={() => onOpenFile?.(pathText || displayPathText)}
                                         disabled={!onOpenFile}
                                         className={`min-w-0 flex-1 truncate text-left text-[10px] transition-colors ${onOpenFile
-                                            ? isComplete
+                                            ? isVisuallyComplete
                                                 ? 'text-zinc-600 hover:text-zinc-500'
                                                 : 'text-zinc-400 hover:text-zinc-200'
                                             : 'text-zinc-500'
@@ -301,14 +329,14 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     }
 
     return (
-        <div className={`border-l-2 pl-2.5 ${getStatusColor()} ${isComplete ? 'opacity-45' : ''}`}>
+        <div className={`border-l-2 pl-2.5 ${getStatusColor()} ${isVisuallyComplete ? 'opacity-45' : ''}`}>
             <div className="flex items-center justify-between gap-2 py-1">
                 <div className="flex min-w-0 items-center gap-2">
                     <div className="flex h-5 w-5 items-center justify-center text-zinc-500">
                         {getStatusIcon()}
                     </div>
                     <div className="min-w-0">
-                        <span className={`block truncate text-[11px] font-medium ${isComplete ? 'text-zinc-500' : 'text-stone-300'}`}>
+                        <span className={`block truncate text-[11px] font-medium ${isVisuallyComplete ? 'text-zinc-500' : 'text-stone-300'}`}>
                             {getFriendlyToolName(toolCall.function.name, parsedArgs)}
                         </span>
                     </div>
@@ -340,7 +368,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
             {commandText && (
                 <div className="ml-7 border-l border-zinc-800/70 pl-3 pb-1 pt-1">
                     <div className="flex items-start gap-2">
-                        <code className={`flex-1 break-all text-[12px] font-mono leading-5 select-text ${isComplete ? 'text-zinc-500' : 'text-stone-300'}`}>
+                        <code className={`flex-1 break-all text-[12px] font-mono leading-5 select-text ${isVisuallyComplete ? 'text-zinc-500' : 'text-stone-300'}`}>
                             {cwdText && <span className="text-zinc-500">{cwdText}$ </span>}
                             {commandText}
                         </code>

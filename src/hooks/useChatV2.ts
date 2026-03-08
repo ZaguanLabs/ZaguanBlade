@@ -16,6 +16,7 @@ const MIN_SUFFIX_REPLAY_LENGTH = 8;
 const MIN_STALE_REPLAY_LENGTH = 24;
 const FLUSH_INTERVAL_MS = 80;
 const TOOL_ACTIVITY_DISPATCH_INTERVAL_MS = 120;
+const MESSAGE_COMPLETION_GRACE_MS = 1200;
 
 function areToolActivitiesEqual(a: ToolActivityState | null, b: ToolActivityState | null): boolean {
     if (a === b) {
@@ -31,6 +32,10 @@ function areToolActivitiesEqual(a: ToolActivityState | null, b: ToolActivityStat
         && a.chunkCount === b.chunkCount
         && a.startedAt === b.startedAt
         && a.lastChunkAt === b.lastChunkAt;
+}
+
+function isWhitespaceOnly(value: string): boolean {
+    return value.trim().length === 0;
 }
 
 type StreamMergeResult = {
@@ -348,6 +353,7 @@ export function useChatV2() {
     const flushScheduledRef = useRef<number | null>(null);
     const streamingStatesRef = useRef<Map<string, StreamingState>>(new Map());
     const toolChunkCountsRef = useRef<Map<string, { chunkCount: number; startedAt: number; lastChunkAt: number }>>(new Map());
+    const messageCompletionCleanupTimersRef = useRef<Map<string, number>>(new Map());
 
     const toChatMentions = useCallback((mentions?: ComposerMention[]): ChatMention[] | undefined => {
         if (!mentions || mentions.length === 0) {
@@ -379,11 +385,42 @@ export function useChatV2() {
 
     const clearPendingTimers = useCallback(() => {
         if (pendingTimeoutsRef.current.length === 0) {
-            return;
+            if (messageCompletionCleanupTimersRef.current.size === 0) {
+                return;
+            }
         }
         pendingTimeoutsRef.current.forEach((timerId) => window.clearTimeout(timerId));
         pendingTimeoutsRef.current = [];
+        messageCompletionCleanupTimersRef.current.forEach((timerId) => window.clearTimeout(timerId));
+        messageCompletionCleanupTimersRef.current.clear();
     }, []);
+
+    const cancelMessageCompletionCleanup = useCallback((id: string) => {
+        const timerId = messageCompletionCleanupTimersRef.current.get(id);
+        if (timerId === undefined) {
+            return;
+        }
+        window.clearTimeout(timerId);
+        messageCompletionCleanupTimersRef.current.delete(id);
+    }, []);
+
+    const scheduleMessageCompletionCleanup = useCallback((id: string) => {
+        cancelMessageCompletionCleanup(id);
+        const timerId = window.setTimeout(() => {
+            messageCompletionCleanupTimersRef.current.delete(id);
+            messageBufferRef.current?.clear(id);
+            if (accumulatedContentRef.current.id === id) {
+                accumulatedContentRef.current = { id: '', content: '' };
+            }
+            if (accumulatedReasoningRef.current.id === id) {
+                accumulatedReasoningRef.current = { id: '', content: '' };
+            }
+            toolActivityRef.current = null;
+            lastToolActivityDispatchAtRef.current = Date.now();
+            dispatch({ type: 'tool-activity/set', activity: null });
+        }, MESSAGE_COMPLETION_GRACE_MS);
+        messageCompletionCleanupTimersRef.current.set(id, timerId);
+    }, [cancelMessageCompletionCleanup]);
 
     const setToolActivity = useCallback((activity: ToolActivityState | null) => {
         const previous = toolActivityRef.current;
@@ -568,11 +605,12 @@ export function useChatV2() {
             flushScheduledRef.current = null;
         }
         clearPendingTimers();
-        setToolActivity(null);
+        toolActivityRef.current = null;
+        lastToolActivityDispatchAtRef.current = Date.now();
         dispatchInFlightRef.current = false;
         dispatch({ type: 'loading/set', loading: false });
         dispatch({ type: 'pending-actions/set', actions: null });
-    }, [clearPendingTimers, setToolActivity]);
+    }, [clearPendingTimers]);
 
     const flushPendingUpdates = useCallback(() => {
         flushScheduledRef.current = null;
@@ -766,6 +804,7 @@ export function useChatV2() {
         if (!messageBufferRef.current) {
             messageBufferRef.current = new MessageBuffer(
                 (id, seq, chunk, _isFinal, type) => {
+                    cancelMessageCompletionCleanup(id);
                     const now = Date.now();
                     const previousStreaming = streamingStatesRef.current.get(id);
                     const streaming: StreamingState = {
@@ -855,6 +894,9 @@ export function useChatV2() {
 
                     const lastBlock = blocks[blocks.length - 1];
                     if (type === 'reasoning') {
+                        if (lastBlock?.type === 'text' && isWhitespaceOnly(lastBlock.content)) {
+                            blocks = blocks.slice(0, -1);
+                        }
                         const fullReasoning = accumulatedReasoningRef.current.id === id
                             ? accumulatedReasoningRef.current.content
                             : mergedChunk.next;
@@ -883,6 +925,19 @@ export function useChatV2() {
                         const fullContent = accumulatedContentRef.current.id === id
                             ? accumulatedContentRef.current.content
                             : mergedChunk.next;
+                        const hasExistingTextBlock = blocks.some((block) => block.type === 'text');
+                        const shouldHoldWhitespaceOnlyBlock = !hasExistingTextBlock && isWhitespaceOnly(fullContent);
+                        if (shouldHoldWhitespaceOnlyBlock) {
+                            blocksRef.current.set(id, blocks);
+                            queueMessageUpdate(
+                                id,
+                                accumulatedContentRef.current.id === id ? accumulatedContentRef.current.content : '',
+                                accumulatedReasoningRef.current.id === id ? accumulatedReasoningRef.current.content : '',
+                                blocks,
+                                streaming,
+                            );
+                            return;
+                        }
                         if (mergedChunk.replaced) {
                             let lastTextIndex = -1;
                             for (let index = blocks.length - 1; index >= 0; index -= 1) {
@@ -1195,15 +1250,8 @@ export function useChatV2() {
 
                 if (chatEvent.type === 'MessageCompleted') {
                     const { id } = chatEvent.payload;
-                    messageBufferRef.current?.clear(id);
-                    if (accumulatedContentRef.current.id === id) {
-                        accumulatedContentRef.current = { id: '', content: '' };
-                    }
-                    if (accumulatedReasoningRef.current.id === id) {
-                        accumulatedReasoningRef.current = { id: '', content: '' };
-                    }
+                    scheduleMessageCompletionCleanup(id);
                     toolChunkCountsRef.current.clear();
-                    setToolActivity(null);
                     return;
                 }
 
