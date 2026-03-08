@@ -57,8 +57,8 @@ pub enum BladeWsEvent {
         session_id: String,
         model_id: String,
     },
-    TextChunk(String),
-    ReasoningChunk(String),
+    TextChunk { content: String, output_index: Option<i64> },
+    ReasoningChunk { content: String, output_index: Option<i64> },
     ToolCall {
         id: String,
         name: String,
@@ -696,13 +696,22 @@ impl BladeWsClient {
                 });
             }
             "text_chunk" => {
+                // Parse output_index to distinguish parallel output streams (OpenAI Responses API)
+                let output_index = msg.payload.get("output_index")
+                    .or_else(|| msg.payload.get("content_index"))
+                    .or_else(|| msg.payload.get("index"))
+                    .and_then(|v| v.as_i64());
                 if let Some(content) = msg.payload.get("content").and_then(|v| v.as_str()) {
-                    let _ = tx.send(BladeWsEvent::TextChunk(content.to_string()));
+                    let _ = tx.send(BladeWsEvent::TextChunk { content: content.to_string(), output_index });
                 }
             }
             "reasoning_chunk" => {
+                let output_index = msg.payload.get("output_index")
+                    .or_else(|| msg.payload.get("content_index"))
+                    .or_else(|| msg.payload.get("index"))
+                    .and_then(|v| v.as_i64());
                 if let Some(content) = msg.payload.get("content").and_then(|v| v.as_str()) {
-                    let _ = tx.send(BladeWsEvent::ReasoningChunk(content.to_string()));
+                    let _ = tx.send(BladeWsEvent::ReasoningChunk { content: content.to_string(), output_index });
                 }
             }
             "tool_call" => {

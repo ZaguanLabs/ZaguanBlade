@@ -634,6 +634,9 @@ impl ChatManager {
                     // Some providers may emit the same content as both reasoning and text chunks.
                     // Keep the latest reasoning chunk so we can skip an immediate duplicate text chunk.
                     let mut last_reasoning_chunk: Option<String> = None;
+                    // Track the first output_index we see to filter parallel streams
+                    // (OpenAI Responses API can emit multiple output items simultaneously)
+                    let mut accepted_output_index: Option<i64> = None;
                     while let Some(event) = ws_rx.recv().await {
                         match event {
                             crate::blade_ws_client::BladeWsEvent::Connected { .. } => {
@@ -674,12 +677,27 @@ impl ChatManager {
                                 });
                                 let _ = session_tx.send(session_id);
                             }
-                            crate::blade_ws_client::BladeWsEvent::TextChunk(text) => {
+                            crate::blade_ws_client::BladeWsEvent::TextChunk { content: text, output_index } => {
                                 eprintln!(
-                                    "[stream-debug][ws->rust][text] len={} preview=\"{}\"",
+                                    "[stream-debug][ws->rust][text] len={} output_index={:?} preview=\"{}\"",
                                     text.len(),
+                                    output_index,
                                     stream_debug_preview(&text)
                                 );
+                                // Filter parallel output streams: lock onto the first index we see
+                                if let Some(idx) = output_index {
+                                    match accepted_output_index {
+                                        None => accepted_output_index = Some(idx),
+                                        Some(accepted) if idx != accepted => {
+                                            eprintln!(
+                                                "[stream-debug][ws->rust][text-skip-parallel] output_index={} accepted={} len={} preview=\"{}\"",
+                                                idx, accepted, text.len(), stream_debug_preview(&text)
+                                            );
+                                            continue;
+                                        }
+                                        _ => {}
+                                    }
+                                }
                                 if last_reasoning_chunk.as_deref() == Some(text.as_str()) {
                                     eprintln!(
                                         "[stream-debug][ws->rust][text-skip-duplicate-reasoning] len={} preview=\"{}\"",
@@ -693,12 +711,27 @@ impl ChatManager {
                                 saw_content = true;
                                 let _ = tx.send_chunk(text);
                             }
-                            crate::blade_ws_client::BladeWsEvent::ReasoningChunk(text) => {
+                            crate::blade_ws_client::BladeWsEvent::ReasoningChunk { content: text, output_index } => {
                                 eprintln!(
-                                    "[stream-debug][ws->rust][reasoning] len={} preview=\"{}\"",
+                                    "[stream-debug][ws->rust][reasoning] len={} output_index={:?} preview=\"{}\"",
                                     text.len(),
+                                    output_index,
                                     stream_debug_preview(&text)
                                 );
+                                // Filter parallel output streams
+                                if let Some(idx) = output_index {
+                                    match accepted_output_index {
+                                        None => accepted_output_index = Some(idx),
+                                        Some(accepted) if idx != accepted => {
+                                            eprintln!(
+                                                "[stream-debug][ws->rust][reasoning-skip-parallel] output_index={} accepted={} len={} preview=\"{}\"",
+                                                idx, accepted, text.len(), stream_debug_preview(&text)
+                                            );
+                                            continue;
+                                        }
+                                        _ => {}
+                                    }
+                                }
                                 last_reasoning_chunk = Some(text.clone());
                                 saw_content = true;
                                 let _ = tx.send_reasoning_chunk(text);

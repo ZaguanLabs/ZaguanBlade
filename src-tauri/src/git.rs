@@ -1256,10 +1256,10 @@ Do NOT include analysis, reasoning, explanations, or multiple options."#,
     let mut reasoning = String::new();
     while let Some(event) = ws_rx.recv().await {
         match event {
-            crate::blade_ws_client::BladeWsEvent::TextChunk(chunk) => {
+            crate::blade_ws_client::BladeWsEvent::TextChunk { content: chunk, .. } => {
                 content.push_str(&chunk);
             }
-            crate::blade_ws_client::BladeWsEvent::ReasoningChunk(chunk) => {
+            crate::blade_ws_client::BladeWsEvent::ReasoningChunk { content: chunk, .. } => {
                 reasoning.push_str(&chunk);
             }
             crate::blade_ws_client::BladeWsEvent::ChatDone { .. } => break,
