@@ -10,6 +10,11 @@ import zbladeLogoUrl from '../assets/zblade-in-app-logo.png';
 
 type StorageMode = 'local' | 'server';
 
+function normalizeOpenAiCompatUrl(url: string): string {
+    const trimmed = url.trim().replace(/\/+$/, '');
+    return trimmed.replace(/\/v1$/i, '').replace(/\/+$/, '');
+}
+
 interface SettingsState {
     storage: {
         mode: StorageMode;
@@ -81,7 +86,7 @@ const defaultSettings: SettingsState = {
         ollamaCloudEnabled: false,
         ollamaCloudApiKey: '',
         openaiCompatEnabled: false,
-        openaiCompatUrl: 'http://localhost:8080/v1',
+        openaiCompatUrl: 'http://localhost:8080',
     },
     allowGitIgnoredFiles: false,  // Default: respect .gitignore
 };
@@ -112,7 +117,7 @@ function backendLocalToFrontend(backend: LocalAiConfig): Pick<SettingsState, 'lo
             ollamaCloudEnabled: backend.ollama_cloud_enabled,
             ollamaCloudApiKey: backend.ollama_cloud_api_key,
             openaiCompatEnabled: backend.openai_compat_enabled,
-            openaiCompatUrl: backend.openai_compat_url,
+            openaiCompatUrl: normalizeOpenAiCompatUrl(backend.openai_compat_url),
         },
     };
 }
@@ -134,7 +139,7 @@ function frontendLocalToBackend(frontend: SettingsState): LocalAiConfig {
         ollama_cloud_enabled: frontend.localAi.ollamaCloudEnabled,
         ollama_cloud_api_key: frontend.localAi.ollamaCloudApiKey,
         openai_compat_enabled: frontend.localAi.openaiCompatEnabled,
-        openai_compat_url: frontend.localAi.openaiCompatUrl,
+        openai_compat_url: normalizeOpenAiCompatUrl(frontend.localAi.openaiCompatUrl),
     };
 }
 

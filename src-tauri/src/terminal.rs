@@ -558,6 +558,70 @@ fn strip_ansi_escapes(input: &str) -> String {
     out
 }
 
+fn strip_ansi_escapes_with_byte_map(input: &str) -> (String, Vec<usize>) {
+    let mut out = String::with_capacity(input.len());
+    let mut byte_map = Vec::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    let mut segment_start = 0;
+
+    let flush_plain = |out: &mut String,
+                       byte_map: &mut Vec<usize>,
+                       src: &str,
+                       start: usize,
+                       end: usize| {
+        if end > start {
+            out.push_str(&src[start..end]);
+            byte_map.extend(start..end);
+        }
+    };
+
+    while i < bytes.len() {
+        if bytes[i] == 0x1b {
+            flush_plain(&mut out, &mut byte_map, input, segment_start, i);
+
+            i += 1;
+            if i >= bytes.len() {
+                break;
+            }
+
+            if bytes[i] == b'[' {
+                i += 1;
+                while i < bytes.len() && !(0x40..=0x7E).contains(&bytes[i]) {
+                    i += 1;
+                }
+                if i < bytes.len() {
+                    i += 1;
+                }
+                segment_start = i;
+            } else if bytes[i] == b']' {
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == 0x07 {
+                        i += 1;
+                        break;
+                    }
+                    if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
+                        i += 2;
+                        break;
+                    }
+                    i += 1;
+                }
+                segment_start = i;
+            } else {
+                i += 1;
+                segment_start = i;
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    flush_plain(&mut out, &mut byte_map, input, segment_start, bytes.len());
+
+    (out, byte_map)
+}
+
 /// Strip BLADE sentinel markers from terminal output.
 /// Returns the cleaned output and any detected sentinel events.
 /// Also strips the shell echo of the command line containing sentinels.
@@ -573,19 +637,13 @@ fn strip_blade_sentinels(input: &str) -> SentinelResult {
     let mut exited = Vec::new();
 
     for line in input.split_inclusive('\n') {
-        // Strip ANSI escape codes for sentinel detection. Shells with syntax
-        // highlighting (e.g. zsh-syntax-highlighting) insert escape sequences
-        // into the echoed command line, breaking plain-text sentinel matching.
-        let plain = strip_ansi_escapes(line);
+        let (plain, byte_map) = strip_ansi_escapes_with_byte_map(line);
 
-        // Robust sentinel detection even if the sentinel appears mid-line
-        // (e.g. prompt/ANSI prefixes or no newline before exit sentinel).
         if let Some(start_idx) = plain.find(SENTINEL_START) {
             let rest = &plain[start_idx + SENTINEL_START.len()..];
             if let Some(end_rel) = rest.find(SENTINEL_END) {
                 let call_id = &rest[..end_rel];
                 started.push(call_id.to_string());
-                // Drop the entire line to avoid showing sentinel artifacts
                 continue;
             }
         }
@@ -598,17 +656,17 @@ fn strip_blade_sentinels(input: &str) -> SentinelResult {
                     let exit_code = exit_str.parse::<i32>().unwrap_or(1);
                     exited.push((call_id.to_string(), exit_code));
 
-                    // For exit sentinels, preserve any output before/after the
-                    // sentinel on this line (handles commands without trailing newline).
-                    // Use the plain version for index calculation.
-                    let prefix = &plain[..exit_idx];
                     let suffix_start = exit_idx + SENTINEL_EXIT.len() + end_rel + SENTINEL_END.len();
-                    let suffix = plain.get(suffix_start..).unwrap_or("");
-                    if !prefix.is_empty() {
-                        cleaned.push_str(prefix);
+                    let original_start = byte_map.get(exit_idx).copied().unwrap_or(0);
+                    let original_end = byte_map
+                        .get(suffix_start)
+                        .copied()
+                        .unwrap_or(line.len());
+                    if original_start > 0 {
+                        cleaned.push_str(&line[..original_start]);
                     }
-                    if !suffix.is_empty() {
-                        cleaned.push_str(suffix);
+                    if original_end < line.len() {
+                        cleaned.push_str(&line[original_end..]);
                     }
                     continue;
                 }

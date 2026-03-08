@@ -25,9 +25,10 @@ function sanitizeTerminalOutput(data: string): string {
 interface TerminalProps {
     id?: string;
     cwd?: string;
+    command?: string;
 }
 
-export default function Terminal({ id = "main-terminal", cwd }: TerminalProps) {
+export default function Terminal({ id = "main-terminal", cwd, command }: TerminalProps) {
     const terminalRef = useRef<HTMLDivElement>(null);
     const xtermRef = useRef<XTerm | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
@@ -266,6 +267,7 @@ export default function Terminal({ id = "main-terminal", cwd }: TerminalProps) {
                     type: "Spawn",
                     payload: {
                         id,
+                        command,
                         cwd: terminalCwd,
                         interactive: true,
                     }
@@ -405,7 +407,7 @@ export default function Terminal({ id = "main-terminal", cwd }: TerminalProps) {
             xtermRef.current = null;
             terminalBufferRef.current = null;
         };
-    }, [id]);
+    }, [command, cwd, id]);
 
     return (
         <div

@@ -3,9 +3,12 @@ use serde_json::json;
 use std::process::Command;
 use tauri::State;
 
-use crate::AppState;
-use crate::models::{catalog, registry};
-use crate::providers;
+use crate::{
+    app_state::AppState,
+    config::normalize_openai_compat_url,
+    models::{catalog, registry},
+    providers,
+};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -84,9 +87,10 @@ async fn generate_commit_message_via_openai_compat(
     let model_name = model_id
         .strip_prefix("openai-compat/")
         .unwrap_or(model_id);
+    let openai_compat_base_url = normalize_openai_compat_url(&api_config.openai_compat_url);
     let url = format!(
         "{}/v1/chat/completions",
-        api_config.openai_compat_url.trim_end_matches('/')
+        openai_compat_base_url
     );
 
     let body = json!({
@@ -1202,6 +1206,14 @@ Do NOT include analysis, reasoning, explanations, or multiple options."#,
             .await;
     }
 
+    let storage_mode = Some({
+        let settings = crate::project_settings::load_project_settings_or_default(std::path::Path::new(&root));
+        match settings.storage.mode {
+            crate::project_settings::StorageMode::Local => "local".to_string(),
+            crate::project_settings::StorageMode::Server => "server".to_string(),
+        }
+    });
+
     // Use shared WebSocket connection manager from AppState
     let ws_manager = state.ws_connection.clone();
     
@@ -1227,7 +1239,15 @@ Do NOT include analysis, reasoning, explanations, or multiple options."#,
 
     // Send the commit message generation request
     ws_manager
-        .send_message(None, resolved_model_id, prompt, None, Some(workspace_info))
+        .send_message_with_storage_mode(
+            None,
+            resolved_model_id,
+            prompt,
+            None,
+            Some(workspace_info),
+            storage_mode,
+            Some("code".to_string()),
+        )
         .await
         .map_err(|e| format!("Failed to send message: {}", e))?;
 

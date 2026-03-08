@@ -142,7 +142,6 @@ pub fn load_project_state(project_path: &str) -> Option<ProjectState> {
 
 /// Save project state to disk
 pub fn save_project_state(state: &ProjectState) -> Result<(), String> {
-    println!("[ProjectState] Starting save_project_state logic...");
     let state_dir =
         get_state_dir().ok_or_else(|| "Could not determine config directory".to_string())?;
 
@@ -154,6 +153,12 @@ pub fn save_project_state(state: &ProjectState) -> Result<(), String> {
 
     let json = serde_json::to_string_pretty(state)
         .map_err(|e| format!("Failed to serialize state: {}", e))?;
+
+    if let Ok(existing) = fs::read_to_string(&state_path) {
+        if existing == json {
+            return Ok(());
+        }
+    }
 
     fs::write(&state_path, json).map_err(|e| format!("Failed to write state file: {}", e))?;
 

@@ -1,13 +1,13 @@
 // use eframe::egui; // Removed
 use std::path::PathBuf;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 
 use crate::agentic_loop::AgenticLoop;
 use crate::ai_workflow::get_tool_definitions_for_model;
 use crate::ai_workflow::{AiWorkflow, PendingToolBatch};
 use crate::blade_ws_client::BladeWsClient;
 use crate::chat::handler::merge_tool_call_deltas;
-use crate::config::ApiConfig;
+use crate::config::{normalize_openai_compat_url, ApiConfig};
 use crate::conversation::ConversationHistory;
 use crate::models::registry::ModelInfo;
 use crate::providers::{
@@ -22,7 +22,7 @@ use crate::xml_parser;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 fn stream_debug_preview(value: &str) -> String {
     let normalized = value.replace('\n', "\\n").replace('\r', "\\r");
@@ -33,6 +33,69 @@ fn stream_debug_preview(value: &str) -> String {
     } else {
         preview
     }
+}
+
+fn is_semantically_empty_message(msg: &ChatMessage) -> bool {
+    let has_text = !msg.content.trim().is_empty();
+    let has_reasoning = msg
+        .reasoning
+        .as_ref()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    let has_tool_calls = msg
+        .tool_calls
+        .as_ref()
+        .map(|calls| !calls.is_empty())
+        .unwrap_or(false);
+    let has_images = msg
+        .images
+        .as_ref()
+        .map(|images| !images.is_empty())
+        .unwrap_or(false);
+
+    match msg.role {
+        ChatRole::Assistant => !(has_text || has_reasoning || has_tool_calls),
+        ChatRole::User => !(has_text || has_images),
+        ChatRole::System => !has_text,
+        ChatRole::Tool => !has_text,
+    }
+}
+
+fn local_tool_support_cache() -> &'static Mutex<HashSet<String>> {
+    static CACHE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn local_tool_support_cache_key(provider: &str, model_id: &str) -> String {
+    format!("{}:{}", provider, model_id.trim().to_ascii_lowercase())
+}
+
+fn model_disables_tools(cache_key: &str) -> bool {
+    local_tool_support_cache()
+        .lock()
+        .map(|cache| cache.contains(cache_key))
+        .unwrap_or(false)
+}
+
+fn remember_model_disables_tools(cache_key: &str) {
+    if let Ok(mut cache) = local_tool_support_cache().lock() {
+        cache.insert(cache_key.to_string());
+    }
+}
+
+fn is_tools_unsupported_error(status: reqwest::StatusCode, body: &str) -> bool {
+    if !(status.as_u16() == 400 || status.as_u16() == 404 || status.as_u16() == 422) {
+        return false;
+    }
+
+    let body_lower = body.to_ascii_lowercase();
+    body_lower.contains("does not support tools")
+        || body_lower.contains("doesn't support tools")
+        || body_lower.contains("tools are not supported")
+        || body_lower.contains("tool calling is not supported")
+        || body_lower.contains("function calling is not supported")
+        || body_lower.contains("does not support function calling")
+        || body_lower.contains("doesn't support function calling")
 }
 
 pub enum DrainResult {
@@ -153,7 +216,7 @@ struct OllamaToolFunction {
     index: Option<usize>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct OllamaChatRequest {
     model: String,
     messages: Vec<OllamaMessage>,
@@ -930,6 +993,9 @@ impl ChatManager {
 
         let mut tool_name_by_id: HashMap<String, String> = HashMap::new();
         for msg in conversation.get_messages() {
+            if is_semantically_empty_message(&msg) {
+                continue;
+            }
             if let Some(tool_calls) = msg.tool_calls.as_ref() {
                 for call in tool_calls {
                     tool_name_by_id.insert(call.id.clone(), call.function.name.clone());
@@ -938,6 +1004,9 @@ impl ChatManager {
         }
 
         for msg in conversation.get_messages() {
+            if is_semantically_empty_message(&msg) {
+                continue;
+            }
             let (role, content, tool_call_id) = match msg.role {
                 ChatRole::User => ("user", Some(msg.content.clone()), None),
                 ChatRole::Assistant => {
@@ -1016,11 +1085,14 @@ impl ChatManager {
             });
         }
 
+        let tool_cache_key = local_tool_support_cache_key("ollama", &model_name);
+        let include_tools = !model_disables_tools(&tool_cache_key);
         let request = OllamaChatRequest {
             model: model_name.clone(),
             messages,
             stream: true,
-            tools: Some(get_tool_definitions_for_model(&model_name, composite_tools_enabled)),
+            tools: include_tools
+                .then(|| get_tool_definitions_for_model(&model_name, composite_tools_enabled)),
         };
 
         let (tx, rx) = mpsc::channel();
@@ -1058,7 +1130,7 @@ impl ChatManager {
                 request_builder = request_builder.header("Authorization", format!("Bearer {}", cloud_api_key));
             }
             
-            let response = match request_builder.send().await {
+            let mut response = match request_builder.send().await {
                 Ok(res) => res,
                 Err(e) => {
                     let _ = tx.send(ChatEvent::Error(format!(
@@ -1069,7 +1141,45 @@ impl ChatManager {
                 }
             };
 
-            // Check HTTP status before attempting to stream
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+
+                if include_tools && is_tools_unsupported_error(status, &body) {
+                    remember_model_disables_tools(&tool_cache_key);
+
+                    let retry_request = OllamaChatRequest {
+                        tools: None,
+                        ..request.clone()
+                    };
+
+                    let mut retry_builder = http.post(&url).json(&retry_request);
+                    if !cloud_api_key.is_empty() {
+                        retry_builder = retry_builder.header("Authorization", format!("Bearer {}", cloud_api_key));
+                    }
+
+                    response = match retry_builder.send().await {
+                        Ok(res) => res,
+                        Err(e) => {
+                            let _ = tx.send(ChatEvent::Error(format!(
+                                "Ollama retry without tools failed: {}",
+                                e
+                            )));
+                            return;
+                        }
+                    };
+                } else {
+                    let err_msg = if status.as_u16() == 401 {
+                        format!("Ollama authentication failed (401). Check your cloud API key in Settings.")
+                    } else {
+                        format!("Ollama returned HTTP {}: {}", status, body.chars().take(500).collect::<String>())
+                    };
+                    eprintln!("[OLLAMA CHAT] HTTP error: {}", err_msg);
+                    let _ = tx.send(ChatEvent::Error(err_msg));
+                    return;
+                }
+            }
+
             if !response.status().is_success() {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();
@@ -1307,7 +1417,7 @@ impl ChatManager {
             tool_call_id: Option<String>,
         }
 
-        #[derive(Serialize)]
+        #[derive(Serialize, Clone)]
         struct OpenAIRequest {
             model: String,
             messages: Vec<OpenAIMessage>,
@@ -1339,6 +1449,9 @@ impl ChatManager {
 
         // Convert conversation history to OpenAI format
         for msg in conversation.get_messages() {
+            if is_semantically_empty_message(&msg) {
+                continue;
+            }
             match msg.role {
                 ChatRole::User => {
                     let mut parts: Vec<OpenAIContentPart> = Vec::new();
@@ -1407,20 +1520,22 @@ impl ChatManager {
             }
         }
 
+        let tool_cache_key = local_tool_support_cache_key("openai-compat", &model_name);
+        let include_tools = !model_disables_tools(&tool_cache_key);
         let request_body = OpenAIRequest {
             model: model_name.clone(),
             messages,
             stream: true,
-            tools: Some(get_tool_definitions_for_model(
-                &model_name,
-                composite_tools_enabled,
-            )),
+            tools: include_tools.then(|| {
+                get_tool_definitions_for_model(&model_name, composite_tools_enabled)
+            }),
         };
 
+        let openai_compat_base_url = normalize_openai_compat_url(&api_config.openai_compat_url);
         // OpenAI-compatible servers follow the /v1/chat/completions path; base URL should be versionless
         let url = format!(
             "{}/v1/chat/completions",
-            api_config.openai_compat_url.trim_end_matches('/')
+            openai_compat_base_url
         );
         let (tx, rx) = mpsc::channel();
         let tx = ProviderEventSender::new(tx, self.event_notify.clone());
@@ -1454,7 +1569,7 @@ impl ChatManager {
                 None
             };
 
-            let response = match http
+            let mut response = match http
                 .post(&url)
                 .json(&request_body)
                 .send()
@@ -1470,6 +1585,43 @@ impl ChatManager {
                     return;
                 }
             };
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let text = response.text().await.unwrap_or_default();
+
+                if include_tools && is_tools_unsupported_error(status, &text) {
+                    remember_model_disables_tools(&tool_cache_key);
+                    let retry_request = OpenAIRequest {
+                        tools: None,
+                        ..request_body.clone()
+                    };
+
+                    response = match http
+                        .post(&url)
+                        .json(&retry_request)
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => {
+                            let _ = tx.send(ChatEvent::Error(format!(
+                                "Retry without tools failed for OpenAI-compatible server: {}",
+                                e
+                            )));
+                            let _ = tx.send(ChatEvent::Done);
+                            return;
+                        }
+                    };
+                } else {
+                    let _ = tx.send(ChatEvent::Error(format!(
+                        "OpenAI-compatible server returned {}: {}",
+                        status, text
+                    )));
+                    let _ = tx.send(ChatEvent::Done);
+                    return;
+                }
+            }
 
             if !response.status().is_success() {
                 let status = response.status();

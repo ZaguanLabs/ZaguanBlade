@@ -1,4 +1,5 @@
 use crate::models::registry::ModelInfo;
+use crate::config::normalize_openai_compat_url;
 use serde::Deserialize;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -30,7 +31,8 @@ lazy_static::lazy_static! {
 async fn fetch_models_from_server(
     server_url: &str,
 ) -> Result<Vec<ModelInfo>, Box<dyn std::error::Error + Send + Sync>> {
-    let url = format!("{}/v1/models", server_url.trim_end_matches('/'));
+    let base_url = normalize_openai_compat_url(server_url);
+    let url = format!("{}/v1/models", base_url);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()?;
@@ -143,7 +145,8 @@ pub async fn get_models(server_url: &str) -> Vec<ModelInfo> {
 }
 
 pub async fn test_connection(server_url: &str) -> Result<(), String> {
-    let url = format!("{}/v1/models", server_url.trim_end_matches('/'));
+    let base_url = normalize_openai_compat_url(server_url);
+    let url = format!("{}/v1/models", base_url);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()

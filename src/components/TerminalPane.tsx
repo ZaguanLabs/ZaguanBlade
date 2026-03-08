@@ -5,29 +5,30 @@ import Terminal from "./Terminal";
 import { Plus, X, Terminal as TerminalIcon } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { BLADE_TERMINAL_ID, BLADE_TERMINAL_TITLE } from "../constants/terminal";
 import { BladeDispatcher } from "../services/blade";
 
 interface TerminalTab {
     id: string;
     title: string;
     cwd?: string;
+    command?: string;
+    transient?: boolean;
+}
+
+interface PersistedTerminalTab {
+    id: string;
+    title: string;
+    cwd?: string;
 }
 
 export interface TerminalPaneHandle {
-    getTerminalState: () => { terminals: TerminalTab[]; activeId: string };
-    restoreTerminals: (terminals: TerminalTab[], activeId?: string) => void;
+    getTerminalState: () => { terminals: PersistedTerminalTab[]; activeId: string };
+    restoreTerminals: (terminals: PersistedTerminalTab[], activeId?: string) => void;
 }
 
 export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
-    const createBladeTab = useCallback((cwd?: string): TerminalTab => ({
-        id: BLADE_TERMINAL_ID,
-        title: BLADE_TERMINAL_TITLE,
-        cwd,
-    }), []);
-
-    const [terminals, setTerminals] = useState<TerminalTab[]>([createBladeTab()]);
-    const [activeId, setActiveId] = useState<string>(BLADE_TERMINAL_ID);
+    const [terminals, setTerminals] = useState<TerminalTab[]>([]);
+    const [activeId, setActiveId] = useState<string>("");
 
     const getTitleFromCwd = (path?: string, fallback = "Terminal") => {
         if (!path) return fallback;
@@ -37,44 +38,33 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
         return parts[parts.length - 1] || fallback;
     };
 
-    const ensureBladeTerminal = useCallback((cwd?: string, focus = false) => {
-        setTerminals(prev => {
-            const hasBlade = prev.some(term => term.id === BLADE_TERMINAL_ID);
-            if (hasBlade) {
-                return prev.map(term =>
-                    term.id === BLADE_TERMINAL_ID
-                        ? { ...term, cwd: term.cwd ?? cwd, title: BLADE_TERMINAL_TITLE }
-                        : term
-                );
-            }
-            return [createBladeTab(cwd), ...prev];
-        });
-
-        if (focus) {
-            setActiveId(BLADE_TERMINAL_ID);
-        }
-    }, [createBladeTab]);
-
     useImperativeHandle(ref, () => ({
-        getTerminalState: () => ({ terminals, activeId }),
-        restoreTerminals: (restoredTerminals: TerminalTab[], restoredActiveId?: string) => {
+        getTerminalState: () => {
+            const persistedTerminals = terminals
+                .filter((term) => !term.transient)
+                .map(({ id, title, cwd }) => ({ id, title, cwd }));
+
+            return {
+                terminals: persistedTerminals,
+                activeId: persistedTerminals.some((term) => term.id === activeId) ? activeId : (persistedTerminals[0]?.id || ""),
+            };
+        },
+        restoreTerminals: (restoredTerminals: PersistedTerminalTab[], restoredActiveId?: string) => {
             if (restoredTerminals.length > 0) {
-                const normalized = restoredTerminals.map((term) => {
-                    if (term.id === BLADE_TERMINAL_ID) {
-                        return { ...term, title: BLADE_TERMINAL_TITLE };
-                    }
-                    return term.cwd ? { ...term, title: getTitleFromCwd(term.cwd, term.title) } : term;
-                });
-                const hasBlade = normalized.some(term => term.id === BLADE_TERMINAL_ID);
-                const withBlade = hasBlade ? normalized : [createBladeTab(), ...normalized];
-                const nextActive = restoredActiveId && withBlade.some(term => term.id === restoredActiveId)
+                const normalized = restoredTerminals.map((term) =>
+                    term.cwd ? { ...term, title: getTitleFromCwd(term.cwd, term.title) } : term
+                );
+                const nextActive = restoredActiveId && normalized.some(term => term.id === restoredActiveId)
                     ? restoredActiveId
-                    : withBlade[0].id;
-                setTerminals(withBlade);
+                    : normalized[0].id;
+                setTerminals(normalized);
                 setActiveId(nextActive);
+            } else {
+                setTerminals([]);
+                setActiveId("");
             }
         },
-    }), [terminals, activeId, createBladeTab, ensureBladeTerminal]);
+    }), [terminals, activeId]);
 
     // Set initial terminal cwd/title to workspace root if available
     useEffect(() => {
@@ -84,14 +74,11 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
                 const workspaceRoot = await invoke<string | null>("get_current_workspace");
                 if (!isMounted || !workspaceRoot) return;
                 setTerminals(prev =>
-                    prev.map(term => {
-                        if (term.id === BLADE_TERMINAL_ID) {
-                            return { ...term, cwd: term.cwd ?? workspaceRoot, title: BLADE_TERMINAL_TITLE };
-                        }
-                        return term.cwd
+                    prev.map(term =>
+                        term.cwd
                             ? { ...term, title: getTitleFromCwd(term.cwd, term.title) }
-                            : { ...term, cwd: workspaceRoot, title: getTitleFromCwd(workspaceRoot, term.title) };
-                    })
+                            : { ...term, cwd: workspaceRoot, title: getTitleFromCwd(workspaceRoot, term.title) }
+                    )
                 );
             } catch {
                 // ignore
@@ -104,28 +91,50 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
         };
     }, []);
 
-    // Allow external consumers (like run_command) to open the Blade terminal if needed
-    useEffect(() => {
-        const unlisten = listen<{ cwd?: string; focus?: boolean }>('open-blade-terminal', (event) => {
-            const { cwd, focus } = event.payload || {};
-            ensureBladeTerminal(cwd, focus ?? true);
-        });
-
-        return () => {
-            unlisten.then(fn => fn());
-        };
-    }, [ensureBladeTerminal]);
-
     // Listen for open-terminal events from other components (e.g., File Explorer)
     useEffect(() => {
-        const unlisten = listen<{ path: string }>('open-terminal', (event) => {
-            const { path } = event.payload;
-            const title = getTitleFromCwd(path, 'Terminal');
-            const newId = `term-${Date.now()}`;
-            const newTab = { id: newId, title, cwd: path };
-            setTerminals(prev => [...prev, newTab]);
-            setActiveId(newId);
-            console.debug('[TerminalPane] Opening terminal at:', path);
+        const unlisten = listen<{
+            path?: string;
+            cwd?: string;
+            id?: string;
+            title?: string;
+            command?: string;
+            focus?: boolean;
+            transient?: boolean;
+        }>('open-terminal', (event) => {
+            const cwd = event.payload.cwd ?? event.payload.path;
+            const id = event.payload.id ?? `term-${Date.now()}`;
+            const title = event.payload.title ?? getTitleFromCwd(cwd, 'Terminal');
+            const focus = event.payload.focus ?? true;
+
+            setTerminals(prev => {
+                const existingIndex = prev.findIndex((term) => term.id === id);
+                const nextTab: TerminalTab = {
+                    id,
+                    title,
+                    cwd,
+                    command: event.payload.command,
+                    transient: event.payload.transient,
+                };
+
+                if (existingIndex >= 0) {
+                    const next = [...prev];
+                    next[existingIndex] = {
+                        ...next[existingIndex],
+                        ...nextTab,
+                        title: nextTab.title || next[existingIndex].title,
+                    };
+                    return next;
+                }
+
+                return [...prev, nextTab];
+            });
+
+            if (focus) {
+                setActiveId(id);
+            }
+
+            console.debug('[TerminalPane] Opening terminal:', { id, cwd, title, hasCommand: !!event.payload.command });
         });
 
         return () => {
@@ -140,9 +149,6 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
             setTerminals(prev =>
                 prev.map(term => {
                     if (term.id !== id) return term;
-                    if (term.id === BLADE_TERMINAL_ID) {
-                        return { ...term, cwd, title: BLADE_TERMINAL_TITLE };
-                    }
                     return { ...term, cwd, title: getTitleFromCwd(cwd, term.title) };
                 })
             );
@@ -186,6 +192,11 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
         }).catch(console.error);
     };
 
+    const suppressContextMenu = useCallback((e: React.MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+    }, []);
+
     return (
         <div className="h-full min-w-0 overflow-hidden flex flex-row bg-[#1e1e1e]">
             {/* Terminal Area */}
@@ -199,13 +210,16 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
                             zIndex: term.id === activeId ? 10 : 0
                         }}
                     >
-                        <Terminal id={term.id} cwd={term.cwd} />
+                        <Terminal id={term.id} cwd={term.cwd} command={term.command} />
                     </div>
                 ))}
             </div>
 
             {/* Tabs Sidebar (Right side like VSCode default or requested image) */}
-            <div className="w-48 bg-[var(--bg-app)] border-l border-[var(--border-default)] shadow-[var(--shadow-md)] flex flex-col">
+            <div
+                className="w-48 bg-[var(--bg-app)] border-l border-[var(--border-default)] shadow-[var(--shadow-md)] flex flex-col"
+                onContextMenu={suppressContextMenu}
+            >
                 <div className="p-2 text-xs font-semibold text-[var(--fg-tertiary)] uppercase tracking-wider flex items-center justify-between">
                     <span>Terminals</span>
                     <button onClick={addTerminal} className="hover:text-[var(--fg-primary)] transition-colors">

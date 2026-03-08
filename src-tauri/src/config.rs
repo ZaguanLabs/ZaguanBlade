@@ -94,7 +94,7 @@ impl ApiConfig {
         self.ollama_cloud_enabled = local.ollama_cloud_enabled;
         self.ollama_cloud_api_key = local.ollama_cloud_api_key.clone();
         self.openai_compat_enabled = local.openai_compat_enabled;
-        self.openai_compat_url = local.openai_compat_url.clone();
+        self.openai_compat_url = normalize_openai_compat_url(&local.openai_compat_url);
     }
 }
 
@@ -105,6 +105,15 @@ fn default_blade_url() -> String {
 
 fn default_ollama_url() -> String {
     "http://localhost:11434".to_string()
+}
+
+pub fn normalize_openai_compat_url(url: &str) -> String {
+    let trimmed = url.trim().trim_end_matches('/');
+    trimmed
+        .strip_suffix("/v1")
+        .unwrap_or(trimmed)
+        .trim_end_matches('/')
+        .to_string()
 }
 
 fn default_openai_compat_url() -> String {

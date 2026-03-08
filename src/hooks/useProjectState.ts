@@ -46,6 +46,10 @@ interface UseProjectStateReturn {
     isClosing: boolean;
 }
 
+function serializeProjectState(state: ProjectState): string {
+    return JSON.stringify(state);
+}
+
 export function useProjectState({
     projectPath,
     tabs,
@@ -65,6 +69,8 @@ export function useProjectState({
     const isDirtyRef = useRef(false);
     const isRestoringRef = useRef(false);
     const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const lastSavedSignatureRef = useRef<string | null>(null);
+    const lastObservedSignatureRef = useRef<string | null>(null);
 
     // Helper to construct state object
     const constructState = useCallback((): ProjectState | null => {
@@ -98,7 +104,6 @@ export function useProjectState({
     const saveState = useCallback(async () => {
         if (!projectPath) return;
 
-        // Optimization: Don't save if state hasn't changed (clean)
         if (!isDirtyRef.current) {
             return;
         }
@@ -106,9 +111,16 @@ export function useProjectState({
         const state = constructState();
         if (!state) return;
 
+        const signature = serializeProjectState(state);
+        if (signature === lastSavedSignatureRef.current) {
+            isDirtyRef.current = false;
+            return;
+        }
+
         try {
             await invoke('save_project_state', { stateData: state });
-            // console.debug('[ProjectState] Saved state for:', projectPath); // Disabled log for cleaner output
+            lastSavedSignatureRef.current = signature;
+            lastObservedSignatureRef.current = signature;
             isDirtyRef.current = false;
         } catch (e) {
             console.error('[ProjectState] Failed to save state:', e);
@@ -133,20 +145,23 @@ export function useProjectState({
         if (!projectPath || loaded) return;
 
         const load = async () => {
-            // Flag that we are restoring state to prevent dirty-marking
             isRestoringRef.current = true;
 
             const state = await loadState();
 
             if (state && onStateLoaded) {
+                const signature = serializeProjectState(state);
+                lastSavedSignatureRef.current = signature;
+                lastObservedSignatureRef.current = signature;
                 onStateLoaded(state);
             } else {
                 console.debug('[ProjectState] No saved state found');
+                lastSavedSignatureRef.current = null;
+                lastObservedSignatureRef.current = null;
             }
 
             setLoaded(true);
 
-            // Allow a small tick for React state updates to settle before enabling dirty tracking
             setTimeout(() => {
                 isRestoringRef.current = false;
             }, 100);
@@ -159,13 +174,25 @@ export function useProjectState({
     useEffect(() => {
         if (!projectPath || !loaded) return;
 
-        // If we represent a change but we are currently restoring, ignore it
         if (isRestoringRef.current) return;
 
-        // Mark as dirty
+        const state = constructState();
+        if (!state) return;
+
+        const signature = serializeProjectState(state);
+        if (signature === lastObservedSignatureRef.current) {
+            return;
+        }
+
+        lastObservedSignatureRef.current = signature;
+
+        if (signature === lastSavedSignatureRef.current) {
+            isDirtyRef.current = false;
+            return;
+        }
+
         isDirtyRef.current = true;
 
-        // Debounce save
         if (saveTimeoutRef.current) {
             clearTimeout(saveTimeoutRef.current);
         }

@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { listen } from '@tauri-apps/api/event';
+import { listen, emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { BladeDispatcher } from '../services/blade';
 
@@ -98,13 +98,17 @@ export function useCommandExecution() {
 
         const payload = `( ${parts.join('; ')} )`;
 
-        BladeDispatcher.terminal({
-            type: 'Spawn',
-            payload: {
-                id: terminalId,
-                command: payload,
-                interactive: true,
-            },
+        const title = commandToRun.trim().length > 0
+            ? `AI: ${commandToRun.trim().slice(0, 32)}`
+            : 'AI Command';
+
+        emit('open-terminal', {
+            id: terminalId,
+            cwd,
+            title,
+            command: payload,
+            focus: true,
+            transient: true,
         }).catch(async err => {
             pendingCommandsRef.current.delete(callId);
             await handleCommandComplete(callId, `Failed to start command terminal: ${String(err)}`, 1);
