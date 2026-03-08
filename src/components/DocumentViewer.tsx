@@ -17,6 +17,7 @@ interface DocumentViewerProps {
   suggestedName?: string;
   onClose: () => void;
   onSave?: (path: string) => void;
+  onImplementPlan?: (planText: string) => void;
 
 }
 
@@ -28,9 +29,14 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
   suggestedName,
   onClose,
   onSave,
+  onImplementPlan,
 
 }) => {
   const [isSaving, setIsSaving] = useState(false);
+  const trimmedContent = content.trim();
+  const sourceName = `${suggestedName || ''} ${title}`.toLowerCase();
+  const looksLikePlanDocument = sourceName.includes('plan') || /^\s*#{1,6}\s*plan\b/im.test(content);
+  const canImplementPlan = Boolean(onImplementPlan && trimmedContent && looksLikePlanDocument);
 
   const handleSave = async () => {
     if (!isEphemeral) return;
@@ -86,6 +92,14 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
+          {canImplementPlan && (
+            <button
+              onClick={() => onImplementPlan?.(trimmedContent)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 border border-emerald-500/25 transition-colors"
+            >
+              Implement
+            </button>
+          )}
           {isEphemeral && (
             <button
               onClick={handleSave}

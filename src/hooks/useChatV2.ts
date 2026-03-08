@@ -8,7 +8,7 @@ import { MessageBuffer } from '../utils/eventBuffer';
 import { ensureMessagesHaveBlocks } from '../utils/messageBlocks';
 import { EventNames, type RequestConfirmationPayload, type StructuredAction, type ToolExecutionCompletedPayload, type TodoItem } from '../types/events';
 import type { BladeEventEnvelope, ChatMention } from '../types/blade';
-import type { ChatMessage, ChatMode, ComposerMention, CommandExecution, ImageAttachment, MessageBlock, ModelInfo, QueuedRequest, StreamingState, ToolActivityState, ToolCall } from '../types/chat';
+import type { ChatImage, ChatMessage, ChatMode, ComposerMention, CommandExecution, ImageAttachment, MessageBlock, ModelInfo, QueuedRequest, StreamingState, ToolActivityState, ToolCall } from '../types/chat';
 
 const MAX_DELTA_OVERLAP_CHECK = 512;
 const MIN_SNAPSHOT_PREFIX = 48;
@@ -231,6 +231,98 @@ function createPlanSummaryMessage(todos: TodoItem[]): ChatMessage {
     };
 }
 
+function imageSignature(image: ChatImage | undefined, index: number): string {
+    if (!image) {
+        return `missing:${index}`;
+    }
+
+    const dataPreview = typeof image.data === 'string' ? image.data.slice(0, 48) : '';
+    return [
+        image.mime_type || '',
+        image.name || '',
+        image.size ?? '',
+        dataPreview,
+        index,
+    ].join('|');
+}
+
+function messageImageSignature(message: ChatMessage): string | null {
+    if (message.role !== 'User' || !message.images || message.images.length === 0) {
+        return null;
+    }
+
+    return [
+        message.role,
+        message.content,
+        ...message.images.map((image, index) => imageSignature(image, index)),
+    ].join('::');
+}
+
+function reconcileMessageImagePreviews(previousMessages: ChatMessage[], nextMessages: ChatMessage[]): ChatMessage[] {
+    if (previousMessages.length === 0 || nextMessages.length === 0) {
+        return nextMessages;
+    }
+
+    const previousById = new Map<string, ChatMessage>();
+    const previousByImageSignature = new Map<string, ChatMessage>();
+
+    for (const message of previousMessages) {
+        if (message.id) {
+            previousById.set(message.id, message);
+        }
+        const signature = messageImageSignature(message);
+        if (signature) {
+            previousByImageSignature.set(signature, message);
+        }
+    }
+
+    let changed = false;
+    const reconciled = nextMessages.map((message) => {
+        if (message.role !== 'User' || !message.images || message.images.length === 0) {
+            return message;
+        }
+
+        const previous = (message.id ? previousById.get(message.id) : undefined)
+            || previousByImageSignature.get(messageImageSignature(message) || '');
+        if (!previous?.images || previous.images.length !== message.images.length) {
+            return message;
+        }
+
+        let imageChanged = false;
+        const nextImages = message.images.map((image, index) => {
+            const previousImage = previous.images?.[index] as ImageAttachment | undefined;
+            if (!previousImage) {
+                return image;
+            }
+
+            const nextImage = image as ImageAttachment;
+            const mergedImage: ImageAttachment = {
+                ...nextImage,
+                dataUrl: nextImage.dataUrl || previousImage.dataUrl,
+                thumbnailUrl: nextImage.thumbnailUrl || previousImage.thumbnailUrl,
+            };
+
+            if (mergedImage.dataUrl !== nextImage.dataUrl || mergedImage.thumbnailUrl !== nextImage.thumbnailUrl) {
+                imageChanged = true;
+            }
+
+            return mergedImage;
+        });
+
+        if (!imageChanged) {
+            return message;
+        }
+
+        changed = true;
+        return {
+            ...message,
+            images: nextImages,
+        };
+    });
+
+    return changed ? reconciled : nextMessages;
+}
+
 export function useChatV2() {
     const editorState = useEditorState();
     const [state, dispatch] = useReducer(chatReducer, initialState);
@@ -276,6 +368,13 @@ export function useChatV2() {
             return;
         }
         dispatch({ type: 'messages/replace', messages: updater });
+    }, []);
+
+    const replaceMessagesPreservingImagePreviews = useCallback((incomingMessages: ChatMessage[]) => {
+        dispatch({
+            type: 'messages/replace',
+            messages: reconcileMessageImagePreviews(messagesRef.current, incomingMessages),
+        });
     }, []);
 
     const clearPendingTimers = useCallback(() => {
@@ -638,7 +737,7 @@ export function useChatV2() {
                     invoke<boolean>('get_chat_status'),
                 ]);
 
-                dispatch({ type: 'messages/replace', messages: ensureMessagesHaveBlocks(history) });
+                replaceMessagesPreservingImagePreviews(ensureMessagesHaveBlocks(history));
                 dispatch({ type: 'models/set', models: modelList });
 
                 if (isStreaming) {
@@ -1420,18 +1519,18 @@ export function useChatV2() {
     const loadConversation = useCallback((messages: ChatMessage[]) => {
         resetStreamingState();
         firstDispatchRef.current = true;
-        dispatch({ type: 'messages/replace', messages });
+        replaceMessagesPreservingImagePreviews(messages);
         dispatch({ type: 'todos/set', todos: [] });
         dispatch({ type: 'queue/clear' });
-    }, [resetStreamingState]);
+    }, [replaceMessagesPreservingImagePreviews, resetStreamingState]);
 
     const setConversation = useCallback((messages: ChatMessage[] | ((current: ChatMessage[]) => ChatMessage[])) => {
         if (typeof messages === 'function') {
             setMessages(messages);
             return;
         }
-        dispatch({ type: 'messages/replace', messages });
-    }, [setMessages]);
+        replaceMessagesPreservingImagePreviews(messages);
+    }, [replaceMessagesPreservingImagePreviews, setMessages]);
 
     const setActiveTodos = useCallback((value: TodoItem[] | ((current: TodoItem[]) => TodoItem[])) => {
         if (typeof value === 'function') {

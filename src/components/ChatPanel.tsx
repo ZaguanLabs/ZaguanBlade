@@ -18,7 +18,9 @@ import { GlobalChangeActions } from './editor/GlobalChangeActions';
 import { TaskPanel } from './TaskPanel';
 import { QueuePanel } from './QueuePanel';
 import type { UncommittedChange } from '../types/uncommitted';
-import { deriveChatRows } from '../utils/chatTimeline';
+import { deriveChatRows, estimateChatRowHeight, findFirstUnvirtualizedChatRowIndex } from '../utils/chatTimeline';
+
+const VIRTUALIZATION_OVERSCAN_PX = 720;
 
 interface ResearchProgress {
     message: string;
@@ -54,6 +56,32 @@ interface ChatPanelProps {
     activeTodos: TodoItem[];
     queuedRequests: QueuedRequest[];
     deleteQueuedRequest: (index: number) => void;
+    onImplementPlan: (planText: string) => void;
+}
+
+function getPlanTextFromMessage(message: ChatMessageType): string | null {
+    const content = message.content?.trim();
+    if (content) {
+        return content;
+    }
+
+    const blockText = (message.blocks || [])
+        .filter((block): block is Extract<typeof block, { type: 'text' }> => block.type === 'text')
+        .map((block) => block.content.trim())
+        .filter(Boolean)
+        .join('\n\n')
+        .trim();
+    if (blockText) {
+        return blockText;
+    }
+
+    if (message.planSummary?.todos?.length) {
+        return message.planSummary.todos
+            .map((todo, index) => `${index + 1}. ${todo.content}`)
+            .join('\n');
+    }
+
+    return null;
 }
 
 const pendingResponseWords = [
@@ -125,6 +153,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     activeTodos,
     queuedRequests,
     deleteQueuedRequest,
+    onImplementPlan,
 }) => {
     const { t } = useTranslation();
     const { stopCommandExecution } = useCommandExecution();
@@ -137,6 +166,11 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     const [composerPrefill, setComposerPrefill] = useState<QueuedRequest | null>(null);
     const [showScrollToBottom, setShowScrollToBottom] = useState(false);
     const showScrollToBottomRef = useRef(false);
+    const [scrollMetrics, setScrollMetrics] = useState({
+        scrollTop: 0,
+        viewportHeight: 0,
+        viewportWidth: 0,
+    });
 
     // Check API Key
     const checkApiKey = useCallback(async () => {
@@ -158,6 +192,45 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
 
     const scrollContainerRef = useRef<HTMLDivElement>(null);
 
+    useEffect(() => {
+        const container = scrollContainerRef.current;
+        if (!container) {
+            return;
+        }
+
+        const updateMetrics = () => {
+            setScrollMetrics((current) => {
+                const next = {
+                    scrollTop: container.scrollTop,
+                    viewportHeight: container.clientHeight,
+                    viewportWidth: container.clientWidth,
+                };
+                if (
+                    current.scrollTop === next.scrollTop
+                    && current.viewportHeight === next.viewportHeight
+                    && current.viewportWidth === next.viewportWidth
+                ) {
+                    return current;
+                }
+                return next;
+            });
+        };
+
+        updateMetrics();
+
+        if (typeof ResizeObserver === 'undefined') {
+            return;
+        }
+
+        const observer = new ResizeObserver(() => {
+            updateMetrics();
+        });
+        observer.observe(container);
+        return () => {
+            observer.disconnect();
+        };
+    }, [activeTab]);
+
     const messageCount = messages.length;
     const firstMessageId = messages[0]?.id;
     const lastMessage = messages[messages.length - 1];
@@ -168,6 +241,69 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     const lastMessageBlockCount = lastMessage?.blocks?.length ?? 0;
     const shouldShowPendingResponseIndicator = loading && lastMessage?.role !== 'Assistant';
     const chatRows = useMemo(() => deriveChatRows(messages, loading, pendingActions), [loading, messages, pendingActions]);
+    const firstUnvirtualizedRowIndex = useMemo(
+        () => findFirstUnvirtualizedChatRowIndex(chatRows, loading),
+        [chatRows, loading]
+    );
+    const virtualizedRows = useMemo(
+        () => chatRows.slice(0, firstUnvirtualizedRowIndex),
+        [chatRows, firstUnvirtualizedRowIndex]
+    );
+    const tailRows = useMemo(
+        () => chatRows.slice(firstUnvirtualizedRowIndex),
+        [chatRows, firstUnvirtualizedRowIndex]
+    );
+    const virtualizedRowHeights = useMemo(
+        () => virtualizedRows.map((row) => estimateChatRowHeight(row, { viewportWidthPx: scrollMetrics.viewportWidth })),
+        [scrollMetrics.viewportWidth, virtualizedRows]
+    );
+    const virtualizedRowOffsets = useMemo(() => {
+        const offsets: number[] = [];
+        let runningTotal = 0;
+        for (const height of virtualizedRowHeights) {
+            offsets.push(runningTotal);
+            runningTotal += height;
+        }
+        return offsets;
+    }, [virtualizedRowHeights]);
+    const totalVirtualizedHeight = useMemo(
+        () => virtualizedRowHeights.reduce((sum, height) => sum + height, 0),
+        [virtualizedRowHeights]
+    );
+    const visibleVirtualRange = useMemo(() => {
+        const rowCount = virtualizedRows.length;
+        if (rowCount === 0) {
+            return { startIndex: 0, endIndex: 0, topSpacerHeight: 0, bottomSpacerHeight: 0 };
+        }
+
+        const viewportStart = Math.max(0, scrollMetrics.scrollTop - VIRTUALIZATION_OVERSCAN_PX);
+        const viewportEnd = scrollMetrics.scrollTop + scrollMetrics.viewportHeight + VIRTUALIZATION_OVERSCAN_PX;
+
+        let startIndex = 0;
+        while (
+            startIndex < rowCount
+            && virtualizedRowOffsets[startIndex] + virtualizedRowHeights[startIndex] < viewportStart
+        ) {
+            startIndex += 1;
+        }
+
+        let endIndex = startIndex;
+        while (endIndex < rowCount && virtualizedRowOffsets[endIndex] < viewportEnd) {
+            endIndex += 1;
+        }
+
+        const topSpacerHeight = virtualizedRowOffsets[startIndex] ?? totalVirtualizedHeight;
+        const renderedHeight = virtualizedRowHeights
+            .slice(startIndex, endIndex)
+            .reduce((sum, height) => sum + height, 0);
+        const bottomSpacerHeight = Math.max(0, totalVirtualizedHeight - topSpacerHeight - renderedHeight);
+
+        return { startIndex, endIndex, topSpacerHeight, bottomSpacerHeight };
+    }, [scrollMetrics.scrollTop, scrollMetrics.viewportHeight, totalVirtualizedHeight, virtualizedRowHeights, virtualizedRowOffsets, virtualizedRows.length]);
+    const visibleVirtualRows = useMemo(
+        () => virtualizedRows.slice(visibleVirtualRange.startIndex, visibleVirtualRange.endIndex),
+        [virtualizedRows, visibleVirtualRange.endIndex, visibleVirtualRange.startIndex]
+    );
     const streamingSignature = useMemo(() => {
         if (!lastMessage) return '';
         return [
@@ -240,6 +376,21 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
 
     const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
         const target = e.target as HTMLDivElement;
+        setScrollMetrics((current) => {
+            const next = {
+                scrollTop: target.scrollTop,
+                viewportHeight: target.clientHeight,
+                viewportWidth: target.clientWidth,
+            };
+            if (
+                current.scrollTop === next.scrollTop
+                && current.viewportHeight === next.viewportHeight
+                && current.viewportWidth === next.viewportWidth
+            ) {
+                return current;
+            }
+            return next;
+        });
         const isBottom = Math.abs(target.scrollHeight - target.scrollTop - target.clientHeight) < 100;
         isUserAtBottomRef.current = isBottom;
         const nextShowScrollToBottom = !isBottom && messageCount > 0;
@@ -297,6 +448,25 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         setComposerPrefill(null);
     }, []);
 
+    const latestPlanText = useMemo(() => {
+        for (let idx = messages.length - 1; idx >= 0; idx -= 1) {
+            const message = messages[idx];
+            if (message.role !== 'Assistant') {
+                continue;
+            }
+            const planText = getPlanTextFromMessage(message);
+            if (planText) {
+                return planText;
+            }
+        }
+        return null;
+    }, [messages]);
+
+    const handleImplementPlan = useCallback(() => {
+        if (!latestPlanText) return;
+        onImplementPlan(latestPlanText);
+    }, [latestPlanText, onImplementPlan]);
+
     const showProgressIndicator = loading
         && researchProgress?.isActive
         && researchProgress.stage.toLowerCase() !== 'considering_next_steps';
@@ -317,7 +487,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                     className="relative flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent"
                     onScroll={handleScroll}
                 >
-                    <div className="mx-auto flex max-w-4xl flex-col gap-1 px-3 py-5 md:px-4">
+                    <div className="mx-auto flex w-full max-w-none flex-col gap-0.5 px-0.5 py-4 md:px-1">
                         {messages.length === 0 && (
                             <div className="mx-4 mt-10 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/70 px-6 py-8 text-center shadow-[0_24px_80px_rgba(0,0,0,0.25)] backdrop-blur-md">
                                 <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-emerald-500/20 bg-emerald-500/10 text-2xl shadow-[0_0_40px_rgba(16,185,129,0.15)]">
@@ -339,7 +509,32 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                             </div>
                         )}
 
-                        {chatRows.map((row) => (
+                        {visibleVirtualRange.topSpacerHeight > 0 && (
+                            <div style={{ height: `${visibleVirtualRange.topSpacerHeight}px` }} />
+                        )}
+
+                        {visibleVirtualRows.map((row) => (
+                            <ChatMessage
+                                key={row.key}
+                                message={row.message}
+                                pendingActions={row.pendingActions}
+                                onApproveCommand={row.pendingActions ? handleApproveCommand : undefined}
+                                onSkipCommand={row.pendingActions ? handleSkipCommand : undefined}
+                                onApproveSingleCommand={row.pendingActions ? handleApproveSingleCommand : undefined}
+                                onSkipSingleCommand={row.pendingActions ? handleSkipSingleCommand : undefined}
+                                isContinued={row.isContinued}
+                                isActive={row.isActive}
+                                onUndoTool={onUndoTool}
+                                onStopCommand={handleStopCommand}
+                                onOpenFile={onOpenFile}
+                            />
+                        ))}
+
+                        {visibleVirtualRange.bottomSpacerHeight > 0 && (
+                            <div style={{ height: `${visibleVirtualRange.bottomSpacerHeight}px` }} />
+                        )}
+
+                        {tailRows.map((row) => (
                             <ChatMessage
                                 key={row.key}
                                 message={row.message}
@@ -406,6 +601,21 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                 onEditRequest={handleEditQueuedRequest}
                 onDeleteRequest={deleteQueuedRequest}
             />
+
+            {chatMode === 'planning' && latestPlanText && (
+                <div className="px-3 pb-1 pt-2">
+                    <div className="flex justify-end">
+                        <button
+                            type="button"
+                            onClick={handleImplementPlan}
+                            disabled={loading || !hasApiKey}
+                            className="inline-flex items-center rounded-md border border-emerald-500/30 bg-emerald-500/12 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-200 transition-colors hover:border-emerald-400/50 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                            Implement
+                        </button>
+                    </div>
+                </div>
+            )}
 
             <CommandCenter
                 onSend={sendMessage}

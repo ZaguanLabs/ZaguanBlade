@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { GitFileStatus, GitStatusSummary, CommitPreflightResult } from '../hooks/useGitStatus';
 import { Sparkles, GitCommit, Upload, ChevronDown, ChevronRight, Plus, Minus, RefreshCw, AlertTriangle } from 'lucide-react';
@@ -51,6 +51,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
 }) => {
     const { t } = useTranslation();
     const [commitMessage, setCommitMessage] = useState('');
+    const commitTextareaRef = useRef<HTMLTextAreaElement>(null);
     const [actionError, setActionError] = useState<string | null>(null);
     const [preflightWarning, setPreflightWarning] = useState<string | null>(null);
     const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -73,6 +74,16 @@ export const GitPanel: React.FC<GitPanelProps> = ({
         () => files.filter(file => file.unstaged || file.untracked),
         [files]
     );
+
+    const resizeCommitTextarea = useCallback((textarea?: HTMLTextAreaElement | null) => {
+        if (!textarea) return;
+        textarea.style.height = 'auto';
+        textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`;
+    }, []);
+
+    useEffect(() => {
+        resizeCommitTextarea(commitTextareaRef.current);
+    }, [commitMessage, resizeCommitTextarea]);
 
     const runAction = async (id: string, action: () => Promise<void>) => {
         setActionError(null);
@@ -245,10 +256,15 @@ export const GitPanel: React.FC<GitPanelProps> = ({
 
                             {/* Commit message textarea */}
                             <textarea
-                                className="w-full min-h-[60px] bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg p-2.5 text-[11px] text-[var(--fg-primary)] placeholder-[var(--fg-secondary)] resize-none focus:outline-none focus:border-[var(--accent-primary)]/50 focus:ring-1 focus:ring-[var(--accent-primary)]/20 transition-all"
+                                ref={commitTextareaRef}
+                                rows={5}
+                                className="w-full min-h-[96px] max-h-[180px] overflow-y-auto bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg p-2.5 text-[11px] text-[var(--fg-primary)] placeholder-[var(--fg-secondary)] resize-none focus:outline-none focus:border-[var(--accent-primary)]/50 focus:ring-1 focus:ring-[var(--accent-primary)]/20 transition-all"
                                 placeholder={t('git.commitMessagePlaceholder')}
                                 value={commitMessage}
-                                onChange={e => setCommitMessage(e.target.value)}
+                                onChange={e => {
+                                    setCommitMessage(e.target.value);
+                                    resizeCommitTextarea(e.currentTarget);
+                                }}
                             />
 
                             {/* Action buttons row */}

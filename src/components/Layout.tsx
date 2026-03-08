@@ -136,6 +136,21 @@ const AppLayoutInner: React.FC = () => {
         handleFileSelect(path);
     }, [handleFileSelect]);
 
+    const handleImplementPlan = useCallback((planText: string) => {
+        const trimmedPlan = planText.trim();
+        if (!trimmedPlan) {
+            return;
+        }
+
+        chat.setChatMode('code');
+        chat.sendMessage(
+            `Implement this plan in the current workspace.\n\n${trimmedPlan}`,
+            undefined,
+            undefined,
+            'code'
+        );
+    }, [chat]);
+
     // Tauri event listeners (file open, research progress, change-applied, etc.)
     const { researchProgress, finalizeResearchActivities } = useLayoutEvents({
         setTabs,
@@ -601,6 +616,7 @@ const AppLayoutInner: React.FC = () => {
                                                         suggestedName={tab.suggestedName}
                                                         onClose={() => handleTabClose(tab.id)}
                                                         onSave={(savedPath) => handleEphemeralSave(tab.id, savedPath)}
+                                                        onImplementPlan={handleImplementPlan}
                                                     />
                                                 </div>
                                             );
@@ -701,6 +717,7 @@ const AppLayoutInner: React.FC = () => {
                                 activeTodos={chat.activeTodos}
                                 queuedRequests={chat.messageQueue}
                                 deleteQueuedRequest={chat.deleteQueuedRequest}
+                                onImplementPlan={handleImplementPlan}
                             />
                         </Suspense>
                     </div>

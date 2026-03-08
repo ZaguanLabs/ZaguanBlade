@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import type { ChatMessage as ChatMessageType, ChatImage, ImageAttachment, ToolCall, CommandExecution, MessageBlock } from '../types/chat';
+import type { ChatMessage as ChatMessageType, ChatImage, ImageAttachment } from '../types/chat';
 import { User, Bot, Terminal, Brain, ChevronDown, ChevronRight, Loader2, Copy, RotateCcw, Pencil, MessageSquare, Check, FileText, Folder } from 'lucide-react';
 import { ToolCallDisplay } from './ToolCallDisplay';
 import { CommandOutputDisplay } from './CommandOutputDisplay';
 import { CommandApprovalCard } from './CommandApprovalCard';
 import { useContextMenu, ContextMenuItem } from './ui/ContextMenu';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { deriveMessageRenderSegments, type DerivedActivityGroupItem } from '../utils/chatTimeline';
 
 const REVERTIBLE_TOOLS = new Set([
     'apply_patch',
@@ -33,16 +34,13 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
 
     const displayContent = cleanContent || content;
 
-    // Auto-expand when streaming starts, auto-collapse when content arrives
+    // Auto-expand while reasoning is active, auto-collapse when reasoning ends
     useEffect(() => {
-        // If message just became active and has no content yet, expand (unless user toggled)
-        if (isActive && !wasActiveRef.current && !hasContent && !userToggled) {
+        if (isActive && !wasActiveRef.current && !userToggled) {
             setIsExpanded(true);
         }
 
-        // If content starts arriving (transition from no content to content), collapse
-        // Only auto-collapse if user hasn't manually toggled
-        if (hasContent && !hadContentRef.current && isExpanded && !userToggled) {
+        if (!isActive && wasActiveRef.current && isExpanded && !userToggled) {
             setIsExpanded(false);
         }
 
@@ -82,13 +80,8 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
                     <Brain className={`w-3 h-3 flex-shrink-0 ${isStreaming ? 'text-purple-400 animate-pulse' : 'text-zinc-600'}`} />
                     <span className={`font-mono text-[9px] uppercase tracking-wider flex-shrink-0 ${isStreaming ? 'text-purple-400' : 'text-zinc-600'
                         }`}>
-                        {isStreaming ? 'Reasoning' : 'Thought Process'}
+                        Reasoning
                     </span>
-                    {!isExpanded && displayContent && (
-                        <span className="text-[10px] text-zinc-500 truncate font-mono ml-2">
-                            {displayContent.slice(0, 80)}...
-                        </span>
-                    )}
                 </div>
                 {isStreaming && (
                     <Loader2 className="w-2.5 h-2.5 text-purple-400/60 animate-spin mr-1 flex-shrink-0" />
@@ -220,12 +213,7 @@ const ReferencedPathsDisplay: React.FC<{
 };
 
 type ActivityGroupItem =
-    | { kind: 'tool_call'; id: string; toolCall: ToolCall }
-    | { kind: 'command_execution'; id: string; commandExecution: CommandExecution };
-
-type RenderSegment =
-    | { kind: 'block'; block: MessageBlock; index: number }
-    | { kind: 'activity_group'; id: string; items: ActivityGroupItem[] };
+    DerivedActivityGroupItem;
 
 const ActivityGroupDisplay: React.FC<{
     items: ActivityGroupItem[];
@@ -289,7 +277,7 @@ interface ChatMessageProps {
 }
 
 const StreamingTextPreview: React.FC<{ content: string }> = ({ content }) => (
-    <div className="whitespace-pre-wrap break-words text-[13px] font-medium leading-7 text-zinc-200">
+    <div className="whitespace-pre-wrap break-words text-[13px] font-medium leading-7 text-stone-300">
         {content}
     </div>
 );
@@ -363,64 +351,10 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
             name: name || `Attachment ${index + 1}`
         }];
     });
-    const renderSegments = useMemo<RenderSegment[]>(() => {
-        if (!message.blocks || message.blocks.length === 0) {
-            return [];
-        }
-
-        const segments: RenderSegment[] = [];
-        let index = 0;
-
-        while (index < message.blocks.length) {
-            const block = message.blocks[index];
-            if (block.type !== 'tool_call' && block.type !== 'command_execution') {
-                segments.push({ kind: 'block', block, index });
-                index += 1;
-                continue;
-            }
-
-            const items: ActivityGroupItem[] = [];
-            let cursor = index;
-
-            while (cursor < message.blocks.length) {
-                const candidate = message.blocks[cursor];
-                if (candidate.type === 'tool_call') {
-                    const toolCall = message.tool_calls?.find((tc) => tc.id === candidate.id);
-                    const isRunCommand = toolCall?.function.name === 'run_command';
-                    const hasPendingApproval = !!pendingActions && pendingActions.length > 0;
-                    const hasExecutionBlock = message.blocks?.some((b) => b.type === 'command_execution' && b.id === candidate.id);
-                    if (toolCall && !(isRunCommand && hasPendingApproval) && !(isRunCommand && hasExecutionBlock)) {
-                        items.push({ kind: 'tool_call', id: candidate.id, toolCall });
-                    }
-                    cursor += 1;
-                    continue;
-                }
-
-                if (candidate.type === 'command_execution') {
-                    const commandExecution = message.commandExecutions?.find((execution) => execution.id === candidate.id);
-                    if (commandExecution) {
-                        items.push({ kind: 'command_execution', id: candidate.id, commandExecution });
-                    }
-                    cursor += 1;
-                    continue;
-                }
-
-                break;
-            }
-
-            if (items.length > 0) {
-                segments.push({
-                    kind: 'activity_group',
-                    id: items.map((item) => item.id).join(':'),
-                    items,
-                });
-            }
-
-            index = cursor;
-        }
-
-        return segments;
-    }, [message.blocks, message.commandExecutions, message.tool_calls, pendingActions]);
+    const renderSegments = useMemo(
+        () => deriveMessageRenderSegments(message, pendingActions),
+        [message, pendingActions]
+    );
 
     // Context menu for chat messages
     const handleContextMenu = useCallback((e: React.MouseEvent) => {
@@ -489,57 +423,54 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
 
     return (
         <div
-            className={`group px-3 ${isContinued ? 'pt-0.5 pb-1.5' : 'pt-3 pb-3'} ${isTool ? 'opacity-70' : ''}`}
+            className={`group px-1.5 ${isContinued ? 'pt-0 pb-0.5' : 'pt-1.5 pb-1.5'} ${isTool ? 'opacity-70' : ''}`}
             onContextMenu={handleContextMenu}
         >
-            <div className={`relative flex gap-2.5 rounded-xl border px-3 py-2.5 transition-colors ${
+            <div className={`relative w-full rounded-xl border px-3 py-2.5 transition-colors ${
                 isUser
                     ? 'border-zinc-800/80 bg-zinc-900/55 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]'
                     : isAssistant
                         ? 'border-zinc-800/70 bg-zinc-950/35 shadow-[0_12px_32px_rgba(0,0,0,0.12)]'
                         : 'border-zinc-800/70 bg-zinc-950/40'
             }`}>
-                <div className="w-7 shrink-0 flex flex-col items-center pt-0.5">
-                    {!isContinued ? (
-                        <div className="opacity-90 transition-opacity group-hover:opacity-100">
-                            {isUser && <div className="flex h-7 w-7 items-center justify-center rounded-xl border border-zinc-700/80 bg-zinc-800/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"><User className="h-3.5 w-3.5 text-zinc-200" /></div>}
-                            {isAssistant && <div className="flex h-7 w-7 items-center justify-center rounded-xl border border-zinc-700/70 bg-zinc-900/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"><Bot className="h-3.5 w-3.5 text-zinc-200" /></div>}
-                            {isSystem && <div className="flex h-7 w-7 items-center justify-center rounded-xl border border-yellow-500/20 bg-yellow-500/10"><Terminal className="h-3.5 w-3.5 text-yellow-500" /></div>}
-                            {isTool && <div className="flex h-7 w-7 items-center justify-center rounded-xl border border-purple-500/20 bg-purple-500/10"><Terminal className="h-3.5 w-3.5 text-purple-400" /></div>}
-                        </div>
-                    ) : (
-                        <div className="h-full w-px rounded-full bg-zinc-800/70" />
-                    )}
-                </div>
-
-                <div className="min-w-0 flex-1 overflow-hidden space-y-1.5">
+                <div className="min-w-0 overflow-hidden space-y-2">
                     {!isContinued && (
-                        <div className="mb-0.5 flex min-h-5 items-center gap-2">
-                            <span className={`rounded-md border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] ${
-                                isUser
-                                    ? 'border-zinc-700/80 bg-zinc-800/70 text-zinc-300'
-                                    : isAssistant
-                                        ? 'border-zinc-800/80 bg-zinc-900/50 text-zinc-400'
-                                        : isSystem
-                                            ? 'border-yellow-500/20 bg-yellow-500/10 text-yellow-300'
-                                            : 'border-purple-500/20 bg-purple-500/10 text-purple-300'
-                            }`}>
-                                {isUser ? 'You' : (isAssistant ? 'Assistant' : message.role)}
-                            </span>
-                            {isActive && isAssistant && (
-                                <span className="inline-flex items-center gap-1 rounded-md border border-zinc-800/80 bg-zinc-900/50 px-1.5 py-0.5 text-[9px] font-medium text-zinc-400">
-                                    <Loader2 className="h-2.5 w-2.5 animate-spin" />
-                                    Live
+                        <div className="flex flex-col gap-2">
+                            <div className="flex min-h-6 items-center gap-2">
+                                <div className="opacity-90 transition-opacity group-hover:opacity-100">
+                                    {isUser && <div className="flex h-6 w-6 items-center justify-center rounded-lg border border-zinc-700/80 bg-zinc-800/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"><User className="h-3 w-3 text-zinc-200" /></div>}
+                                    {isAssistant && <div className="flex h-6 w-6 items-center justify-center rounded-lg border border-zinc-700/70 bg-zinc-900/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"><Bot className="h-3 w-3 text-zinc-200" /></div>}
+                                    {isSystem && <div className="flex h-6 w-6 items-center justify-center rounded-lg border border-yellow-500/20 bg-yellow-500/10"><Terminal className="h-3 w-3 text-yellow-500" /></div>}
+                                    {isTool && <div className="flex h-6 w-6 items-center justify-center rounded-lg border border-purple-500/20 bg-purple-500/10"><Terminal className="h-3 w-3 text-purple-400" /></div>}
+                                </div>
+                                <span className={`rounded-md border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] ${
+                                    isUser
+                                        ? 'border-zinc-700/80 bg-zinc-800/70 text-zinc-300'
+                                        : isAssistant
+                                            ? 'border-zinc-800/80 bg-zinc-900/50 text-zinc-400'
+                                            : isSystem
+                                                ? 'border-yellow-500/20 bg-yellow-500/10 text-yellow-300'
+                                                : 'border-purple-500/20 bg-purple-500/10 text-purple-300'
+                                }`}>
+                                    {isUser ? 'You' : (isAssistant ? 'Assistant' : message.role)}
                                 </span>
-                            )}
-                            {isTool && message.tool_call_id && (
-                                <span className="rounded-md border border-zinc-800 bg-zinc-950 px-1.5 py-0.5 text-[9px] font-mono text-zinc-500">
-                                    {message.tool_call_id.slice(0, 8)}
-                                </span>
-                            )}
+                                {isActive && isAssistant && (
+                                    <span className="inline-flex items-center gap-1 rounded-md border border-zinc-800/80 bg-zinc-900/50 px-1.5 py-0.5 text-[9px] font-medium text-zinc-400">
+                                        <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                                        Live
+                                    </span>
+                                )}
+                                {isTool && message.tool_call_id && (
+                                    <span className="rounded-md border border-zinc-800 bg-zinc-950 px-1.5 py-0.5 text-[9px] font-mono text-zinc-500">
+                                        {message.tool_call_id.slice(0, 8)}
+                                    </span>
+                                )}
+                            </div>
+                            <div className="h-px w-[95%] self-center bg-zinc-800/80" />
                         </div>
                     )}
 
+                <div className="space-y-1.5">
                 {imageAttachments.length > 0 && (
                     <div className="mb-2">
                         <div className="flex flex-wrap gap-2">
@@ -593,7 +524,8 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 return block.type === 'reasoning' ? idx : lastIdx;
                             }, -1);
                             
-                            return renderSegments.map((segment) => {
+                            return renderSegments.map((segment, segmentIndex) => {
+                                const previousSegment = segmentIndex > 0 ? renderSegments[segmentIndex - 1] : null;
                                 if (segment.kind === 'activity_group') {
                                     return (
                                         <ActivityGroupDisplay
@@ -621,6 +553,9 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 } else if (block.type === 'text') {
                                 return (
                                     <div key={block.id || `text-${idx}`} className="mb-2 select-text">
+                                        {previousSegment?.kind === 'activity_group' && (
+                                            <div className="mb-3 h-px w-full bg-zinc-800/80" />
+                                        )}
                                         {isActive ? (
                                             <StreamingTextPreview content={block.content} />
                                         ) : (
@@ -770,6 +705,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 )}
                                 {finalText && (
                                     <div className="select-text">
+                                        {hasToolCalls && <div className="mb-3 h-px w-full bg-zinc-800/80" />}
                                         {isActive ? (
                                             <StreamingTextPreview content={finalText} />
                                         ) : (
@@ -795,6 +731,8 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                         );
                     })()
                 )}
+
+                </div>
 
                 {hasChunkCounter && (
                     <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-zinc-800/80 bg-zinc-950/70 px-2.5 py-1 text-[10px] font-mono text-zinc-500">

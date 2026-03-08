@@ -34,6 +34,8 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
     const fitAddonRef = useRef<FitAddon | null>(null);
     const terminalBufferRef = useRef<TerminalBuffer | null>(null);
     const fitIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const initialCwdRef = useRef(cwd);
+    const initialCommandRef = useRef(command);
     const { showMenu } = useContextMenu();
 
     // Context menu handler
@@ -257,7 +259,7 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
         const initBackend = async () => {
             try {
                 // Use provided cwd or fall back to workspace root
-                let terminalCwd = cwd;
+                let terminalCwd = initialCwdRef.current;
                 if (!terminalCwd) {
                     const workspaceRoot = await invoke<string | null>("get_current_workspace");
                     terminalCwd = workspaceRoot || undefined;
@@ -267,7 +269,7 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
                     type: "Spawn",
                     payload: {
                         id,
-                        command,
+                        command: initialCommandRef.current,
                         cwd: terminalCwd,
                         interactive: true,
                     }
@@ -397,6 +399,11 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
             unlistenLegacy.then((unlisten) => unlisten());
             unlistenV11.then((unlisten) => unlisten());
 
+            BladeDispatcher.terminal({
+                type: "Kill",
+                payload: { id }
+            }).catch(() => {});
+
             // Dispose logic
             try {
                 // We don't dispose the term immediately to avoid race conditions if the ref is used elsewhere?
@@ -407,7 +414,7 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
             xtermRef.current = null;
             terminalBufferRef.current = null;
         };
-    }, [command, cwd, id]);
+    }, [id]);
 
     return (
         <div

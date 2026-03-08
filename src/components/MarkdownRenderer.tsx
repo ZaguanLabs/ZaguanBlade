@@ -136,7 +136,7 @@ const markdownComponents = {
     // Paragraphs
     p({ children }: { children?: React.ReactNode }) {
         return (
-            <p className="text-[12px] font-medium text-zinc-300 leading-relaxed my-2 first:mt-0 last:mb-0">
+            <p className="text-[12px] font-medium text-stone-400 leading-relaxed my-2 first:mt-0 last:mb-0">
                 {children}
             </p>
         );
@@ -145,28 +145,28 @@ const markdownComponents = {
     // Headings
     h1({ children }: { children?: React.ReactNode }) {
         return (
-            <h1 className="text-[15px] font-semibold text-zinc-200 mt-4 mb-2 first:mt-0 border-b border-zinc-800 pb-1">
+            <h1 className="text-[15px] font-semibold text-stone-300 mt-4 mb-2 first:mt-0 border-b border-zinc-800 pb-1">
                 {children}
             </h1>
         );
     },
     h2({ children }: { children?: React.ReactNode }) {
         return (
-            <h2 className="text-[14px] font-semibold text-zinc-200 mt-4 mb-2 first:mt-0 border-b border-zinc-800/50 pb-1">
+            <h2 className="text-[14px] font-semibold text-stone-300 mt-4 mb-2 first:mt-0 border-b border-zinc-800/50 pb-1">
                 {children}
             </h2>
         );
     },
     h3({ children }: { children?: React.ReactNode }) {
         return (
-            <h3 className="text-[13px] font-semibold text-zinc-200 mt-3 mb-1.5 first:mt-0">
+            <h3 className="text-[13px] font-semibold text-stone-300 mt-3 mb-1.5 first:mt-0">
                 {children}
             </h3>
         );
     },
     h4({ children }: { children?: React.ReactNode }) {
         return (
-            <h4 className="text-[12px] font-semibold text-zinc-200 mt-2 mb-1 first:mt-0">
+            <h4 className="text-[12px] font-semibold text-stone-300 mt-2 mb-1 first:mt-0">
                 {children}
             </h4>
         );
@@ -189,7 +189,7 @@ const markdownComponents = {
     },
     li({ children }: { children?: React.ReactNode }) {
         return (
-            <li className="text-[12px] font-medium text-zinc-300 leading-relaxed pl-1">
+            <li className="text-[12px] font-medium text-stone-400 leading-relaxed pl-1">
                 {children}
             </li>
         );
@@ -211,18 +211,18 @@ const markdownComponents = {
 
     // Strong/Bold
     strong({ children }: { children?: React.ReactNode }) {
-        return <strong className="font-semibold text-zinc-200">{children}</strong>;
+        return <strong className="font-semibold text-stone-300">{children}</strong>;
     },
 
     // Emphasis/Italic
     em({ children }: { children?: React.ReactNode }) {
-        return <em className="italic text-zinc-300">{children}</em>;
+        return <em className="italic text-stone-400">{children}</em>;
     },
 
     // Blockquotes
     blockquote({ children }: { children?: React.ReactNode }) {
         return (
-            <blockquote className="my-3 pl-3 border-l-2 border-emerald-500/50 text-zinc-400 italic">
+            <blockquote className="my-3 pl-3 border-l-2 border-emerald-500/50 text-stone-400 italic">
                 {children}
             </blockquote>
         );

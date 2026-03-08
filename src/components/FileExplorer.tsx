@@ -622,8 +622,16 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
 
                 // Select the active file
                 const fileItem = tree.getItems().find(item => item.getId() === activeFile);
-                if (fileItem && !fileItem.isSelected()) {
-                    fileItem.select();
+                if (fileItem) {
+                    tree.getItems().forEach(item => {
+                        if (item.getId() !== activeFile && item.isSelected()) {
+                            item.deselect();
+                        }
+                    });
+
+                    if (!fileItem.isSelected()) {
+                        fileItem.select();
+                    }
                 }
 
                 // Mark this file as expanded to prevent re-running
@@ -657,6 +665,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                 onContextMenu={handleBackgroundContextMenu}
             >
                 {tree.getItems().map(item => {
+                    const isActiveFile = !item.isFolder() && activeFile === item.getId();
                     // Check if we should show the new item input as first child of this folder
                     const showNewItemInput = newItem && 
                         item.isFolder() && 
@@ -669,8 +678,10 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                                 {...item.getProps()}
                                 data-tree-item
                                 className={`group flex items-center gap-1.5 py-1 px-2 cursor-pointer relative
-                                    ${item.isSelected()
+                                    ${isActiveFile
                                         ? 'bg-[var(--bg-selection)] text-[var(--accent-secondary)]'
+                                        : item.isSelected()
+                                            ? 'bg-[var(--bg-selection)]/60 text-[var(--fg-primary)]'
                                         : 'text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)]'
                                     }
                                     ${item.isFocused() ? 'ring-1 ring-inset ring-[var(--border-focus)]' : ''}

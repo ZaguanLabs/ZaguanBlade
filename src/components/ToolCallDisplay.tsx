@@ -55,7 +55,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
             case 'executing':
                 return 'border-l-blue-400';
             case 'complete':
-                return 'border-l-emerald-400';
+                return 'border-l-zinc-800';
             case 'error':
                 return 'border-l-red-400';
             case 'skipped':
@@ -79,6 +79,8 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                 return 'Pending';
         }
     };
+
+    const isComplete = status === 'complete';
 
     // Get friendly tool name
     const getFriendlyToolName = (name: string, args?: Record<string, unknown>): string => {
@@ -189,15 +191,15 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     // Compact inline display for most tools, expanded for run_command
     if (!isRunCommand) {
         return (
-            <div className={`group/tool border-l-2 pl-2.5 text-[11px] ${getStatusColor()}`}>
-                <div className="flex items-start gap-2 py-1.5">
+            <div className={`group/tool border-l-2 pl-2.5 text-[11px] ${getStatusColor()} ${isComplete ? 'opacity-45' : ''}`}>
+                <div className="flex items-start gap-2 py-1">
                     <div className="flex h-5 w-5 shrink-0 items-center justify-center text-zinc-500">
                         {getStatusIcon()}
                     </div>
-                    <div className="min-w-0 flex-1 space-y-1">
+                    <div className="min-w-0 flex-1 space-y-0.5">
                         <div className="flex items-start gap-2">
                             <div className="min-w-0 flex flex-1 items-center gap-2">
-                                <span className="shrink-0 text-[11px] font-medium text-zinc-200">
+                                <span className={`shrink-0 text-[11px] font-medium ${isComplete ? 'text-zinc-500' : 'text-stone-300'}`}>
                                     {getFriendlyToolName(toolCall.function.name, parsedArgs)}
                                 </span>
                                 {displayPathText && (
@@ -206,7 +208,9 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                                         onClick={() => onOpenFile?.(pathText || displayPathText)}
                                         disabled={!onOpenFile}
                                         className={`min-w-0 flex-1 truncate text-left text-[10px] transition-colors ${onOpenFile
-                                            ? 'text-zinc-400 hover:text-zinc-200'
+                                            ? isComplete
+                                                ? 'text-zinc-600 hover:text-zinc-500'
+                                                : 'text-zinc-400 hover:text-zinc-200'
                                             : 'text-zinc-500'
                                             }`}
                                         title={pathText || displayPathText}
@@ -225,7 +229,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                             </div>
                             <div className="ml-auto flex shrink-0 items-center gap-1 pl-2">
                                 <span className={`text-[9px] font-semibold uppercase tracking-[0.14em] ${status === 'complete'
-                                    ? 'text-emerald-300'
+                                    ? 'text-zinc-600'
                                     : status === 'executing'
                                         ? 'text-blue-300'
                                         : status === 'error'
@@ -251,7 +255,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                                 )}
                             </div>
                         </div>
-                        <div className="flex flex-wrap items-center gap-2 pl-0.5">
+                        <div className="flex flex-wrap items-center gap-1.5 pl-0.5">
                             {searchQuery && displayPathText && (
                                 <span
                                     className="min-w-0 max-w-full truncate text-[10px] font-mono text-zinc-500"
@@ -266,7 +270,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                                         e.stopPropagation();
                                         onUndo();
                                     }}
-                                    className="flex items-center gap-1 rounded px-1 py-0.5 text-[9px] text-zinc-500 transition-colors hover:text-red-300"
+                                    className="flex items-center gap-1 rounded px-1 py-0.5 text-[9px] text-zinc-600 transition-colors hover:text-red-300"
                                     title="Undo changes"
                                 >
                                     <RotateCcw className="w-2.5 h-2.5" />
@@ -277,14 +281,14 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                     </div>
                 </div>
                 {isExpanded && detailItems.length > 0 && (
-                    <div className="ml-7 border-l border-zinc-800/70 pl-3 pb-1 pt-1.5">
-                        <div className="space-y-2">
+                    <div className="ml-7 border-l border-zinc-800/70 pl-3 pb-1 pt-1">
+                        <div className="space-y-1.5">
                             {detailItems.map((item) => (
-                                <div key={item.label} className="space-y-1">
+                                <div key={item.label} className="space-y-0.5">
                                     <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
                                         {item.label}
                                     </div>
-                                    <div className="wrap-break-word text-[11px] leading-5 text-zinc-300">
+                                    <div className="wrap-break-word text-[11px] leading-4 text-zinc-300">
                                         {item.value}
                                     </div>
                                 </div>
@@ -297,14 +301,14 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     }
 
     return (
-        <div className={`border-l-2 pl-2.5 ${getStatusColor()}`}>
-            <div className="flex items-center justify-between gap-2 py-1.5">
+        <div className={`border-l-2 pl-2.5 ${getStatusColor()} ${isComplete ? 'opacity-45' : ''}`}>
+            <div className="flex items-center justify-between gap-2 py-1">
                 <div className="flex min-w-0 items-center gap-2">
                     <div className="flex h-5 w-5 items-center justify-center text-zinc-500">
                         {getStatusIcon()}
                     </div>
                     <div className="min-w-0">
-                        <span className="block truncate text-[11px] font-medium text-zinc-200">
+                        <span className={`block truncate text-[11px] font-medium ${isComplete ? 'text-zinc-500' : 'text-stone-300'}`}>
                             {getFriendlyToolName(toolCall.function.name, parsedArgs)}
                         </span>
                     </div>
@@ -323,7 +327,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                             <StopCircle className="h-3.5 w-3.5" />
                         </button>
                     )}
-                    <span className={`text-[9px] font-semibold uppercase tracking-[0.14em] ${status === 'complete' ? 'text-emerald-300' :
+                    <span className={`text-[9px] font-semibold uppercase tracking-[0.14em] ${status === 'complete' ? 'text-zinc-600' :
                         status === 'executing' ? 'text-blue-400' :
                             status === 'error' ? 'text-red-400' :
                                 status === 'skipped' ? 'text-yellow-400' : 'text-zinc-500'
@@ -334,9 +338,9 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
             </div>
 
             {commandText && (
-                <div className="ml-7 border-l border-zinc-800/70 pl-3 pb-1 pt-1.5">
+                <div className="ml-7 border-l border-zinc-800/70 pl-3 pb-1 pt-1">
                     <div className="flex items-start gap-2">
-                        <code className="flex-1 break-all text-[12px] font-mono leading-6 text-zinc-200 select-text">
+                        <code className={`flex-1 break-all text-[12px] font-mono leading-5 select-text ${isComplete ? 'text-zinc-500' : 'text-stone-300'}`}>
                             {cwdText && <span className="text-zinc-500">{cwdText}$ </span>}
                             {commandText}
                         </code>
