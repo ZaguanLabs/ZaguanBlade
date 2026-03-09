@@ -117,7 +117,7 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
 
         // 1. Initialize xterm with Tokyo Night theme
         const term = new XTerm({
-            cursorBlink: true,
+            cursorBlink: false,
             fontFamily: "\"Fira Code\", \"Symbols Nerd Font Mono\", monospace",
             fontSize: 12,
             lineHeight: 1.2,

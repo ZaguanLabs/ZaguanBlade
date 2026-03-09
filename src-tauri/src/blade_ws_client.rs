@@ -57,8 +57,8 @@ pub enum BladeWsEvent {
         session_id: String,
         model_id: String,
     },
-    TextChunk { content: String, output_index: Option<i64> },
-    ReasoningChunk { content: String, output_index: Option<i64> },
+    TextChunk { content: String, output_index: Option<i64>, phase: Option<String> },
+    ReasoningChunk { content: String, output_index: Option<i64>, phase: Option<String> },
     ToolCall {
         id: String,
         name: String,
@@ -701,8 +701,11 @@ impl BladeWsClient {
                     .or_else(|| msg.payload.get("content_index"))
                     .or_else(|| msg.payload.get("index"))
                     .and_then(|v| v.as_i64());
+                let phase = msg.payload.get("phase")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
                 if let Some(content) = msg.payload.get("content").and_then(|v| v.as_str()) {
-                    let _ = tx.send(BladeWsEvent::TextChunk { content: content.to_string(), output_index });
+                    let _ = tx.send(BladeWsEvent::TextChunk { content: content.to_string(), output_index, phase });
                 }
             }
             "reasoning_chunk" => {
@@ -710,8 +713,11 @@ impl BladeWsClient {
                     .or_else(|| msg.payload.get("content_index"))
                     .or_else(|| msg.payload.get("index"))
                     .and_then(|v| v.as_i64());
+                let phase = msg.payload.get("phase")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
                 if let Some(content) = msg.payload.get("content").and_then(|v| v.as_str()) {
-                    let _ = tx.send(BladeWsEvent::ReasoningChunk { content: content.to_string(), output_index });
+                    let _ = tx.send(BladeWsEvent::ReasoningChunk { content: content.to_string(), output_index, phase });
                 }
             }
             "tool_call" => {

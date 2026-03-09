@@ -5,7 +5,7 @@ import { BladeDispatcher } from '../services/blade';
 import { EditorFacade } from '../services/editorFacade';
 import { useEditorState } from '../contexts/EditorContext';
 import { MessageBuffer } from '../utils/eventBuffer';
-import { ensureMessagesHaveBlocks } from '../utils/messageBlocks';
+import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertToolCallBlockPreservingOrder } from '../utils/messageBlocks';
 import { EventNames, type RequestConfirmationPayload, type StructuredAction, type ToolExecutionCompletedPayload, type TodoItem } from '../types/events';
 import type { BladeEventEnvelope, ChatMention } from '../types/blade';
 import type { ChatImage, ChatMessage, ChatMode, ComposerMention, CommandExecution, ImageAttachment, MessageBlock, ModelInfo, QueuedRequest, StreamingState, ToolActivityState, ToolCall } from '../types/chat';
@@ -1146,21 +1146,17 @@ export function useChatV2() {
                         }
                         if (existingIndex === -1) {
                             const liveBlocks = blocksRef.current.get(messageId) || [];
-                            const nextBlocks = [...liveBlocks];
-                            if (incomingToolCall && !nextBlocks.some((block) => block.type === 'tool_call' && block.id === toolCallId)) {
-                                nextBlocks.push({ type: 'tool_call', id: toolCallId });
-                            }
+                            const nextBlocks = incomingToolCall
+                                ? insertToolCallBlockPreservingOrder(liveBlocks, toolCallId)
+                                : [...liveBlocks];
                             blocksRef.current.set(messageId, nextBlocks);
-                            return [
-                                ...messages,
-                                {
-                                    id: messageId,
-                                    role: 'Assistant',
-                                    content: '',
-                                    tool_calls: incomingToolCall ? [{ ...(incomingToolCall as ToolCall), status, result: result ?? undefined }] : [],
-                                    blocks: nextBlocks,
-                                },
-                            ];
+                            return insertAssistantMessageAfterLastUser(messages, {
+                                id: messageId,
+                                role: 'Assistant',
+                                content: '',
+                                tool_calls: incomingToolCall ? [{ ...(incomingToolCall as ToolCall), status, result: result ?? undefined }] : [],
+                                blocks: nextBlocks,
+                            });
                         }
 
                         return messages.map((message) => {
@@ -1181,8 +1177,9 @@ export function useChatV2() {
                                     status,
                                     ...(result ? { result } : {}),
                                 };
-                                blocksRef.current.set(messageId, nextBlocks);
-                                return { ...message, tool_calls: nextTools, blocks: nextBlocks };
+                                const orderedBlocks = insertToolCallBlockPreservingOrder(nextBlocks, toolCallId);
+                                blocksRef.current.set(messageId, orderedBlocks);
+                                return { ...message, tool_calls: nextTools, blocks: orderedBlocks };
                             }
 
                             if (!incomingToolCall) {
@@ -1190,10 +1187,8 @@ export function useChatV2() {
                                 return message;
                             }
 
-                            if (!nextBlocks.some((block) => block.type === 'tool_call' && block.id === toolCallId)) {
-                                nextBlocks.push({ type: 'tool_call', id: toolCallId });
-                            }
-                            blocksRef.current.set(messageId, nextBlocks);
+                            const orderedBlocks = insertToolCallBlockPreservingOrder(nextBlocks, toolCallId);
+                            blocksRef.current.set(messageId, orderedBlocks);
 
                             return {
                                 ...message,
@@ -1210,7 +1205,7 @@ export function useChatV2() {
                                         ...(result ? { result } : {}),
                                     },
                                 ],
-                                blocks: nextBlocks,
+                                blocks: orderedBlocks,
                             };
                         });
                     });

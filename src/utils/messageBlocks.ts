@@ -1,5 +1,37 @@
 import type { ChatMessage, MessageBlock } from '../types/chat';
 
+export function insertToolCallBlockPreservingOrder(blocks: MessageBlock[], toolCallId: string): MessageBlock[] {
+    if (blocks.some((block) => block.type === 'tool_call' && block.id === toolCallId)) {
+        return blocks;
+    }
+
+    const nextBlocks = [...blocks];
+    const matchingExecutionIndex = nextBlocks.findIndex((block) => block.type === 'command_execution' && block.id === toolCallId);
+    if (matchingExecutionIndex >= 0) {
+        nextBlocks.splice(matchingExecutionIndex, 0, { type: 'tool_call', id: toolCallId });
+        return nextBlocks;
+    }
+
+    let insertIndex = nextBlocks.length;
+    while (insertIndex > 0 && nextBlocks[insertIndex - 1].type === 'text') {
+        insertIndex -= 1;
+    }
+
+    nextBlocks.splice(insertIndex, 0, { type: 'tool_call', id: toolCallId });
+    return nextBlocks;
+}
+
+export function insertAssistantMessageAfterLastUser(messages: ChatMessage[], message: ChatMessage): ChatMessage[] {
+    const lastUserIndex = messages.map((item) => item.role).lastIndexOf('User');
+    if (lastUserIndex === -1) {
+        return [...messages, message];
+    }
+
+    const nextMessages = [...messages];
+    nextMessages.splice(lastUserIndex + 1, 0, message);
+    return nextMessages;
+}
+
 /**
  * Reconstructs the blocks array for a message based on its content.
  * This is used when loading messages from history or the backend,

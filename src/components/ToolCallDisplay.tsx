@@ -5,6 +5,7 @@ import { ToolCall } from '../types/chat';
 import { Zap, CheckCircle2, XCircle, Loader2, Copy, Check, ChevronRight, ChevronDown, RotateCcw, StopCircle } from 'lucide-react';
 
 const COMPLETE_FADE_DELAY_MS = 250;
+const COMPLETE_VISUAL_HOLD_MS = 1100;
 
 interface ToolCallDisplayProps {
     toolCall: ToolCall;
@@ -47,7 +48,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
         setShouldFadeComplete(false);
         const timerId = window.setTimeout(() => {
             setShouldFadeComplete(true);
-        }, 650);
+        }, COMPLETE_VISUAL_HOLD_MS);
 
         return () => {
             window.clearTimeout(timerId);
