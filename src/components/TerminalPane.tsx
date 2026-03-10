@@ -198,7 +198,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
     }, []);
 
     return (
-        <div className="h-full min-w-0 overflow-hidden flex flex-row bg-[#1e1e1e]">
+        <div className="h-full min-w-0 overflow-hidden flex flex-row bg-(--term-bg)">
             {/* Terminal Area */}
             <div className="flex-1 min-w-0 relative overflow-hidden">
                 {terminals.map((term) => (
@@ -206,7 +206,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
                         key={term.id}
                         className="absolute inset-0 w-full h-full"
                         style={{
-                            visibility: term.id === activeId ? "visible" : "hidden",
+                            display: term.id === activeId ? "block" : "none",
                             zIndex: term.id === activeId ? 10 : 0
                         }}
                     >
@@ -232,13 +232,14 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
                         <div
                             key={term.id}
                             onClick={() => setActiveId(term.id)}
-                            className={`
-                    group flex items-center justify-between px-3 py-2 cursor-pointer text-sm border-l-2
-                    ${activeId === term.id
-                                    ? "bg-[#37373d] border-blue-500 text-white"
-                                    : "border-transparent text-zinc-400 hover:bg-[#2a2d2e] hover:text-zinc-200"
-                                }
-                `}
+                            className="group flex items-center justify-between px-3 py-2 cursor-pointer text-sm border-l-2 transition-colors"
+                            style={{
+                                borderLeftColor: activeId === term.id ? 'var(--accent-primary)' : 'transparent',
+                                backgroundColor: activeId === term.id
+                                    ? 'color-mix(in srgb, var(--accent-primary) 16%, var(--bg-surface))'
+                                    : 'transparent',
+                                color: activeId === term.id ? 'var(--fg-primary)' : 'var(--fg-secondary)',
+                            }}
                         >
                             <div className="flex items-center gap-2 truncate">
                                 <TerminalIcon className="w-3.5 h-3.5 opacity-70" />
@@ -247,7 +248,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
                             {terminals.length > 1 && (
                                 <button
                                     onClick={(e) => closeTerminal(e, term.id)}
-                                    className="opacity-0 group-hover:opacity-100 hover:bg-zinc-600 rounded p-0.5"
+                                    className="opacity-0 group-hover:opacity-100 rounded p-0.5 transition-colors hover:bg-(--bg-surface-hover)"
                                 >
                                     <X className="w-3 h-3" />
                                 </button>

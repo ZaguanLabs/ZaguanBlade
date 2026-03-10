@@ -65,6 +65,8 @@ export const GitPanel: React.FC<GitPanelProps> = ({
     const changedCount = status?.changedCount ?? 0;
     const stagedCount = status?.stagedCount ?? 0;
     const canCommit = commitMessage.trim().length > 0 && changedCount > 0;
+    const isPushing = busyAction === 'push';
+    const showPushButton = (status?.ahead ?? 0) > 0 || pushSuccess || isPushing;
 
     const stagedFiles = useMemo(
         () => files.filter(file => file.staged),
@@ -292,16 +294,34 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                 <div className="flex-1" />
 
                                 {/* Dynamic Commit/Push button */}
-                                {(status?.ahead ?? 0) > 0 || pushSuccess || busyAction === 'push' ? (
+                                {showPushButton ? (
                                     <button
                                         className={`relative flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-md transition-all duration-300 font-medium overflow-hidden ${
-                                            pushSuccess
-                                                ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/30 scale-[1.02]'
-                                                : busyAction === 'push'
-                                                    ? 'bg-slate-900 text-slate-100 border border-slate-700/70 cursor-not-allowed shadow-inner'
-                                                    : 'bg-green-600 text-white hover:bg-green-500 hover:shadow-md hover:shadow-green-500/20'
+                                            pushSuccess ? 'scale-[1.02]' : ''
+                                        } ${
+                                            isPushing || pushSuccess ? 'cursor-not-allowed' : ''
                                         }`}
-                                        disabled={busyAction === 'push' || pushSuccess}
+                                        style={{
+                                            backgroundColor: pushSuccess
+                                                ? 'var(--accent-secondary)'
+                                                : isPushing
+                                                    ? 'color-mix(in srgb, var(--accent-primary) 18%, var(--bg-surface))'
+                                                    : 'var(--accent-primary)',
+                                            color: pushSuccess
+                                                ? 'var(--fg-bright)'
+                                                : isPushing
+                                                    ? 'var(--fg-primary)'
+                                                    : 'var(--fg-bright)',
+                                            border: isPushing
+                                                ? '1px solid color-mix(in srgb, var(--accent-primary) 40%, var(--border-default))'
+                                                : '1px solid transparent',
+                                            boxShadow: pushSuccess
+                                                ? '0 0 0 1px color-mix(in srgb, var(--accent-secondary) 24%, transparent), var(--shadow-md)'
+                                                : isPushing
+                                                    ? 'inset 0 1px 0 color-mix(in srgb, var(--fg-bright) 12%, transparent)'
+                                                    : 'var(--shadow-sm)',
+                                        }}
+                                        disabled={isPushing || pushSuccess}
                                         onClick={(e) => {
                                             e.preventDefault();
                                             void handlePushOnButtonUp();
@@ -315,16 +335,24 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                     >
                                         {/* Push indicator badge */}
                                         {status?.ahead && status.ahead > 0 && !pushSuccess && (
-                                            <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center w-3.5 h-3.5 bg-white text-green-600 rounded-full text-[8px] font-bold animate-pulse">
+                                            <span
+                                                className="absolute -top-1.5 -right-1.5 flex items-center justify-center w-3.5 h-3.5 rounded-full text-[8px] font-bold animate-pulse"
+                                                style={{
+                                                    backgroundColor: 'var(--bg-surface)',
+                                                    color: 'var(--accent-primary)',
+                                                    boxShadow: '0 0 0 1px color-mix(in srgb, var(--accent-primary) 22%, transparent)',
+                                                }}
+                                            >
                                                 {status.ahead}
                                             </span>
                                         )}
                                         {/* Animated left-to-right progress fill while pushing */}
-                                        {busyAction === 'push' && (
+                                        {isPushing && (
                                             <div className="absolute inset-0 overflow-hidden rounded-md pointer-events-none">
                                                 <div
-                                                    className="absolute inset-y-0 left-0 bg-gradient-to-r from-emerald-500/85 via-teal-400/85 to-cyan-400/85"
+                                                    className="absolute inset-y-0 left-0"
                                                     style={{
+                                                        background: 'linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 82%, transparent), color-mix(in srgb, var(--accent-secondary) 78%, transparent), color-mix(in srgb, var(--accent-purple) 76%, transparent))',
                                                         width: '100%',
                                                         transformOrigin: 'left center',
                                                         animation: 'push-fill-sweep 1.2s ease-out infinite',
@@ -339,7 +367,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                                     <svg className="w-3.5 h-3.5 animate-[push-check_0.3s_ease-out]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
                                                     Pushed!
                                                 </>
-                                            ) : busyAction === 'push' ? (
+                                            ) : isPushing ? (
                                                 <>
                                                     <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round"><path d="M12 2a10 10 0 0 1 10 10" /></svg>
                                                     Pushing

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, RefObject } from 'react';
+import { useState, useEffect, useCallback, useRef, RefObject } from 'react';
 
 interface UseResizeHandlersOptions {
     editorColumnRef: RefObject<HTMLDivElement | null>;
@@ -26,6 +26,8 @@ export function useResizeHandlers({
     const [chatPanelWidth, setChatPanelWidth] = useState(initialChatPanelWidth);
     const [isTerminalDragging, setIsTerminalDragging] = useState(false);
     const [isChatDragging, setIsChatDragging] = useState(false);
+    const terminalDragFrameRef = useRef<number | null>(null);
+    const pendingTerminalHeightRef = useRef<number | null>(null);
 
     // Terminal panel resize handler
     const handleTerminalMouseDown = useCallback((e: React.MouseEvent) => {
@@ -40,13 +42,34 @@ export function useResizeHandlers({
             const col = editorColumnRef.current;
             if (!col) return;
             const rect = col.getBoundingClientRect();
-            const newHeight = rect.bottom - e.clientY;
-            if (newHeight >= 80 && newHeight <= rect.height - 60) {
-                setTerminalHeight(newHeight);
+            const minHeight = 80;
+            const maxHeight = rect.height - 60;
+            const newHeight = Math.round(Math.min(maxHeight, Math.max(minHeight, rect.bottom - e.clientY)));
+
+            pendingTerminalHeightRef.current = newHeight;
+
+            if (terminalDragFrameRef.current !== null) {
+                return;
             }
+
+            terminalDragFrameRef.current = requestAnimationFrame(() => {
+                terminalDragFrameRef.current = null;
+                const nextHeight = pendingTerminalHeightRef.current;
+                if (typeof nextHeight === 'number') {
+                    setTerminalHeight(nextHeight);
+                }
+            });
         };
 
         const handleTerminalMouseUp = () => {
+            if (terminalDragFrameRef.current !== null) {
+                cancelAnimationFrame(terminalDragFrameRef.current);
+                terminalDragFrameRef.current = null;
+            }
+            const nextHeight = pendingTerminalHeightRef.current;
+            if (typeof nextHeight === 'number') {
+                setTerminalHeight(nextHeight);
+            }
             setIsTerminalDragging(false);
         };
 
@@ -57,6 +80,10 @@ export function useResizeHandlers({
         }
 
         return () => {
+            if (terminalDragFrameRef.current !== null) {
+                cancelAnimationFrame(terminalDragFrameRef.current);
+                terminalDragFrameRef.current = null;
+            }
             document.removeEventListener('mousemove', handleTerminalMouseMove);
             document.removeEventListener('mouseup', handleTerminalMouseUp);
             document.body.classList.remove('resize-y-cursor');

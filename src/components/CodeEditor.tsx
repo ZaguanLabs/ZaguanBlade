@@ -9,7 +9,7 @@ import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } 
 import { lintGutter } from "@codemirror/lint";
 
 // Custom theme and extensions
-import { zaguanTheme } from "./editor/theme/zaguanTheme";
+import { getZaguanTheme } from "./editor/theme/zaguanTheme";
 import { getLanguageExtension } from "./editor/languages";
 import {
     lineHighlightField,
@@ -31,6 +31,7 @@ import {
 } from "./editor/extensions";
 import { zlpLinter } from "./editor/extensions/zlpLinter";
 import { useEditorActions } from "../contexts/EditorContext";
+import { useTheme } from "../contexts/ThemeContext";
 import { useContextMenu, type ContextMenuItem } from "./ui/ContextMenu";
 import { Copy, Scissors, Clipboard, Undo2, Redo2, Search, Network } from "lucide-react";
 import { ZLPService } from "../services/zlp";
@@ -76,7 +77,9 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     const editorRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     const languageConf = useRef(new Compartment());
+    const themeConf = useRef(new Compartment());
     const { setCursorPosition, setSelection, clearSelection } = useEditorActions();
+    const { currentTheme } = useTheme();
     const { showMenu } = useContextMenu();
 
     // Call Graph Inspector State
@@ -141,8 +144,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 ...(isMarkdown ? [] : [autocompletion(), highlightSelectionMatches()]),
                 indentOnInput(),
 
-                // Custom Zaguan theme (includes syntax highlighting)
-                zaguanTheme,
+                themeConf.current.of(getZaguanTheme(currentTheme.appearance === 'dark')),
 
                 // UX enhancements
                 placeholder("Start typing or paste code here..."),
@@ -249,7 +251,16 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
             view.destroy();
             viewRef.current = null;
         };
-    }, []);
+    }, [content, currentTheme.appearance, filename, isMarkdown, onChange, setCursorPosition, setSelection, clearSelection, shouldWrap]);
+
+    useEffect(() => {
+        const view = viewRef.current;
+        if (!view) return;
+
+        view.dispatch({
+            effects: themeConf.current.reconfigure(getZaguanTheme(currentTheme.appearance === 'dark')),
+        });
+    }, [currentTheme.appearance]);
 
     // Handle file switch and content updates
     const lastFilename = useRef(filename);

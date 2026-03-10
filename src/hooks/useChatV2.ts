@@ -5,7 +5,7 @@ import { BladeDispatcher } from '../services/blade';
 import { EditorFacade } from '../services/editorFacade';
 import { useEditorState } from '../contexts/EditorContext';
 import { MessageBuffer } from '../utils/eventBuffer';
-import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertToolCallBlockPreservingOrder } from '../utils/messageBlocks';
+import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertToolCallBlockPreservingOrder, upsertSplitTextBlocks } from '../utils/messageBlocks';
 import { EventNames, type RequestConfirmationPayload, type StructuredAction, type ToolExecutionCompletedPayload, type TodoItem } from '../types/events';
 import type { BladeEventEnvelope, ChatMention } from '../types/blade';
 import type { ChatImage, ChatMessage, ChatMode, ComposerMention, CommandExecution, ImageAttachment, MessageBlock, ModelInfo, QueuedRequest, StreamingState, ToolActivityState, ToolCall } from '../types/chat';
@@ -43,6 +43,95 @@ function streamDebugLog(tag: string, payload: Record<string, unknown>): void {
     const message = `${tag} ${JSON.stringify(payload)}`;
     console.debug(message);
     void invoke('log_frontend', { message }).catch(() => undefined);
+}
+
+function findTextBeforeFirstActivity(blocks: MessageBlock[]): string | undefined {
+    const firstActivityIndex = blocks.findIndex((block) => block.type === 'tool_call' || block.type === 'command_execution');
+    if (firstActivityIndex === -1) {
+        return undefined;
+    }
+
+    for (let index = firstActivityIndex - 1; index >= 0; index -= 1) {
+        const block = blocks[index];
+        if (block.type === 'text') {
+            return block.content;
+        }
+    }
+
+    return undefined;
+}
+
+function findTextAfterLastActivity(blocks: MessageBlock[]): string | undefined {
+    const lastActivityIndex = blocks.reduce((lastIndex, block, index) => {
+        return block.type === 'tool_call' || block.type === 'command_execution' ? index : lastIndex;
+    }, -1);
+    if (lastActivityIndex === -1) {
+        return undefined;
+    }
+
+    for (let index = lastActivityIndex + 1; index < blocks.length; index += 1) {
+        const block = blocks[index];
+        if (block.type === 'text') {
+            return block.content;
+        }
+    }
+
+    return undefined;
+}
+
+function inferContentBeforeTools(message: ChatMessage | undefined, blocks: MessageBlock[], fullContent: string): string | undefined {
+    const textBeforeFirstActivity = findTextBeforeFirstActivity(blocks);
+    if (textBeforeFirstActivity !== undefined) {
+        return textBeforeFirstActivity;
+    }
+
+    if (message?.content_before_tools !== undefined) {
+        if (message.content_before_tools.length > 0) {
+            return message.content_before_tools;
+        }
+
+        const textAfterLastActivity = findTextAfterLastActivity(blocks);
+        const hasOnlyActivityOrWhitespaceBlocks = blocks.every((block) => block.type !== 'text' || isWhitespaceOnly(block.content));
+        const hasInFlightActivity = (message.tool_calls || []).some((toolCall) => {
+            return toolCall.status === undefined || toolCall.status === 'pending' || toolCall.status === 'executing';
+        });
+        if (!textAfterLastActivity && hasOnlyActivityOrWhitespaceBlocks && hasInFlightActivity && !isWhitespaceOnly(fullContent)) {
+            return fullContent;
+        }
+
+        return message.content_before_tools;
+    }
+
+    const firstActivityIndex = blocks.findIndex((block) => block.type === 'tool_call' || block.type === 'command_execution');
+    if (firstActivityIndex === -1) {
+        return undefined;
+    }
+
+    return '';
+}
+
+function normalizeSplitBlocks(
+    message: ChatMessage | undefined,
+    blocks: MessageBlock[],
+    fullContent: string,
+): { blocks: MessageBlock[]; contentBeforeTools?: string; contentAfterTools?: string } {
+    const hasActivityBlocks = blocks.some((block) => block.type === 'tool_call' || block.type === 'command_execution');
+    const hasExplicitSplit = message?.content_before_tools !== undefined || message?.content_after_tools !== undefined;
+    if (!hasActivityBlocks && !hasExplicitSplit) {
+        return { blocks };
+    }
+
+    const contentBeforeTools = inferContentBeforeTools(message, blocks, fullContent) ?? '';
+    const textAfterLastActivity = findTextAfterLastActivity(blocks);
+    const contentAfterTools = fullContent.startsWith(contentBeforeTools)
+        ? fullContent.slice(contentBeforeTools.length)
+        : (textAfterLastActivity ?? message?.content_after_tools ?? fullContent);
+
+    return {
+        blocks: upsertSplitTextBlocks(blocks, contentBeforeTools, contentAfterTools),
+        contentBeforeTools,
+        contentAfterTools,
+    };
 }
 
 type ChatState = {
@@ -263,7 +352,14 @@ export function useChatV2() {
     const accumulatedContentRef = useRef<{ id: string; content: string }>({ id: '', content: '' });
     const accumulatedReasoningRef = useRef<{ id: string; content: string }>({ id: '', content: '' });
     const dispatchInFlightRef = useRef(false);
-    const pendingUpdatesRef = useRef<Map<string, { content: string; reasoning: string; blocks: MessageBlock[]; streaming?: StreamingState }>>(new Map());
+    const pendingUpdatesRef = useRef<Map<string, {
+        content: string;
+        reasoning: string;
+        blocks: MessageBlock[];
+        streaming?: StreamingState;
+        contentBeforeTools?: string;
+        contentAfterTools?: string;
+    }>>(new Map());
     const flushScheduledRef = useRef<number | null>(null);
     const streamingStatesRef = useRef<Map<string, StreamingState>>(new Map());
     const toolChunkCountsRef = useRef<Map<string, { chunkCount: number; startedAt: number; lastChunkAt: number }>>(new Map());
@@ -556,6 +652,8 @@ export function useChatV2() {
                     if (
                         existingMessage.content !== update.content
                         || existingMessage.reasoning !== update.reasoning
+                        || existingMessage.content_before_tools !== update.contentBeforeTools
+                        || existingMessage.content_after_tools !== update.contentAfterTools
                         || streamingChanged
                     ) {
                         if (!changed) {
@@ -584,6 +682,8 @@ export function useChatV2() {
                             ...existingMessage,
                             content: update.content,
                             reasoning: update.reasoning,
+                            content_before_tools: update.contentBeforeTools,
+                            content_after_tools: update.contentAfterTools,
                             blocks: mergedBlocks,
                             streaming: update.streaming,
                         };
@@ -601,6 +701,8 @@ export function useChatV2() {
                     role: 'Assistant',
                     content: update.content,
                     reasoning: update.reasoning,
+                    content_before_tools: update.contentBeforeTools,
+                    content_after_tools: update.contentAfterTools,
                     blocks: update.blocks,
                     streaming: update.streaming,
                 });
@@ -623,8 +725,17 @@ export function useChatV2() {
         reasoning: string,
         blocks: MessageBlock[],
         streaming?: StreamingState,
+        contentBeforeTools?: string,
+        contentAfterTools?: string,
     ) => {
-        pendingUpdatesRef.current.set(id, { content, reasoning, blocks, streaming });
+        pendingUpdatesRef.current.set(id, {
+            content,
+            reasoning,
+            blocks,
+            streaming,
+            contentBeforeTools,
+            contentAfterTools,
+        });
         scheduleFlush();
     }, [scheduleFlush]);
 
@@ -804,46 +915,60 @@ export function useChatV2() {
                         }
                     } else {
                         const fullContent = accumulatedContentRef.current.content;
+                        const normalizedSplitState = normalizeSplitBlocks(existingMessage, blocks, fullContent);
+                        const effectiveBlocks = normalizedSplitState.blocks;
+                        const hasExistingTextBlock = effectiveBlocks.some((block) => block.type === 'text');
+                        const visibleContent = normalizedSplitState.contentBeforeTools !== undefined
+                            ? normalizedSplitState.contentAfterTools || ''
+                            : fullContent;
                         // Defer creating a text block until we have non-whitespace content
-                        const hasExistingTextBlock = blocks.some((block) => block.type === 'text');
-                        if (!hasExistingTextBlock && isWhitespaceOnly(fullContent)) {
-                            blocksRef.current.set(id, blocks);
+                        if (!hasExistingTextBlock && isWhitespaceOnly(visibleContent)) {
+                            blocksRef.current.set(id, effectiveBlocks);
                             queueMessageUpdate(
                                 id,
                                 accumulatedContentRef.current.id === id ? accumulatedContentRef.current.content : '',
                                 accumulatedReasoningRef.current.id === id ? accumulatedReasoningRef.current.content : '',
-                                blocks,
+                                effectiveBlocks,
                                 streaming,
+                                normalizedSplitState.contentBeforeTools,
+                                normalizedSplitState.contentAfterTools,
                             );
                             return;
                         }
-                        // Find the last text block to continue (not necessarily the very last block)
-                        let lastTextIndex = -1;
-                        for (let index = blocks.length - 1; index >= 0; index -= 1) {
-                            if (blocks[index].type === 'text') {
-                                lastTextIndex = index;
-                                break;
-                            }
-                        }
-                        if (lastTextIndex >= 0) {
-                            // Update existing text block with full accumulated content
-                            const targetBlock = blocks[lastTextIndex];
-                            if (targetBlock.type === 'text') {
-                                blocks[lastTextIndex] = { ...targetBlock, content: fullContent };
-                            }
+                        if (normalizedSplitState.contentBeforeTools !== undefined) {
+                            blocks = normalizedSplitState.blocks;
                         } else {
-                            // Create new text block with full accumulated content
-                            blocks = [...blocks, { type: 'text', content: fullContent, id: crypto.randomUUID() }];
+                        // Find the last text block to continue (not necessarily the very last block)
+                            let lastTextIndex = -1;
+                            for (let index = blocks.length - 1; index >= 0; index -= 1) {
+                                if (blocks[index].type === 'text') {
+                                    lastTextIndex = index;
+                                    break;
+                                }
+                            }
+                            if (lastTextIndex >= 0) {
+                                // Update existing text block with full accumulated content
+                                const targetBlock = blocks[lastTextIndex];
+                                if (targetBlock.type === 'text') {
+                                    blocks[lastTextIndex] = { ...targetBlock, content: fullContent };
+                                }
+                            } else {
+                                // Create new text block with full accumulated content
+                                blocks = [...blocks, { type: 'text', content: fullContent, id: crypto.randomUUID() }];
+                            }
                         }
                     }
 
                     blocksRef.current.set(id, blocks);
+                    const normalizedBlocks = normalizeSplitBlocks(existingMessage, blocks, accumulatedContentRef.current.id === id ? accumulatedContentRef.current.content : '');
                     queueMessageUpdate(
                         id,
                         accumulatedContentRef.current.id === id ? accumulatedContentRef.current.content : '',
                         accumulatedReasoningRef.current.id === id ? accumulatedReasoningRef.current.content : '',
-                        blocks,
+                        normalizedBlocks.blocks,
                         streaming,
+                        normalizedBlocks.contentBeforeTools,
+                        normalizedBlocks.contentAfterTools,
                     );
                 },
                 (id) => {
@@ -858,12 +983,18 @@ export function useChatV2() {
 
                     const existingMessage = messageByIdRef.current.get(id);
                     const blocks = blocksRef.current.get(id) || existingMessage?.blocks || [];
+                    const fullContent = accumulatedContentRef.current.id === id
+                        ? accumulatedContentRef.current.content
+                        : (existingMessage?.content || '');
+                    const normalizedBlocks = normalizeSplitBlocks(existingMessage, blocks, fullContent);
                     queueMessageUpdate(
                         id,
-                        accumulatedContentRef.current.id === id ? accumulatedContentRef.current.content : (existingMessage?.content || ''),
+                        fullContent,
                         accumulatedReasoningRef.current.id === id ? accumulatedReasoningRef.current.content : (existingMessage?.reasoning || ''),
-                        blocks,
+                        normalizedBlocks.blocks,
                         streaming,
+                        normalizedBlocks.contentBeforeTools,
+                        normalizedBlocks.contentAfterTools,
                     );
                     flushPendingUpdates();
                     blocksRef.current.delete(id);
@@ -1024,13 +1155,20 @@ export function useChatV2() {
                         }
                     }
 
+                    const fullContent = accumulatedContentRef.current.id === message.id
+                        ? accumulatedContentRef.current.content
+                        : message.content;
+                    const normalizedBlocks = normalizeSplitBlocks(message, blocks, fullContent);
+
                     if (message.id) {
-                        blocksRef.current.set(message.id, blocks);
+                        blocksRef.current.set(message.id, normalizedBlocks.blocks);
                     }
 
                     nextMessages[messageIndex] = {
                         ...message,
-                        blocks,
+                        blocks: normalizedBlocks.blocks,
+                        content_before_tools: normalizedBlocks.contentBeforeTools,
+                        content_after_tools: normalizedBlocks.contentAfterTools,
                         commandExecutions: executions,
                     };
                     return nextMessages;
@@ -1149,13 +1287,16 @@ export function useChatV2() {
                             const nextBlocks = incomingToolCall
                                 ? insertToolCallBlockPreservingOrder(liveBlocks, toolCallId)
                                 : [...liveBlocks];
-                            blocksRef.current.set(messageId, nextBlocks);
+                            const normalizedBlocks = normalizeSplitBlocks(undefined, nextBlocks, accumulatedContentRef.current.id === messageId ? accumulatedContentRef.current.content : '');
+                            blocksRef.current.set(messageId, normalizedBlocks.blocks);
                             return insertAssistantMessageAfterLastUser(messages, {
                                 id: messageId,
                                 role: 'Assistant',
                                 content: '',
+                                content_before_tools: normalizedBlocks.contentBeforeTools,
+                                content_after_tools: normalizedBlocks.contentAfterTools,
                                 tool_calls: incomingToolCall ? [{ ...(incomingToolCall as ToolCall), status, result: result ?? undefined }] : [],
-                                blocks: nextBlocks,
+                                blocks: normalizedBlocks.blocks,
                             });
                         }
 
@@ -1178,8 +1319,18 @@ export function useChatV2() {
                                     ...(result ? { result } : {}),
                                 };
                                 const orderedBlocks = insertToolCallBlockPreservingOrder(nextBlocks, toolCallId);
-                                blocksRef.current.set(messageId, orderedBlocks);
-                                return { ...message, tool_calls: nextTools, blocks: orderedBlocks };
+                                const fullContent = accumulatedContentRef.current.id === messageId
+                                    ? accumulatedContentRef.current.content
+                                    : message.content;
+                                const normalizedBlocks = normalizeSplitBlocks(message, orderedBlocks, fullContent);
+                                blocksRef.current.set(messageId, normalizedBlocks.blocks);
+                                return {
+                                    ...message,
+                                    tool_calls: nextTools,
+                                    content_before_tools: normalizedBlocks.contentBeforeTools,
+                                    content_after_tools: normalizedBlocks.contentAfterTools,
+                                    blocks: normalizedBlocks.blocks,
+                                };
                             }
 
                             if (!incomingToolCall) {
@@ -1188,15 +1339,23 @@ export function useChatV2() {
                             }
 
                             const orderedBlocks = insertToolCallBlockPreservingOrder(nextBlocks, toolCallId);
-                            blocksRef.current.set(messageId, orderedBlocks);
+                            const accumulatedContent = accumulatedContentRef.current.id === messageId
+                                ? accumulatedContentRef.current.content
+                                : message.content;
+                            const contentBeforeTools = message.content_before_tools !== undefined
+                                ? message.content_before_tools
+                                : accumulatedContent;
+                            const normalizedBlocks = normalizeSplitBlocks(
+                                { ...message, content_before_tools: contentBeforeTools },
+                                orderedBlocks,
+                                accumulatedContent,
+                            );
+                            blocksRef.current.set(messageId, normalizedBlocks.blocks);
 
                             return {
                                 ...message,
-                                content_before_tools: message.content_before_tools !== undefined
-                                    ? message.content_before_tools
-                                    : (accumulatedContentRef.current.id === messageId
-                                        ? accumulatedContentRef.current.content
-                                        : message.content),
+                                content_before_tools: normalizedBlocks.contentBeforeTools,
+                                content_after_tools: normalizedBlocks.contentAfterTools,
                                 tool_calls: [
                                     ...existingTools,
                                     {
@@ -1205,7 +1364,7 @@ export function useChatV2() {
                                         ...(result ? { result } : {}),
                                     },
                                 ],
-                                blocks: orderedBlocks,
+                                blocks: normalizedBlocks.blocks,
                             };
                         });
                     });

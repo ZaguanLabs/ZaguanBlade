@@ -79,10 +79,74 @@
   --font-family-mono: "JetBrains Mono", "Fira Code", "Symbols Nerd Font Mono", "Courier New", monospace;
 
   /* Terminal Colors */
-  --term-bg: #101523;
-  --term-fg: #97a1b8;
-  --term-selection: #6366f133;
-  --term-cursor: #f0f0ff;
+  --term-bg: #16161e;
+  --term-fg: #a9b1d6;
+  --term-selection: #515c7e4d;
+  --term-cursor: #c0caf5;
+  --term-cursor-accent: #1a1b26;
+  --term-black: #1a1b26;
+  --term-red: #f7768e;
+  --term-green: #9ece6a;
+  --term-yellow: #e0af68;
+  --term-blue: #7aa2f7;
+  --term-magenta: #bb9af7;
+  --term-cyan: #73daca;
+  --term-white: #a9b1d6;
+  --term-bright-black: #565f89;
+  --term-bright-red: #ff869e;
+  --term-bright-green: #b9f27c;
+  --term-bright-yellow: #e0c068;
+  --term-bright-blue: #89b4fa;
+  --term-bright-magenta: #c4a7e7;
+  --term-bright-cyan: #89dceb;
+  --term-bright-white: #c0caf5;
+
+  --editor-bg: #0e0e10;
+  --editor-bg-panel: #111113;
+  --editor-bg-surface: #1c1c1f;
+  --editor-bg-surface-hover: #252528;
+  --editor-fg: #d4d4d8;
+  --editor-fg-muted: #71717a;
+  --editor-fg-subtle: #52525b;
+  --editor-fg-dim: #3f3f46;
+  --editor-border: #1e1e22;
+  --editor-border-focus: #7c6af7;
+  --editor-accent: #818cf8;
+  --editor-selection: #6366f133;
+  --editor-selection-match: #6366f122;
+  --editor-cursor: #f4f4f5;
+  --editor-matching-bracket: #6366f140;
+  --editor-line-number: #3f3f46;
+  --editor-line-number-active: #f4f4f5;
+
+  --syntax-comment: #4b5563;
+  --syntax-keyword: #818cf8;
+  --syntax-operator: #6b7280;
+  --syntax-punctuation: #4b5563;
+  --syntax-variable: #c4c4cc;
+  --syntax-string: #4ade80;
+  --syntax-number: #fb923c;
+  --syntax-function: #a78bfa;
+  --syntax-type: #67e8f9;
+  --syntax-constant: #fb923c;
+  --syntax-regexp: #818cf8;
+  --syntax-macro: #818cf8;
+  --syntax-property: #94a3b8;
+  --syntax-tag: #a78bfa;
+  --syntax-attribute: #fbbf24;
+
+  --markdown-block-bg: #0c0c0e;
+  --markdown-block-header-bg: rgba(24, 24, 27, 0.5);
+  --markdown-inline-code-bg: #27272a;
+  --markdown-inline-code-fg: #4ade80;
+  --markdown-heading: #d6d3d1;
+  --markdown-body: #a8a29e;
+  --markdown-strong: #d6d3d1;
+  --markdown-link: #4ade80;
+  --markdown-link-hover: #86efac;
+  --markdown-border: #27272a;
+  --markdown-marker: #52525b;
+  --markdown-table-hover: rgba(24, 24, 27, 0.3);
 
   /* Shadows - Multi-tier Z-axis System */
   --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.5);

@@ -3,6 +3,7 @@ import test from 'node:test';
 import type { ChatMessage, CommandExecution, ToolCall } from '../types/chat';
 import type { StructuredAction } from '../types/events';
 import { deriveChatRows, deriveMessageRenderSegments } from './chatTimeline';
+import { insertToolCallBlockPreservingOrder, upsertSplitTextBlocks } from './messageBlocks';
 
 function makeToolCall(overrides: Partial<ToolCall> & Pick<ToolCall, 'id'>): ToolCall {
     return {
@@ -134,4 +135,48 @@ test('deriveMessageRenderSegments hides pending run_command tool calls behind th
     const segments = deriveMessageRenderSegments(message, [makePendingAction('call-approval')]);
 
     assert.equal(segments.length, 0);
+});
+
+test('insertToolCallBlockPreservingOrder appends new tool calls after existing assistant text', () => {
+    const blocks = [
+        { type: 'text' as const, content: 'First response', id: 'text-1' },
+        { type: 'tool_call' as const, id: 'tool-1' },
+        { type: 'text' as const, content: 'Follow-up response', id: 'text-2' },
+    ];
+
+    const nextBlocks = insertToolCallBlockPreservingOrder(blocks, 'tool-2');
+
+    assert.deepEqual(
+        nextBlocks.map((block) => block.type === 'text' ? `${block.type}:${block.id}` : `${block.type}:${block.id}`),
+        ['text:text-1', 'tool_call:tool-1', 'tool_call:tool-2', 'text:text-2']
+    );
+});
+
+test('insertToolCallBlockPreservingOrder inserts a tool call before its matching command execution', () => {
+    const blocks = [
+        { type: 'text' as const, content: 'First response', id: 'text-1' },
+        { type: 'command_execution' as const, id: 'tool-2' },
+        { type: 'text' as const, content: 'After execution', id: 'text-2' },
+    ];
+
+    const nextBlocks = insertToolCallBlockPreservingOrder(blocks, 'tool-2');
+
+    assert.deepEqual(
+        nextBlocks.map((block) => block.type === 'text' ? `${block.type}:${block.id}` : `${block.type}:${block.id}`),
+        ['text:text-1', 'tool_call:tool-2', 'command_execution:tool-2', 'text:text-2']
+    );
+});
+
+test('upsertSplitTextBlocks keeps post-tool text after the activity group', () => {
+    const blocks = [
+        { type: 'text' as const, content: 'Before and after', id: 'text-1' },
+        { type: 'tool_call' as const, id: 'tool-1' },
+    ];
+
+    const nextBlocks = upsertSplitTextBlocks(blocks, 'Before', ' and after');
+
+    assert.deepEqual(
+        nextBlocks.map((block) => block.type === 'text' ? `${block.type}:${block.content}` : `${block.type}:${block.id}`),
+        ['text:Before', 'tool_call:tool-1', 'text: and after']
+    );
 });

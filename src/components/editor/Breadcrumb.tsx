@@ -26,7 +26,7 @@ export const Breadcrumb: React.FC<BreadcrumbProps> = ({ filePath, workspaceRoot 
     if (segments.length === 0) return null;
 
     return (
-        <div className="flex items-center gap-1.5 px-4 py-2 my-2 bg-[var(--bg-app)] border-b border-[var(--border-default)] shadow-[var(--shadow-sm)] text-xs text-[var(--fg-tertiary)] font-mono overflow-x-auto whitespace-nowrap">
+        <div className="flex items-center gap-1.5 px-4 pt-2 pb-1 text-xs text-[var(--fg-tertiary)] font-mono overflow-x-auto whitespace-nowrap">
             {segments.map((segment, index) => (
                 <React.Fragment key={index}>
                     {index > 0 && (
