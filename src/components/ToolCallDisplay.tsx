@@ -5,6 +5,7 @@ import { ToolCall } from '../types/chat';
 import { Zap, CheckCircle2, XCircle, Loader2, Copy, Check, ChevronRight, ChevronDown, RotateCcw, StopCircle } from 'lucide-react';
 
 const COMPLETE_FADE_DELAY_MS = 250;
+const COMPLETE_VISUAL_HOLD_MS = 1100;
 
 interface ToolCallDisplayProps {
     toolCall: ToolCall;
@@ -47,7 +48,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
         setShouldFadeComplete(false);
         const timerId = window.setTimeout(() => {
             setShouldFadeComplete(true);
-        }, 650);
+        }, COMPLETE_VISUAL_HOLD_MS);
 
         return () => {
             window.clearTimeout(timerId);
@@ -64,33 +65,34 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
         }
     }, []);
 
-    const getStatusIcon = () => {
+    const getStatusTone = () => {
         switch (status) {
             case 'executing':
-                return <Loader2 className="w-3.5 h-3.5 text-blue-400 animate-spin" />;
+                return 'var(--accent-primary)';
             case 'complete':
-                return <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />;
+                return 'var(--accent-green)';
             case 'error':
-                return <XCircle className="w-3.5 h-3.5 text-red-400" />;
+                return 'var(--accent-error)';
             case 'skipped':
-                return <XCircle className="w-3.5 h-3.5 text-yellow-400" />;
+                return 'var(--accent-warning)';
             default:
-                return <Zap className="w-3.5 h-3.5 text-purple-400" />;
+                return 'var(--accent-purple)';
         }
     };
 
-    const getStatusColor = () => {
+    const getStatusIcon = () => {
+        const style = { color: getStatusTone() };
         switch (status) {
             case 'executing':
-                return 'border-l-blue-400';
+                return <Loader2 className="w-3.5 h-3.5 animate-spin" style={style} />;
             case 'complete':
-                return 'border-l-zinc-800';
+                return <CheckCircle2 className="w-3.5 h-3.5" style={style} />;
             case 'error':
-                return 'border-l-red-400';
+                return <XCircle className="w-3.5 h-3.5" style={style} />;
             case 'skipped':
-                return 'border-l-yellow-400';
+                return <XCircle className="w-3.5 h-3.5" style={style} />;
             default:
-                return 'border-l-zinc-600';
+                return <Zap className="w-3.5 h-3.5" style={style} />;
         }
     };
 
@@ -221,15 +223,18 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     // Compact inline display for most tools, expanded for run_command
     if (!isRunCommand) {
         return (
-            <div className={`group/tool border-l-2 pl-2.5 text-[11px] transition-opacity duration-1000 ease-out ${getStatusColor()} ${isVisuallyComplete ? 'opacity-45' : 'opacity-100'}`}>
+            <div
+                className={`group/tool border-l-2 pl-2.5 text-[11px] transition-opacity duration-1000 ease-out ${isVisuallyComplete ? 'opacity-45' : 'opacity-100'}`}
+                style={{ borderLeftColor: getStatusTone() }}
+            >
                 <div className="flex items-start gap-2 py-1">
-                    <div className="flex h-5 w-5 shrink-0 items-center justify-center text-zinc-500">
+                    <div className="flex h-5 w-5 shrink-0 items-center justify-center text-(--fg-tertiary)">
                         {getStatusIcon()}
                     </div>
                     <div className="min-w-0 flex-1 space-y-0.5">
                         <div className="flex items-start gap-2">
                             <div className="min-w-0 flex flex-1 items-center gap-2">
-                                <span className={`shrink-0 text-[11px] font-medium ${isVisuallyComplete ? 'text-zinc-500' : 'text-stone-300'}`}>
+                                <span className={`shrink-0 text-[11px] font-medium ${isVisuallyComplete ? 'text-(--fg-tertiary)' : 'text-(--fg-primary)'}`}>
                                     {getFriendlyToolName(toolCall.function.name, parsedArgs)}
                                 </span>
                                 {displayPathText && (
@@ -239,9 +244,9 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                                         disabled={!onOpenFile}
                                         className={`min-w-0 flex-1 truncate text-left text-[10px] transition-colors ${onOpenFile
                                             ? isVisuallyComplete
-                                                ? 'text-zinc-600 hover:text-zinc-500'
-                                                : 'text-zinc-400 hover:text-zinc-200'
-                                            : 'text-zinc-500'
+                                                ? 'text-(--fg-tertiary) hover:text-(--fg-secondary)'
+                                                : 'text-(--fg-secondary) hover:text-(--fg-primary)'
+                                            : 'text-(--fg-tertiary)'
                                             }`}
                                         title={pathText || displayPathText}
                                     >
@@ -250,7 +255,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                                 )}
                                 {!displayPathText && searchQuery && (
                                     <span
-                                        className="min-w-0 flex-1 truncate text-[10px] font-mono text-zinc-500"
+                                        className="min-w-0 flex-1 truncate text-[10px] font-mono text-(--fg-tertiary)"
                                         title={searchQuery}
                                     >
                                         {searchQuery}
@@ -259,21 +264,21 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                             </div>
                             <div className="ml-auto flex shrink-0 items-center gap-1 pl-2">
                                 <span className={`text-[9px] font-semibold uppercase tracking-[0.14em] ${status === 'complete'
-                                    ? 'text-zinc-600'
+                                    ? 'text-(--accent-green)'
                                     : status === 'executing'
-                                        ? 'text-blue-300'
+                                        ? 'text-(--accent-primary)'
                                         : status === 'error'
-                                            ? 'text-red-300'
+                                            ? 'text-(--accent-error)'
                                             : status === 'skipped'
-                                                ? 'text-yellow-300'
-                                                : 'text-zinc-400'
+                                                ? 'text-(--accent-warning)'
+                                                : 'text-(--accent-purple)'
                                     }`}>
                                     {getStatusText()}
                                 </span>
                                 {detailItems.length > 0 && (
                                     <button
                                         onClick={() => setIsExpanded(!isExpanded)}
-                                        className="rounded p-0.5 text-zinc-600 transition-colors hover:text-zinc-300"
+                                        className="rounded p-0.5 text-(--fg-tertiary) transition-colors hover:text-(--fg-primary)"
                                         title={isExpanded ? 'Hide details' : 'Show details'}
                                     >
                                         {isExpanded ? (
@@ -288,7 +293,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                         <div className="flex flex-wrap items-center gap-1.5 pl-0.5">
                             {searchQuery && displayPathText && (
                                 <span
-                                    className="min-w-0 max-w-full truncate text-[10px] font-mono text-zinc-500"
+                                    className="min-w-0 max-w-full truncate text-[10px] font-mono text-(--fg-tertiary)"
                                     title={searchQuery}
                                 >
                                     {searchQuery}
@@ -300,7 +305,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                                         e.stopPropagation();
                                         onUndo();
                                     }}
-                                    className="flex items-center gap-1 rounded px-1 py-0.5 text-[9px] text-zinc-600 transition-colors hover:text-red-300"
+                                    className="flex items-center gap-1 rounded px-1 py-0.5 text-[9px] text-(--fg-tertiary) transition-colors hover:text-(--accent-error)"
                                     title="Undo changes"
                                 >
                                     <RotateCcw className="w-2.5 h-2.5" />
@@ -311,14 +316,17 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                     </div>
                 </div>
                 {isExpanded && detailItems.length > 0 && (
-                    <div className="ml-7 border-l border-zinc-800/70 pl-3 pb-1 pt-1">
+                    <div
+                        className="ml-7 border-l pl-3 pb-1 pt-1"
+                        style={{ borderLeftColor: 'color-mix(in srgb, var(--border-default) 82%, transparent)' }}
+                    >
                         <div className="space-y-1.5">
                             {detailItems.map((item) => (
                                 <div key={item.label} className="space-y-0.5">
-                                    <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                                    <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-(--fg-tertiary)">
                                         {item.label}
                                     </div>
-                                    <div className="wrap-break-word text-[11px] leading-4 text-zinc-300">
+                                    <div className="wrap-break-word text-[11px] leading-4 text-(--fg-primary)">
                                         {item.value}
                                     </div>
                                 </div>
@@ -331,14 +339,17 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     }
 
     return (
-        <div className={`border-l-2 pl-2.5 transition-opacity duration-1000 ease-out ${getStatusColor()} ${isVisuallyComplete ? 'opacity-45' : 'opacity-100'}`}>
+        <div
+            className={`border-l-2 pl-2.5 transition-opacity duration-1000 ease-out ${isVisuallyComplete ? 'opacity-45' : 'opacity-100'}`}
+            style={{ borderLeftColor: getStatusTone() }}
+        >
             <div className="flex items-center justify-between gap-2 py-1">
                 <div className="flex min-w-0 items-center gap-2">
-                    <div className="flex h-5 w-5 items-center justify-center text-zinc-500">
+                    <div className="flex h-5 w-5 items-center justify-center text-(--fg-tertiary)">
                         {getStatusIcon()}
                     </div>
                     <div className="min-w-0">
-                        <span className={`block truncate text-[11px] font-medium ${isVisuallyComplete ? 'text-zinc-500' : 'text-stone-300'}`}>
+                        <span className={`block truncate text-[11px] font-medium ${isVisuallyComplete ? 'text-(--fg-tertiary)' : 'text-(--fg-primary)'}`}>
                             {getFriendlyToolName(toolCall.function.name, parsedArgs)}
                         </span>
                     </div>
@@ -350,17 +361,17 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                                 e.stopPropagation();
                                 onStopCommand();
                             }}
-                            className="inline-flex h-5 w-5 items-center justify-center rounded text-red-400 transition-colors hover:text-red-300"
+                            className="inline-flex h-5 w-5 items-center justify-center rounded text-(--accent-error) transition-colors hover:opacity-80"
                             title={t('toolCall.stopCommand')}
                             aria-label={t('toolCall.stopCommand')}
                         >
                             <StopCircle className="h-3.5 w-3.5" />
                         </button>
                     )}
-                    <span className={`text-[9px] font-semibold uppercase tracking-[0.14em] ${status === 'complete' ? 'text-zinc-600' :
-                        status === 'executing' ? 'text-blue-400' :
-                            status === 'error' ? 'text-red-400' :
-                                status === 'skipped' ? 'text-yellow-400' : 'text-zinc-500'
+                    <span className={`text-[9px] font-semibold uppercase tracking-[0.14em] ${status === 'complete' ? 'text-(--accent-green)' :
+                        status === 'executing' ? 'text-(--accent-primary)' :
+                            status === 'error' ? 'text-(--accent-error)' :
+                                status === 'skipped' ? 'text-(--accent-warning)' : 'text-(--accent-purple)'
                         }`}>
                         {getStatusText()}
                     </span>
@@ -368,21 +379,24 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
             </div>
 
             {commandText && (
-                <div className="ml-7 border-l border-zinc-800/70 pl-3 pb-1 pt-1">
+                <div
+                    className="ml-7 border-l pl-3 pb-1 pt-1"
+                    style={{ borderLeftColor: 'color-mix(in srgb, var(--border-default) 82%, transparent)' }}
+                >
                     <div className="flex items-start gap-2">
-                        <code className={`flex-1 break-all text-[12px] font-mono leading-5 select-text ${isVisuallyComplete ? 'text-zinc-500' : 'text-stone-300'}`}>
-                            {cwdText && <span className="text-zinc-500">{cwdText}$ </span>}
+                        <code className={`flex-1 break-all text-[12px] font-mono leading-5 select-text ${isVisuallyComplete ? 'text-(--fg-tertiary)' : 'text-(--fg-primary)'}`}>
+                            {cwdText && <span className="text-(--fg-tertiary)">{cwdText}$ </span>}
                             {commandText}
                         </code>
                         <button
                             onClick={() => handleCopyCommand(commandText)}
-                            className="group/copy shrink-0 rounded p-1 text-zinc-500 transition-colors hover:text-zinc-300"
+                            className="group/copy shrink-0 rounded p-1 text-(--fg-tertiary) transition-colors hover:text-(--fg-primary)"
                             title={t('toolCall.copyCommand')}
                         >
                             {copied ? (
                                 <Check className="w-3.5 h-3.5 text-emerald-400" />
                             ) : (
-                                <Copy className="w-3.5 h-3.5 text-zinc-500 group-hover/copy:text-zinc-300" />
+                                <Copy className="w-3.5 h-3.5 text-(--fg-tertiary) group-hover/copy:text-(--fg-primary)" />
                             )}
                         </button>
                     </div>

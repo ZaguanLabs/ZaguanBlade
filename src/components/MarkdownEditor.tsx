@@ -54,22 +54,23 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
     }, []);
 
     return (
-        <div className="h-full flex flex-col bg-[#1e1e1e]">
+        <div className="h-full flex flex-col bg-(--editor-bg)">
             {/* Toggle Bar */}
-            <div className="h-10 bg-zinc-900/50 border-b border-zinc-800 flex items-center justify-between px-4">
+            <div className="h-10 border-b border-(--markdown-border) flex items-center justify-between px-4" style={{ backgroundColor: 'var(--markdown-block-header-bg)' }}>
                 <div className="flex items-center gap-2">
-                    <span className="text-xs text-zinc-500 font-mono">
+                    <span className="text-xs text-(--markdown-marker) font-mono">
                         {filename?.split('/').pop() || t('editor.untitled')}
                     </span>
                 </div>
 
-                <div className="flex items-center gap-1 bg-zinc-800/50 rounded-md p-0.5">
+                <div className="flex items-center gap-1 rounded-md p-0.5" style={{ backgroundColor: 'color-mix(in srgb, var(--markdown-inline-code-bg) 80%, transparent)' }}>
                     <button
                         onClick={() => setMode(mode === 'edit' ? 'view' : 'edit')}
                         className={`flex items-center gap-2 px-3 py-1 rounded text-xs font-medium transition-all ${mode === 'edit'
-                                ? 'bg-zinc-700 text-zinc-100 shadow-sm border border-zinc-600'
-                                : 'bg-emerald-900/40 text-emerald-200 shadow-sm border border-emerald-800/50'
+                                ? 'shadow-sm border text-(--markdown-heading) border-(--markdown-border) bg-(--markdown-inline-code-bg)'
+                                : 'shadow-sm border border-(--accent-primary) text-(--markdown-link)'
                             }`}
+                        style={mode === 'view' ? { backgroundColor: 'color-mix(in srgb, var(--accent-primary) 18%, transparent)' } : undefined}
                         title={t('editor.toggleEditView')}
                     >
                         {mode === 'edit' ? (
@@ -85,7 +86,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
                         )}
                     </button>
                     {/* Helper hint */}
-                    <span className="text-[10px] text-zinc-500 px-1 font-mono hidden sm:inline-block">
+                    <span className="text-[10px] text-(--markdown-marker) px-1 font-mono hidden sm:inline-block">
                         Ctrl+E
                     </span>
                 </div>
@@ -112,7 +113,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
                         )}
                     </>
                 ) : (
-                    <div className="h-full overflow-y-auto px-8 py-6 pb-[35vh] bg-[#1e1e1e]" style={{ scrollPaddingBottom: '35vh' }}>
+                    <div className="h-full overflow-y-auto px-8 py-6 pb-[35vh] bg-(--editor-bg)" style={{ scrollPaddingBottom: '35vh' }}>
                         <div className="max-w-4xl mx-auto">
                             <MarkdownRenderer content={content} />
                         </div>

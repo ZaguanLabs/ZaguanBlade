@@ -16,7 +16,7 @@ const customTheme = {
     ...oneDark,
     'pre[class*="language-"]': {
         ...oneDark['pre[class*="language-"]'],
-        background: '#0c0c0e',
+        background: 'var(--markdown-block-bg)',
         margin: 0,
         padding: '1rem',
         fontSize: '12px',
@@ -63,21 +63,22 @@ const CodeBlock = React.memo<CodeBlockProps>(({ language, value }) => {
     const displayLanguage = language || 'text';
 
     return (
-        <div className="group relative my-3 rounded-lg overflow-hidden border border-zinc-800 bg-[#0c0c0e]">
+        <div className="group relative my-3 rounded-lg overflow-hidden border border-(--markdown-border) bg-(--markdown-block-bg)">
             {/* Header with language label and copy button */}
-            <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-900/50 border-b border-zinc-800">
-                <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider">
+            <div className="flex items-center justify-between px-3 py-1.5 border-b border-(--markdown-border)" style={{ backgroundColor: 'var(--markdown-block-header-bg)' }}>
+                <span className="text-[10px] font-mono text-(--markdown-marker) uppercase tracking-wider">
                     {displayLanguage}
                 </span>
                 <button
                     onClick={handleCopy}
-                    className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+                    className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-(--markdown-marker) hover:text-(--markdown-heading) transition-colors"
+                    style={{ backgroundColor: copied ? 'color-mix(in srgb, var(--accent-primary) 14%, transparent)' : undefined }}
                     title="Copy code"
                 >
                     {copied ? (
                         <>
-                            <Check className="w-3 h-3 text-emerald-400" />
-                            <span className="text-emerald-400">Copied</span>
+                            <Check className="w-3 h-3 text-(--markdown-link)" />
+                            <span className="text-(--markdown-link)">Copied</span>
                         </>
                     ) : (
                         <>
@@ -106,7 +107,7 @@ CodeBlock.displayName = 'CodeBlock';
 
 // Simple inline code - no need for heavy memoization
 const InlineCode: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-    <code className="px-1.5 py-0.5 rounded bg-zinc-800 text-emerald-400 text-[11px] font-mono">
+    <code className="px-1.5 py-0.5 rounded bg-(--markdown-inline-code-bg) text-(--markdown-inline-code-fg) text-[11px] font-mono">
         {children}
     </code>
 );
@@ -136,7 +137,7 @@ const markdownComponents = {
     // Paragraphs
     p({ children }: { children?: React.ReactNode }) {
         return (
-            <p className="text-[12px] font-medium text-stone-400 leading-relaxed my-2 first:mt-0 last:mb-0">
+            <p className="text-[12px] font-medium text-(--markdown-body) leading-relaxed my-2 first:mt-0 last:mb-0">
                 {children}
             </p>
         );
@@ -145,28 +146,28 @@ const markdownComponents = {
     // Headings
     h1({ children }: { children?: React.ReactNode }) {
         return (
-            <h1 className="text-[15px] font-semibold text-stone-300 mt-4 mb-2 first:mt-0 border-b border-zinc-800 pb-1">
+            <h1 className="text-[15px] font-semibold text-(--markdown-heading) mt-4 mb-2 first:mt-0 border-b border-(--markdown-border) pb-1">
                 {children}
             </h1>
         );
     },
     h2({ children }: { children?: React.ReactNode }) {
         return (
-            <h2 className="text-[14px] font-semibold text-stone-300 mt-4 mb-2 first:mt-0 border-b border-zinc-800/50 pb-1">
+            <h2 className="text-[14px] font-semibold text-(--markdown-heading) mt-4 mb-2 first:mt-0 border-b border-(--markdown-border) pb-1">
                 {children}
             </h2>
         );
     },
     h3({ children }: { children?: React.ReactNode }) {
         return (
-            <h3 className="text-[13px] font-semibold text-stone-300 mt-3 mb-1.5 first:mt-0">
+            <h3 className="text-[13px] font-semibold text-(--markdown-heading) mt-3 mb-1.5 first:mt-0">
                 {children}
             </h3>
         );
     },
     h4({ children }: { children?: React.ReactNode }) {
         return (
-            <h4 className="text-[12px] font-semibold text-stone-300 mt-2 mb-1 first:mt-0">
+            <h4 className="text-[12px] font-semibold text-(--markdown-heading) mt-2 mb-1 first:mt-0">
                 {children}
             </h4>
         );
@@ -175,21 +176,21 @@ const markdownComponents = {
     // Lists
     ul({ children }: { children?: React.ReactNode }) {
         return (
-            <ul className="my-2 ml-4 space-y-1 list-disc marker:text-zinc-600">
+            <ul className="my-2 ml-4 space-y-1 list-disc marker:text-(--markdown-marker)">
                 {children}
             </ul>
         );
     },
     ol({ children }: { children?: React.ReactNode }) {
         return (
-            <ol className="my-2 ml-4 space-y-1 list-decimal marker:text-zinc-500">
+            <ol className="my-2 ml-4 space-y-1 list-decimal marker:text-(--markdown-marker)">
                 {children}
             </ol>
         );
     },
     li({ children }: { children?: React.ReactNode }) {
         return (
-            <li className="text-[12px] font-medium text-stone-400 leading-relaxed pl-1">
+            <li className="text-[12px] font-medium text-(--markdown-body) leading-relaxed pl-1">
                 {children}
             </li>
         );
@@ -202,7 +203,7 @@ const markdownComponents = {
                 href={href}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-emerald-400 hover:text-emerald-300 hover:underline transition-colors"
+                className="text-(--markdown-link) hover:text-(--markdown-link-hover) hover:underline transition-colors"
             >
                 {children}
             </a>
@@ -211,18 +212,18 @@ const markdownComponents = {
 
     // Strong/Bold
     strong({ children }: { children?: React.ReactNode }) {
-        return <strong className="font-semibold text-stone-300">{children}</strong>;
+        return <strong className="font-semibold text-(--markdown-strong)">{children}</strong>;
     },
 
     // Emphasis/Italic
     em({ children }: { children?: React.ReactNode }) {
-        return <em className="italic text-stone-400">{children}</em>;
+        return <em className="italic text-(--markdown-body)">{children}</em>;
     },
 
     // Blockquotes
     blockquote({ children }: { children?: React.ReactNode }) {
         return (
-            <blockquote className="my-3 pl-3 border-l-2 border-emerald-500/50 text-stone-400 italic">
+            <blockquote className="my-3 pl-3 border-l-2 text-(--markdown-body) italic" style={{ borderLeftColor: 'color-mix(in srgb, var(--markdown-link) 50%, transparent)' }}>
                 {children}
             </blockquote>
         );
@@ -230,13 +231,13 @@ const markdownComponents = {
 
     // Horizontal rule
     hr() {
-        return <hr className="my-4 border-zinc-800" />;
+        return <hr className="my-4 border-(--markdown-border)" />;
     },
 
     // Tables
     table({ children }: { children?: React.ReactNode }) {
         return (
-            <div className="my-3 overflow-x-auto rounded-lg border border-zinc-800">
+            <div className="my-3 overflow-x-auto rounded-lg border border-(--markdown-border)">
                 <table className="w-full text-[12px]">
                     {children}
                 </table>
@@ -245,31 +246,31 @@ const markdownComponents = {
     },
     thead({ children }: { children?: React.ReactNode }) {
         return (
-            <thead className="bg-zinc-900/50 border-b border-zinc-800">
+            <thead className="border-b border-(--markdown-border)" style={{ backgroundColor: 'var(--markdown-block-header-bg)' }}>
                 {children}
             </thead>
         );
     },
     tbody({ children }: { children?: React.ReactNode }) {
-        return <tbody className="divide-y divide-zinc-800/50">{children}</tbody>;
+        return <tbody className="divide-y divide-(--markdown-border)">{children}</tbody>;
     },
     tr({ children }: { children?: React.ReactNode }) {
         return (
-            <tr className="hover:bg-zinc-900/30 transition-colors">
+            <tr className="transition-colors hover:bg-(--markdown-table-hover)">
                 {children}
             </tr>
         );
     },
     th({ children }: { children?: React.ReactNode }) {
         return (
-            <th className="px-3 py-2 text-left font-semibold text-zinc-300">
+            <th className="px-3 py-2 text-left font-semibold text-(--markdown-heading)">
                 {children}
             </th>
         );
     },
     td({ children }: { children?: React.ReactNode }) {
         return (
-            <td className="px-3 py-2 text-zinc-400">
+            <td className="px-3 py-2 text-(--markdown-body)">
                 {children}
             </td>
         );
@@ -281,7 +282,7 @@ const markdownComponents = {
             <img
                 src={src}
                 alt={alt || ''}
-                className="my-3 max-w-full rounded-lg border border-zinc-800"
+                className="my-3 max-w-full rounded-lg border border-(--markdown-border)"
             />
         );
     },

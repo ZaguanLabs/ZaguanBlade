@@ -4,9 +4,10 @@ import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { emit } from '@tauri-apps/api/event';
 import { getVersion } from '@tauri-apps/api/app';
-import { X, Database, Cloud, Shield, Zap, HardDrive, Server, ChevronRight, Info, Loader2, Code, Key, CheckCircle2 } from 'lucide-react';
+import { X, Database, Cloud, Shield, Zap, HardDrive, Server, ChevronRight, ChevronDown, Info, Loader2, Code, Key, CheckCircle2, Palette } from 'lucide-react';
 import type { BackendSettings, LocalAiConfig, RemoteAiConfig } from '../types/settings';
 import zbladeLogoUrl from '../assets/zblade-in-app-logo.png';
+import { availableThemes, normalizeThemeId } from '../themes';
 
 type StorageMode = 'local' | 'server';
 
@@ -35,12 +36,14 @@ interface SettingsState {
         telemetry: boolean;
     };
     editor: {};
+    configuration: {
+        theme: string;
+        markdownView: string;
+    };
     account: {
         bladeUrl: string;
         apiKey: string;
         userId: string;
-        theme: string;
-        markdownView: string;
     };
     localAi: {
         ollamaEnabled: boolean;
@@ -73,12 +76,14 @@ const defaultSettings: SettingsState = {
         telemetry: false,
     },
     editor: {},
+    configuration: {
+        theme: 'zaguan-dark',
+        markdownView: 'split',
+    },
     account: {
         bladeUrl: '',
         apiKey: '',
         userId: '',
-        theme: 'system',
-        markdownView: 'split',
     },
     localAi: {
         ollamaEnabled: false,
@@ -97,14 +102,16 @@ const defaultSettings: SettingsState = {
 
 
 
-function backendRemoteToFrontend(backend: RemoteAiConfig): Pick<SettingsState, 'account'> {
+function backendRemoteToFrontend(backend: RemoteAiConfig): Pick<SettingsState, 'account' | 'configuration'> {
     return {
+        configuration: {
+            theme: normalizeThemeId(backend.theme),
+            markdownView: backend.markdown_view || 'split',
+        },
         account: {
             bladeUrl: '', // Always empty, internal only
             apiKey: backend.api_key,
             userId: backend.user_id,
-            theme: backend.theme,
-            markdownView: backend.markdown_view,
         },
     };
 }
@@ -127,8 +134,8 @@ function frontendRemoteToBackend(frontend: SettingsState): RemoteAiConfig {
         blade_url: '', // Frontend does not set this
         api_key: frontend.account.apiKey,
         user_id: frontend.account.userId,
-        theme: frontend.account.theme,
-        markdown_view: frontend.account.markdownView,
+        theme: normalizeThemeId(frontend.configuration.theme),
+        markdown_view: frontend.configuration.markdownView,
     };
 }
 
@@ -143,7 +150,7 @@ function frontendLocalToBackend(frontend: SettingsState): LocalAiConfig {
     };
 }
 
-function backendToFrontend(backend: BackendSettings): Omit<SettingsState, 'account' | 'localAi'> {
+function backendToFrontend(backend: BackendSettings): Omit<SettingsState, 'account' | 'localAi' | 'configuration'> {
     return {
         storage: {
             mode: backend.storage.mode,
@@ -200,12 +207,12 @@ interface SettingsModalProps {
     onRefreshModels?: () => Promise<import('../types/chat').ModelInfo[]>;
 }
 
-type SettingsSection = 'account' | 'localai' | 'storage' | 'context' | 'privacy' | 'editor' | 'about';
+type SettingsSection = 'configuration' | 'account' | 'localai' | 'storage' | 'context' | 'privacy' | 'editor' | 'about';
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, workspacePath, onRefreshModels }) => {
     const { t } = useTranslation();
     const [settings, setSettings] = useState<SettingsState>(defaultSettings);
-    const [activeSection, setActiveSection] = useState<SettingsSection>('account');
+    const [activeSection, setActiveSection] = useState<SettingsSection>('configuration');
     const [hasChanges, setHasChanges] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
@@ -274,7 +281,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
         loadSettings();
     }, [isOpen, workspacePath]);
 
-    const updateSettings = <K extends 'storage' | 'context' | 'privacy' | 'editor' | 'account' | 'localAi'>(
+    const updateSettings = <K extends 'storage' | 'context' | 'privacy' | 'editor' | 'configuration' | 'account' | 'localAi'>(
         section: K,
         updates: Partial<SettingsState[K]>
     ) => {
@@ -334,6 +341,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
     if (!isOpen) return null;
 
     const sections: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
+        { id: 'configuration', label: 'Configuration', icon: <Palette className="w-4 h-4" /> },
         { id: 'account', label: 'Account', icon: <Key className="w-4 h-4" /> },
         { id: 'localai', label: 'Local AI', icon: <Server className="w-4 h-4" /> },
         { id: 'storage', label: 'Storage', icon: <Database className="w-4 h-4" /> },
@@ -403,6 +411,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
                                         {error}
                                     </div>
                                 )}
+                                {activeSection === 'configuration' && (
+                                    <ConfigurationSettings
+                                        settings={settings.configuration}
+                                        onChange={(updates) => updateSettings('configuration', updates)}
+                                    />
+                                )}
                                 {activeSection === 'storage' && (
                                     <StorageSettings
                                         settings={settings.storage}
@@ -471,6 +485,89 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
                             {isSaving && <Loader2 className="w-4 h-4 animate-spin" />}
                             {isSaving ? 'Saving...' : 'Save Changes'}
                         </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+interface ConfigurationSettingsProps {
+    settings: SettingsState['configuration'];
+    onChange: (updates: Partial<SettingsState['configuration']>) => void;
+}
+
+const ConfigurationSettings: React.FC<ConfigurationSettingsProps> = ({ settings, onChange }) => {
+    const selectedTheme = availableThemes.find((theme) => theme.id === normalizeThemeId(settings.theme)) ?? availableThemes[0];
+
+    return (
+        <div className="space-y-6">
+            <div>
+                <h3 className="text-base font-semibold text-(--fg-primary) mb-1">Configuration</h3>
+                <p className="text-sm text-(--fg-tertiary) mb-4">
+                    Configure global experience settings for the app.
+                </p>
+            </div>
+
+            <div className="border border-(--border-default) rounded-[calc(var(--panel-radius)+4px)] p-5 space-y-5 bg-[color-mix(in_srgb,var(--bg-panel)_88%,var(--bg-editor))] shadow-(--panel-shadow)">
+                <div>
+                    <div className="text-sm font-medium text-(--fg-primary)">Theme</div>
+                    <div className="text-xs text-(--fg-tertiary) mt-1">
+                        Choose which built-in visual theme Zaguán Blade should use.
+                    </div>
+                </div>
+
+                <div className="space-y-2.5">
+                    <label className="text-xs font-medium uppercase tracking-[0.16em] text-(--fg-secondary) block">
+                        Available themes
+                    </label>
+
+                    <div className="relative">
+                        <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-4">
+                            <div className="flex items-center gap-2">
+                                <span className="h-3 w-3 rounded-full border border-(--border-default)" style={{ backgroundColor: 'var(--accent-primary)' }} />
+                                <span className="h-3 w-3 rounded-full border border-(--border-default)" style={{ backgroundColor: 'var(--bg-surface)' }} />
+                                <span className="h-3 w-3 rounded-full border border-(--border-default)" style={{ backgroundColor: 'var(--fg-primary)' }} />
+                            </div>
+                        </div>
+                        <select
+                            value={normalizeThemeId(settings.theme)}
+                            onChange={(e) => onChange({ theme: normalizeThemeId(e.target.value) })}
+                            className="w-full appearance-none rounded-[calc(var(--panel-radius)+2px)] border border-(--border-default) bg-(--bg-surface) py-3 pr-12 pl-20 text-sm font-medium text-(--fg-primary) shadow-(--shadow-sm) transition-[border-color,background-color,box-shadow] duration-200 hover:bg-(--bg-surface-hover) focus:outline-none focus:border-(--accent-primary) focus:shadow-[0_0_0_1px_var(--accent-primary),var(--shadow-md)]"
+                        >
+                            {availableThemes.map((theme) => (
+                                <option key={theme.id} value={theme.id}>
+                                    {theme.label}
+                                </option>
+                            ))}
+                        </select>
+                        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4 text-(--fg-secondary)">
+                            <ChevronDown className="w-4 h-4" />
+                        </div>
+                    </div>
+                </div>
+
+                <div className="rounded-[calc(var(--panel-radius)+2px)] border border-(--border-subtle) bg-(--bg-surface) p-4 shadow-(--shadow-sm) space-y-3">
+                    <div className="flex items-start justify-between gap-4">
+                        <div className="space-y-1">
+                            <div className="text-sm font-semibold text-(--fg-primary)">{selectedTheme.label}</div>
+                            <div className="text-xs leading-relaxed text-(--fg-secondary)">{selectedTheme.description}</div>
+                        </div>
+                        <div className="shrink-0 rounded-full border border-(--border-default) px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] text-(--accent-primary) bg-[color-mix(in_srgb,var(--accent-primary)_10%,transparent)]">
+                            Live
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-4 gap-2">
+                        <div className="h-12 rounded-[calc(var(--panel-radius)-4px)] border border-(--border-subtle) shadow-(--shadow-sm)" style={{ backgroundColor: 'var(--bg-app)' }} />
+                        <div className="h-12 rounded-[calc(var(--panel-radius)-4px)] border border-(--border-subtle) shadow-(--shadow-sm)" style={{ backgroundColor: 'var(--bg-panel)' }} />
+                        <div className="h-12 rounded-[calc(var(--panel-radius)-4px)] border border-(--border-subtle) shadow-(--shadow-sm)" style={{ backgroundColor: 'var(--bg-surface)' }} />
+                        <div className="h-12 rounded-[calc(var(--panel-radius)-4px)] border border-(--border-subtle) shadow-(--shadow-sm)" style={{ backgroundColor: 'var(--accent-primary)' }} />
+                    </div>
+
+                    <div className="flex items-center gap-2 text-[11px] text-(--fg-tertiary)">
+                        <span className="h-2 w-2 rounded-full bg-(--accent-primary)" />
+                        <span>This theme updates the app shell, editor, markdown, and terminal together.</span>
                     </div>
                 </div>
             </div>

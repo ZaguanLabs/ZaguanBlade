@@ -1,5 +1,6 @@
 use serde::Serialize;
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::process::Command;
 use tauri::State;
 
@@ -76,6 +77,13 @@ fn empty_summary() -> GitStatusSummary {
         ahead: 0,
         behind: 0,
         dirty: false,
+    }
+}
+
+fn empty_snapshot() -> GitStatusSnapshot {
+    GitStatusSnapshot {
+        summary: empty_summary(),
+        files: Vec::new(),
     }
 }
 
@@ -266,9 +274,8 @@ fn workspace_root(state: &State<'_, AppState>) -> Option<String> {
 }
 
 fn open_repo(state: &State<'_, AppState>) -> Result<gix::Repository, String> {
-    let git_dir = state.git_dir.read().unwrap();
-    let path = git_dir.as_ref().ok_or("Not a Git repository")?;
-    gix::open(path).map_err(|e| format!("Failed to open git repository: {}", e))
+    let root = workspace_root(state).ok_or("Not a Git repository")?;
+    gix::discover(&root).map_err(|e| format!("Failed to discover git repository: {}", e))
 }
 
 fn normalize_remote_url(url: &str) -> String {
@@ -281,6 +288,301 @@ fn normalize_remote_url(url: &str) -> String {
         url.trim_end_matches(".git").to_string()
     } else {
         url.to_string()
+    }
+}
+
+#[derive(Default)]
+struct PendingGitFileStatus {
+    display_path: Option<String>,
+    staged: bool,
+    unstaged: bool,
+    untracked: bool,
+    conflicted: bool,
+    staged_code: Option<char>,
+    unstaged_code: Option<char>,
+}
+
+impl PendingGitFileStatus {
+    fn into_git_file_status(self, path: String) -> GitFileStatus {
+        let status_code = if self.untracked {
+            "??".to_string()
+        } else {
+            let x = self
+                .staged_code
+                .unwrap_or(if self.conflicted && self.staged { 'U' } else { '.' });
+            let y = self
+                .unstaged_code
+                .unwrap_or(if self.conflicted && self.unstaged { 'U' } else { '.' });
+            format!("{}{}", x, y)
+        };
+
+        GitFileStatus {
+            path,
+            display_path: self.display_path,
+            staged: self.staged,
+            unstaged: self.unstaged,
+            untracked: self.untracked,
+            conflicted: self.conflicted,
+            status_code,
+        }
+    }
+}
+
+fn bstr_to_string(path: &gix::bstr::BStr) -> String {
+    String::from_utf8_lossy(path.as_ref()).into_owned()
+}
+
+fn count_walk<T, E>(iter: impl IntoIterator<Item = Result<T, E>>) -> Result<u32, String>
+where
+    E: std::fmt::Display,
+{
+    let mut count = 0u32;
+    for item in iter {
+        item.map_err(|e| e.to_string())?;
+        count = count.saturating_add(1);
+    }
+    Ok(count)
+}
+
+fn collect_ahead_behind(repo: &gix::Repository) -> Result<(u32, u32), String> {
+    let Some(head_ref) = repo
+        .head_ref()
+        .map_err(|e| format!("Failed to read HEAD reference: {}", e))?
+    else {
+        return Ok((0, 0));
+    };
+
+    let Some(tracking_name_result) = head_ref.remote_tracking_ref_name(gix::remote::Direction::Fetch) else {
+        return Ok((0, 0));
+    };
+    let tracking_name = tracking_name_result
+        .map_err(|e| format!("Failed to resolve tracking branch: {}", e))?;
+
+    let local_id = match repo.head_id() {
+        Ok(id) => id.detach(),
+        Err(_) => return Ok((0, 0)),
+    };
+
+    let upstream_id = match repo.find_reference(tracking_name.as_ref()) {
+        Ok(reference) => match reference.into_fully_peeled_id() {
+            Ok(id) => id.detach(),
+            Err(_) => return Ok((0, 0)),
+        },
+        Err(_) => return Ok((0, 0)),
+    };
+
+    let ahead = count_walk(
+        repo.rev_walk([local_id])
+            .with_hidden([upstream_id])
+            .all()
+            .map_err(|e| format!("Failed to walk local commits: {}", e))?,
+    )?;
+    let behind = count_walk(
+        repo.rev_walk([upstream_id])
+            .with_hidden([local_id])
+            .all()
+            .map_err(|e| format!("Failed to walk upstream commits: {}", e))?,
+    )?;
+
+    Ok((ahead, behind))
+}
+
+fn collect_git_status_snapshot_gix(repo: &gix::Repository) -> Result<GitStatusSnapshot, String> {
+    let mut files_by_path: BTreeMap<String, PendingGitFileStatus> = BTreeMap::new();
+    let mut iter = repo
+        .status(gix::progress::Discard)
+        .map_err(|e| format!("Failed to initialize git status: {}", e))?
+        .untracked_files(gix::status::UntrackedFiles::Files)
+        .tree_index_track_renames(gix::status::tree_index::TrackRenames::AsConfigured)
+        .index_worktree_rewrites(Some(gix::diff::Rewrites::default()))
+        .into_iter(Vec::<gix::bstr::BString>::new())
+        .map_err(|e| format!("Failed to create git status iterator: {}", e))?;
+
+    for item in &mut iter {
+        match item.map_err(|e| format!("Failed to collect git status item: {}", e))? {
+            gix::status::Item::TreeIndex(change) => match change {
+                gix::diff::index::Change::Addition { location, .. } => {
+                    let path = bstr_to_string(location.as_ref());
+                    if is_zblade_path(&path) {
+                        continue;
+                    }
+                    let file = files_by_path.entry(path).or_default();
+                    file.staged = true;
+                    file.staged_code = Some('A');
+                }
+                gix::diff::index::Change::Deletion { location, .. } => {
+                    let path = bstr_to_string(location.as_ref());
+                    if is_zblade_path(&path) {
+                        continue;
+                    }
+                    let file = files_by_path.entry(path).or_default();
+                    file.staged = true;
+                    file.staged_code = Some('D');
+                }
+                gix::diff::index::Change::Modification {
+                    location,
+                    previous_entry_mode,
+                    entry_mode,
+                    ..
+                } => {
+                    let path = bstr_to_string(location.as_ref());
+                    if is_zblade_path(&path) {
+                        continue;
+                    }
+                    let file = files_by_path.entry(path).or_default();
+                    file.staged = true;
+                    file.staged_code = Some(if previous_entry_mode != entry_mode { 'T' } else { 'M' });
+                }
+                gix::diff::index::Change::Rewrite {
+                    source_location,
+                    location,
+                    copy,
+                    ..
+                } => {
+                    let path = bstr_to_string(location.as_ref());
+                    if is_zblade_path(&path) {
+                        continue;
+                    }
+                    let source_path = bstr_to_string(source_location.as_ref());
+                    let file = files_by_path.entry(path.clone()).or_default();
+                    file.display_path = Some(format!("{} → {}", source_path, path));
+                    file.staged = true;
+                    file.staged_code = Some(if copy { 'C' } else { 'R' });
+                }
+            },
+            gix::status::Item::IndexWorktree(item) => {
+                let summary = item.summary();
+                match item {
+                gix::status::index_worktree::Item::Modification { rela_path, .. } => {
+                    let path = bstr_to_string(rela_path.as_ref());
+                    if is_zblade_path(&path) {
+                        continue;
+                    }
+                    let file = files_by_path.entry(path).or_default();
+                    match summary {
+                        Some(gix::status::index_worktree::iter::Summary::Conflict) => {
+                            file.conflicted = true;
+                            file.staged = true;
+                            file.unstaged = true;
+                            file.staged_code = Some('U');
+                            file.unstaged_code = Some('U');
+                        }
+                        Some(gix::status::index_worktree::iter::Summary::Removed) => {
+                            file.unstaged = true;
+                            file.unstaged_code = Some('D');
+                        }
+                        Some(gix::status::index_worktree::iter::Summary::TypeChange) => {
+                            file.unstaged = true;
+                            file.unstaged_code = Some('T');
+                        }
+                        Some(gix::status::index_worktree::iter::Summary::Modified) => {
+                            file.unstaged = true;
+                            file.unstaged_code = Some('M');
+                        }
+                        Some(gix::status::index_worktree::iter::Summary::IntentToAdd) => {
+                            file.unstaged = true;
+                            file.unstaged_code = Some('A');
+                        }
+                        _ => {}
+                    }
+                }
+                gix::status::index_worktree::Item::DirectoryContents { entry, .. } => {
+                    let path = bstr_to_string(entry.rela_path.as_ref());
+                    if is_zblade_path(&path) {
+                        continue;
+                    }
+                    let file = files_by_path.entry(path).or_default();
+                    file.unstaged = true;
+                    file.untracked = true;
+                    file.unstaged_code = Some('?');
+                }
+                gix::status::index_worktree::Item::Rewrite {
+                    source,
+                    dirwalk_entry,
+                    copy,
+                    ..
+                } => {
+                    let path = bstr_to_string(dirwalk_entry.rela_path.as_ref());
+                    if is_zblade_path(&path) {
+                        continue;
+                    }
+                    let source_path = match source {
+                        gix::status::index_worktree::RewriteSource::RewriteFromIndex {
+                            source_rela_path,
+                            ..
+                        } => bstr_to_string(source_rela_path.as_ref()),
+                        gix::status::index_worktree::RewriteSource::CopyFromDirectoryEntry {
+                            source_dirwalk_entry,
+                            ..
+                        } => bstr_to_string(source_dirwalk_entry.rela_path.as_ref()),
+                    };
+                    let file = files_by_path.entry(path.clone()).or_default();
+                    file.display_path = Some(format!("{} → {}", source_path, path));
+                    file.unstaged = true;
+                    file.unstaged_code = Some(if copy { 'C' } else { 'R' });
+                }
+            }},
+        }
+    }
+
+    let files: Vec<GitFileStatus> = files_by_path
+        .into_iter()
+        .map(|(path, file)| file.into_git_file_status(path))
+        .collect();
+
+    let staged_count = files.iter().filter(|file| file.staged).count() as u32;
+    let unstaged_count = files
+        .iter()
+        .filter(|file| file.unstaged && !file.untracked)
+        .count() as u32;
+    let untracked_count = files.iter().filter(|file| file.untracked).count() as u32;
+    let (ahead, behind) = collect_ahead_behind(repo)?;
+    let branch = repo
+        .head()
+        .ok()
+        .and_then(|head| head.referent_name().map(|name| name.shorten().to_string()));
+
+    Ok(GitStatusSnapshot {
+        summary: GitStatusSummary {
+            is_repo: true,
+            changed_count: staged_count + unstaged_count + untracked_count,
+            staged_count,
+            unstaged_count,
+            untracked_count,
+            branch,
+            ahead,
+            behind,
+            dirty: staged_count + unstaged_count + untracked_count > 0,
+        },
+        files,
+    })
+}
+
+fn collect_git_status_snapshot_cli(root: &str) -> Result<GitStatusSnapshot, String> {
+    let stdout = match git_status_output(root)? {
+        Some(output) => output,
+        None => return Ok(empty_snapshot()),
+    };
+
+    Ok(GitStatusSnapshot {
+        summary: parse_git_status(&stdout),
+        files: parse_git_status_files(&stdout),
+    })
+}
+
+fn collect_git_status_snapshot(state: &State<'_, AppState>) -> Result<GitStatusSnapshot, String> {
+    let Some(root) = workspace_root(state) else {
+        return Ok(empty_snapshot());
+    };
+
+    let repo = match open_repo(state) {
+        Ok(repo) => repo,
+        Err(_) => return Ok(empty_snapshot()),
+    };
+
+    match collect_git_status_snapshot_gix(&repo) {
+        Ok(snapshot) => Ok(snapshot),
+        Err(_) => collect_git_status_snapshot_cli(&root),
     }
 }
 
@@ -763,53 +1065,17 @@ fn parse_git_status_files(output: &str) -> Vec<GitFileStatus> {
 
 #[tauri::command]
 pub fn git_status_summary(state: State<'_, AppState>) -> Result<GitStatusSummary, String> {
-    let Some(root) = workspace_root(&state) else {
-        return Ok(empty_summary());
-    };
-    let stdout = match git_status_output(&root)? {
-        Some(output) => output,
-        None => return Ok(empty_summary()),
-    };
-
-    Ok(parse_git_status(&stdout))
+    Ok(collect_git_status_snapshot(&state)?.summary)
 }
 
 #[tauri::command]
 pub fn git_status_files(state: State<'_, AppState>) -> Result<Vec<GitFileStatus>, String> {
-    let Some(root) = workspace_root(&state) else {
-        return Ok(Vec::new());
-    };
-    let stdout = match git_status_output(&root)? {
-        Some(output) => output,
-        None => return Ok(Vec::new()),
-    };
-
-    Ok(parse_git_status_files(&stdout))
+    Ok(collect_git_status_snapshot(&state)?.files)
 }
 
 #[tauri::command]
 pub fn git_status(state: State<'_, AppState>) -> Result<GitStatusSnapshot, String> {
-    let Some(root) = workspace_root(&state) else {
-        return Ok(GitStatusSnapshot {
-            summary: empty_summary(),
-            files: Vec::new(),
-        });
-    };
-
-    let stdout = match git_status_output(&root)? {
-        Some(output) => output,
-        None => {
-            return Ok(GitStatusSnapshot {
-                summary: empty_summary(),
-                files: Vec::new(),
-            })
-        }
-    };
-
-    Ok(GitStatusSnapshot {
-        summary: parse_git_status(&stdout),
-        files: parse_git_status_files(&stdout),
-    })
+    collect_git_status_snapshot(&state)
 }
 
 #[tauri::command]
@@ -1301,39 +1567,46 @@ pub struct GitCommitStats {
 
 #[tauri::command]
 pub fn git_commit_stats(state: State<'_, AppState>, hash: String) -> Result<GitCommitStats, String> {
-    let Some(root) = workspace_root(&state) else {
-        return Err("No workspace open".to_string());
+    let repo = open_repo(&state)?;
+    let commit = repo
+        .rev_parse_single(hash.as_str())
+        .map_err(|e| format!("Failed to resolve revision {hash}: {}", e))?
+        .object()
+        .map_err(|e| format!("Failed to read revision {hash}: {}", e))?
+        .try_into_commit()
+        .map_err(|e| format!("Revision {hash} is not a commit: {}", e))?;
+
+    let commit_tree = commit
+        .tree()
+        .map_err(|e| format!("Failed to read commit tree for {hash}: {}", e))?;
+
+    let base_tree = if let Some(parent_id) = commit.parent_ids().next() {
+        parent_id
+            .object()
+            .map_err(|e| format!("Failed to read parent commit for {hash}: {}", e))?
+            .try_into_commit()
+            .map_err(|e| format!("Parent revision for {hash} is not a commit: {}", e))?
+            .tree()
+            .map_err(|e| format!("Failed to read parent tree for {hash}: {}", e))?
+    } else {
+        repo.empty_tree()
     };
 
-    // Use diff-tree --numstat for efficient stat computation
-    let output = run_git(
-        &root,
-        &["diff-tree", "--numstat", "--no-commit-id", "-r", &hash][..],
-    )?;
+    let mut changes = base_tree
+        .changes()
+        .map_err(|e| format!("Failed to initialize tree diff for {hash}: {}", e))?;
+    changes.options(|options| {
+        options.track_rewrites(None);
+    });
 
-    let mut insertions = 0u32;
-    let mut deletions = 0u32;
-    let mut files_changed = 0u32;
-
-    for line in output.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        files_changed += 1;
-        let mut parts = line.split_whitespace();
-        if let Some(ins) = parts.next() {
-            insertions += ins.parse::<u32>().unwrap_or(0); // "-" for binary
-        }
-        if let Some(del) = parts.next() {
-            deletions += del.parse::<u32>().unwrap_or(0);
-        }
-    }
+    let stats = changes
+        .stats(&commit_tree)
+        .map_err(|e| format!("Failed to calculate commit stats for {hash}: {}", e))?;
 
     Ok(GitCommitStats {
-        insertions,
-        deletions,
-        files_changed,
+        insertions: stats.lines_added.min(u64::from(u32::MAX)) as u32,
+        deletions: stats.lines_removed.min(u64::from(u32::MAX)) as u32,
+        files_changed: stats.files_changed.min(u64::from(u32::MAX)) as u32,
     })
 }
 

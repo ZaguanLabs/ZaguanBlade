@@ -54,11 +54,18 @@ export const CommandOutputDisplay: React.FC<CommandOutputDisplayProps> = ({
     const isSuccess = exitCode === 0;
 
     return (
-        <div className="my-3 bg-[#1e1e1e] border border-[#3e3e42] rounded-lg overflow-hidden">
+        <div
+            className="my-3 rounded-lg overflow-hidden border"
+            style={{
+                backgroundColor: 'color-mix(in srgb, var(--bg-surface) 90%, var(--bg-app))',
+                borderColor: 'color-mix(in srgb, var(--border-default) 88%, transparent)',
+            }}
+        >
             {/* Header */}
             <button
                 onClick={() => setIsExpanded(!isExpanded)}
-                className="w-full flex items-center gap-3 px-4 py-3 bg-[#252526] hover:bg-[#2d2d2d] transition-colors text-left"
+                className="w-full flex items-center gap-3 px-4 py-3 transition-colors text-left"
+                style={{ backgroundColor: 'color-mix(in srgb, var(--bg-panel) 84%, var(--bg-app))' }}
             >
                 <div className={`p-1.5 rounded ${isSuccess ? 'bg-emerald-500/10' : 'bg-red-500/10'}`}>
                     {isSuccess ? (
@@ -70,19 +77,19 @@ export const CommandOutputDisplay: React.FC<CommandOutputDisplayProps> = ({
 
                 <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
-                        <Terminal className="w-3.5 h-3.5 text-zinc-400" />
-                        <code className="text-sm font-mono text-white truncate">
+                        <Terminal className="w-3.5 h-3.5 text-(--fg-tertiary)" />
+                        <code className="text-sm font-mono text-(--fg-primary) truncate">
                             {command}
                         </code>
                     </div>
                     {cwd && (
-                        <div className="text-xs font-mono text-zinc-500 truncate">
+                        <div className="text-xs font-mono text-(--fg-tertiary) truncate">
                             {cwd}
                         </div>
                     )}
                 </div>
 
-                <div className="flex items-center gap-3 text-xs text-zinc-400">
+                <div className="flex items-center gap-3 text-xs text-(--fg-tertiary)">
                     {duration !== undefined && (
                         <div className="flex items-center gap-1">
                             <Clock className="w-3 h-3" />
@@ -105,8 +112,14 @@ export const CommandOutputDisplay: React.FC<CommandOutputDisplayProps> = ({
 
             {/* Output */}
             {isExpanded && output && (
-                <div className="border-t border-[#3e3e42]">
-                    <pre className="p-4 text-xs font-mono text-zinc-300 overflow-x-auto max-h-[400px] overflow-y-auto bg-[#1e1e1e] select-text whitespace-pre-wrap break-words">
+                <div
+                    className="border-t"
+                    style={{ borderTopColor: 'color-mix(in srgb, var(--border-default) 88%, transparent)' }}
+                >
+                    <pre
+                        className="p-4 text-xs font-mono text-(--fg-primary) overflow-x-auto max-h-[400px] overflow-y-auto select-text whitespace-pre-wrap wrap-break-word"
+                        style={{ backgroundColor: 'color-mix(in srgb, var(--bg-surface) 94%, var(--bg-app))' }}
+                    >
                         {stripAllAnsi(output)}
                     </pre>
                 </div>
@@ -114,7 +127,10 @@ export const CommandOutputDisplay: React.FC<CommandOutputDisplayProps> = ({
 
             {/* Empty output message */}
             {isExpanded && !output && (
-                <div className="border-t border-[#3e3e42] px-4 py-3 text-xs text-zinc-500 italic">
+                <div
+                    className="border-t px-4 py-3 text-xs text-(--fg-tertiary) italic"
+                    style={{ borderTopColor: 'color-mix(in srgb, var(--border-default) 88%, transparent)' }}
+                >
                     No output
                 </div>
             )}

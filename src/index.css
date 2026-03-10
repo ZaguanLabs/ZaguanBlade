@@ -33,12 +33,27 @@ body {
     /* Desktop app feel */
 }
 
+::selection {
+    background: var(--bg-selection);
+    color: var(--fg-primary);
+}
+
+input::selection,
+textarea::selection,
+code::selection,
+pre::selection,
+.select-text::selection,
+.select-text *::selection {
+    background: var(--bg-selection);
+    color: var(--fg-primary);
+}
+
 /* CodeMirror token colors fallback (classHighlighter).
  * This preserves syntax coloring even if generated HighlightStyle classes
  * fail to attach in some runtime environments.
  */
 .code-editor-scroll .cm-editor .tok-comment {
-    color: #4b5563;
+    color: var(--syntax-comment);
     font-style: italic;
 }
 
@@ -47,14 +62,14 @@ body {
 .code-editor-scroll .cm-editor .tok-definitionKeyword,
 .code-editor-scroll .cm-editor .tok-moduleKeyword,
 .code-editor-scroll .cm-editor .tok-controlKeyword {
-    color: #818cf8;
+    color: var(--syntax-keyword);
 }
 
 .code-editor-scroll .cm-editor .tok-string,
 .code-editor-scroll .cm-editor .tok-special.tok-string,
 .code-editor-scroll .cm-editor .tok-character,
 .code-editor-scroll .cm-editor .tok-attributeValue {
-    color: #4ade80;
+    color: var(--syntax-string);
 }
 
 .code-editor-scroll .cm-editor .tok-number,
@@ -63,27 +78,27 @@ body {
 .code-editor-scroll .cm-editor .tok-bool,
 .code-editor-scroll .cm-editor .tok-null,
 .code-editor-scroll .cm-editor .tok-constant {
-    color: #fb923c;
+    color: var(--syntax-number);
 }
 
 .code-editor-scroll .cm-editor .tok-typeName,
 .code-editor-scroll .cm-editor .tok-className,
 .code-editor-scroll .cm-editor .tok-namespace {
-    color: #67e8f9;
+    color: var(--syntax-type);
 }
 
 .code-editor-scroll .cm-editor .tok-function,
 .code-editor-scroll .cm-editor .tok-macroName,
 .code-editor-scroll .cm-editor .tok-tagName {
-    color: #a78bfa;
+    color: var(--syntax-function);
 }
 
 .code-editor-scroll .cm-editor .tok-propertyName {
-    color: #94a3b8;
+    color: var(--syntax-property);
 }
 
 .code-editor-scroll .cm-editor .tok-attributeName {
-    color: #fbbf24;
+    color: var(--syntax-attribute);
 }
 
 .code-editor-scroll .cm-editor .tok-punctuation,
@@ -92,7 +107,7 @@ body {
 .code-editor-scroll .cm-editor .tok-brace,
 .code-editor-scroll .cm-editor .tok-angleBracket,
 .code-editor-scroll .cm-editor .tok-separator {
-    color: #4b5563;
+    color: var(--syntax-punctuation);
 }
 
 /* Code editor scrollbar only (avoid styling whole app / terminal overlays) */

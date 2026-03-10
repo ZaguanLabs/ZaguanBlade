@@ -8,6 +8,7 @@ import { listen, emit } from "@tauri-apps/api/event";
 import { BladeDispatcher } from "../services/blade";
 import { TerminalBuffer } from "../utils/eventBuffer";
 import type { BladeEventEnvelope } from "../types/blade";
+import { useTheme } from "../contexts/ThemeContext";
 import { useContextMenu, ContextMenuItem } from "./ui/ContextMenu";
 import { Copy, ClipboardPaste, Trash2, MessageSquare } from "lucide-react";
 import { BLADE_TERMINAL_ID } from "../constants/terminal";
@@ -22,6 +23,34 @@ function sanitizeTerminalOutput(data: string): string {
     return data.replace(/^.*##BLADE_CMD_(?:START|EXIT):.*##.*$/gm, '');
 }
 
+function getTerminalTheme() {
+    const styles = getComputedStyle(document.documentElement);
+
+    return {
+        background: styles.getPropertyValue('--term-bg').trim(),
+        foreground: styles.getPropertyValue('--term-fg').trim(),
+        cursor: styles.getPropertyValue('--term-cursor').trim(),
+        cursorAccent: styles.getPropertyValue('--term-cursor-accent').trim(),
+        selectionBackground: styles.getPropertyValue('--term-selection').trim(),
+        black: styles.getPropertyValue('--term-black').trim(),
+        red: styles.getPropertyValue('--term-red').trim(),
+        green: styles.getPropertyValue('--term-green').trim(),
+        yellow: styles.getPropertyValue('--term-yellow').trim(),
+        blue: styles.getPropertyValue('--term-blue').trim(),
+        magenta: styles.getPropertyValue('--term-magenta').trim(),
+        cyan: styles.getPropertyValue('--term-cyan').trim(),
+        white: styles.getPropertyValue('--term-white').trim(),
+        brightBlack: styles.getPropertyValue('--term-bright-black').trim(),
+        brightRed: styles.getPropertyValue('--term-bright-red').trim(),
+        brightGreen: styles.getPropertyValue('--term-bright-green').trim(),
+        brightYellow: styles.getPropertyValue('--term-bright-yellow').trim(),
+        brightBlue: styles.getPropertyValue('--term-bright-blue').trim(),
+        brightMagenta: styles.getPropertyValue('--term-bright-magenta').trim(),
+        brightCyan: styles.getPropertyValue('--term-bright-cyan').trim(),
+        brightWhite: styles.getPropertyValue('--term-bright-white').trim(),
+    };
+}
+
 interface TerminalProps {
     id?: string;
     cwd?: string;
@@ -29,11 +58,14 @@ interface TerminalProps {
 }
 
 export default function Terminal({ id = "main-terminal", cwd, command }: TerminalProps) {
+    const { themeId } = useTheme();
     const terminalRef = useRef<HTMLDivElement>(null);
     const xtermRef = useRef<XTerm | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
     const terminalBufferRef = useRef<TerminalBuffer | null>(null);
     const fitIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const resizeFrameRef = useRef<number | null>(null);
+    const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null);
     const initialCwdRef = useRef(cwd);
     const initialCommandRef = useRef(command);
     const { showMenu } = useContextMenu();
@@ -117,33 +149,11 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
 
         // 1. Initialize xterm with Tokyo Night theme
         const term = new XTerm({
-            cursorBlink: true,
+            cursorBlink: false,
             fontFamily: "\"Fira Code\", \"Symbols Nerd Font Mono\", monospace",
             fontSize: 12,
             lineHeight: 1.2,
-            theme: {
-                background: "#16161e",        // Tokyo Night panel background
-                foreground: "#a9b1d6",        // Tokyo Night primary text
-                cursor: "#c0caf5",            // Tokyo Night bright cursor
-                cursorAccent: "#1a1b26",      // Cursor text color
-                selectionBackground: "#515c7e4d", // Tokyo Night selection
-                black: "#1a1b26",
-                red: "#f7768e",
-                green: "#9ece6a",
-                yellow: "#e0af68",
-                blue: "#7aa2f7",
-                magenta: "#bb9af7",
-                cyan: "#73daca",
-                white: "#a9b1d6",
-                brightBlack: "#565f89",
-                brightRed: "#ff869e",
-                brightGreen: "#b9f27c",
-                brightYellow: "#e0c068",
-                brightBlue: "#89b4fa",
-                brightMagenta: "#c4a7e7",
-                brightCyan: "#89dceb",
-                brightWhite: "#c0caf5",
-            },
+            theme: getTerminalTheme(),
             allowTransparency: true,
             fontWeight: "normal",
             fontWeightBold: "bold",
@@ -222,6 +232,53 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
             return true;
         });
 
+        const syncTerminalSize = () => {
+            if (!fitAddonRef.current || !terminalRef.current || !xtermRef.current) return;
+            if (!terminalRef.current.offsetParent) return;
+            try {
+                const proposed = fitAddonRef.current.proposeDimensions();
+                if (!proposed || proposed.cols <= 0 || proposed.rows <= 0) {
+                    return;
+                }
+
+                const lastResize = lastResizeRef.current;
+                if (lastResize && lastResize.cols === proposed.cols && lastResize.rows === proposed.rows) {
+                    return;
+                }
+
+                fitAddonRef.current.fit();
+
+                const applied = {
+                    cols: xtermRef.current.cols,
+                    rows: xtermRef.current.rows,
+                };
+
+                if (lastResize && lastResize.cols === applied.cols && lastResize.rows === applied.rows) {
+                    return;
+                }
+
+                lastResizeRef.current = applied;
+
+                BladeDispatcher.terminal({
+                    type: "Resize",
+                    payload: { id, rows: applied.rows, cols: applied.cols }
+                }).catch(e => console.error("Resize failed", e));
+            } catch (e) {
+                console.error("Resize logic error", e);
+            }
+        };
+
+        const scheduleResize = () => {
+            if (resizeFrameRef.current !== null) {
+                return;
+            }
+
+            resizeFrameRef.current = requestAnimationFrame(() => {
+                resizeFrameRef.current = null;
+                syncTerminalSize();
+            });
+        };
+
         // Robust Fit Strategy:
         // PTY spawning needs dimensions. We must ensure the terminal has size before fitting.
         // We poll for a short period until we get valid dimensions.
@@ -231,13 +288,11 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
             try {
                 const dims = fitAddon.proposeDimensions();
                 if (dims && dims.cols > 0 && dims.rows > 0) {
-                    fitAddon.fit();
+                    syncTerminalSize();
                     if (fitIntervalRef.current) {
                         clearInterval(fitIntervalRef.current);
                         fitIntervalRef.current = null;
                     }
-                    // Force refresh after successful fit
-                    term.refresh(0, term.rows - 1);
                 }
             } catch (e) {
                 // Ignore errors during layout phase
@@ -281,13 +336,7 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
 
                 // Initial resize after backend spawn
                 setTimeout(() => {
-                    const dims = fitAddon.proposeDimensions();
-                    if (dims) {
-                        BladeDispatcher.terminal({
-                            type: "Resize",
-                            payload: { id, rows: dims.rows, cols: dims.cols }
-                        });
-                    }
+                    scheduleResize();
                 }, 50);
             } catch (err) {
                 console.error("Failed to create terminal:", err);
@@ -355,35 +404,8 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
             }).catch(console.error);
         });
 
-        // 5. Handle Resize
-        const handleResize = () => {
-            if (!fitAddonRef.current || !terminalRef.current || !xtermRef.current) return;
-            try {
-                fitAddonRef.current.fit();
-
-                // Force a refresh of the renderer
-                xtermRef.current.refresh(0, xtermRef.current.rows - 1);
-
-                const dims = fitAddonRef.current.proposeDimensions();
-                if (dims && dims.cols > 0 && dims.rows > 0) {
-                    BladeDispatcher.terminal({
-                        type: "Resize",
-                        payload: { id, rows: dims.rows, cols: dims.cols }
-                    }).catch(e => console.error("Resize failed", e));
-                }
-            } catch (e) {
-                console.error("Resize logic error", e);
-            }
-        };
-
         const resizeObserver = new ResizeObserver(() => {
-            // Debounce or RAF
-            requestAnimationFrame(() => {
-                // Check if visible
-                if (terminalRef.current?.offsetParent) {
-                    handleResize();
-                }
-            });
+            scheduleResize();
         });
 
         resizeObserver.observe(terminalRef.current);
@@ -393,6 +415,10 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
             if (fitIntervalRef.current) {
                 clearInterval(fitIntervalRef.current);
                 fitIntervalRef.current = null;
+            }
+            if (resizeFrameRef.current !== null) {
+                cancelAnimationFrame(resizeFrameRef.current);
+                resizeFrameRef.current = null;
             }
 
             resizeObserver.disconnect();
@@ -412,9 +438,14 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
             } catch (e) { console.error("Error disposing terminal", e); }
 
             xtermRef.current = null;
-            terminalBufferRef.current = null;
+            fitAddonRef.current = null;
         };
     }, [id]);
+
+    useEffect(() => {
+        if (!xtermRef.current) return;
+        xtermRef.current.options.theme = getTerminalTheme();
+    }, [themeId]);
 
     return (
         <div
@@ -424,4 +455,5 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
             onContextMenu={handleContextMenu}
         />
     );
+
 }

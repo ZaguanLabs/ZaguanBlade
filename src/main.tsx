@@ -4,6 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import App from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ContextMenuProvider } from './components/ui/ContextMenu';
+import { ThemeProvider } from './contexts/ThemeContext';
 import './index.css';
 import './i18n'; // Initialize i18n
 import "@fontsource/fira-code"; // Defaults to weight 400 (terminal fallback font)
@@ -39,7 +40,7 @@ const AppWrapper = () => {
     }, []);
 
     return (
-        <Suspense fallback={<div className="h-screen w-screen bg-[var(--bg-app)]" />}>
+        <Suspense fallback={<div className="h-screen w-screen bg-(--bg-app)" />}>
             <App />
         </Suspense>
     );
@@ -47,8 +48,10 @@ const AppWrapper = () => {
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
     <ErrorBoundary>
-        <ContextMenuProvider>
-            <AppWrapper />
-        </ContextMenuProvider>
+        <ThemeProvider>
+            <ContextMenuProvider>
+                <AppWrapper />
+            </ContextMenuProvider>
+        </ThemeProvider>
     </ErrorBoundary>
 );

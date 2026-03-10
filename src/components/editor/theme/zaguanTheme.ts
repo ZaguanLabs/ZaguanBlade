@@ -9,57 +9,57 @@ import { classHighlighter, tags as t } from "@lezer/highlight";
 
 const colors = {
     // Base — OLED-dark, unified with app theme
-    bg: "#0e0e10",
-    bgPanel: "#111113",
-    bgSurface: "#1c1c1f",
-    bgSurfaceHover: "#252528",
+    bg: "var(--editor-bg)",
+    bgPanel: "var(--editor-bg-panel)",
+    bgSurface: "var(--editor-bg-surface)",
+    bgSurfaceHover: "var(--editor-bg-surface-hover)",
 
     // Foreground — neutral, no blue tint
-    fg: "#d4d4d8",
-    fgMuted: "#71717a",
-    fgSubtle: "#52525b",
-    fgDim: "#3f3f46",
+    fg: "var(--editor-fg)",
+    fgMuted: "var(--editor-fg-muted)",
+    fgSubtle: "var(--editor-fg-subtle)",
+    fgDim: "var(--editor-fg-dim)",
 
     // Borders
-    border: "#1e1e22",
-    borderFocus: "#7c6af7",
+    border: "var(--editor-border)",
+    borderFocus: "var(--editor-border-focus)",
 
     // Accent — electric violet
-    accent: "#818cf8",
+    accent: "var(--editor-accent)",
 
     // Syntax — dimmed structural
-    keyword: "#818cf8",      // Muted indigo — present but not loud
-    operator: "#6b7280",     // Gray — fades into background
-    punctuation: "#4b5563",  // Very dim — brain infers them
-    variable: "#c4c4cc",     // Near-neutral — plain text
-    comment: "#4b5563",      // Dark gray — maximally recessive
+    keyword: "var(--syntax-keyword)",
+    operator: "var(--syntax-operator)",
+    punctuation: "var(--syntax-punctuation)",
+    variable: "var(--syntax-variable)",
+    comment: "var(--syntax-comment)",
 
     // Syntax — pop (data tokens)
-    string: "#4ade80",       // Neon mint green — data stands out
-    number: "#fb923c",       // Warm orange — data stands out
-    function: "#a78bfa",     // Electric violet — actions stand out
-    type: "#67e8f9",         // Bright cyan — types stand out
-    constant: "#fb923c",     // Same as number
-    regexp: "#818cf8",       // Same as keyword
-    macro: "#818cf8",        // Same as keyword
-    property: "#94a3b8",     // Slate — structural, not data
-    tag: "#a78bfa",          // Muted indigo-violet — structural tags recede
-    attribute: "#fbbf24",    // Amber — warm
+    string: "var(--syntax-string)",
+    number: "var(--syntax-number)",
+    function: "var(--syntax-function)",
+    type: "var(--syntax-type)",
+    constant: "var(--syntax-constant)",
+    regexp: "var(--syntax-regexp)",
+    macro: "var(--syntax-macro)",
+    property: "var(--syntax-property)",
+    tag: "var(--syntax-tag)",
+    attribute: "var(--syntax-attribute)",
 
     // UI
-    selection: "#6366f133",
-    selectionMatch: "#6366f122",
-    cursor: "#f4f4f5",
-    matchingBracket: "#6366f140",
+    selection: "var(--editor-selection)",
+    selectionMatch: "var(--editor-selection-match)",
+    cursor: "var(--editor-cursor)",
+    matchingBracket: "var(--editor-matching-bracket)",
 
     // Gutter
     gutterBg: "transparent",
-    lineNumber: "#3f3f46",
-    lineNumberActive: "#f4f4f5",
+    lineNumber: "var(--editor-line-number)",
+    lineNumberActive: "var(--editor-line-number-active)",
 };
 
 // Editor theme (UI styling)
-export const zaguanEditorTheme = EditorView.theme({
+const zaguanEditorThemeSpec = {
     "&": {
         backgroundColor: colors.bg,
         color: colors.fg,
@@ -325,7 +325,10 @@ export const zaguanEditorTheme = EditorView.theme({
         color: colors.fgSubtle,
         marginTop: "6px",
     },
-}, { dark: true });
+};
+
+export const zaguanEditorThemeDark = EditorView.theme(zaguanEditorThemeSpec, { dark: true });
+export const zaguanEditorThemeLight = EditorView.theme(zaguanEditorThemeSpec, { dark: false });
 
 // Syntax highlighting
 export const zaguanHighlightStyle = HighlightStyle.define([
@@ -456,11 +459,15 @@ export const zaguanGlowTheme = EditorView.baseTheme({
 });
 
 // Combined theme extension
-export const zaguanTheme: Extension = [
-    zaguanEditorTheme,
-    zaguanGlowTheme,
-    syntaxHighlighting(zaguanHighlightStyle),
-    syntaxHighlighting(classHighlighter),
-];
+export function getZaguanTheme(isDark: boolean): Extension {
+    return [
+        isDark ? zaguanEditorThemeDark : zaguanEditorThemeLight,
+        zaguanGlowTheme,
+        syntaxHighlighting(zaguanHighlightStyle),
+        syntaxHighlighting(classHighlighter),
+    ];
+}
+
+export const zaguanTheme: Extension = getZaguanTheme(true);
 
 export default zaguanTheme;

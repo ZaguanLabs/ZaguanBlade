@@ -140,6 +140,14 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
             resizeTextarea(textarea);
         });
     }, [resizeTextarea]);
+    const focusComposer = useCallback(() => {
+        if (disabled || !textareaRef.current) return;
+        const textarea = textareaRef.current;
+        const end = textarea.value.length;
+        textarea.focus();
+        textarea.setSelectionRange(end, end);
+        resizeTextarea(textarea);
+    }, [disabled, resizeTextarea]);
     const isLocalOnly = useMemo(() => (
         models.length > 0
         && models.every((model) => model.provider === 'ollama' || model.provider === 'openai-compat')
@@ -202,15 +210,11 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
         setAttachmentError(null);
 
         requestAnimationFrame(() => {
-            if (!textareaRef.current) return;
-            const end = prefillRequest.text.length;
-            textareaRef.current.focus();
-            textareaRef.current.setSelectionRange(end, end);
-            resizeTextarea(textareaRef.current);
+            focusComposer();
         });
 
         onPrefillConsumed?.();
-    }, [prefillRequest, onPrefillConsumed, resizeTextarea, setChatMode]);
+    }, [focusComposer, prefillRequest, onPrefillConsumed, setChatMode]);
 
     useEffect(() => {
         if (!showSuggestions) {
@@ -247,6 +251,18 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
             setSelectedSuggestionIndex(0);
         }
     }, [selectedSuggestionIndex, suggestions.length]);
+
+    useEffect(() => {
+        const handleWindowKeyDown = (event: KeyboardEvent) => {
+            if (!event.ctrlKey || event.shiftKey || event.altKey || event.metaKey) return;
+            if (event.key.toLowerCase() !== 'l') return;
+            event.preventDefault();
+            focusComposer();
+        };
+
+        window.addEventListener('keydown', handleWindowKeyDown);
+        return () => window.removeEventListener('keydown', handleWindowKeyDown);
+    }, [focusComposer]);
 
     const appendImageFiles = useCallback(async (inputFiles: File[]) => {
         if (inputFiles.length === 0) return;
@@ -634,10 +650,9 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
             setShowSuggestions(suggestion.kind === 'path' && suggestion.isDir);
 
             setTimeout(() => {
-                if (textareaRef.current) {
-                    textareaRef.current.focus();
-                    textareaRef.current.setSelectionRange(nextState.cursor, nextState.cursor);
-                }
+                if (!textareaRef.current) return;
+                textareaRef.current.focus();
+                textareaRef.current.setSelectionRange(nextState.cursor, nextState.cursor);
             }, 0);
         }
     }, [scheduleTextareaResize, text]);
@@ -873,7 +888,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                 onChange={handleTextChange}
                                 onPaste={handlePaste}
                                 onKeyDown={handleKeyDown}
-                                placeholder={chatMode === 'planning' ? 'Investigate the codebase, ask clarifying questions, and build a concrete plan before coding…' : t('chat.inputPlaceholder')}
+                                placeholder={chatMode === 'planning' ? 'Investigate the codebase, ask clarifying questions, and build a concrete plan before coding… (Ctrl-L to focus)' : `${t('chat.inputPlaceholder')} (Ctrl-L to focus)`}
                                 className="relative z-10 min-h-[88px] max-h-[360px] w-full resize-none overflow-y-auto bg-transparent px-3 pb-3 pt-2.5 pr-14 text-[13px] font-medium leading-6 text-[var(--fg-primary)] outline-none placeholder-[var(--fg-tertiary)]"
                                 rows={1}
                                 disabled={disabled}

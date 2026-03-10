@@ -1,5 +1,98 @@
 import type { ChatMessage, MessageBlock } from '../types/chat';
 
+export function findLastActivityBlockIndex(blocks: MessageBlock[]): number {
+    for (let index = blocks.length - 1; index >= 0; index -= 1) {
+        const block = blocks[index];
+        if (block.type === 'tool_call' || block.type === 'command_execution') {
+            return index;
+        }
+    }
+
+    return -1;
+}
+
+export function insertToolCallBlockPreservingOrder(blocks: MessageBlock[], toolCallId: string): MessageBlock[] {
+    if (blocks.some((block) => block.type === 'tool_call' && block.id === toolCallId)) {
+        return blocks;
+    }
+
+    const nextBlocks = [...blocks];
+    const matchingExecutionIndex = nextBlocks.findIndex((block) => block.type === 'command_execution' && block.id === toolCallId);
+    if (matchingExecutionIndex >= 0) {
+        nextBlocks.splice(matchingExecutionIndex, 0, { type: 'tool_call', id: toolCallId });
+        return nextBlocks;
+    }
+
+    const lastActivityIndex = findLastActivityBlockIndex(nextBlocks);
+    if (lastActivityIndex >= 0) {
+        nextBlocks.splice(lastActivityIndex + 1, 0, { type: 'tool_call', id: toolCallId });
+        return nextBlocks;
+    }
+
+    nextBlocks.push({ type: 'tool_call', id: toolCallId });
+    return nextBlocks;
+}
+
+export function upsertSplitTextBlocks(
+    blocks: MessageBlock[],
+    beforeToolsContent: string,
+    afterToolsContent: string,
+): MessageBlock[] {
+    const firstActivityIndex = blocks.findIndex((block) => block.type === 'tool_call' || block.type === 'command_execution');
+    if (firstActivityIndex === -1) {
+        return blocks;
+    }
+
+    const lastActivityIndex = findLastActivityBlockIndex(blocks);
+    const prefix = blocks.slice(0, firstActivityIndex);
+    const activity = blocks.slice(firstActivityIndex, lastActivityIndex + 1);
+    const suffix = blocks.slice(lastActivityIndex + 1);
+
+    const nextPrefix = [...prefix];
+    let lastPrefixTextIndex = -1;
+    for (let index = nextPrefix.length - 1; index >= 0; index -= 1) {
+        if (nextPrefix[index].type === 'text') {
+            lastPrefixTextIndex = index;
+            break;
+        }
+    }
+
+    if (lastPrefixTextIndex >= 0) {
+        const block = nextPrefix[lastPrefixTextIndex];
+        if (block.type === 'text') {
+            nextPrefix[lastPrefixTextIndex] = { ...block, content: beforeToolsContent };
+        }
+    } else if (beforeToolsContent.length > 0) {
+        nextPrefix.push({ type: 'text', content: beforeToolsContent, id: crypto.randomUUID() });
+    }
+
+    const suffixWithoutText = suffix.filter((block) => block.type !== 'text');
+
+    return afterToolsContent.length > 0
+        ? [
+            ...nextPrefix,
+            ...activity,
+            { type: 'text', content: afterToolsContent, id: crypto.randomUUID() },
+            ...suffixWithoutText,
+        ]
+        : [
+            ...nextPrefix,
+            ...activity,
+            ...suffixWithoutText,
+        ];
+}
+
+export function insertAssistantMessageAfterLastUser(messages: ChatMessage[], message: ChatMessage): ChatMessage[] {
+    const lastUserIndex = messages.map((item) => item.role).lastIndexOf('User');
+    if (lastUserIndex === -1) {
+        return [...messages, message];
+    }
+
+    const nextMessages = [...messages];
+    nextMessages.splice(lastUserIndex + 1, 0, message);
+    return nextMessages;
+}
+
 /**
  * Reconstructs the blocks array for a message based on its content.
  * This is used when loading messages from history or the backend,

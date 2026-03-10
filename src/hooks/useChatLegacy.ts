@@ -10,7 +10,7 @@ import { useEditorState } from '../contexts/EditorContext';
 import { MessageBuffer } from '../utils/eventBuffer';
 import type { BladeEventEnvelope } from '../types/blade';
 import { getOrCreateIdempotencyKey, IDEMPOTENT_OPERATIONS } from '../utils/idempotency';
-import { ensureMessagesHaveBlocks } from '../utils/messageBlocks';
+import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertToolCallBlockPreservingOrder } from '../utils/messageBlocks';
 
 const MAX_DELTA_OVERLAP_CHECK = 512;
 const MIN_SNAPSHOT_PREFIX = 48;
@@ -1031,10 +1031,9 @@ export function useChatLegacy() {
                                 // Keep any live streamed blocks (reasoning/text) so timeline order is preserved
                                 // even when ToolUpdate arrives before a batched message flush.
                                 const liveBlocks = blocksRef.current.get(message_id) || [];
-                                const newBlocks = [...liveBlocks];
-                                if (tool_call && !newBlocks.some(b => b.type === 'tool_call' && b.id === tool_call_id)) {
-                                    newBlocks.push({ type: 'tool_call', id: tool_call_id });
-                                }
+                                const newBlocks = tool_call
+                                    ? insertToolCallBlockPreservingOrder(liveBlocks, tool_call_id)
+                                    : [...liveBlocks];
                                 blocksRef.current.set(message_id, newBlocks);
 
                                 const newMsg: ChatMessage = {
@@ -1044,13 +1043,7 @@ export function useChatLegacy() {
                                     tool_calls: tool_call ? [{ ...tool_call, status: status as any, result }] : [],
                                     blocks: newBlocks
                                 };
-                                // Insert after the last user message to maintain conversation flow
-                                const lastUserIdx = prev.map(m => m.role).lastIndexOf('User');
-                                if (lastUserIdx >= 0 && lastUserIdx === prev.length - 1) {
-                                    // User message is at the end, append assistant after it
-                                    return [...prev, newMsg];
-                                }
-                                return [...prev, newMsg];
+                                return insertAssistantMessageAfterLastUser(prev, newMsg);
                             }
 
                             return prev.map(msg => {
@@ -1067,6 +1060,7 @@ export function useChatLegacy() {
                                         newTools[toolIndex] = { ...newTools[toolIndex], status: status as any };
                                         if (result) newTools[toolIndex].result = result;
                                         if (tool_call) newTools[toolIndex] = { ...newTools[toolIndex], ...tool_call };
+                                        newBlocks = insertToolCallBlockPreservingOrder(newBlocks, tool_call_id);
                                     } else {
                                         // Add new tool call
                                         if (tool_call) {
@@ -1077,12 +1071,7 @@ export function useChatLegacy() {
                                                     : msg.content);
                                             
                                             // Check if block already exists (idempotency safety)
-                                            if (!newBlocks.some(b => b.type === 'tool_call' && b.id === tool_call_id)) {
-                                                // Preserve natural stream order: ToolUpdate arrives in sequence,
-                                                // so append the tool block at the end of current live blocks.
-                                                // This keeps reasoning/tool/text chronology intact.
-                                                newBlocks.push({ type: 'tool_call', id: tool_call_id });
-                                            }
+                                            newBlocks = insertToolCallBlockPreservingOrder(newBlocks, tool_call_id);
 
                                             blocksRef.current.set(message_id, newBlocks);
                                             return {

@@ -277,7 +277,7 @@ interface ChatMessageProps {
 }
 
 const StreamingTextPreview: React.FC<{ content: string }> = ({ content }) => (
-    <div className="whitespace-pre-wrap break-words text-[13px] font-medium leading-7 text-stone-300">
+    <div className="whitespace-pre-wrap break-words text-[13px] font-normal leading-7 text-(--markdown-body)">
         {content}
     </div>
 );
@@ -355,6 +355,60 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
         () => deriveMessageRenderSegments(message, pendingActions),
         [message, pendingActions]
     );
+    const assistantCardStyle = isAssistant
+        ? {
+            backgroundColor: 'color-mix(in srgb, var(--bg-panel) 80%, var(--bg-app))',
+            borderColor: 'color-mix(in srgb, var(--border-default) 88%, transparent)',
+            boxShadow: '0 14px 36px rgba(0, 0, 0, 0.18)'
+        }
+        : undefined;
+    const userCardStyle = isUser
+        ? {
+            backgroundColor: 'color-mix(in srgb, var(--bg-surface) 92%, var(--bg-app))',
+            borderColor: 'color-mix(in srgb, var(--border-default) 94%, transparent)',
+            boxShadow: 'var(--shadow-sm)'
+        }
+        : undefined;
+    const assistantIconStyle = isAssistant
+        ? {
+            backgroundColor: 'color-mix(in srgb, var(--bg-surface) 72%, var(--bg-app))',
+            borderColor: 'color-mix(in srgb, var(--border-default) 92%, transparent)'
+        }
+        : undefined;
+    const userIconStyle = isUser
+        ? {
+            backgroundColor: 'color-mix(in srgb, var(--bg-surface-hover) 82%, var(--bg-app))',
+            borderColor: 'color-mix(in srgb, var(--border-default) 92%, transparent)'
+        }
+        : undefined;
+    const assistantLabelStyle = isAssistant
+        ? {
+            backgroundColor: 'color-mix(in srgb, var(--bg-surface) 52%, var(--bg-app))',
+            borderColor: 'color-mix(in srgb, var(--border-subtle) 100%, transparent)'
+        }
+        : undefined;
+    const userLabelStyle = isUser
+        ? {
+            backgroundColor: 'color-mix(in srgb, var(--bg-surface-hover) 70%, var(--bg-app))',
+            borderColor: 'color-mix(in srgb, var(--border-subtle) 100%, transparent)'
+        }
+        : undefined;
+    const assistantLiveStyle = isAssistant
+        ? {
+            backgroundColor: 'color-mix(in srgb, var(--bg-surface) 45%, var(--bg-app))',
+            borderColor: 'color-mix(in srgb, var(--accent-primary) 38%, transparent)'
+        }
+        : undefined;
+    const assistantDividerStyle = isAssistant
+        ? {
+            backgroundColor: 'color-mix(in srgb, var(--border-default) 88%, transparent)'
+        }
+        : undefined;
+    const userDividerStyle = isUser
+        ? {
+            backgroundColor: 'color-mix(in srgb, var(--border-default) 88%, transparent)'
+        }
+        : undefined;
 
     // Context menu for chat messages
     const handleContextMenu = useCallback((e: React.MouseEvent) => {
@@ -428,34 +482,34 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
         >
             <div className={`relative w-full rounded-xl border px-3 py-2.5 transition-colors ${
                 isUser
-                    ? 'border-zinc-800/80 bg-zinc-900/55 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]'
+                    ? ''
                     : isAssistant
-                        ? 'border-zinc-800/70 bg-zinc-950/35 shadow-[0_12px_32px_rgba(0,0,0,0.12)]'
+                        ? ''
                         : 'border-zinc-800/70 bg-zinc-950/40'
-            }`}>
+            }`} style={isUser ? userCardStyle : assistantCardStyle}>
                 <div className="min-w-0 overflow-hidden space-y-2">
                     {!isContinued && (
                         <div className="flex flex-col gap-2">
                             <div className="flex min-h-6 items-center gap-2">
                                 <div className="opacity-90 transition-opacity group-hover:opacity-100">
-                                    {isUser && <div className="flex h-6 w-6 items-center justify-center rounded-lg border border-zinc-700/80 bg-zinc-800/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"><User className="h-3 w-3 text-zinc-200" /></div>}
-                                    {isAssistant && <div className="flex h-6 w-6 items-center justify-center rounded-lg border border-zinc-700/70 bg-zinc-900/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"><Bot className="h-3 w-3 text-zinc-200" /></div>}
+                                    {isUser && <div className="flex h-6 w-6 items-center justify-center rounded-lg border" style={userIconStyle}><User className="h-3 w-3 text-(--fg-secondary)" /></div>}
+                                    {isAssistant && <div className="flex h-6 w-6 items-center justify-center rounded-lg border shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]" style={assistantIconStyle}><Bot className="h-3 w-3 text-(--accent-primary)" /></div>}
                                     {isSystem && <div className="flex h-6 w-6 items-center justify-center rounded-lg border border-yellow-500/20 bg-yellow-500/10"><Terminal className="h-3 w-3 text-yellow-500" /></div>}
                                     {isTool && <div className="flex h-6 w-6 items-center justify-center rounded-lg border border-purple-500/20 bg-purple-500/10"><Terminal className="h-3 w-3 text-purple-400" /></div>}
                                 </div>
                                 <span className={`rounded-md border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] ${
                                     isUser
-                                        ? 'border-zinc-700/80 bg-zinc-800/70 text-zinc-300'
+                                        ? 'text-(--fg-tertiary)'
                                         : isAssistant
-                                            ? 'border-zinc-800/80 bg-zinc-900/50 text-zinc-400'
+                                            ? 'text-(--fg-tertiary)'
                                             : isSystem
                                                 ? 'border-yellow-500/20 bg-yellow-500/10 text-yellow-300'
                                                 : 'border-purple-500/20 bg-purple-500/10 text-purple-300'
-                                }`}>
+                                }`} style={isUser ? userLabelStyle : assistantLabelStyle}>
                                     {isUser ? 'You' : (isAssistant ? 'Assistant' : message.role)}
                                 </span>
                                 {isActive && isAssistant && (
-                                    <span className="inline-flex items-center gap-1 rounded-md border border-zinc-800/80 bg-zinc-900/50 px-1.5 py-0.5 text-[9px] font-medium text-zinc-400">
+                                    <span className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[9px] font-medium text-(--accent-primary)" style={assistantLiveStyle}>
                                         <Loader2 className="h-2.5 w-2.5 animate-spin" />
                                         Live
                                     </span>
@@ -466,7 +520,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                     </span>
                                 )}
                             </div>
-                            <div className="h-px w-[95%] self-center bg-zinc-800/80" />
+                            <div className="h-px w-[95%] self-center bg-zinc-800/80" style={isUser ? userDividerStyle : assistantDividerStyle} />
                         </div>
                     )}
 
@@ -554,7 +608,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 return (
                                     <div key={block.id || `text-${idx}`} className="mb-2 select-text">
                                         {previousSegment?.kind === 'activity_group' && (
-                                            <div className="mb-3 h-px w-full bg-zinc-800/80" />
+                                            <div className="mb-3 h-px w-full bg-zinc-800/80" style={assistantDividerStyle} />
                                         )}
                                         {isActive ? (
                                             <StreamingTextPreview content={block.content} />
@@ -705,7 +759,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 )}
                                 {finalText && (
                                     <div className="select-text">
-                                        {hasToolCalls && <div className="mb-3 h-px w-full bg-zinc-800/80" />}
+                                        {hasToolCalls && <div className="mb-3 h-px w-full bg-zinc-800/80" style={assistantDividerStyle} />}
                                         {isActive ? (
                                             <StreamingTextPreview content={finalText} />
                                         ) : (
