@@ -1,6 +1,6 @@
 use serde::Serialize;
 use serde_json::json;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::process::Command;
 use tauri::State;
 
@@ -739,6 +739,7 @@ struct CommitContext {
     files: Vec<String>,
     diff: String,
     diff_stat: String,
+    untracked_files: Vec<String>,
     new_file_content: String,
     staged: bool,
     branch: Option<String>,
@@ -828,37 +829,53 @@ async fn generate_commit_message_via_ollama(
     }
 }
 
-fn collect_changes_for_message(root: &str) -> Result<CommitContext, String> {
-    let staged_files = run_git(root, &["diff", "--cached", "--name-only"][..])?;
-    let mut files: Vec<String> = staged_files
+fn collect_git_paths(output: &str) -> Vec<String> {
+    output
         .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect();
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty() && !is_zblade_path(line))
+        .collect()
+}
+
+fn extend_unique_paths(target: &mut Vec<String>, source: impl IntoIterator<Item = String>) {
+    let mut seen: BTreeSet<String> = target.iter().cloned().collect();
+    for path in source {
+        if seen.insert(path.clone()) {
+            target.push(path);
+        }
+    }
+}
+
+fn collect_changes_for_message(root: &str) -> Result<CommitContext, String> {
+    let staged_files = collect_git_paths(&run_git(root, &["diff", "--cached", "--name-only"][..])?);
+    let mut files = staged_files.clone();
 
     let staged = !files.is_empty();
+    let unstaged_files = collect_git_paths(&run_git(root, &["diff", "--name-only"][..])?);
 
     if !staged {
-        let unstaged_files = run_git(root, &["diff", "--name-only"][..])?;
-        files = unstaged_files
-            .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty())
-            .collect();
+        files = unstaged_files.clone();
     }
 
-    // Get untracked files
-    let untracked_output = run_git(root, &["ls-files", "--others", "--exclude-standard"][..])?;
-    let untracked: Vec<String> = untracked_output
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect();
+    let untracked = collect_git_paths(&run_git(
+        root,
+        &["ls-files", "--others", "--exclude-standard"][..],
+    )?);
 
-    // Add untracked to file list if not looking at staged
     if !staged {
         files.extend(untracked.clone());
     }
+
+    let added_files_output = if staged {
+        run_git(
+            root,
+            &["diff", "--cached", "--name-only", "--diff-filter=A"][..],
+        )?
+    } else {
+        run_git(root, &["diff", "--name-only", "--diff-filter=A"][..])?
+    };
+    let mut preview_files = collect_git_paths(&added_files_output);
+    extend_unique_paths(&mut preview_files, untracked.iter().cloned());
 
     let mut diff = if staged {
         run_git(root, &["diff", "--cached", "--unified=3"][..])?
@@ -920,13 +937,11 @@ fn collect_changes_for_message(root: &str) -> Result<CommitContext, String> {
         }
     };
 
-    // For untracked files, include a preview of their content
     let mut new_file_content = String::new();
-    let files_to_preview = if staged { vec![] } else { untracked };
     const MAX_PREVIEW_PER_FILE: usize = 2000;
     const MAX_TOTAL_PREVIEW: usize = 6000;
 
-    for file in files_to_preview {
+    for file in preview_files {
         if new_file_content.len() >= MAX_TOTAL_PREVIEW {
             new_file_content.push_str("\n...more new files omitted...");
             break;
@@ -951,6 +966,7 @@ fn collect_changes_for_message(root: &str) -> Result<CommitContext, String> {
         files,
         diff,
         diff_stat,
+        untracked_files: untracked,
         new_file_content,
         staged,
         branch,
@@ -1396,6 +1412,19 @@ pub async fn git_generate_commit_message_ai(
         format!("\nNEW FILES CONTENT:\n{}", ctx.new_file_content)
     };
 
+    let untracked_section = if ctx.staged && !ctx.untracked_files.is_empty() {
+        format!(
+            "ADDITIONAL UNTRACKED FILES IN WORKTREE (not currently staged):\n{}\n",
+            ctx.untracked_files
+                .iter()
+                .map(|f| format!("- {}", f))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    } else {
+        String::new()
+    };
+
     // Build context sections
     let branch_section = ctx.branch
         .as_ref()
@@ -1429,7 +1458,7 @@ Match the style of recent commits if possible.
 
 {branch}FILES ({stage}):
 {files}
-{stats}{style}{new_files}
+{stats}{style}{untracked}{new_files}
 DIFF:
 {diff}
 
@@ -1440,6 +1469,7 @@ Do NOT include analysis, reasoning, explanations, or multiple options."#,
         files = file_list,
         stats = stats_section,
         style = style_section,
+        untracked = untracked_section,
         new_files = new_files_section,
         diff = ctx.diff
     );

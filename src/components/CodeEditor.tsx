@@ -78,6 +78,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     const viewRef = useRef<EditorView | null>(null);
     const languageConf = useRef(new Compartment());
     const themeConf = useRef(new Compartment());
+    const wrapConf = useRef(new Compartment());
     const { setCursorPosition, setSelection, clearSelection } = useEditorActions();
     const { currentTheme } = useTheme();
     const { showMenu } = useContextMenu();
@@ -91,9 +92,13 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
 
     // Ref to capture the latest onSave callback (avoids stale closure in keymap)
     const onSaveRef = useRef(onSave);
+    const onChangeRef = useRef(onChange);
     useEffect(() => {
         onSaveRef.current = onSave;
     }, [onSave]);
+    useEffect(() => {
+        onChangeRef.current = onChange;
+    }, [onChange]);
 
     // Expose methods to parent via ref
     useImperativeHandle(ref, () => ({
@@ -168,7 +173,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 aiGlowDecorations(),
 
                 // Line wrapping (enabled for markdown and when explicitly requested)
-                ...(shouldWrap ? [EditorView.lineWrapping] : []),
+                wrapConf.current.of(shouldWrap ? [EditorView.lineWrapping] : []),
 
                 // Layout
                 EditorView.theme({
@@ -210,7 +215,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 EditorView.updateListener.of((update) => {
                     if (update.docChanged) {
                         isUserEditRef.current = true;
-                        onChange(update.state.doc.toString());
+                        onChangeRef.current(update.state.doc.toString());
                     }
 
                     if (update.selectionSet) {
@@ -251,7 +256,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
             view.destroy();
             viewRef.current = null;
         };
-    }, [content, currentTheme.appearance, filename, isMarkdown, onChange, setCursorPosition, setSelection, clearSelection, shouldWrap]);
+    }, [filename, isMarkdown, setCursorPosition, setSelection, clearSelection, shouldWrap]);
 
     useEffect(() => {
         const view = viewRef.current;
@@ -261,6 +266,15 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
             effects: themeConf.current.reconfigure(getZaguanTheme(currentTheme.appearance === 'dark')),
         });
     }, [currentTheme.appearance]);
+
+    useEffect(() => {
+        const view = viewRef.current;
+        if (!view) return;
+
+        view.dispatch({
+            effects: wrapConf.current.reconfigure(shouldWrap ? [EditorView.lineWrapping] : []),
+        });
+    }, [shouldWrap]);
 
     // Handle file switch and content updates
     const lastFilename = useRef(filename);
@@ -326,11 +340,20 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
 
 
     // Handle line highlighting when highlightLines prop changes
+    const lastAppliedHighlightRef = useRef<string | null>(null);
     useEffect(() => {
         const view = viewRef.current;
-        if (!view || !content) return;
+        if (!view) return;
+
+        const highlightKey = highlightLines
+            ? `${filename ?? ''}:${highlightLines.startLine}:${highlightLines.endLine}`
+            : null;
 
         if (highlightLines) {
+            if (!content || highlightKey === lastAppliedHighlightRef.current) {
+                return;
+            }
+
             try {
                 const { startLine, endLine } = highlightLines;
                 if (startLine <= view.state.doc.lines) {
@@ -341,16 +364,18 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                             EditorView.scrollIntoView(line.from, { y: "center" })
                         ]
                     });
+                    lastAppliedHighlightRef.current = highlightKey;
                 }
             } catch (error) {
                 console.error('Error applying line highlight:', error);
             }
         } else {
+            lastAppliedHighlightRef.current = null;
             view.dispatch({
                 effects: clearLineHighlight.of(null)
             });
         }
-    }, [highlightLines, content]);
+    }, [highlightLines, content, filename]);
 
     // Custom context menu for the editor
     const handleContextMenu = useCallback((e: React.MouseEvent) => {
