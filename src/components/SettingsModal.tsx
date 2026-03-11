@@ -1,10 +1,10 @@
 'use client';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { emit } from '@tauri-apps/api/event';
 import { getVersion } from '@tauri-apps/api/app';
-import { X, Database, Cloud, Shield, Zap, HardDrive, Server, ChevronRight, ChevronDown, Info, Loader2, Code, Key, CheckCircle2, Palette } from 'lucide-react';
+import { X, Database, Cloud, Shield, Zap, HardDrive, Server, ChevronRight, ChevronDown, Info, Loader2, Code, Key, CheckCircle2, Palette, Check } from 'lucide-react';
 import type { BackendSettings, LocalAiConfig, RemoteAiConfig } from '../types/settings';
 import zbladeLogoUrl from '../assets/zblade-in-app-logo.png';
 import { availableThemes, normalizeThemeId } from '../themes';
@@ -212,6 +212,7 @@ type SettingsSection = 'configuration' | 'account' | 'localai' | 'storage' | 'co
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, workspacePath, onRefreshModels }) => {
     const { t } = useTranslation();
     const [settings, setSettings] = useState<SettingsState>(defaultSettings);
+    const [loadedSettings, setLoadedSettings] = useState<SettingsState>(defaultSettings);
     const [activeSection, setActiveSection] = useState<SettingsSection>('configuration');
     const [hasChanges, setHasChanges] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
@@ -267,12 +268,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
                 }
 
                 setSettings(mergedSettings);
+                setLoadedSettings(mergedSettings);
                 setHasChanges(false);
                 console.debug('[Settings] Loaded settings:', mergedSettings);
             } catch (e) {
                 console.error('[Settings] Failed to load global settings:', e);
                 setError(String(e));
                 setSettings(defaultSettings);
+                setLoadedSettings(defaultSettings);
             } finally {
                 setIsLoading(false);
             }
@@ -296,6 +299,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
         if (isSaving || !hasChanges) return;
 
         const settingsSnapshot = settings;
+        const loadedSettingsSnapshot = loadedSettings;
         const workspacePathSnapshot = workspacePath;
         const refreshModels = onRefreshModels;
 
@@ -306,31 +310,64 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
 
         void (async () => {
             try {
-                // Save split global settings
                 const remoteSettings = frontendRemoteToBackend(settingsSnapshot);
+                const previousRemoteSettings = frontendRemoteToBackend(loadedSettingsSnapshot);
                 const localSettings = frontendLocalToBackend(settingsSnapshot);
-                await invoke('save_remote_ai_settings', {
-                    settings: remoteSettings,
-                });
-                await invoke('save_local_ai_settings', {
-                    settings: localSettings,
-                });
-                await emit('global-settings-changed');
+                const previousLocalSettings = frontendLocalToBackend(loadedSettingsSnapshot);
+                const projectSettings = frontendToBackend(settingsSnapshot);
+                const previousProjectSettings = frontendToBackend(loadedSettingsSnapshot);
 
-                // Save Project Settings (if workspace is open)
-                if (workspacePathSnapshot) {
-                    const backendSettings = frontendToBackend(settingsSnapshot);
-                    await invoke('save_project_settings', {
-                        projectPath: workspacePathSnapshot,
-                        settings: backendSettings,
+                const remoteSettingsChanged = JSON.stringify(remoteSettings) !== JSON.stringify(previousRemoteSettings);
+                const localSettingsChanged = JSON.stringify(localSettings) !== JSON.stringify(previousLocalSettings);
+                const projectSettingsChanged = JSON.stringify(projectSettings) !== JSON.stringify(previousProjectSettings);
+                const themeChanged = remoteSettings.theme !== previousRemoteSettings.theme;
+                const remoteAccountChanged =
+                    remoteSettings.api_key !== previousRemoteSettings.api_key
+                    || remoteSettings.user_id !== previousRemoteSettings.user_id
+                    || remoteSettings.blade_url !== previousRemoteSettings.blade_url;
+                const remoteConfigurationChanged = remoteSettings.markdown_view !== previousRemoteSettings.markdown_view;
+
+                if (remoteSettingsChanged) {
+                    await invoke('save_remote_ai_settings', {
+                        settings: remoteSettings,
                     });
                 }
 
-                // Refresh models if local AI settings changed
-                if (refreshModels) {
+                if (localSettingsChanged) {
+                    await invoke('save_local_ai_settings', {
+                        settings: localSettings,
+                    });
+                }
+
+                // Save Project Settings (if workspace is open)
+                if (workspacePathSnapshot && projectSettingsChanged) {
+                    await invoke('save_project_settings', {
+                        projectPath: workspacePathSnapshot,
+                        settings: projectSettings,
+                    });
+                }
+
+                if (themeChanged) {
+                    await emit('theme-changed');
+                }
+
+                if (remoteAccountChanged || remoteConfigurationChanged) {
+                    await emit('remote-settings-changed');
+                }
+
+                if (localSettingsChanged) {
+                    await emit('local-ai-settings-changed');
+                }
+
+                if (projectSettingsChanged) {
+                    await emit('project-settings-changed');
+                }
+
+                if (refreshModels && localSettingsChanged) {
                     await refreshModels();
                 }
 
+                setLoadedSettings(settingsSnapshot);
                 console.debug('[Settings] Saved settings');
             } catch (e) {
                 console.error('[Settings] Failed to save in background:', e);
@@ -494,8 +531,188 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
 
 interface ConfigurationSettingsProps {
     settings: SettingsState['configuration'];
-    onChange: (updates: Partial<SettingsState['configuration']>) => void;
+    onChange: (settings: Partial<SettingsState['configuration']>) => void;
 }
+
+const ThemeSelect: React.FC<{
+    value: string;
+    onChange: (themeId: string) => void;
+}> = ({ value, onChange }) => {
+    const [isOpen, setIsOpen] = useState(false);
+    const containerRef = useRef<HTMLDivElement>(null);
+    const buttonRef = useRef<HTMLButtonElement>(null);
+    const menuRef = useRef<HTMLDivElement>(null);
+    const selectedTheme = availableThemes.find((theme) => theme.id === normalizeThemeId(value)) ?? availableThemes[0];
+
+    useEffect(() => {
+        if (!isOpen) return;
+
+        const handlePointerDown = (event: MouseEvent) => {
+            if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+                setIsOpen(false);
+            }
+        };
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                setIsOpen(false);
+                buttonRef.current?.focus();
+            }
+        };
+
+        document.addEventListener('mousedown', handlePointerDown);
+        document.addEventListener('keydown', handleKeyDown);
+
+        return () => {
+            document.removeEventListener('mousedown', handlePointerDown);
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [isOpen]);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        const selectedItem = menuRef.current?.querySelector<HTMLButtonElement>(`[data-theme-id="${selectedTheme.id}"]`);
+        selectedItem?.focus();
+    }, [isOpen, selectedTheme.id]);
+
+    const handleToggle = () => {
+        setIsOpen((prev) => !prev);
+    };
+
+    const handleSelect = (themeId: string) => {
+        onChange(themeId);
+        setIsOpen(false);
+        buttonRef.current?.focus();
+    };
+
+    const handleTriggerKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+        if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            setIsOpen(true);
+        }
+    };
+
+    const handleItemKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+        if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            const nextIndex = (index + 1) % availableThemes.length;
+            menuRef.current?.querySelector<HTMLButtonElement>(`[data-theme-id="${availableThemes[nextIndex].id}"]`)?.focus();
+            return;
+        }
+
+        if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            const nextIndex = (index - 1 + availableThemes.length) % availableThemes.length;
+            menuRef.current?.querySelector<HTMLButtonElement>(`[data-theme-id="${availableThemes[nextIndex].id}"]`)?.focus();
+            return;
+        }
+
+        if (event.key === 'Home') {
+            event.preventDefault();
+            menuRef.current?.querySelector<HTMLButtonElement>(`[data-theme-id="${availableThemes[0].id}"]`)?.focus();
+            return;
+        }
+
+        if (event.key === 'End') {
+            event.preventDefault();
+            menuRef.current?.querySelector<HTMLButtonElement>(`[data-theme-id="${availableThemes[availableThemes.length - 1].id}"]`)?.focus();
+            return;
+        }
+
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            setIsOpen(false);
+            buttonRef.current?.focus();
+        }
+    };
+
+    return (
+        <div className="relative" ref={containerRef}>
+            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                <div className="flex items-center gap-1.5">
+                    <span className="h-2.5 w-2.5 rounded-full border border-(--border-default)" style={{ backgroundColor: 'var(--accent-primary)' }} />
+                    <span className="h-2.5 w-2.5 rounded-full border border-(--border-default)" style={{ backgroundColor: 'var(--bg-surface)' }} />
+                    <span className="h-2.5 w-2.5 rounded-full border border-(--border-default)" style={{ backgroundColor: 'var(--fg-primary)' }} />
+                </div>
+            </div>
+
+            <button
+                ref={buttonRef}
+                type="button"
+                aria-haspopup="listbox"
+                aria-expanded={isOpen}
+                aria-label="Select theme"
+                onClick={handleToggle}
+                onKeyDown={handleTriggerKeyDown}
+                className={`
+                    w-full rounded-[calc(var(--panel-radius)+2px)] border py-2 pr-10 pl-14 text-left text-sm font-medium transition-[border-color,background-color,box-shadow,transform] duration-200 focus:outline-none
+                    ${isOpen
+                        ? 'border-(--accent-primary) bg-[color-mix(in_srgb,var(--accent-primary)_14%,var(--bg-surface))] text-(--fg-primary) shadow-[0_0_0_1px_var(--accent-primary),0_14px_34px_color-mix(in_srgb,var(--accent-primary)_18%,transparent)]'
+                        : 'border-(--border-default) bg-(--bg-surface) text-(--fg-primary) shadow-(--shadow-sm) hover:bg-(--bg-surface-hover) focus:border-(--accent-primary) focus:shadow-[0_0_0_1px_var(--accent-primary),var(--shadow-md)]'
+                    }
+                `}
+            >
+                <span className="block truncate">{selectedTheme.label}</span>
+            </button>
+
+            <div className={`pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 transition-colors duration-200 ${isOpen ? 'text-(--accent-primary)' : 'text-(--fg-secondary)'}`}>
+                <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
+            </div>
+
+            {isOpen && (
+                <div
+                    ref={menuRef}
+                    role="listbox"
+                    aria-label="Available themes"
+                    className="absolute left-0 right-0 top-[calc(100%+0.375rem)] z-50 overflow-hidden rounded-[calc(var(--panel-radius)+6px)] border border-(--accent-primary) bg-[color-mix(in_srgb,var(--bg-panel)_88%,var(--bg-surface))] p-1.5 shadow-[0_0_0_1px_color-mix(in_srgb,var(--accent-primary)_28%,transparent),0_18px_40px_color-mix(in_srgb,var(--accent-primary)_18%,transparent)] backdrop-blur-[18px]"
+                >
+                    <div className="max-h-64 space-y-0.5 overflow-y-auto pr-0.5">
+                        {availableThemes.map((theme, index) => {
+                            const isSelected = theme.id === selectedTheme.id;
+
+                            return (
+                                <button
+                                    key={theme.id}
+                                    type="button"
+                                    role="option"
+                                    aria-selected={isSelected}
+                                    data-theme-id={theme.id}
+                                    title={theme.description}
+                                    onClick={() => handleSelect(theme.id)}
+                                    onKeyDown={(event) => handleItemKeyDown(event, index)}
+                                    className={`group w-full rounded-[calc(var(--panel-radius)+1px)] border px-2 py-1.5 text-left transition-[border-color,background-color,box-shadow,transform] duration-200 focus:outline-none ${
+                                        isSelected
+                                            ? 'border-(--accent-primary) bg-[color-mix(in_srgb,var(--accent-primary)_16%,var(--bg-surface))] shadow-[0_0_0_1px_color-mix(in_srgb,var(--accent-primary)_28%,transparent)]'
+                                            : 'border-transparent bg-(--bg-surface) hover:border-(--border-default) hover:bg-(--bg-surface-hover) focus:border-(--accent-primary) focus:bg-(--bg-surface-hover)'
+                                    }`}
+                                >
+                                    <div className="flex items-center gap-2">
+                                        <div className="flex min-w-0 flex-1 items-center gap-2">
+                                            <span className="truncate text-[12px] font-semibold text-(--fg-primary)">{theme.label}</span>
+                                            <div className="ml-1 flex shrink-0 items-center gap-1">
+                                                <div className="h-3.5 w-7 rounded-[999px] border border-(--border-subtle)" style={{ backgroundColor: theme.tokens['--bg-app'] }} />
+                                                <div className="h-3.5 w-7 rounded-[999px] border border-(--border-subtle)" style={{ backgroundColor: theme.tokens['--bg-panel'] }} />
+                                                <div className="h-3.5 w-7 rounded-[999px] border border-(--border-subtle)" style={{ backgroundColor: theme.tokens['--bg-surface'] }} />
+                                                <div className="h-3.5 w-7 rounded-[999px] border border-(--border-subtle)" style={{ backgroundColor: theme.tokens['--accent-primary'] }} />
+                                            </div>
+                                        </div>
+                                        <div className={`flex h-4 w-4 shrink-0 items-center justify-center ${
+                                            isSelected
+                                                ? 'text-(--accent-primary)'
+                                                : 'text-transparent group-hover:text-(--fg-tertiary)'
+                                        }`}>
+                                            <Check className="h-3.5 w-3.5 transition-opacity duration-150" />
+                                        </div>
+                                    </div>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
 
 const ConfigurationSettings: React.FC<ConfigurationSettingsProps> = ({ settings, onChange }) => {
     const selectedTheme = availableThemes.find((theme) => theme.id === normalizeThemeId(settings.theme)) ?? availableThemes[0];
@@ -522,29 +739,10 @@ const ConfigurationSettings: React.FC<ConfigurationSettingsProps> = ({ settings,
                         Available themes
                     </label>
 
-                    <div className="relative">
-                        <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-4">
-                            <div className="flex items-center gap-2">
-                                <span className="h-3 w-3 rounded-full border border-(--border-default)" style={{ backgroundColor: 'var(--accent-primary)' }} />
-                                <span className="h-3 w-3 rounded-full border border-(--border-default)" style={{ backgroundColor: 'var(--bg-surface)' }} />
-                                <span className="h-3 w-3 rounded-full border border-(--border-default)" style={{ backgroundColor: 'var(--fg-primary)' }} />
-                            </div>
-                        </div>
-                        <select
-                            value={normalizeThemeId(settings.theme)}
-                            onChange={(e) => onChange({ theme: normalizeThemeId(e.target.value) })}
-                            className="w-full appearance-none rounded-[calc(var(--panel-radius)+2px)] border border-(--border-default) bg-(--bg-surface) py-3 pr-12 pl-20 text-sm font-medium text-(--fg-primary) shadow-(--shadow-sm) transition-[border-color,background-color,box-shadow] duration-200 hover:bg-(--bg-surface-hover) focus:outline-none focus:border-(--accent-primary) focus:shadow-[0_0_0_1px_var(--accent-primary),var(--shadow-md)]"
-                        >
-                            {availableThemes.map((theme) => (
-                                <option key={theme.id} value={theme.id}>
-                                    {theme.label}
-                                </option>
-                            ))}
-                        </select>
-                        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4 text-(--fg-secondary)">
-                            <ChevronDown className="w-4 h-4" />
-                        </div>
-                    </div>
+                    <ThemeSelect
+                        value={normalizeThemeId(settings.theme)}
+                        onChange={(theme) => onChange({ theme: normalizeThemeId(theme) })}
+                    />
                 </div>
 
                 <div className="rounded-[calc(var(--panel-radius)+2px)] border border-(--border-subtle) bg-(--bg-surface) p-4 shadow-(--shadow-sm) space-y-3">

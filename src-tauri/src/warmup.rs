@@ -107,16 +107,6 @@ impl WarmupClient {
 
         let url = format!("{}/v1/blade/warmup", self.base_url);
 
-        eprintln!(
-            "[WARMUP] Sending warmup request: session={}, model={}, provider={}, trigger={:?}, strategy={:?}, preferred_artifacts={:?}",
-            session_id,
-            model,
-            provider,
-            request.trigger,
-            request.cache_strategy,
-            request.preferred_artifacts
-        );
-
         let response = self
             .http_client
             .post(&url)
@@ -137,15 +127,6 @@ impl WarmupClient {
             .json()
             .await
             .map_err(|e| format!("Failed to parse warmup response: {}", e))?;
-
-        eprintln!(
-            "[WARMUP] Response: type={}, provider={}, artifacts={}, ready={}, duration={}ms",
-            data.response_type,
-            data.provider,
-            data.artifacts_loaded,
-            data.cache_ready,
-            data.duration_ms
-        );
 
         // Track last warmup time
         *self.last_warmup.lock().unwrap() = Some(Instant::now());

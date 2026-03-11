@@ -24,17 +24,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
-fn stream_debug_preview(value: &str) -> String {
-    let normalized = value.replace('\n', "\\n").replace('\r', "\\r");
-    let mut chars = normalized.chars();
-    let preview: String = chars.by_ref().take(160).collect();
-    if chars.next().is_some() {
-        format!("{}…", preview)
-    } else {
-        preview
-    }
-}
-
 fn should_preserve_parallel_responses_outputs(model_id: &str) -> bool {
     model_id.to_ascii_lowercase().contains("gpt-5.4")
 }
@@ -683,22 +672,11 @@ impl ChatManager {
                                 let _ = session_tx.send(session_id);
                             }
                             crate::blade_ws_client::BladeWsEvent::TextChunk { content: text, output_index, phase } => {
-                                eprintln!(
-                                    "[stream-debug][ws->rust][text] len={} output_index={:?} phase={:?} preview=\"{}\"",
-                                    text.len(),
-                                    output_index,
-                                    phase,
-                                    stream_debug_preview(&text)
-                                );
                                 if !preserve_parallel_outputs {
                                     if let Some(idx) = output_index {
                                         match accepted_output_index {
                                             None => accepted_output_index = Some(idx),
                                             Some(accepted) if idx != accepted => {
-                                                eprintln!(
-                                                    "[stream-debug][ws->rust][text-skip-parallel] output_index={} accepted={} len={} preview=\"{}\"",
-                                                    idx, accepted, text.len(), stream_debug_preview(&text)
-                                                );
                                                 continue;
                                             }
                                             _ => {}
@@ -712,11 +690,6 @@ impl ChatManager {
                                     continue;
                                 }
                                 if last_reasoning_chunk.as_deref() == Some(text.as_str()) {
-                                    eprintln!(
-                                        "[stream-debug][ws->rust][text-skip-duplicate-reasoning] len={} preview=\"{}\"",
-                                        text.len(),
-                                        stream_debug_preview(&text)
-                                    );
                                     last_reasoning_chunk = None;
                                     continue;
                                 }
@@ -724,23 +697,12 @@ impl ChatManager {
                                 saw_content = true;
                                 let _ = tx.send_chunk(text);
                             }
-                            crate::blade_ws_client::BladeWsEvent::ReasoningChunk { content: text, output_index, phase } => {
-                                eprintln!(
-                                    "[stream-debug][ws->rust][reasoning] len={} output_index={:?} phase={:?} preview=\"{}\"",
-                                    text.len(),
-                                    output_index,
-                                    phase,
-                                    stream_debug_preview(&text)
-                                );
+                            crate::blade_ws_client::BladeWsEvent::ReasoningChunk { content: text, output_index, phase: _ } => {
                                 if !preserve_parallel_outputs {
                                     if let Some(idx) = output_index {
                                         match accepted_output_index {
                                             None => accepted_output_index = Some(idx),
                                             Some(accepted) if idx != accepted => {
-                                                eprintln!(
-                                                    "[stream-debug][ws->rust][reasoning-skip-parallel] output_index={} accepted={} len={} preview=\"{}\"",
-                                                    idx, accepted, text.len(), stream_debug_preview(&text)
-                                                );
                                                 continue;
                                             }
                                             _ => {}

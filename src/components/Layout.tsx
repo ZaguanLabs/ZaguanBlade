@@ -211,8 +211,8 @@ const AppLayoutInner: React.FC = () => {
 
         loadSettings();
 
-        // Listen for settings changes from SettingsModal
-        const unlistenPromise = listen('global-settings-changed', loadSettings);
+        // Listen for project settings changes from SettingsModal
+        const unlistenPromise = listen('project-settings-changed', loadSettings);
 
         return () => {
             unlistenPromise.then(unlisten => unlisten());

@@ -45,7 +45,7 @@ const WelcomePage: React.FC<{ onOpenSettings?: () => void }> = ({ onOpenSettings
         checkApiKey();
 
         // Listen for settings changes to update immediately
-        const unlistenPromise = listen('global-settings-changed', checkApiKey);
+        const unlistenPromise = listen('remote-settings-changed', checkApiKey);
         return () => {
             unlistenPromise.then(unlisten => unlisten());
         };

@@ -1,7 +1,8 @@
 'use client';
 import React, { useState, useRef, useEffect } from 'react';
 import { ModelInfo } from '../types/chat';
-import { ChevronDown, Check, Box, Search, Cpu, Sparkles, BrainCircuit } from 'lucide-react';
+import { ChevronDown, Check, Box, Cpu, Sparkles, BrainCircuit } from 'lucide-react';
+import { ThemedDropdownEmptyState, ThemedDropdownScrollArea, ThemedDropdownSurface, themedDropdownItemClassName } from './ui/ThemedDropdown';
 
 interface ModelSelectorProps {
     models: ModelInfo[];
@@ -38,6 +39,49 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ models, selectedId
         return <Box className="w-3.5 h-3.5 text-zinc-400" />;
     };
 
+    const renderModelItem = (model: ModelInfo) => {
+        const isSelected = model.id === selectedId;
+
+        return (
+            <button
+                key={model.id}
+                type="button"
+                onClick={() => {
+                    onSelect(model.id);
+                    setIsOpen(false);
+                }}
+                className={themedDropdownItemClassName(isSelected, 'px-3 py-3')}
+            >
+                <div className="flex items-start gap-3">
+                    <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-[calc(var(--panel-radius)-6px)] border ${
+                        isSelected
+                            ? 'border-(--accent-primary) bg-[color-mix(in_srgb,var(--accent-primary)_14%,var(--bg-app))]'
+                            : 'border-(--border-subtle) bg-(--bg-app)'
+                    }`}>
+                        {getModelIcon(model.id)}
+                    </div>
+                    <div className="min-w-0 flex-1 space-y-1">
+                        <div className="truncate text-xs font-semibold text-(--fg-primary)">
+                            {model.name}
+                        </div>
+                        {model.description && (
+                            <div className="truncate text-[10px] leading-relaxed text-(--fg-secondary)">
+                                {model.description}
+                            </div>
+                        )}
+                    </div>
+                    <div className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border ${
+                        isSelected
+                            ? 'border-(--accent-primary) bg-[color-mix(in_srgb,var(--accent-primary)_16%,transparent)] text-(--accent-primary)'
+                            : 'border-(--border-default) bg-(--bg-app) text-(--fg-tertiary)'
+                    }`}>
+                        <Check className={`h-3.5 w-3.5 transition-opacity duration-150 ${isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-45'}`} />
+                    </div>
+                </div>
+            </button>
+        );
+    };
+
     return (
         <div className="relative w-full" ref={containerRef}>
             <button
@@ -46,76 +90,43 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ models, selectedId
                 disabled={disabled}
                 className={`
                     w-full flex items-center justify-between px-3 py-1.5 
-                    bg-[var(--bg-surface)] hover:bg-[var(--bg-surface-hover)]
-                    border border-[var(--border-subtle)] hover:border-[var(--border-hover)]
+                    bg-(--bg-surface) hover:bg-(--bg-surface-hover)
+                    border border-(--border-subtle) hover:border-(--border-default)
                     rounded transition-all duration-200 group
-                    ${isOpen ? 'ring-1 ring-[var(--accent-primary)]/50 border-[var(--accent-primary)]/50' : ''}
+                    ${isOpen ? 'ring-1 ring-(--accent-primary)/50 border-(--accent-primary)/50' : ''}
                     ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
                 `}
             >
                 <div className="flex items-center gap-2 overflow-hidden">
-                    <div className="shrink-0 p-0.5 rounded bg-[var(--bg-app)]/50 border border-[var(--border-subtle)]">
+                    <div className="shrink-0 p-0.5 rounded bg-(--bg-app)/50 border border-(--border-subtle)">
                         {selectedModel ? getModelIcon(selectedModel.id) : <Box className="w-3 h-3" />}
                     </div>
                     <div className="flex flex-col items-start min-w-0">
-                        <span className="text-[11px] font-medium text-[var(--fg-secondary)] truncate w-full text-left">
+                        <span className="text-[11px] font-medium text-(--fg-secondary) truncate w-full text-left">
                             {selectedModel?.name || 'Select Model'}
                         </span>
                     </div>
                 </div>
-                <ChevronDown className={`w-3 h-3 text-[var(--fg-tertiary)] transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
+                <ChevronDown className={`w-3 h-3 text-(--fg-tertiary) transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
             </button>
 
             {isOpen && (
-                <div
+                <ThemedDropdownSurface
                     onWheel={(event) => event.stopPropagation()}
-                    className="absolute top-full left-0 right-0 mt-1.5 py-1.5 bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded-lg shadow-xl z-50 max-h-[300px] overflow-y-auto overscroll-contain flex flex-col gap-0.5 animate-in fade-in zoom-in-95 duration-100 origin-top"
+                    className="absolute top-full left-0 right-0 mt-1.5 animate-in fade-in zoom-in-95 duration-100 origin-top"
                     style={{
-                        boxShadow: '0 8px 30px rgba(0, 0, 0, 0.4), 0 0 1px rgba(255, 255, 255, 0.1)',
                         overscrollBehavior: 'contain',
                     }}
                 >
                     {models.length === 0 && (
-                        <div className="px-3 py-2 text-xs text-[var(--fg-tertiary)] text-center italic">
+                        <ThemedDropdownEmptyState className="text-xs">
                             No models available
-                        </div>
+                        </ThemedDropdownEmptyState>
                     )}
-                    {models.map(model => {
-                        const isSelected = model.id === selectedId;
-                        return (
-                            <button
-                                key={model.id}
-                                onClick={() => {
-                                    onSelect(model.id);
-                                    setIsOpen(false);
-                                }}
-                                className={`
-                                    flex items-center gap-3 px-3 py-2 mx-1 rounded-sm text-left
-                                    transition-colors duration-150
-                                    ${isSelected
-                                        ? 'bg-[var(--accent-primary)]/10 text-[var(--fg-primary)]'
-                                        : 'text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--fg-primary)]'
-                                    }
-                                `}
-                            >
-                                <div className="shrink-0 mt-0.5">
-                                    {getModelIcon(model.id)}
-                                </div>
-                                <div className="flex flex-col min-w-0 flex-1">
-                                    <span className="text-xs font-medium truncate">
-                                        {model.name}
-                                    </span>
-                                    {model.description && (
-                                        <span className="text-[10px] text-[var(--fg-tertiary)] truncate opacity-80">
-                                            {model.description}
-                                        </span>
-                                    )}
-                                </div>
-                                {isSelected && <Check className="w-3.5 h-3.5 text-[var(--accent-primary)] shrink-0" />}
-                            </button>
-                        );
-                    })}
-                </div>
+                    <ThemedDropdownScrollArea className="max-h-[300px]">
+                        {models.map(renderModelItem)}
+                    </ThemedDropdownScrollArea>
+                </ThemedDropdownSurface>
             )}
         </div>
     );

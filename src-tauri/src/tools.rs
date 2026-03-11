@@ -595,14 +595,11 @@ fn create_gitignore_filter(workspace_root: &Path) -> Option<GitignoreFilter> {
     
     // If allow_gitignored_files is true, don't create a filter (allow all files)
     if settings.allow_gitignored_files {
-        eprintln!("[GITIGNORE] Filtering disabled by project settings");
         return None;
     }
     
     // Create filter to respect .gitignore
-    let filter = GitignoreFilter::new(workspace_root);
-    eprintln!("[GITIGNORE] Filtering enabled for workspace: {}", workspace_root.display());
-    Some(filter)
+    Some(GitignoreFilter::new(workspace_root))
 }
 
 // Editor state for IDE-specific tools

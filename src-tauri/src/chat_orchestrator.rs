@@ -7,17 +7,6 @@ use crate::{blade_protocol, local_artifacts};
 use std::collections::HashSet;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
-fn stream_debug_preview(value: &str) -> String {
-    let normalized = value.replace('\n', "\\n").replace('\r', "\\r");
-    let mut chars = normalized.chars();
-    let preview: String = chars.by_ref().take(160).collect();
-    if chars.next().is_some() {
-        format!("{}…", preview)
-    } else {
-        preview
-    }
-}
-
 fn extract_explicit_output_path(message: &str) -> Option<String> {
     message
         .split_whitespace()
@@ -649,13 +638,6 @@ pub async fn handle_send_message<R: Runtime>(
                 mgr.message_seq += 1;
                 drop(mgr);
                 let msg_id = if msg_id.is_empty() { "streaming-msg".to_string() } else { msg_id };
-                eprintln!(
-                    "[stream-debug][rust->ui][text] id={} seq={} len={} preview=\"{}\"",
-                    msg_id,
-                    seq,
-                    chunk.len(),
-                    stream_debug_preview(&chunk)
-                );
 
                 // 2. Emit Blade v1.1 MessageDelta
                 let _ = window.emit(
@@ -683,13 +665,6 @@ pub async fn handle_send_message<R: Runtime>(
                 mgr.message_seq += 1;
                 drop(mgr);
                 let msg_id = if msg_id.is_empty() { "streaming-msg".to_string() } else { msg_id };
-                eprintln!(
-                    "[stream-debug][rust->ui][reasoning] id={} seq={} len={} preview=\"{}\"",
-                    msg_id,
-                    seq,
-                    chunk.len(),
-                    stream_debug_preview(&chunk)
-                );
 
                 let _ = window.emit(
                     "blade-event",

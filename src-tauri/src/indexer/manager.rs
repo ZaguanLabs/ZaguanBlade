@@ -52,15 +52,11 @@ impl IndexerManager {
         // Write project_index.md immediately after indexing
         if let Err(e) = manager.write_project_index_sync() {
             eprintln!("[Indexer] Failed to write project_index.md: {}", e);
-        } else {
-            eprintln!("[Indexer] Wrote .zblade/context/project_index.md");
         }
 
         // Write compact deterministic index for first-turn warmup context
         if let Err(e) = manager.write_project_index_min_sync() {
             eprintln!("[Indexer] Failed to write project_index_min.md: {}", e);
-        } else {
-            eprintln!("[Indexer] Wrote .zblade/context/project_index_min.md");
         }
 
         Ok(manager)

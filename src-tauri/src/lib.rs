@@ -128,9 +128,7 @@ pub fn run() {
                                 stats.files_indexed, stats.duration_ms
                             );
                         }
-                        Err(e) => {
-                            eprintln!("[LanguageService] Startup indexing failed: {}", e);
-                        }
+                        Err(_) => {}
                     }
                 }
             });

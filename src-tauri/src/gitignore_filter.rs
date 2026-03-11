@@ -21,19 +21,14 @@ impl GitignoreFilter {
         // First, add the root .gitignore if it exists
         let root_gitignore = workspace_root.join(".gitignore");
         if root_gitignore.exists() {
-            if let Some(e) = builder.add(&root_gitignore) {
-                eprintln!("[GITIGNORE] Failed to load root .gitignore: {}", e);
-            } else {
+            if builder.add(&root_gitignore).is_none() {
                 gitignore_count += 1;
             }
         }
         
         // Also check for global gitignore (~/.gitignore_global or git config)
         if let Some(global_gitignore) = Self::find_global_gitignore() {
-            if let Some(e) = builder.add(&global_gitignore) {
-                eprintln!("[GITIGNORE] Failed to load global gitignore: {}", e);
-            } else {
-                eprintln!("[GITIGNORE] Loaded global gitignore: {}", global_gitignore.display());
+            if builder.add(&global_gitignore).is_none() {
                 gitignore_count += 1;
             }
         }
@@ -63,23 +58,20 @@ impl GitignoreFilter {
             }
             
             // Check if this is a .gitignore file
-            if path.file_name().map(|n| n == ".gitignore").unwrap_or(false) {
-                if let Some(e) = builder.add(path) {
-                    eprintln!("[GITIGNORE] Failed to load {}: {}", path.display(), e);
-                } else {
-                    gitignore_count += 1;
-                }
+            if path.file_name().map(|n| n == ".gitignore").unwrap_or(false)
+                && builder.add(path).is_none()
+            {
+                gitignore_count += 1;
             }
         }
         
         let gitignore = if gitignore_count > 0 {
-            eprintln!("[GITIGNORE] Loaded {} .gitignore file(s) from {}", gitignore_count, workspace_root.display());
-            Some(builder.build().unwrap_or_else(|e| {
-                eprintln!("[GITIGNORE] Failed to build gitignore matcher: {}", e);
-                GitignoreBuilder::new(workspace_root).build().unwrap()
-            }))
+            Some(
+                builder
+                    .build()
+                    .unwrap_or_else(|_| GitignoreBuilder::new(workspace_root).build().unwrap()),
+            )
         } else {
-            eprintln!("[GITIGNORE] No .gitignore files found in {}", workspace_root.display());
             None
         };
 

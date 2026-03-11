@@ -35,7 +35,7 @@ export const ThemeProvider: React.FC<React.PropsWithChildren> = ({ children }) =
 
         void loadTheme();
 
-        const unlistenPromise = listen('global-settings-changed', () => {
+        const unlistenPromise = listen('theme-changed', () => {
             void loadTheme();
         });
 

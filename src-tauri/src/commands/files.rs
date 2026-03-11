@@ -235,23 +235,8 @@ pub async fn open_workspace_logic(
     let _ = app_handle.emit(crate::events::event_names::REFRESH_EXPLORER, ());
 
     let language_service = language_service;
-    let workspace_path = path.clone();
     tokio::task::spawn_blocking(move || {
-        eprintln!(
-            "[LanguageService] Starting background workspace indexing: {}",
-            workspace_path
-        );
-        match language_service.index_directory(".") {
-            Ok(stats) => {
-                eprintln!(
-                    "[LanguageService] Workspace indexed: {} files, {} symbols in {}ms",
-                    stats.files_indexed, stats.symbols_extracted, stats.duration_ms
-                );
-            }
-            Err(e) => {
-                eprintln!("[LanguageService] Workspace indexing failed: {}", e);
-            }
-        }
+        let _ = language_service.index_directory(".");
     });
 
     Ok(())

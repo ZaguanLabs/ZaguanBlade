@@ -443,7 +443,6 @@ pub fn resize_terminal(
 ) -> Result<(), String> {
     let mut ptys = state.ptys.lock().unwrap();
     if let Some(pty) = ptys.get_mut(&id) {
-        println!("Resizing PTY {} to {}x{}", id, rows, cols);
         pty.master
             .resize(PtySize {
                 rows,

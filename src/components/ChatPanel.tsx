@@ -184,7 +184,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
 
     useEffect(() => {
         checkApiKey();
-        const unlistenPromise = listen('global-settings-changed', checkApiKey);
+        const unlistenPromise = listen('remote-settings-changed', checkApiKey);
         return () => {
             unlistenPromise.then(unlisten => unlisten());
         };

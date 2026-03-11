@@ -136,11 +136,6 @@ impl LanguageService {
             );
         }
 
-        eprintln!(
-            "[LanguageService] Indexed {} symbols in {}",
-            symbols.len(),
-            file_path
-        );
         Ok(symbols)
     }
 
@@ -156,11 +151,6 @@ impl LanguageService {
         self.index_directory_recursive(&full_path, "", &mut stats, gitignore_filter.as_ref())?;
 
         stats.duration_ms = start.elapsed().as_millis() as u64;
-        eprintln!(
-            "[LanguageService] Indexed {} files, {} symbols in {}ms",
-            stats.files_indexed, stats.symbols_extracted, stats.duration_ms
-        );
-
         Ok(stats)
     }
 
@@ -170,17 +160,11 @@ impl LanguageService {
 
         // If allow_gitignored_files is true, don't create a filter (allow all files)
         if settings.allow_gitignored_files {
-            eprintln!("[LanguageService] Gitignore filtering disabled by project settings");
             return None;
         }
 
         // Create filter to respect .gitignore
-        let filter = GitignoreFilter::new(&self.workspace_root);
-        eprintln!(
-            "[LanguageService] Gitignore filtering enabled for workspace: {}",
-            self.workspace_root.display()
-        );
-        Some(filter)
+        Some(GitignoreFilter::new(&self.workspace_root))
     }
 
     fn index_directory_recursive(
@@ -233,9 +217,8 @@ impl LanguageService {
                             stats.files_indexed += 1;
                             stats.symbols_extracted += symbols.len();
                         }
-                        Err(e) => {
+                        Err(_) => {
                             stats.files_failed += 1;
-                            eprintln!("[LanguageService] Failed to index {}: {}", relative, e);
                         }
                     }
                 }
