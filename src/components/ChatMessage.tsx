@@ -399,6 +399,24 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
             borderColor: 'color-mix(in srgb, var(--accent-primary) 38%, transparent)'
         }
         : undefined;
+    const assistantChunkCounterStyle = isAssistant
+        ? {
+            backgroundColor: stream?.endTime
+                ? 'color-mix(in srgb, var(--bg-surface) 58%, var(--bg-app))'
+                : 'color-mix(in srgb, var(--bg-surface) 48%, var(--bg-app))',
+            borderColor: stream?.endTime
+                ? 'color-mix(in srgb, var(--border-default) 94%, transparent)'
+                : 'color-mix(in srgb, var(--accent-primary) 32%, var(--border-default))',
+            color: stream?.endTime
+                ? 'var(--fg-tertiary)'
+                : 'color-mix(in srgb, var(--accent-primary) 70%, var(--fg-secondary))'
+        }
+        : undefined;
+    const assistantChunkCounterDividerStyle = isAssistant
+        ? {
+            color: 'color-mix(in srgb, var(--border-default) 82%, var(--fg-tertiary))'
+        }
+        : undefined;
     const assistantDividerStyle = isAssistant
         ? {
             backgroundColor: 'color-mix(in srgb, var(--border-default) 88%, transparent)'
@@ -789,9 +807,12 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                 </div>
 
                 {hasChunkCounter && (
-                    <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-zinc-800/80 bg-zinc-950/70 px-2.5 py-1 text-[10px] font-mono text-zinc-500">
+                    <div
+                        className="mt-3 inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[10px] font-mono"
+                        style={assistantChunkCounterStyle}
+                    >
                         <span>{stream!.seq} chunks</span>
-                        <span className="text-zinc-700">•</span>
+                        <span style={assistantChunkCounterDividerStyle}>•</span>
                         <span>
                             {stream!.endTime
                                 ? `${streamElapsedSec.toFixed(1)}s`
