@@ -37,7 +37,7 @@ export const FileChangeBar: React.FC<FileChangeBarProps> = ({
       {/* Diff stats */}
       <div className="flex items-center gap-1.5 text-[11px]">
         {change.added_lines > 0 && (
-          <span className="flex items-center gap-0.5" style={{ color: 'var(--accent-secondary)' }}>
+          <span className="flex items-center gap-0.5" style={{ color: 'var(--accent-green)' }}>
             <Plus className="w-3 h-3" />
             {change.added_lines}
           </span>
@@ -58,7 +58,7 @@ export const FileChangeBar: React.FC<FileChangeBarProps> = ({
         onClick={onAccept}
         disabled={disabled}
         className="flex items-center gap-1 text-[11px] font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-        style={{ color: 'var(--accent-secondary)' }}
+        style={{ color: 'var(--accent-green)' }}
         title="Accept changes (keep on disk)"
       >
         <Check className="w-3.5 h-3.5" />

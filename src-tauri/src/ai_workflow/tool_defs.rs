@@ -62,16 +62,31 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "apply_patch",
             "function": {
                 "name": "apply_patch",
-                "description": "Apply search/replace edit to a file",
+                "description": "Apply atomic search/replace edits to an existing file",
                 "strict": false,
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": { "type": "string", "description": "File path" },
-                        "old_text": { "type": "string", "description": "Text to find and replace" },
-                        "new_text": { "type": "string", "description": "Replacement text" }
+                        "old_text": { "type": "string", "description": "Legacy single-edit mode: text to find and replace" },
+                        "new_text": { "type": "string", "description": "Legacy single-edit mode: replacement text" },
+                        "patches": {
+                            "type": "array",
+                            "description": "Preferred multi-edit mode: array of patches applied atomically",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "old_text": { "type": "string", "description": "Exact text to replace" },
+                                    "new_text": { "type": "string", "description": "Replacement text" },
+                                    "start_line": { "type": "integer", "description": "Optional line hint" },
+                                    "end_line": { "type": "integer", "description": "Optional end line hint" }
+                                },
+                                "required": ["old_text", "new_text"],
+                                "additionalProperties": false
+                            }
+                        }
                     },
-                    "required": ["path", "old_text", "new_text"],
+                    "required": ["path"],
                     "additionalProperties": false
                 }
             }

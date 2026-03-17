@@ -142,14 +142,8 @@ export function deriveMessageRenderSegments(
         return [];
     }
 
-    const pendingIds = new Set((pendingActions || []).map((action) => action.id));
     const toolCallById = new Map((message.tool_calls || []).map((toolCall) => [toolCall.id, toolCall]));
     const commandExecutionById = new Map((message.commandExecutions || []).map((execution) => [execution.id, execution]));
-    const commandExecutionIds = new Set(
-        (message.blocks || [])
-            .filter((block): block is Extract<MessageBlock, { type: 'command_execution' }> => block.type === 'command_execution')
-            .map((block) => block.id)
-    );
 
     const segments: DerivedRenderSegment[] = [];
     let index = 0;
@@ -170,10 +164,7 @@ export function deriveMessageRenderSegments(
 
             if (candidate.type === 'tool_call') {
                 const toolCall = toolCallById.get(candidate.id);
-                const isRunCommand = toolCall?.function.name === 'run_command';
-                const hasPendingApproval = pendingIds.has(candidate.id);
-                const hasExecutionBlock = commandExecutionIds.has(candidate.id);
-                if (toolCall && !(isRunCommand && hasPendingApproval) && !(isRunCommand && hasExecutionBlock)) {
+                if (toolCall) {
                     items.push({ kind: 'tool_call', id: candidate.id, toolCall });
                 }
                 cursor += 1;

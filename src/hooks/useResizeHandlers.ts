@@ -20,7 +20,7 @@ interface ResizeHandlers {
 export function useResizeHandlers({
     editorColumnRef,
     initialTerminalHeight = 300,
-    initialChatPanelWidth = 400,
+    initialChatPanelWidth = 450,
 }: UseResizeHandlersOptions): ResizeHandlers {
     const [terminalHeight, setTerminalHeight] = useState(initialTerminalHeight);
     const [chatPanelWidth, setChatPanelWidth] = useState(initialChatPanelWidth);

@@ -64,42 +64,74 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
     };
 
     const isStreaming = isActive && !hasContent;
+    const containerStyle = isStreaming
+        ? {
+            backgroundColor: 'color-mix(in srgb, var(--bg-surface) 88%, var(--bg-app))',
+            borderColor: 'color-mix(in srgb, var(--accent-primary) 26%, var(--border-default))',
+            boxShadow: '0 10px 24px color-mix(in srgb, var(--accent-primary) 10%, transparent)'
+        }
+        : {
+            backgroundColor: 'color-mix(in srgb, var(--bg-surface) 70%, var(--bg-app))',
+            borderColor: 'color-mix(in srgb, var(--border-default) 92%, transparent)',
+            boxShadow: 'none',
+            opacity: 0.9
+        };
+    const headerStyle = {
+        backgroundColor: isStreaming
+            ? 'color-mix(in srgb, var(--accent-primary) 8%, var(--bg-surface))'
+            : 'color-mix(in srgb, var(--bg-surface) 54%, var(--bg-app))'
+    };
+    const contentStyle = {
+        backgroundColor: isStreaming
+            ? 'color-mix(in srgb, var(--bg-app) 16%, var(--bg-surface))'
+            : 'color-mix(in srgb, var(--bg-app) 10%, var(--bg-surface))',
+        borderColor: isStreaming
+            ? 'color-mix(in srgb, var(--accent-primary) 16%, var(--border-subtle))'
+            : 'color-mix(in srgb, var(--border-default) 72%, transparent)'
+    };
+    const contentTextStyle = {
+        color: isStreaming
+            ? 'color-mix(in srgb, var(--fg-primary) 88%, var(--accent-primary))'
+            : 'var(--fg-secondary)'
+    };
 
     return (
-        <div className={`my-2 rounded-md border overflow-hidden transition-all duration-200 ${
-            isStreaming
-                ? 'border-purple-500/40 bg-purple-950/30 shadow-lg shadow-purple-500/10'
-                : 'border-zinc-700/30 bg-zinc-800/20 opacity-70'
-            }`}>
-            {/* Header - clickable to toggle */}
+        <div
+            className="my-2 overflow-hidden rounded-lg border transition-[border-color,background-color,box-shadow,opacity] duration-200"
+            style={containerStyle}
+        >
             <button
                 onClick={handleToggle}
-                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-zinc-700/30 transition-colors text-left"
+                className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-(--bg-surface-hover)/45"
+                style={headerStyle}
             >
                 <div className="flex items-center gap-2 flex-1 min-w-0">
-                    <Brain className={`w-3 h-3 flex-shrink-0 ${isStreaming ? 'text-purple-400 animate-pulse' : 'text-zinc-600'}`} />
-                    <span className={`font-mono text-[9px] uppercase tracking-wider flex-shrink-0 ${isStreaming ? 'text-purple-400' : 'text-zinc-600'
+                    <Brain className={`h-3 w-3 flex-shrink-0 ${isStreaming ? 'animate-pulse text-(--accent-primary)' : 'text-(--fg-tertiary)'}`} />
+                    <span className={`flex-shrink-0 font-mono text-[9px] uppercase tracking-[0.16em] ${isStreaming ? 'text-(--accent-primary)' : 'text-(--fg-tertiary)'
                         }`}>
                         Reasoning
                     </span>
                 </div>
                 {isStreaming && (
-                    <Loader2 className="w-2.5 h-2.5 text-purple-400/60 animate-spin mr-1 flex-shrink-0" />
+                    <Loader2 className="mr-1 h-2.5 w-2.5 flex-shrink-0 animate-spin text-(--accent-primary)" />
                 )}
                 {isExpanded ? (
-                    <ChevronDown className="w-3 h-3 text-zinc-500 flex-shrink-0" />
+                    <ChevronDown className="h-3 w-3 flex-shrink-0 text-(--fg-secondary)" />
                 ) : (
-                    <ChevronRight className="w-3 h-3 text-zinc-500 flex-shrink-0" />
+                    <ChevronRight className="h-3 w-3 flex-shrink-0 text-(--fg-secondary)" />
                 )}
             </button>
 
-            {/* Content - scrollable container */}
             {isExpanded && (
                 <div
                     ref={contentRef}
-                    className="px-3 py-2 border-t border-zinc-700/30 bg-zinc-800/40 max-h-48 overflow-y-auto overflow-x-hidden"
+                    className="max-h-48 overflow-x-hidden overflow-y-auto border-t px-3 py-2"
+                    style={contentStyle}
                 >
-                    <div className="text-zinc-400 text-[10px] leading-relaxed select-text whitespace-pre-wrap font-mono break-words overflow-wrap-anywhere">
+                    <div
+                        className="select-text overflow-wrap-anywhere whitespace-pre-wrap break-words font-mono text-[10px] leading-relaxed"
+                        style={contentTextStyle}
+                    >
                         {displayContent}
                     </div>
                 </div>
@@ -217,15 +249,33 @@ type ActivityGroupItem =
 
 const ActivityGroupDisplay: React.FC<{
     items: ActivityGroupItem[];
+    pendingActions?: import('../types/events').StructuredAction[] | null;
+    onApproveCommand?: () => void;
+    onSkipCommand?: () => void;
+    onApproveSingleCommand?: (callId: string) => void;
+    onSkipSingleCommand?: (callId: string) => void;
     onUndoTool?: (toolCallId: string) => void;
     onStopCommand?: (callId: string) => void;
     onOpenFile?: (path: string) => void;
-}> = ({ items, onUndoTool, onStopCommand, onOpenFile }) => {
+}> = ({ items, pendingActions, onApproveCommand, onSkipCommand, onApproveSingleCommand, onSkipSingleCommand, onUndoTool, onStopCommand, onOpenFile }) => {
     return (
         <div className="mb-2 space-y-1.5">
             {items.map((item) => {
                 if (item.kind === 'tool_call') {
                     const toolCall = item.toolCall;
+                    const matchingPendingAction = pendingActions?.find((action) => action.id === toolCall.id);
+                    if (toolCall.function.name === 'run_command' && matchingPendingAction && onApproveCommand && onSkipCommand) {
+                        return (
+                            <CommandApprovalCard
+                                key={item.id}
+                                actions={[matchingPendingAction]}
+                                onRun={onApproveCommand}
+                                onSkip={onSkipCommand}
+                                onRunSingle={onApproveSingleCommand}
+                                onSkipSingle={onSkipSingleCommand}
+                            />
+                        );
+                    }
                     return (
                         <ToolCallDisplay
                             key={item.id}
@@ -603,6 +653,11 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                         <ActivityGroupDisplay
                                             key={segment.id}
                                             items={segment.items}
+                                            pendingActions={pendingActions}
+                                            onApproveCommand={onApproveCommand}
+                                            onSkipCommand={onSkipCommand}
+                                            onApproveSingleCommand={onApproveSingleCommand}
+                                            onSkipSingleCommand={onSkipSingleCommand}
                                             onUndoTool={onUndoTool}
                                             onStopCommand={onStopCommand}
                                             onOpenFile={onOpenFile}
@@ -654,20 +709,6 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                             return null;
                             });
                         })()}
-
-                        {/* Pending Actions (Command Approval) */}
-                        {pendingActions && pendingActions.length > 0 && onApproveCommand && onSkipCommand && (
-                            <div className="mb-3">
-                                <CommandApprovalCard
-                                    actions={pendingActions}
-                                    onRun={onApproveCommand}
-                                    onSkip={onSkipCommand}
-                                    onRunSingle={onApproveSingleCommand}
-                                    onSkipSingle={onSkipSingleCommand}
-                                />
-                            </div>
-                        )}
-
 
                         {/* Legacy: Render commandExecutions that don't have block entries (backward compat) */}
                         {message.commandExecutions && message.commandExecutions.length > 0 && (
@@ -733,46 +774,44 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                         )}
                                     </div>
                                 )}
-                                {pendingActions && pendingActions.length > 0 && onApproveCommand && onSkipCommand && (
-                                    <div className="mb-3">
-                                        <CommandApprovalCard
-                                            actions={pendingActions}
-                                            onRun={onApproveCommand}
-                                            onSkip={onSkipCommand}
-                                            onRunSingle={onApproveSingleCommand}
-                                            onSkipSingle={onSkipSingleCommand}
-                                        />
-                                    </div>
-                                )}
                                 {hasToolCalls && (
                                     <div className="mb-3 space-y-2">
                                         {toolCalls
-                                            .filter(call => {
-                                                // Skip run_command when pending approval - CommandApprovalCard handles it
-                                                if (call.function.name === 'run_command' && pendingActions && pendingActions.length > 0) {
-                                                    return false;
+                                            .map((call, idx) => {
+                                                const matchingPendingAction = pendingActions?.find((action) => action.id === call.id);
+                                                if (call.function.name === 'run_command' && matchingPendingAction && onApproveCommand && onSkipCommand) {
+                                                    return (
+                                                        <CommandApprovalCard
+                                                            key={`${call.id}-${idx}`}
+                                                            actions={[matchingPendingAction]}
+                                                            onRun={onApproveCommand}
+                                                            onSkip={onSkipCommand}
+                                                            onRunSingle={onApproveSingleCommand}
+                                                            onSkipSingle={onSkipSingleCommand}
+                                                        />
+                                                    );
                                                 }
-                                                return true;
-                                            })
-                                            .map((call, idx) => (
-                                                <ToolCallDisplay
-                                                    key={`${call.id}-${idx}`}
-                                                    toolCall={call}
-                                                    status={call.status || 'executing'}
-                                                    result={call.result}
-                                                    onStopCommand={
-                                                        call.function.name === 'run_command' && onStopCommand
-                                                            ? (() => onStopCommand(call.id))
-                                                            : undefined
-                                                    }
-                                                    onUndo={
-                                                        onUndoTool && REVERTIBLE_TOOLS.has(call.function.name)
-                                                            ? (() => onUndoTool(call.id))
-                                                            : undefined
-                                                    }
-                                                    onOpenFile={onOpenFile}
-                                                />
-                                            ))}
+
+                                                return (
+                                                    <ToolCallDisplay
+                                                        key={`${call.id}-${idx}`}
+                                                        toolCall={call}
+                                                        status={call.status || 'executing'}
+                                                        result={call.result}
+                                                        onStopCommand={
+                                                            call.function.name === 'run_command' && onStopCommand
+                                                                ? (() => onStopCommand(call.id))
+                                                                : undefined
+                                                        }
+                                                        onUndo={
+                                                            onUndoTool && REVERTIBLE_TOOLS.has(call.function.name)
+                                                                ? (() => onUndoTool(call.id))
+                                                                : undefined
+                                                        }
+                                                        onOpenFile={onOpenFile}
+                                                    />
+                                                );
+                                            })}
                                     </div>
                                 )}
                                 {finalText && (

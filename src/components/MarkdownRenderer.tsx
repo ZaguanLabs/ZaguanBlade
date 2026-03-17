@@ -107,7 +107,15 @@ CodeBlock.displayName = 'CodeBlock';
 
 // Simple inline code - no need for heavy memoization
 const InlineCode: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-    <code className="px-1.5 py-0.5 rounded bg-(--markdown-inline-code-bg) text-(--markdown-inline-code-fg) text-[11px] font-mono">
+    <code
+        className="inline-block px-1.5 py-0.5 rounded text-[11px] font-mono align-baseline"
+        style={{
+            backgroundColor: 'var(--markdown-inline-code-bg)',
+            color: 'var(--markdown-inline-code-fg)',
+            border: '1px solid color-mix(in srgb, var(--markdown-inline-code-fg) 14%, var(--markdown-border))',
+            boxShadow: 'inset 0 1px 0 color-mix(in srgb, var(--fg-bright) 18%, transparent)',
+        }}
+    >
         {children}
     </code>
 );

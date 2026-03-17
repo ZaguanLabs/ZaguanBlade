@@ -15,8 +15,9 @@ export const CommandApprovalCard: React.FC<CommandApprovalCardProps> = ({
     actions,
     onRun,
     onSkip,
+    onRunSingle,
+    onSkipSingle,
 }) => {
-    // Only show the first pending action - one at a time
     const currentAction = actions[0];
     if (!currentAction) return null;
     
@@ -59,15 +60,32 @@ export const CommandApprovalCard: React.FC<CommandApprovalCardProps> = ({
 
                 <div className="flex items-center gap-1.5">
                     <button
-                        onClick={onSkip}
+                        onClick={() => {
+                            if (onSkipSingle) {
+                                onSkipSingle(currentAction.id);
+                                return;
+                            }
+                            onSkip();
+                        }}
                         className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-app)]/70 px-2.5 py-1.5 text-[11px] font-medium text-[var(--fg-secondary)] transition-colors hover:bg-[var(--bg-surface-hover)] hover:text-[var(--fg-primary)]"
                     >
                         <X className="h-3 w-3" />
                         Skip
                     </button>
                     <button
-                        onClick={onRun}
-                        className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-200 transition-colors hover:bg-emerald-500/14 hover:text-emerald-100"
+                        onClick={() => {
+                            if (onRunSingle) {
+                                onRunSingle(currentAction.id);
+                                return;
+                            }
+                            onRun();
+                        }}
+                        className="flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition-colors"
+                        style={{
+                            border: '1px solid color-mix(in srgb, var(--accent-green) 28%, var(--border-subtle))',
+                            backgroundColor: 'color-mix(in srgb, var(--accent-green) 14%, var(--bg-app))',
+                            color: 'var(--accent-green)',
+                        }}
                     >
                         <Play className="h-3 w-3" />
                         Run

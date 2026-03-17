@@ -1,14 +1,12 @@
 import React, { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
 import { useTranslation } from 'react-i18next';
-import { ArrowDown, Check, X, Settings, Key, Loader2 } from 'lucide-react';
+import { ArrowDown, Check, X, Loader2 } from 'lucide-react';
 import { useCommandExecution } from '../hooks/useCommandExecution';
 import { useHistory } from '../hooks/useHistory';
 import type { ChatMessage as ChatMessageType, ChatMode, ComposerMention, ImageAttachment, ModelInfo, QueuedRequest, ToolActivityState } from '../types/chat';
 
 import type { StructuredAction, TodoItem } from '../types/events';
-import type { RemoteAiConfig } from '../types/settings';
 import { ChatMessage } from './ChatMessage';
 import { ChatTabBar } from './ChatTabBar';
 import { CommandCenter } from './CommandCenter';
@@ -162,33 +160,15 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     const isUserAtBottomRef = useRef(true);
     const prevMessageCountRef = useRef(0);
     const [activeTab, setActiveTab] = useState<'chat' | 'history'>('chat');
-    const [hasApiKey, setHasApiKey] = useState<boolean>(true);
     const [composerPrefill, setComposerPrefill] = useState<QueuedRequest | null>(null);
     const [showScrollToBottom, setShowScrollToBottom] = useState(false);
     const showScrollToBottomRef = useRef(false);
+    const canUseAi = models.length > 0;
     const [scrollMetrics, setScrollMetrics] = useState({
         scrollTop: 0,
         viewportHeight: 0,
         viewportWidth: 0,
     });
-
-    // Check API Key
-    const checkApiKey = useCallback(async () => {
-        try {
-            const config = await invoke<RemoteAiConfig>('get_remote_ai_settings');
-            setHasApiKey(!!config.api_key && config.api_key.length > 0);
-        } catch (e) {
-            console.error('Failed to check API key:', e);
-        }
-    }, []);
-
-    useEffect(() => {
-        checkApiKey();
-        const unlistenPromise = listen('remote-settings-changed', checkApiKey);
-        return () => {
-            unlistenPromise.then(unlisten => unlisten());
-        };
-    }, [checkApiKey]);
 
     const scrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -495,7 +475,10 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                                 </div>
                                 <h2 className="text-sm font-semibold uppercase tracking-[0.24em] text-[var(--fg-secondary)]">Zaguán Blade</h2>
                                 <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-[var(--fg-tertiary)]">
-                                    Ask for a fix, paste a task, or describe what you want to build. The assistant can inspect the files you have open, explain unfamiliar code, suggest edits, and help you move from idea to finished change without losing the thread.
+                                    Ask for a fix, paste code, or describe what you want to build.
+                                </p>
+                                <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-[var(--fg-secondary)]">
+                                    Tip: Local AI runs on your machine — no API costs.
                                 </p>
                                 <div className="mt-5 flex flex-wrap items-center justify-center gap-2 text-[11px] text-[var(--fg-tertiary)]">
                                     <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-app)] px-3 py-1">Understand this file</span>
@@ -504,7 +487,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                                     <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-app)] px-3 py-1">Attach screenshots</span>
                                 </div>
                                 <p className="mt-5 text-xs font-mono uppercase tracking-[0.2em] text-[var(--fg-tertiary)]/70">
-                                    Start with a goal, question, or bug
+                                    Start with a fix, question, or build idea
                                 </p>
                             </div>
                         )}
@@ -608,7 +591,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                         <button
                             type="button"
                             onClick={handleImplementPlan}
-                            disabled={loading || !hasApiKey}
+                            disabled={loading || !canUseAi}
                             className="inline-flex items-center rounded-md border border-emerald-500/30 bg-emerald-500/12 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-200 transition-colors hover:border-emerald-400/50 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                             Implement
@@ -626,40 +609,12 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                 setSelectedModelId={setSelectedModelId}
                 chatMode={chatMode}
                 setChatMode={setChatMode}
-                disabled={!hasApiKey}
+                disabled={!canUseAi}
                 prefillRequest={composerPrefill}
                 onPrefillConsumed={handleComposerPrefillConsumed}
             />
 
             {/* API Key Missing Overlay */}
-            {!hasApiKey && (
-                <div className="absolute inset-x-0 bottom-[140px] top-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center p-6 z-20 text-center animate-in fade-in duration-300">
-                    <div className="bg-[var(--bg-surface)] border border-[var(--border-subtle)] p-6 rounded-xl shadow-2xl max-w-sm w-full">
-                        <div className="w-12 h-12 bg-amber-500/10 rounded-full flex items-center justify-center mx-auto mb-4">
-                            <Key className="w-6 h-6 text-amber-500" />
-                        </div>
-                        <h3 className="text-lg font-semibold text-[var(--fg-primary)] mb-2">Setup Required</h3>
-                        <p className="text-sm text-[var(--fg-secondary)] mb-6">
-                            To use the AI Assistant, you need to configure your Zaguán API Key.
-                        </p>
-                        <button
-                            onClick={() => {
-                                // Dispatch event to open settings
-                                // Since we don't have direct access to setIsSettingsOpen, we can dispatch a custom event
-                                // or rely on the user clicking the gear icon.
-                                // But for better UX, let's try to emit an event Layout listens to?
-                                // Layout listens for 'open-settings' maybe?
-                                // For now, we'll suggest using the gear icon if we can't trigger it.
-                                document.dispatchEvent(new CustomEvent('open-settings'));
-                            }}
-                            className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
-                        >
-                            <Settings className="w-4 h-4" />
-                            Open Settings
-                        </button>
-                    </div>
-                </div>
-            )}
         </div>
     );
 };

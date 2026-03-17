@@ -203,13 +203,14 @@ function frontendToBackend(frontend: SettingsState): BackendSettings {
 interface SettingsModalProps {
     isOpen: boolean;
     onClose: () => void;
+    initialSection?: SettingsSection;
     workspacePath?: string | null;
     onRefreshModels?: () => Promise<import('../types/chat').ModelInfo[]>;
 }
 
 type SettingsSection = 'configuration' | 'account' | 'localai' | 'storage' | 'context' | 'privacy' | 'editor' | 'about';
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, workspacePath, onRefreshModels }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialSection, workspacePath, onRefreshModels }) => {
     const { t } = useTranslation();
     const [settings, setSettings] = useState<SettingsState>(defaultSettings);
     const [loadedSettings, setLoadedSettings] = useState<SettingsState>(defaultSettings);
@@ -283,6 +284,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, w
 
         loadSettings();
     }, [isOpen, workspacePath]);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        setActiveSection(initialSection ?? 'configuration');
+    }, [initialSection, isOpen]);
 
     const updateSettings = <K extends 'storage' | 'context' | 'privacy' | 'editor' | 'configuration' | 'account' | 'localAi'>(
         section: K,

@@ -112,6 +112,14 @@ async fn fetch_models_from_server(
 }
 
 pub async fn get_models(blade_url: &str, api_key: &str) -> Vec<ModelInfo> {
+    let api_key = api_key.trim();
+    if api_key.is_empty() {
+        if let Ok(mut cache) = MODEL_CACHE.lock() {
+            *cache = None;
+        }
+        return Vec::new();
+    }
+
     // 1. Fast path: Check cache first
     if let Ok(cache) = MODEL_CACHE.lock() {
         if let Some(ref cached) = *cache {

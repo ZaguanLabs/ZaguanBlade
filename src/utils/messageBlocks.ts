@@ -23,12 +23,6 @@ export function insertToolCallBlockPreservingOrder(blocks: MessageBlock[], toolC
         return nextBlocks;
     }
 
-    const lastActivityIndex = findLastActivityBlockIndex(nextBlocks);
-    if (lastActivityIndex >= 0) {
-        nextBlocks.splice(lastActivityIndex + 1, 0, { type: 'tool_call', id: toolCallId });
-        return nextBlocks;
-    }
-
     nextBlocks.push({ type: 'tool_call', id: toolCallId });
     return nextBlocks;
 }

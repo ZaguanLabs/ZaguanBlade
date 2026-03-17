@@ -9,7 +9,7 @@ import type { CodeEditorHandle } from './CodeEditor';
 import { useEditorActions } from '../contexts/EditorContext';
 import { BladeDispatcher } from '../services/blade';
 import { BladeEvent, FileEvent } from '../types/blade';
-import { ArrowRight, Settings } from 'lucide-react';
+import { ArrowRight, Server, Cloud } from 'lucide-react';
 import zbladeLogoUrl from '../assets/zblade-in-app-logo.png';
 import { FileChangeBar } from './editor/FileChangeBar';
 import { Breadcrumb } from './editor/Breadcrumb';
@@ -23,6 +23,14 @@ const PdfViewer = React.lazy(() =>
 const WelcomePage: React.FC<{ onOpenSettings?: () => void }> = ({ onOpenSettings }) => {
     const [hasApiKey, setHasApiKey] = useState<boolean>(false);
     const [isLoading, setIsLoading] = useState(true);
+
+    const openSettingsSection = (section?: 'account' | 'localai') => {
+        if (onOpenSettings) {
+            document.dispatchEvent(new CustomEvent('open-settings', { detail: { section } }));
+            return;
+        }
+        document.dispatchEvent(new CustomEvent('open-settings', { detail: { section } }));
+    };
 
     useEffect(() => {
         // Check for API key on mount
@@ -64,36 +72,39 @@ const WelcomePage: React.FC<{ onOpenSettings?: () => void }> = ({ onOpenSettings
                 </div>
 
                 <h1 className="text-3xl font-bold text-[var(--fg-primary)] mb-3 tracking-tight">
-                    Zaguán Blade
+                    Run AI locally or use cloud models
                 </h1>
                 <p className="text-[var(--fg-secondary)] text-lg mb-8 leading-relaxed">
-                    The AI-Native Code Editor for the future of development.
+                    Local = private, runs on your machine • Cloud = faster, pay per use
                 </p>
 
-                <div className="grid gap-4 max-w-sm mx-auto">
+                <div className="grid gap-3 max-w-sm mx-auto">
                     {!isLoading && (
                         <>
-                            {!hasApiKey && (
-                                <button
-                                    onClick={onOpenSettings}
-                                    className="flex items-center justify-center gap-2 w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium transition-colors shadow-lg shadow-emerald-900/20"
-                                >
-                                    <Settings className="w-4 h-4" />
-                                    Configure API Key
-                                </button>
-                            )}
+                            <button
+                                onClick={() => openSettingsSection('localai')}
+                                className="flex items-center justify-center gap-2 w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium transition-colors shadow-lg shadow-emerald-900/20"
+                            >
+                                <Server className="w-4 h-4" />
+                                Use Local AI (no setup)
+                            </button>
+
+                            <button
+                                onClick={() => openSettingsSection('account')}
+                                className="flex items-center justify-center gap-2 w-full py-3 px-4 bg-[var(--bg-surface)] hover:bg-[var(--bg-surface-hover)] border border-[var(--border-subtle)] hover:border-[var(--border-focus)] text-[var(--fg-primary)] rounded-lg font-medium transition-all"
+                            >
+                                <Cloud className="w-4 h-4" />
+                                Use Cloud Models (API key)
+                            </button>
 
                             <a
                                 href={hasApiKey ? "https://zaguanai.com/dashboard" : "https://zaguanai.com/pricing"}
                                 target="_blank"
                                 rel="noreferrer"
-                                className={`flex items-center justify-center gap-2 w-full py-3 px-4 rounded-lg font-medium transition-all ${hasApiKey
-                                        ? "bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-900/20"
-                                        : "bg-[var(--bg-surface)] hover:bg-[var(--bg-surface-hover)] border border-[var(--border-subtle)] hover:border-[var(--border-focus)] text-[var(--fg-primary)]"
-                                    }`}
+                                className="flex items-center justify-center gap-2 w-full py-2 px-4 rounded-lg font-medium transition-all text-[var(--fg-secondary)] hover:text-[var(--fg-primary)]"
                             >
-                                {hasApiKey ? "Manage your Subscription" : "Get Subscription"}
-                                <ArrowRight className={`w-4 h-4 ${hasApiKey ? "" : "opacity-50"}`} />
+                                Manage Subscription
+                                <ArrowRight className="w-4 h-4 opacity-70" />
                             </a>
                         </>
                     )}
@@ -101,12 +112,9 @@ const WelcomePage: React.FC<{ onOpenSettings?: () => void }> = ({ onOpenSettings
 
                 <div className="mt-12 pt-8 border-t border-[var(--border-subtle)]">
                     <p className="text-xs text-[var(--fg-tertiary)]">
-                        {hasApiKey
-                            ? "AI features are ready to use."
-                            : "To use AI features, you need an active Zaguán Blade subscription and valid API Key."
-                        }
+                        No API key? Use Local AI.
                         <br />
-                        Code is processed securely according to our privacy policy.
+                        Your code stays on your machine.
                     </p>
                 </div>
             </div>

@@ -29,7 +29,7 @@ export const GlobalChangeActions: React.FC<GlobalChangeActionsProps> = ({
         <span>
           {fileCount} file{fileCount !== 1 ? 's' : ''}
         </span>
-        <span style={{ color: 'var(--accent-secondary)' }}>+{totalAdded}</span>
+        <span style={{ color: 'var(--accent-green)' }}>+{totalAdded}</span>
         <span style={{ color: 'var(--accent-error)' }}>-{totalRemoved}</span>
       </div>
 
@@ -38,7 +38,7 @@ export const GlobalChangeActions: React.FC<GlobalChangeActionsProps> = ({
           onClick={onAcceptAll}
           disabled={disabled}
           className="flex items-center gap-1 px-1 py-0.5 transition-colors disabled:cursor-not-allowed disabled:opacity-50 hover:opacity-80"
-          style={{ color: 'var(--accent-secondary)' }}
+          style={{ color: 'var(--accent-green)' }}
           title="Accept all AI changes"
         >
           <Check className="w-3 h-3" />

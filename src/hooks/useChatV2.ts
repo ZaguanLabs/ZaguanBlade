@@ -14,6 +14,16 @@ const FLUSH_INTERVAL_MS = 80;
 const TOOL_ACTIVITY_DISPATCH_INTERVAL_MS = 120;
 const MESSAGE_COMPLETION_GRACE_MS = 1200;
 
+function pickDefaultModel(models: ModelInfo[]): ModelInfo | null {
+    if (models.length === 0) {
+        return null;
+    }
+
+    return models.find((model) => model.id === 'anthropic/claude-sonnet-4-5-20250929')
+        || models.find((model) => model.id === 'openai/gpt-5.2')
+        || models[0];
+}
+
 function areToolActivitiesEqual(a: ToolActivityState | null, b: ToolActivityState | null): boolean {
     if (a === b) {
         return true;
@@ -79,6 +89,29 @@ function findTextAfterLastActivity(blocks: MessageBlock[]): string | undefined {
     return undefined;
 }
 
+function hasInterleavedContentBetweenActivities(blocks: MessageBlock[]): boolean {
+    const firstActivityIndex = blocks.findIndex((block) => block.type === 'tool_call' || block.type === 'command_execution');
+    if (firstActivityIndex === -1) {
+        return false;
+    }
+
+    const lastActivityIndex = blocks.reduce((lastIndex, block, index) => {
+        return block.type === 'tool_call' || block.type === 'command_execution' ? index : lastIndex;
+    }, -1);
+    if (lastActivityIndex <= firstActivityIndex) {
+        return false;
+    }
+
+    for (let index = firstActivityIndex + 1; index < lastActivityIndex; index += 1) {
+        const block = blocks[index];
+        if (block.type !== 'tool_call' && block.type !== 'command_execution') {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 function inferContentBeforeTools(message: ChatMessage | undefined, blocks: MessageBlock[], fullContent: string): string | undefined {
     const textBeforeFirstActivity = findTextBeforeFirstActivity(blocks);
     if (textBeforeFirstActivity !== undefined) {
@@ -118,6 +151,10 @@ function normalizeSplitBlocks(
     const hasActivityBlocks = blocks.some((block) => block.type === 'tool_call' || block.type === 'command_execution');
     const hasExplicitSplit = message?.content_before_tools !== undefined || message?.content_after_tools !== undefined;
     if (!hasActivityBlocks && !hasExplicitSplit) {
+        return { blocks };
+    }
+
+    if (hasInterleavedContentBetweenActivities(blocks)) {
         return { blocks };
     }
 
@@ -596,11 +633,41 @@ export function useChatV2() {
         }
     }, [buildEditorContext]);
 
+    const syncSelectedModel = useCallback(async (modelId: string, explicit: boolean) => {
+        hasExplicitModelRef.current = explicit;
+        selectedModelIdRef.current = modelId;
+        dispatch({ type: 'model/set', modelId });
+        try {
+            await BladeDispatcher.chat({
+                type: 'SetSelectedModel',
+                payload: { model: modelId },
+            });
+        } catch (error) {
+            console.error('[useChatV2] Failed to sync model to backend:', error);
+        }
+    }, []);
+
     const refreshModels = useCallback(async () => {
         const models = await invoke<ModelInfo[]>('list_models');
         dispatch({ type: 'models/set', models });
+
+        if (models.length === 0) {
+            return models;
+        }
+
+        const hasSelectedModel = models.some((model) => (
+            model.id === selectedModelIdRef.current || model.api_id === selectedModelIdRef.current
+        ));
+
+        if (!hasSelectedModel) {
+            const defaultModel = pickDefaultModel(models);
+            if (defaultModel) {
+                await syncSelectedModel(defaultModel.id, false);
+            }
+        }
+
         return models;
-    }, []);
+    }, [syncSelectedModel]);
 
     const resetStreamingState = useCallback(() => {
         messageBufferRef.current?.clearAll();
@@ -740,18 +807,8 @@ export function useChatV2() {
     }, [scheduleFlush]);
 
     const setSelectedModelId = useCallback(async (modelId: string) => {
-        hasExplicitModelRef.current = true;
-        selectedModelIdRef.current = modelId;
-        dispatch({ type: 'model/set', modelId });
-        try {
-            await BladeDispatcher.chat({
-                type: 'SetSelectedModel',
-                payload: { model: modelId },
-            });
-        } catch (error) {
-            console.error('[useChatV2] Failed to sync model to backend:', error);
-        }
-    }, []);
+        await syncSelectedModel(modelId, true);
+    }, [syncSelectedModel]);
 
     const updateMessages = useCallback((updater: (messages: ChatMessage[]) => ChatMessage[]) => {
         setMessages(updater);
@@ -807,11 +864,17 @@ export function useChatV2() {
                     dispatch({ type: 'loading/set', loading: true });
                 }
 
-                if (modelList.length > 0 && !hasExplicitModelRef.current) {
-                    const defaultModel = modelList.find((model) => model.id === 'anthropic/claude-sonnet-4-5-20250929')
-                        || modelList.find((model) => model.id === 'openai/gpt-5.2')
-                        || modelList[0];
-                    dispatch({ type: 'model/set', modelId: defaultModel.id });
+                if (modelList.length > 0) {
+                    const hasSelectedModel = modelList.some((model) => (
+                        model.id === selectedModelIdRef.current || model.api_id === selectedModelIdRef.current
+                    ));
+
+                    if (!hasExplicitModelRef.current || !hasSelectedModel) {
+                        const defaultModel = pickDefaultModel(modelList);
+                        if (defaultModel) {
+                            await syncSelectedModel(defaultModel.id, hasExplicitModelRef.current && hasSelectedModel);
+                        }
+                    }
                 }
             } catch (error) {
                 console.error('[useChatV2] Failed to initialize chat:', error);
@@ -819,7 +882,7 @@ export function useChatV2() {
         }
 
         void init();
-    }, []);
+    }, [syncSelectedModel]);
 
     useEffect(() => {
         if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {

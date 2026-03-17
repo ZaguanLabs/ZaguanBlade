@@ -120,7 +120,7 @@ test('deriveMessageRenderSegments groups tool calls and command executions toget
     );
 });
 
-test('deriveMessageRenderSegments hides pending run_command tool calls behind the approval card', () => {
+test('deriveMessageRenderSegments keeps pending run_command tool calls in the timeline', () => {
     const toolCall = makeToolCall({
         id: 'call-approval',
         function: { name: 'run_command', arguments: '{"command":"pwd"}' },
@@ -134,7 +134,8 @@ test('deriveMessageRenderSegments hides pending run_command tool calls behind th
 
     const segments = deriveMessageRenderSegments(message, [makePendingAction('call-approval')]);
 
-    assert.equal(segments.length, 0);
+    assert.equal(segments.length, 1);
+    assert.equal(segments[0]?.kind, 'activity_group');
 });
 
 test('insertToolCallBlockPreservingOrder appends new tool calls after existing assistant text', () => {
@@ -148,7 +149,7 @@ test('insertToolCallBlockPreservingOrder appends new tool calls after existing a
 
     assert.deepEqual(
         nextBlocks.map((block) => block.type === 'text' ? `${block.type}:${block.id}` : `${block.type}:${block.id}`),
-        ['text:text-1', 'tool_call:tool-1', 'tool_call:tool-2', 'text:text-2']
+        ['text:text-1', 'tool_call:tool-1', 'text:text-2', 'tool_call:tool-2']
     );
 });
 

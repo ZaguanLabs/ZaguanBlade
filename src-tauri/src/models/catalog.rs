@@ -2,7 +2,11 @@ use crate::config::ApiConfig;
 use crate::models::registry::ModelInfo;
 
 pub async fn list_all_models(config: &ApiConfig) -> Vec<ModelInfo> {
-    let mut models = crate::models::registry::get_models(&config.blade_url, &config.api_key).await;
+    let mut models = if config.api_key.trim().is_empty() {
+        Vec::new()
+    } else {
+        crate::models::registry::get_models(&config.blade_url, &config.api_key).await
+    };
 
     if config.ollama_enabled {
         let mut ollama_models = crate::models::ollama::get_models(

@@ -161,12 +161,19 @@ const AppLayoutInner: React.FC = () => {
         setConversation: chat.setConversation,
     });
 
+    type SettingsSection = 'configuration' | 'account' | 'localai' | 'storage' | 'context' | 'privacy' | 'editor' | 'about';
+
     // Settings modal state
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+    const [initialSettingsSection, setInitialSettingsSection] = useState<SettingsSection | undefined>(undefined);
 
     // Listen for open-settings custom event (from WelcomePage or ChatPanel)
     useEffect(() => {
-        const handleOpenSettings = () => setIsSettingsOpen(true);
+        const handleOpenSettings = (event: Event) => {
+            const customEvent = event as CustomEvent<{ section?: SettingsSection }>;
+            setInitialSettingsSection(customEvent.detail?.section);
+            setIsSettingsOpen(true);
+        };
         document.addEventListener('open-settings', handleOpenSettings);
         return () => document.removeEventListener('open-settings', handleOpenSettings);
     }, []);
@@ -780,6 +787,7 @@ const AppLayoutInner: React.FC = () => {
                     <SettingsModal
                         isOpen={isSettingsOpen}
                         onClose={() => setIsSettingsOpen(false)}
+                        initialSection={initialSettingsSection}
                         workspacePath={workspacePath}
                         onRefreshModels={refreshModels}
                     />
