@@ -330,6 +330,7 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
                     }
                 });
 
+                emit('terminal-ready', { id }).catch(console.error);
                 if (id === BLADE_TERMINAL_ID) {
                     emit('blade-terminal-ready', { id }).catch(console.error);
                 }

@@ -42,38 +42,20 @@ export function upsertSplitTextBlocks(
     const activity = blocks.slice(firstActivityIndex, lastActivityIndex + 1);
     const suffix = blocks.slice(lastActivityIndex + 1);
 
-    const nextPrefix = [...prefix];
-    let lastPrefixTextIndex = -1;
-    for (let index = nextPrefix.length - 1; index >= 0; index -= 1) {
-        if (nextPrefix[index].type === 'text') {
-            lastPrefixTextIndex = index;
-            break;
-        }
-    }
-
-    if (lastPrefixTextIndex >= 0) {
-        const block = nextPrefix[lastPrefixTextIndex];
-        if (block.type === 'text') {
-            nextPrefix[lastPrefixTextIndex] = { ...block, content: beforeToolsContent };
-        }
-    } else if (beforeToolsContent.length > 0) {
-        nextPrefix.push({ type: 'text', content: beforeToolsContent, id: crypto.randomUUID() });
-    }
-
+    const prefixWithoutText = prefix.filter((block) => block.type !== 'text');
     const suffixWithoutText = suffix.filter((block) => block.type !== 'text');
 
-    return afterToolsContent.length > 0
-        ? [
-            ...nextPrefix,
-            ...activity,
-            { type: 'text', content: afterToolsContent, id: crypto.randomUUID() },
-            ...suffixWithoutText,
-        ]
-        : [
-            ...nextPrefix,
-            ...activity,
-            ...suffixWithoutText,
-        ];
+    return [
+        ...prefixWithoutText,
+        ...(beforeToolsContent.length > 0
+            ? [{ type: 'text' as const, content: beforeToolsContent, id: crypto.randomUUID() }]
+            : []),
+        ...activity,
+        ...(afterToolsContent.length > 0
+            ? [{ type: 'text' as const, content: afterToolsContent, id: crypto.randomUUID() }]
+            : []),
+        ...suffixWithoutText,
+    ];
 }
 
 export function insertAssistantMessageAfterLastUser(messages: ChatMessage[], message: ChatMessage): ChatMessage[] {

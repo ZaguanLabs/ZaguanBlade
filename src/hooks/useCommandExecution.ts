@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { listen, emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { BladeDispatcher } from '../services/blade';
+import { BLADE_TERMINAL_ID, BLADE_TERMINAL_TITLE } from '../constants/terminal';
 
 export interface CommandExecution {
     commandId: string;
@@ -16,6 +17,7 @@ export interface CommandExecution {
 type PendingCommand = {
     callId: string;
     terminalId: string;
+    terminalTitle: string;
     command: string;
     program?: string;
     args?: string[];
@@ -24,15 +26,42 @@ type PendingCommand = {
     blocking: boolean;
     waitMsBeforeAsync?: number;
     started: boolean;
+    fallbackAttempted: boolean;
+};
+
+type ManagedTerminal = {
+    id: string;
+    title: string;
+    cwd?: string;
+    ready: boolean;
+    opening: boolean;
+    activeCallId: string | null;
+    backgroundLocked: boolean;
+    primary: boolean;
 };
 
 const SENTINEL_START = '##BLADE_CMD_START:';
 const SENTINEL_EXIT = '##BLADE_CMD_EXIT:';
 const SENTINEL_END = '##';
+const DETACHED_MARKER = '[run_command] detached pid=';
+const TERMINAL_READY_TIMEOUT_MS = 15000;
 
 export function useCommandExecution() {
     const [executions, setExecutions] = useState<Map<string, CommandExecution>>(new Map());
     const pendingCommandsRef = useRef<Map<string, PendingCommand>>(new Map());
+    const terminalsRef = useRef<Map<string, ManagedTerminal>>(new Map([
+        [BLADE_TERMINAL_ID, {
+            id: BLADE_TERMINAL_ID,
+            title: BLADE_TERMINAL_TITLE,
+            ready: false,
+            opening: false,
+            activeCallId: null,
+            backgroundLocked: false,
+            primary: true,
+        }],
+    ]));
+    const terminalReadyWaitersRef = useRef<Map<string, Array<() => void>>>(new Map());
+    const extraTerminalCounterRef = useRef(2);
 
     const handleCommandComplete = useCallback(async (callId: string, output: string, exitCode: number) => {
         console.debug('[CMD EXEC] Complete:', { callId, exitCode, outputLength: output.length });
@@ -72,48 +101,221 @@ export function useCommandExecution() {
         return pending.command;
     }, [escapeShellArg]);
 
-    const sendCommandToBlade = useCallback((pending: PendingCommand) => {
-        const { callId, terminalId, cwd, blocking, waitMsBeforeAsync } = pending;
+    const updateTerminal = useCallback((terminalId: string, updater: (terminal: ManagedTerminal | undefined) => ManagedTerminal | undefined) => {
+        const current = terminalsRef.current.get(terminalId);
+        const next = updater(current);
+
+        if (next) {
+            terminalsRef.current.set(terminalId, next);
+            return next;
+        }
+
+        terminalsRef.current.delete(terminalId);
+        return undefined;
+    }, []);
+
+    const resolveTerminalReady = useCallback((terminalId: string) => {
+        const waiters = terminalReadyWaitersRef.current.get(terminalId);
+        if (!waiters || waiters.length === 0) {
+            return;
+        }
+        terminalReadyWaitersRef.current.delete(terminalId);
+        for (const waiter of waiters) {
+            waiter();
+        }
+    }, []);
+
+    const waitForTerminalReady = useCallback((terminalId: string) => {
+        const existing = terminalsRef.current.get(terminalId);
+        if (existing?.ready) {
+            return Promise.resolve();
+        }
+
+        return new Promise<void>((resolve, reject) => {
+            const timeoutId = window.setTimeout(() => {
+                const waiters = terminalReadyWaitersRef.current.get(terminalId) || [];
+                terminalReadyWaitersRef.current.set(
+                    terminalId,
+                    waiters.filter(waiter => waiter !== onReady),
+                );
+                reject(new Error(`Timed out waiting for terminal ${terminalId} to be ready.`));
+            }, TERMINAL_READY_TIMEOUT_MS);
+
+            const onReady = () => {
+                window.clearTimeout(timeoutId);
+                resolve();
+            };
+
+            const waiters = terminalReadyWaitersRef.current.get(terminalId) || [];
+            waiters.push(onReady);
+            terminalReadyWaitersRef.current.set(terminalId, waiters);
+        });
+    }, []);
+
+    const openManagedTerminal = useCallback(async (terminalId: string, title: string, cwd?: string) => {
+        const existing = terminalsRef.current.get(terminalId);
+        if (existing?.ready) {
+            return;
+        }
+
+        if (!existing?.opening) {
+            updateTerminal(terminalId, terminal => ({
+                id: terminalId,
+                title: terminal?.title ?? title,
+                cwd: cwd ?? terminal?.cwd,
+                ready: false,
+                opening: true,
+                activeCallId: terminal?.activeCallId ?? null,
+                backgroundLocked: terminal?.backgroundLocked ?? false,
+                primary: terminal?.primary ?? terminalId === BLADE_TERMINAL_ID,
+            }));
+
+            await emit('open-terminal', {
+                id: terminalId,
+                cwd,
+                title,
+                focus: true,
+                transient: terminalId !== BLADE_TERMINAL_ID,
+            });
+        }
+
+        await waitForTerminalReady(terminalId);
+    }, [updateTerminal, waitForTerminalReady]);
+
+    const createExtraTerminal = useCallback((callId: string, cwd?: string): ManagedTerminal => {
+        const terminal: ManagedTerminal = {
+            id: `blade-ai-${extraTerminalCounterRef.current}-${callId}`,
+            title: `Blade ${extraTerminalCounterRef.current}`,
+            cwd,
+            ready: false,
+            opening: false,
+            activeCallId: callId,
+            backgroundLocked: false,
+            primary: false,
+        };
+        extraTerminalCounterRef.current += 1;
+        terminalsRef.current.set(terminal.id, terminal);
+        return terminal;
+    }, []);
+
+    const reserveTerminalForCommand = useCallback((callId: string, cwd?: string) => {
+        const reusableTerminals = Array.from(terminalsRef.current.values())
+            .filter(terminal => !terminal.activeCallId && !terminal.backgroundLocked)
+            .sort((a, b) => {
+                if (a.primary !== b.primary) {
+                    return a.primary ? -1 : 1;
+                }
+                return a.id.localeCompare(b.id);
+            });
+
+        const terminal = reusableTerminals[0] ?? createExtraTerminal(callId, cwd);
+
+        updateTerminal(terminal.id, current => {
+            const base = current ?? terminal;
+            return {
+                ...base,
+                cwd: cwd ?? base.cwd,
+                activeCallId: callId,
+            };
+        });
+
+        return terminalsRef.current.get(terminal.id) ?? terminal;
+    }, [createExtraTerminal, updateTerminal]);
+
+    const buildInteractiveCommandPayload = useCallback((pending: PendingCommand) => {
+        const { callId, cwd, blocking, waitMsBeforeAsync } = pending;
         const commandToRun = buildCommandForExecution(pending);
 
         const parts: string[] = [];
         parts.push(`echo '${SENTINEL_START}${callId}${SENTINEL_END}'`);
+        parts.push('__blade_ec=0');
+
         if (cwd) {
-            parts.push(`cd ${escapeShellArg(cwd)}`);
+            parts.push(`cd ${escapeShellArg(cwd)} || __blade_ec=$?`);
         }
+
         if (blocking) {
-            parts.push(commandToRun);
+            parts.push(`if [ "$__blade_ec" -eq 0 ]; then ${commandToRun}; __blade_ec=$?; fi`);
         } else {
             const waitMs = typeof waitMsBeforeAsync === 'number' ? Math.max(0, waitMsBeforeAsync) : 1000;
             const waitSeconds = (waitMs / 1000).toString();
-            parts.push(`( ${commandToRun} ) & __blade_pid=$!`);
-            if (waitMs > 0) {
-                parts.push(`sleep ${waitSeconds}`);
-            }
             parts.push(
-                `if kill -0 "$__blade_pid" 2>/dev/null; then disown "$__blade_pid" 2>/dev/null || true; echo '[run_command] detached pid='"$__blade_pid"; __blade_ec=0; else wait "$__blade_pid"; __blade_ec=$?; fi`
+                `if [ "$__blade_ec" -eq 0 ]; then ( ${commandToRun} ) & __blade_pid=$!; ${waitMs > 0 ? `sleep ${waitSeconds}; ` : ''}if kill -0 "$__blade_pid" 2>/dev/null; then disown "$__blade_pid" 2>/dev/null || true; echo '[run_command] detached pid='"$__blade_pid"; __blade_ec=0; else wait "$__blade_pid"; __blade_ec=$?; fi; fi`
             );
         }
-        parts.push(`__blade_ec=$?; echo '${SENTINEL_EXIT}${callId}:'"$__blade_ec"'${SENTINEL_END}'; exit $__blade_ec`);
 
-        const payload = `( ${parts.join('; ')} )`;
+        parts.push(`echo '${SENTINEL_EXIT}${callId}:'"$__blade_ec"'${SENTINEL_END}'`);
+        parts.push('unset __blade_ec __blade_pid');
 
-        const title = commandToRun.trim().length > 0
-            ? `AI: ${commandToRun.trim().slice(0, 32)}`
-            : 'AI Command';
+        return `( ${parts.join('; ')} )\n`;
+    }, [buildCommandForExecution, escapeShellArg]);
 
-        emit('open-terminal', {
-            id: terminalId,
-            cwd,
-            title,
-            command: payload,
-            focus: true,
-            transient: true,
-        }).catch(async err => {
-            pendingCommandsRef.current.delete(callId);
-            await handleCommandComplete(callId, `Failed to start command terminal: ${String(err)}`, 1);
+    const releaseTerminalReservation = useCallback((pending: PendingCommand, backgroundLocked: boolean) => {
+        updateTerminal(pending.terminalId, terminal => {
+            if (!terminal) {
+                return terminal;
+            }
+
+            return {
+                ...terminal,
+                opening: false,
+                activeCallId: terminal.activeCallId === pending.callId ? null : terminal.activeCallId,
+                backgroundLocked,
+            };
         });
-    }, [buildCommandForExecution, escapeShellArg, handleCommandComplete]);
+    }, [updateTerminal]);
+
+    const invalidateTerminal = useCallback((terminalId: string) => {
+        updateTerminal(terminalId, terminal => {
+            if (!terminal) {
+                return terminal;
+            }
+
+            if (terminal.primary) {
+                return {
+                    ...terminal,
+                    ready: false,
+                    opening: false,
+                    activeCallId: null,
+                    backgroundLocked: false,
+                };
+            }
+
+            return undefined;
+        });
+    }, [updateTerminal]);
+
+    const sendCommandToBlade = useCallback(async (pending: PendingCommand) => {
+        const payload = buildInteractiveCommandPayload(pending);
+
+        try {
+            await openManagedTerminal(pending.terminalId, pending.terminalTitle, pending.cwd);
+            updateTerminal(pending.terminalId, terminal => terminal ? { ...terminal, ready: true, opening: false } : terminal);
+            await BladeDispatcher.terminal({
+                type: 'Input',
+                payload: {
+                    id: pending.terminalId,
+                    data: payload,
+                },
+            });
+        } catch (err) {
+            invalidateTerminal(pending.terminalId);
+            releaseTerminalReservation(pending, false);
+
+            if (!pending.fallbackAttempted) {
+                pending.fallbackAttempted = true;
+                const fallback = createExtraTerminal(pending.callId, pending.cwd);
+                pending.terminalId = fallback.id;
+                pending.terminalTitle = fallback.title;
+                pendingCommandsRef.current.set(pending.callId, pending);
+                await sendCommandToBlade(pending);
+                return;
+            }
+
+            pendingCommandsRef.current.delete(pending.callId);
+            await handleCommandComplete(pending.callId, `Failed to execute command in Blade terminal: ${String(err)}`, 1);
+        }
+    }, [buildInteractiveCommandPayload, createExtraTerminal, handleCommandComplete, invalidateTerminal, openManagedTerminal, releaseTerminalReservation, updateTerminal]);
 
     const stopCommandExecution = useCallback(async (callId: string) => {
         const pending = pendingCommandsRef.current.get(callId);
@@ -123,20 +325,23 @@ export function useCommandExecution() {
 
         try {
             await BladeDispatcher.terminal({
-                type: 'Kill',
+                type: 'Input',
                 payload: {
                     id: pending.terminalId,
+                    data: '\u0003',
                 },
             });
         } catch (err) {
-            console.error('[CMD EXEC] Failed to kill terminal:', err);
+            console.error('[CMD EXEC] Failed to interrupt terminal:', err);
         }
 
+        releaseTerminalReservation(pending, false);
         await handleCommandComplete(callId, 'Command cancelled by user.', 130);
-    }, [handleCommandComplete]);
+    }, [handleCommandComplete, releaseTerminalReservation]);
 
     useEffect(() => {
         let unlistenStart: (() => void) | undefined;
+        let unlistenTerminalReady: (() => void) | undefined;
         let unlistenExit: (() => void) | undefined;
         let unlistenCmdDetected: (() => void) | undefined;
         let unlistenCmdExitDetected: (() => void) | undefined;
@@ -155,10 +360,11 @@ export function useCommandExecution() {
             }>('command-execution-started', (event) => {
                 console.debug('[CMD EXEC] Started:', event.payload);
 
-                const terminalId = `ai-cmd-${event.payload.call_id}`;
+                const reservedTerminal = reserveTerminalForCommand(event.payload.call_id, event.payload.cwd);
                 const pending: PendingCommand = {
                     callId: event.payload.call_id,
-                    terminalId,
+                    terminalId: reservedTerminal.id,
+                    terminalTitle: reservedTerminal.title,
                     command: event.payload.command,
                     program: event.payload.program,
                     args: event.payload.args,
@@ -167,6 +373,7 @@ export function useCommandExecution() {
                     blocking: event.payload.blocking ?? true,
                     waitMsBeforeAsync: event.payload.wait_ms_before_async,
                     started: false,
+                    fallbackAttempted: false,
                 };
                 pendingCommandsRef.current.set(event.payload.call_id, pending);
 
@@ -183,7 +390,13 @@ export function useCommandExecution() {
                 });
 
                 pending.started = true;
-                sendCommandToBlade(pending);
+                void sendCommandToBlade(pending);
+            });
+
+            unlistenTerminalReady = await listen<{ id: string }>('terminal-ready', (event) => {
+                const terminalId = event.payload.id;
+                updateTerminal(terminalId, terminal => terminal ? { ...terminal, ready: true, opening: false } : terminal);
+                resolveTerminalReady(terminalId);
             });
 
             unlistenCmdDetected = await listen<{ terminal_id: string; call_id: string }>('blade-cmd-started', () => {
@@ -192,18 +405,23 @@ export function useCommandExecution() {
 
             unlistenCmdExitDetected = await listen<{ terminal_id: string; call_id: string; exit_code: number; output: string }>('blade-cmd-exited', (event) => {
                 const { call_id: callId, exit_code: exitCode, output } = event.payload;
-                if (!pendingCommandsRef.current.has(callId)) return;
+                const pending = pendingCommandsRef.current.get(callId);
+                if (!pending) return;
                 pendingCommandsRef.current.delete(callId);
+                releaseTerminalReservation(pending, output.includes(DETACHED_MARKER));
                 handleCommandComplete(callId, output, exitCode);
             });
 
             unlistenExit = await listen<{ id: string; exit_code: number }>('terminal-exit', (event) => {
                 const terminalId = event.payload.id;
+                invalidateTerminal(terminalId);
+                resolveTerminalReady(terminalId);
                 const pending = Array.from(pendingCommandsRef.current.values()).find(
                     cmd => cmd.terminalId === terminalId,
                 );
                 if (pending) {
                     pendingCommandsRef.current.delete(pending.callId);
+                    releaseTerminalReservation(pending, false);
                     handleCommandComplete(
                         pending.callId,
                         `Command terminal exited before sentinel completion (exit ${event.payload.exit_code}).`,
@@ -217,11 +435,12 @@ export function useCommandExecution() {
 
         return () => {
             if (unlistenStart) unlistenStart();
+            if (unlistenTerminalReady) unlistenTerminalReady();
             if (unlistenExit) unlistenExit();
             if (unlistenCmdDetected) unlistenCmdDetected();
             if (unlistenCmdExitDetected) unlistenCmdExitDetected();
         };
-    }, [handleCommandComplete, sendCommandToBlade]);
+    }, [handleCommandComplete, invalidateTerminal, releaseTerminalReservation, reserveTerminalForCommand, resolveTerminalReady, sendCommandToBlade, updateTerminal]);
 
     return {
         executions,

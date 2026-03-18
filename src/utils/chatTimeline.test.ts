@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { normalizeSplitBlocks } from '../hooks/useChatV2';
 import type { ChatMessage, CommandExecution, ToolCall } from '../types/chat';
 import type { StructuredAction } from '../types/events';
 import { deriveChatRows, deriveMessageRenderSegments } from './chatTimeline';
@@ -179,5 +180,45 @@ test('upsertSplitTextBlocks keeps post-tool text after the activity group', () =
     assert.deepEqual(
         nextBlocks.map((block) => block.type === 'text' ? `${block.type}:${block.content}` : `${block.type}:${block.id}`),
         ['text:Before', 'tool_call:tool-1', 'text: and after']
+    );
+});
+
+test('upsertSplitTextBlocks reorders late tool insertion so trailing text stays after the activity group', () => {
+    const blocks = [
+        { type: 'text' as const, content: 'Before', id: 'text-1' },
+        { type: 'text' as const, content: 'After', id: 'text-2' },
+        { type: 'tool_call' as const, id: 'tool-1' },
+    ];
+
+    const nextBlocks = upsertSplitTextBlocks(blocks, 'Before', 'After');
+
+    assert.deepEqual(
+        nextBlocks.map((block) => block.type === 'text' ? `${block.type}:${block.content}` : `${block.type}:${block.id}`),
+        ['text:Before', 'tool_call:tool-1', 'text:After']
+    );
+});
+
+test('normalizeSplitBlocks keeps GPT-style final text after reasoning and tool blocks', () => {
+    const message = makeAssistantMessage({
+        id: 'assistant-gpt',
+        content: 'Final answer',
+        content_before_tools: '',
+        tool_calls: [makeToolCall({ id: 'tool-1', status: 'executing' })],
+        reasoning: 'Thinking through the edit',
+    });
+    const blocks = [
+        { type: 'reasoning' as const, content: 'Thinking through the edit', id: 'reasoning-1' },
+        { type: 'tool_call' as const, id: 'tool-1' },
+    ];
+
+    const normalized = normalizeSplitBlocks(message, blocks, 'Final answer');
+
+    assert.equal(normalized.contentBeforeTools, '');
+    assert.equal(normalized.contentAfterTools, 'Final answer');
+    assert.deepEqual(
+        normalized.blocks.map((block) => block.type === 'text' || block.type === 'reasoning'
+            ? `${block.type}:${block.content}`
+            : `${block.type}:${block.id}`),
+        ['reasoning:Thinking through the edit', 'tool_call:tool-1', 'text:Final answer']
     );
 });

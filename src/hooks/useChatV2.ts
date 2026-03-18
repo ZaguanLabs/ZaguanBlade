@@ -113,18 +113,17 @@ function hasInterleavedContentBetweenActivities(blocks: MessageBlock[]): boolean
 }
 
 function inferContentBeforeTools(message: ChatMessage | undefined, blocks: MessageBlock[], fullContent: string): string | undefined {
-    const textBeforeFirstActivity = findTextBeforeFirstActivity(blocks);
-    if (textBeforeFirstActivity !== undefined) {
-        return textBeforeFirstActivity;
-    }
-
     if (message?.content_before_tools !== undefined) {
         if (message.content_before_tools.length > 0) {
             return message.content_before_tools;
         }
 
         const textAfterLastActivity = findTextAfterLastActivity(blocks);
-        const hasOnlyActivityOrWhitespaceBlocks = blocks.every((block) => block.type !== 'text' || isWhitespaceOnly(block.content));
+        const hasOnlyActivityOrWhitespaceBlocks = blocks.every((block) => {
+            return block.type === 'tool_call'
+                || block.type === 'command_execution'
+                || (block.type === 'text' && isWhitespaceOnly(block.content));
+        });
         const hasInFlightActivity = (message.tool_calls || []).some((toolCall) => {
             return toolCall.status === undefined || toolCall.status === 'pending' || toolCall.status === 'executing';
         });
@@ -135,6 +134,11 @@ function inferContentBeforeTools(message: ChatMessage | undefined, blocks: Messa
         return message.content_before_tools;
     }
 
+    const textBeforeFirstActivity = findTextBeforeFirstActivity(blocks);
+    if (textBeforeFirstActivity !== undefined) {
+        return textBeforeFirstActivity;
+    }
+
     const firstActivityIndex = blocks.findIndex((block) => block.type === 'tool_call' || block.type === 'command_execution');
     if (firstActivityIndex === -1) {
         return undefined;
@@ -143,7 +147,7 @@ function inferContentBeforeTools(message: ChatMessage | undefined, blocks: Messa
     return '';
 }
 
-function normalizeSplitBlocks(
+export function normalizeSplitBlocks(
     message: ChatMessage | undefined,
     blocks: MessageBlock[],
     fullContent: string,
