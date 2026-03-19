@@ -410,6 +410,149 @@ pub fn create_terminal<R: Runtime>(
     Ok(())
 }
 
+#[tauri::command]
+pub fn execute_native_command<R: Runtime>(
+    call_id: String,
+    program: String,
+    args: Vec<String>,
+    cwd: Option<String>,
+    app_handle: tauri::AppHandle<R>,
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<(), String> {
+    let pty_system = NativePtySystem::default();
+
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut cmd = CommandBuilder::new(&program);
+    for arg in &args {
+        cmd.arg(arg);
+    }
+
+    let working_dir = cwd.or_else(|| {
+        let ws = state.workspace.lock().unwrap();
+        ws.workspace
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+    });
+
+    if let Some(path) = working_dir {
+        cmd.cwd(path);
+    }
+
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
+    let lang = std::env::var("LANG").unwrap_or_else(|_| "en_US.UTF-8".to_string());
+    cmd.env("LANG", &lang);
+    if let Ok(lc_all) = std::env::var("LC_ALL") {
+        cmd.env("LC_ALL", lc_all);
+    } else {
+        cmd.env("LC_ALL", &lang);
+    }
+
+    strip_appimage_env(&mut cmd);
+
+    let _ = app_handle.emit(
+        "blade-cmd-started",
+        BladeCmdStarted {
+            terminal_id: call_id.clone(),
+            call_id: call_id.clone(),
+        },
+    );
+
+    let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+    let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+
+    let cancel_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let cancel_flag_clone = cancel_flag.clone();
+
+    {
+        let mut executing = state.executing_commands.lock().unwrap();
+        executing.insert(call_id.clone(), cancel_flag);
+    }
+
+    let call_id_clone = call_id.clone();
+    let executing_commands = state.executing_commands.clone();
+    thread::spawn(move || {
+        let mut buffer = [0u8; 1024];
+        let mut accumulated_output = String::new();
+
+        loop {
+            if cancel_flag_clone.load(std::sync::atomic::Ordering::Relaxed) {
+                eprintln!("[EXEC] Native command {} cancelled, killing process", call_id_clone);
+                let _ = child.kill();
+                let _ = app_handle.emit(
+                    "blade-cmd-exited",
+                    BladeCmdExited {
+                        terminal_id: call_id_clone.clone(),
+                        call_id: call_id_clone.clone(),
+                        exit_code: 130,
+                        output: accumulated_output.clone(),
+                    },
+                );
+
+                let mut executing = executing_commands.lock().unwrap();
+                executing.remove(&call_id_clone);
+                return;
+            }
+
+            match reader.read(&mut buffer) {
+                Ok(n) if n > 0 => {
+                    let output = String::from_utf8_lossy(&buffer[..n]).to_string();
+                    accumulated_output.push_str(&output);
+
+                    let payload = TerminalOutput {
+                        id: call_id_clone.clone(),
+                        data: output,
+                    }; 
+                    let _ = app_handle.emit("terminal-output", payload);
+                }
+                Ok(_) => break,
+                Err(_) => break,
+            }
+        }
+
+        let exit_code = match child.wait() {
+            Ok(status) => status.exit_code() as i32,
+            Err(_) => 1,
+        };
+
+        let _ = app_handle.emit(
+            "blade-cmd-exited",
+            BladeCmdExited {
+                terminal_id: call_id_clone.clone(),
+                call_id: call_id_clone.clone(),
+                exit_code,
+                output: accumulated_output,
+            },
+        );
+
+        let _ = app_handle.emit("refresh-explorer", ());
+
+        let mut executing = executing_commands.lock().unwrap();
+        executing.remove(&call_id_clone);
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn cancel_command_execution(call_id: String, state: tauri::State<'_, crate::AppState>) -> bool {
+    let executing = state.executing_commands.lock().unwrap();
+    if let Some(cancel_flag) = executing.get(&call_id) {
+        cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        true
+    } else {
+        false
+    }
+}
+
 pub fn kill_terminal(
     id: String,
     state: tauri::State<'_, TerminalManager>,

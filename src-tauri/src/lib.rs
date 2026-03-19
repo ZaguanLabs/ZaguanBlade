@@ -222,6 +222,8 @@ pub fn run() {
             commands::tools::submit_command_result,
             commands::tools::approve_tool_decision,
             commands::tools::approve_single_command,
+            crate::terminal::execute_native_command,
+            crate::terminal::cancel_command_execution,
             // History
             commands::history::get_file_history,
             commands::history::revert_file_to_snapshot,

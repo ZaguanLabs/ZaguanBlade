@@ -21,6 +21,7 @@ type PendingCommand = {
     command: string;
     program?: string;
     args?: string[];
+    native: boolean;
     shell?: boolean;
     cwd?: string;
     blocking: boolean;
@@ -285,6 +286,26 @@ export function useCommandExecution() {
         });
     }, [updateTerminal]);
 
+    const executeNativeCommand = useCallback(async (pending: PendingCommand) => {
+        if (!pending.program) {
+            pendingCommandsRef.current.delete(pending.callId);
+            await handleCommandComplete(pending.callId, 'Native command execution requires a program.', 1);
+            return;
+        }
+
+        try {
+            await invoke('execute_native_command', {
+                callId: pending.callId,
+                program: pending.program,
+                args: pending.args || [],
+                cwd: pending.cwd,
+            });
+        } catch (err) {
+            pendingCommandsRef.current.delete(pending.callId);
+            await handleCommandComplete(pending.callId, `Failed to execute native command: ${String(err)}`, 1);
+        }
+    }, [handleCommandComplete]);
+
     const sendCommandToBlade = useCallback(async (pending: PendingCommand) => {
         const payload = buildInteractiveCommandPayload(pending);
 
@@ -324,19 +345,27 @@ export function useCommandExecution() {
         pendingCommandsRef.current.delete(callId);
 
         try {
-            await BladeDispatcher.terminal({
-                type: 'Input',
-                payload: {
-                    id: pending.terminalId,
-                    data: '\u0003',
-                },
-            });
+            if (pending.native) {
+                await invoke<boolean>('cancel_command_execution', {
+                    callId,
+                });
+            } else {
+                await BladeDispatcher.terminal({
+                    type: 'Input',
+                    payload: {
+                        id: pending.terminalId,
+                        data: '\u0003',
+                    },
+                });
+            }
         } catch (err) {
             console.error('[CMD EXEC] Failed to interrupt terminal:', err);
         }
 
-        releaseTerminalReservation(pending, false);
-        await handleCommandComplete(callId, 'Command cancelled by user.', 130);
+        if (!pending.native) {
+            releaseTerminalReservation(pending, false);
+            await handleCommandComplete(callId, 'Command cancelled by user.', 130);
+        }
     }, [handleCommandComplete, releaseTerminalReservation]);
 
     useEffect(() => {
@@ -360,7 +389,16 @@ export function useCommandExecution() {
             }>('command-execution-started', (event) => {
                 console.debug('[CMD EXEC] Started:', event.payload);
 
-                const reservedTerminal = reserveTerminalForCommand(event.payload.call_id, event.payload.cwd);
+                const isNative = event.payload.shell === false
+                    && typeof event.payload.program === 'string'
+                    && event.payload.program.length > 0
+                    && (event.payload.blocking ?? true);
+                const reservedTerminal = isNative
+                    ? {
+                        id: event.payload.call_id,
+                        title: event.payload.program || 'Command',
+                    }
+                    : reserveTerminalForCommand(event.payload.call_id, event.payload.cwd);
                 const pending: PendingCommand = {
                     callId: event.payload.call_id,
                     terminalId: reservedTerminal.id,
@@ -368,6 +406,7 @@ export function useCommandExecution() {
                     command: event.payload.command,
                     program: event.payload.program,
                     args: event.payload.args,
+                    native: isNative,
                     shell: event.payload.shell,
                     cwd: event.payload.cwd,
                     blocking: event.payload.blocking ?? true,
@@ -390,7 +429,11 @@ export function useCommandExecution() {
                 });
 
                 pending.started = true;
-                void sendCommandToBlade(pending);
+                if (pending.native) {
+                    void executeNativeCommand(pending);
+                } else {
+                    void sendCommandToBlade(pending);
+                }
             });
 
             unlistenTerminalReady = await listen<{ id: string }>('terminal-ready', (event) => {
@@ -408,7 +451,9 @@ export function useCommandExecution() {
                 const pending = pendingCommandsRef.current.get(callId);
                 if (!pending) return;
                 pendingCommandsRef.current.delete(callId);
-                releaseTerminalReservation(pending, output.includes(DETACHED_MARKER));
+                if (!pending.native) {
+                    releaseTerminalReservation(pending, output.includes(DETACHED_MARKER));
+                }
                 handleCommandComplete(callId, output, exitCode);
             });
 
@@ -421,7 +466,9 @@ export function useCommandExecution() {
                 );
                 if (pending) {
                     pendingCommandsRef.current.delete(pending.callId);
-                    releaseTerminalReservation(pending, false);
+                    if (!pending.native) {
+                        releaseTerminalReservation(pending, false);
+                    }
                     handleCommandComplete(
                         pending.callId,
                         `Command terminal exited before sentinel completion (exit ${event.payload.exit_code}).`,
@@ -440,7 +487,7 @@ export function useCommandExecution() {
             if (unlistenCmdDetected) unlistenCmdDetected();
             if (unlistenCmdExitDetected) unlistenCmdExitDetected();
         };
-    }, [handleCommandComplete, invalidateTerminal, releaseTerminalReservation, reserveTerminalForCommand, resolveTerminalReady, sendCommandToBlade, updateTerminal]);
+    }, [executeNativeCommand, handleCommandComplete, invalidateTerminal, releaseTerminalReservation, reserveTerminalForCommand, resolveTerminalReady, sendCommandToBlade, updateTerminal]);
 
     return {
         executions,

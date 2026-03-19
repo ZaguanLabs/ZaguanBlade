@@ -212,7 +212,8 @@ Download from **[Releases](https://github.com/ZaguanLabs/ZaguanBlade/releases)**
 
 Requirements:
 - Rust 1.70+
-- Node.js 18+ (we use Bun for package management)
+- Bun 1.3+
+- Node.js 20.19+ or 22.12+ if you want to run Vite tooling directly without Bun
 - Platform-specific dependencies (see build guide)
 
 ```bash

@@ -6,9 +6,9 @@ This guide provides instructions on how to build Zaguán Blade from source.
 
 Before you begin, ensure you have the following installed:
 
-*   **Node.js** (v18+)
+*   **Bun** (v1.3+)
+*   **Node.js** (v20.19+ or v22.12+, only if you run Vite tooling directly without Bun)
 *   **Rust** (v1.75+)
-*   **pnpm** (install via `npm install -g pnpm`)
 *   **System Dependencies** (Linux only):
     *   `libwebkit2gtk-4.1-dev`
     *   `build-essential`
@@ -30,7 +30,7 @@ Before you begin, ensure you have the following installed:
 
 2.  **Install dependencies:**
     ```bash
-    pnpm install
+    bun install
     ```
 
 ## Development
@@ -38,7 +38,7 @@ Before you begin, ensure you have the following installed:
 To start the application in development mode with hot-reloading:
 
 ```bash
-pnpm tauri dev
+bun run tauri dev
 ```
 
 This command will start the Vite frontend server and launch the Tauri application window.
@@ -48,11 +48,11 @@ This command will start the Vite frontend server and launch the Tauri applicatio
 To build the optimized production application:
 
 ```bash
-pnpm tauri build
+bun run tauri build
 ```
 
 The build artifacts (e.g., AppImage, Deb, RPM, MSI, DMG) will be located in `src-tauri/target/release/bundle/`.
 
 ## Troubleshooting
 
-If you encounter issues during the build process, ensure your generic Rust and Node environments are correctly set up and that you have all necessary platform-specific build tools installed.
+If you encounter issues during the build process, ensure your Bun and Rust environments are correctly set up, and if you are invoking Vite directly without Bun, verify that your Node.js version meets Vite 8 requirements.
