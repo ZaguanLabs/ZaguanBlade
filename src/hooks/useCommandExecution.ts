@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { listen, emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { BladeDispatcher } from '../services/blade';
+
 import { BLADE_TERMINAL_ID, BLADE_TERMINAL_TITLE } from '../constants/terminal';
 
 export interface CommandExecution {
@@ -46,6 +47,8 @@ const SENTINEL_EXIT = '##BLADE_CMD_EXIT:';
 const SENTINEL_END = '##';
 const DETACHED_MARKER = '[run_command] detached pid=';
 const TERMINAL_READY_TIMEOUT_MS = 15000;
+
+const buildCommandTerminalId = (callId: string) => `ai-cmd-${callId}`;
 
 export function useCommandExecution() {
     const [executions, setExecutions] = useState<Map<string, CommandExecution>>(new Map());
@@ -153,7 +156,13 @@ export function useCommandExecution() {
         });
     }, []);
 
-    const openManagedTerminal = useCallback(async (terminalId: string, title: string, cwd?: string) => {
+    const openManagedTerminal = useCallback(async (
+        terminalId: string,
+        title: string,
+        cwd?: string,
+        command?: string,
+        interactive = true,
+    ) => {
         const existing = terminalsRef.current.get(terminalId);
         if (existing?.ready) {
             return;
@@ -175,6 +184,8 @@ export function useCommandExecution() {
                 id: terminalId,
                 cwd,
                 title,
+                command,
+                interactive,
                 focus: true,
                 transient: terminalId !== BLADE_TERMINAL_ID,
             });
@@ -183,9 +194,9 @@ export function useCommandExecution() {
         await waitForTerminalReady(terminalId);
     }, [updateTerminal, waitForTerminalReady]);
 
-    const createExtraTerminal = useCallback((callId: string, cwd?: string): ManagedTerminal => {
+    const createCommandTerminal = useCallback((callId: string, cwd?: string): ManagedTerminal => {
         const terminal: ManagedTerminal = {
-            id: `blade-ai-${extraTerminalCounterRef.current}-${callId}`,
+            id: buildCommandTerminalId(callId),
             title: `Blade ${extraTerminalCounterRef.current}`,
             cwd,
             ready: false,
@@ -200,16 +211,7 @@ export function useCommandExecution() {
     }, []);
 
     const reserveTerminalForCommand = useCallback((callId: string, cwd?: string) => {
-        const reusableTerminals = Array.from(terminalsRef.current.values())
-            .filter(terminal => !terminal.activeCallId && !terminal.backgroundLocked)
-            .sort((a, b) => {
-                if (a.primary !== b.primary) {
-                    return a.primary ? -1 : 1;
-                }
-                return a.id.localeCompare(b.id);
-            });
-
-        const terminal = reusableTerminals[0] ?? createExtraTerminal(callId, cwd);
+        const terminal = createCommandTerminal(callId, cwd);
 
         updateTerminal(terminal.id, current => {
             const base = current ?? terminal;
@@ -221,7 +223,7 @@ export function useCommandExecution() {
         });
 
         return terminalsRef.current.get(terminal.id) ?? terminal;
-    }, [createExtraTerminal, updateTerminal]);
+    }, [createCommandTerminal, updateTerminal]);
 
     const buildInteractiveCommandPayload = useCallback((pending: PendingCommand) => {
         const { callId, cwd, blocking, waitMsBeforeAsync } = pending;
@@ -325,7 +327,7 @@ export function useCommandExecution() {
 
             if (!pending.fallbackAttempted) {
                 pending.fallbackAttempted = true;
-                const fallback = createExtraTerminal(pending.callId, pending.cwd);
+                const fallback = createCommandTerminal(`${pending.callId}-fallback`, pending.cwd);
                 pending.terminalId = fallback.id;
                 pending.terminalTitle = fallback.title;
                 pendingCommandsRef.current.set(pending.callId, pending);
@@ -336,7 +338,7 @@ export function useCommandExecution() {
             pendingCommandsRef.current.delete(pending.callId);
             await handleCommandComplete(pending.callId, `Failed to execute command in Blade terminal: ${String(err)}`, 1);
         }
-    }, [buildInteractiveCommandPayload, createExtraTerminal, handleCommandComplete, invalidateTerminal, openManagedTerminal, releaseTerminalReservation, updateTerminal]);
+    }, [buildInteractiveCommandPayload, createCommandTerminal, handleCommandComplete, invalidateTerminal, openManagedTerminal, releaseTerminalReservation, updateTerminal]);
 
     const stopCommandExecution = useCallback(async (callId: string) => {
         const pending = pendingCommandsRef.current.get(callId);

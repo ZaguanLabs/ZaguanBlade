@@ -311,20 +311,8 @@ pub fn create_terminal<R: Runtime>(
                         // "" and incorrectly match starts_with(""), causing delayed echo.
                         let trimmed_non_ws = plain.trim();
                         let looks_like_sentinel_echo_prefix =
-                            (trimmed.starts_with("( echo '")
-                                || trimmed.starts_with("(echo '")
-                                || trimmed.starts_with("echo '")
-                                || trimmed.starts_with("( printf '")
-                                || trimmed.starts_with("printf '")
-                                || plain.contains("( echo '")
-                                || plain.contains("(echo '")
-                                || plain.contains(" echo '")
-                                || plain.contains(" printf '")
-                                || plain.ends_with("( echo '")
-                                || plain.ends_with("(echo '")
-                                || plain.ends_with("echo '")
-                                || plain.ends_with("printf '"))
-                                && trimmed.len() <= 96;
+                            has_recent_sentinel_echo_prefix(trimmed)
+                                || has_recent_sentinel_echo_prefix(&plain);
 
                         let could_be_sentinel_prefix = !trimmed_non_ws.is_empty()
                             && "##BLADE_CMD_".starts_with(trimmed_non_ws);
@@ -410,420 +398,27 @@ pub fn create_terminal<R: Runtime>(
     Ok(())
 }
 
-#[tauri::command]
-pub fn execute_native_command<R: Runtime>(
-    call_id: String,
-    program: String,
-    args: Vec<String>,
-    cwd: Option<String>,
-    app_handle: tauri::AppHandle<R>,
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<(), String> {
-    let pty_system = NativePtySystem::default();
-
-    let pair = pty_system
-        .openpty(PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| e.to_string())?;
-
-    let mut cmd = CommandBuilder::new(&program);
-    for arg in &args {
-        cmd.arg(arg);
-    }
-
-    let working_dir = cwd.or_else(|| {
-        let ws = state.workspace.lock().unwrap();
-        ws.workspace
-            .as_ref()
-            .map(|p| p.to_string_lossy().to_string())
-    });
-
-    if let Some(path) = working_dir {
-        cmd.cwd(path);
-    }
-
-    cmd.env("TERM", "xterm-256color");
-    cmd.env("COLORTERM", "truecolor");
-    let lang = std::env::var("LANG").unwrap_or_else(|_| "en_US.UTF-8".to_string());
-    cmd.env("LANG", &lang);
-    if let Ok(lc_all) = std::env::var("LC_ALL") {
-        cmd.env("LC_ALL", lc_all);
-    } else {
-        cmd.env("LC_ALL", &lang);
-    }
-
-    strip_appimage_env(&mut cmd);
-
-    let _ = app_handle.emit(
-        "blade-cmd-started",
-        BladeCmdStarted {
-            terminal_id: call_id.clone(),
-            call_id: call_id.clone(),
-        },
-    );
-
-    let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
-    let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-
-    let cancel_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let cancel_flag_clone = cancel_flag.clone();
-
-    {
-        let mut executing = state.executing_commands.lock().unwrap();
-        executing.insert(call_id.clone(), cancel_flag);
-    }
-
-    let call_id_clone = call_id.clone();
-    let executing_commands = state.executing_commands.clone();
-    thread::spawn(move || {
-        let mut buffer = [0u8; 1024];
-        let mut accumulated_output = String::new();
-
-        loop {
-            if cancel_flag_clone.load(std::sync::atomic::Ordering::Relaxed) {
-                eprintln!("[EXEC] Native command {} cancelled, killing process", call_id_clone);
-                let _ = child.kill();
-                let _ = app_handle.emit(
-                    "blade-cmd-exited",
-                    BladeCmdExited {
-                        terminal_id: call_id_clone.clone(),
-                        call_id: call_id_clone.clone(),
-                        exit_code: 130,
-                        output: accumulated_output.clone(),
-                    },
-                );
-
-                let mut executing = executing_commands.lock().unwrap();
-                executing.remove(&call_id_clone);
-                return;
-            }
-
-            match reader.read(&mut buffer) {
-                Ok(n) if n > 0 => {
-                    let output = String::from_utf8_lossy(&buffer[..n]).to_string();
-                    accumulated_output.push_str(&output);
-
-                    let payload = TerminalOutput {
-                        id: call_id_clone.clone(),
-                        data: output,
-                    }; 
-                    let _ = app_handle.emit("terminal-output", payload);
-                }
-                Ok(_) => break,
-                Err(_) => break,
-            }
-        }
-
-        let exit_code = match child.wait() {
-            Ok(status) => status.exit_code() as i32,
-            Err(_) => 1,
-        };
-
-        let _ = app_handle.emit(
-            "blade-cmd-exited",
-            BladeCmdExited {
-                terminal_id: call_id_clone.clone(),
-                call_id: call_id_clone.clone(),
-                exit_code,
-                output: accumulated_output,
-            },
-        );
-
-        let _ = app_handle.emit("refresh-explorer", ());
-
-        let mut executing = executing_commands.lock().unwrap();
-        executing.remove(&call_id_clone);
-    });
-
-    Ok(())
-}
-
-#[tauri::command]
-pub fn cancel_command_execution(call_id: String, state: tauri::State<'_, crate::AppState>) -> bool {
-    let executing = state.executing_commands.lock().unwrap();
-    if let Some(cancel_flag) = executing.get(&call_id) {
-        cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
-        true
-    } else {
-        false
-    }
-}
-
-pub fn kill_terminal(
-    id: String,
-    state: tauri::State<'_, TerminalManager>,
-) -> Result<(), String> {
-    let mut ptys = state.ptys.lock().unwrap();
-    if let Some(mut pty) = ptys.remove(&id) {
-        let _ = pty.child.kill();
-    }
-    Ok(())
-}
-
-// #[tauri::command]
-pub fn write_to_terminal(
-    id: String,
-    data: String,
-    state: tauri::State<'_, TerminalManager>,
-) -> Result<(), String> {
-    let mut ptys = state.ptys.lock().unwrap();
-    if let Some(pty) = ptys.get_mut(&id) {
-        write!(pty.writer, "{}", data).map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-// #[tauri::command]
-pub fn resize_terminal(
-    id: String,
-    rows: u16,
-    cols: u16,
-    state: tauri::State<'_, TerminalManager>,
-) -> Result<(), String> {
-    let mut ptys = state.ptys.lock().unwrap();
-    if let Some(pty) = ptys.get_mut(&id) {
-        pty.master
-            .resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|e| e.to_string())?;
-    } else {
-        println!("Resize failed: PTY {} not found", id);
-    }
-    Ok(())
-}
-
-// Event payload structs
-#[derive(Clone, serde::Serialize)]
-struct TerminalOutput {
-    id: String,
-    data: String,
-}
-
-#[derive(Clone, serde::Serialize)]
-struct TerminalExit {
-    id: String,
-    exit_code: i32,
-}
-
-#[derive(Clone, serde::Serialize)]
-struct BladeCmdStarted {
-    terminal_id: String,
-    call_id: String,
-}
-
-#[derive(Clone, serde::Serialize)]
-struct BladeCmdExited {
-    terminal_id: String,
-    call_id: String,
-    exit_code: i32,
-    output: String,
-}
-
-// Sentinel markers used by the command execution system.
-// These are plain-text strings (no escape characters) that are echoed to stdout
-// by the shell command wrapper. The terminal reader thread detects and strips them.
 const SENTINEL_START: &str = "##BLADE_CMD_START:";
 const SENTINEL_EXIT: &str = "##BLADE_CMD_EXIT:";
 const SENTINEL_END: &str = "##";
+const SENTINEL_ECHO_PREFIX_PATTERNS: [&str; 8] = [
+    "( echo '",
+    "(echo '",
+    "echo '",
+    "( printf '",
+    "(printf '",
+    "printf '",
+    " echo '",
+    " printf '",
+];
 
-/// Strip ANSI escape sequences from a string for plain-text matching.
-/// This handles CSI sequences (\x1b[...X), OSC sequences (\x1b]...ST),
-/// and simple two-byte sequences (\x1bX).
-fn strip_ansi_escapes(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let bytes = input.as_bytes();
-    let mut i = 0;
-    let mut segment_start = 0;
-
-    let flush_plain = |out: &mut String, src: &str, start: usize, end: usize| {
-        if end > start {
-            out.push_str(&src[start..end]);
-        }
-    };
-
-    while i < bytes.len() {
-        if bytes[i] == 0x1b {
-            // Flush bytes before escape as-is (UTF-8 preserved)
-            flush_plain(&mut out, input, segment_start, i);
-
-            i += 1;
-            if i >= bytes.len() {
-                break;
-            }
-
-            if bytes[i] == b'[' {
-                // CSI sequence: skip until final byte (0x40-0x7E)
-                i += 1;
-                while i < bytes.len() && !(0x40..=0x7E).contains(&bytes[i]) {
-                    i += 1;
-                }
-                if i < bytes.len() {
-                    i += 1;
-                } // skip final byte
-                segment_start = i;
-            } else if bytes[i] == b']' {
-                // OSC sequence: skip until ST (BEL or ESC\)
-                i += 1;
-                while i < bytes.len() {
-                    if bytes[i] == 0x07 {
-                        i += 1;
-                        break;
-                    }
-                    if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
-                        i += 2;
-                        break;
-                    }
-                    i += 1;
-                }
-                segment_start = i;
-            } else {
-                // Simple two-byte escape
-                i += 1;
-                segment_start = i;
-            }
-        } else {
-            i += 1;
-        }
-    }
-
-    // Flush trailing plain text segment
-    flush_plain(&mut out, input, segment_start, bytes.len());
-
-    out
-}
-
-fn strip_ansi_escapes_with_byte_map(input: &str) -> (String, Vec<usize>) {
-    let mut out = String::with_capacity(input.len());
-    let mut byte_map = Vec::with_capacity(input.len());
-    let bytes = input.as_bytes();
-    let mut i = 0;
-    let mut segment_start = 0;
-
-    let flush_plain = |out: &mut String,
-                       byte_map: &mut Vec<usize>,
-                       src: &str,
-                       start: usize,
-                       end: usize| {
-        if end > start {
-            out.push_str(&src[start..end]);
-            byte_map.extend(start..end);
-        }
-    };
-
-    while i < bytes.len() {
-        if bytes[i] == 0x1b {
-            flush_plain(&mut out, &mut byte_map, input, segment_start, i);
-
-            i += 1;
-            if i >= bytes.len() {
-                break;
-            }
-
-            if bytes[i] == b'[' {
-                i += 1;
-                while i < bytes.len() && !(0x40..=0x7E).contains(&bytes[i]) {
-                    i += 1;
-                }
-                if i < bytes.len() {
-                    i += 1;
-                }
-                segment_start = i;
-            } else if bytes[i] == b']' {
-                i += 1;
-                while i < bytes.len() {
-                    if bytes[i] == 0x07 {
-                        i += 1;
-                        break;
-                    }
-                    if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
-                        i += 2;
-                        break;
-                    }
-                    i += 1;
-                }
-                segment_start = i;
-            } else {
-                i += 1;
-                segment_start = i;
-            }
-        } else {
-            i += 1;
-        }
-    }
-
-    flush_plain(&mut out, &mut byte_map, input, segment_start, bytes.len());
-
-    (out, byte_map)
-}
-
-/// Strip BLADE sentinel markers from terminal output.
-/// Returns the cleaned output and any detected sentinel events.
-/// Also strips the shell echo of the command line containing sentinels.
-struct SentinelResult {
-    cleaned: String,
-    started: Vec<String>,       // call_ids
-    exited: Vec<(String, i32)>, // (call_id, exit_code)
-}
-
-fn strip_blade_sentinels(input: &str) -> SentinelResult {
-    let mut cleaned = String::with_capacity(input.len());
-    let mut started = Vec::new();
-    let mut exited = Vec::new();
-
-    for line in input.split_inclusive('\n') {
-        let (plain, byte_map) = strip_ansi_escapes_with_byte_map(line);
-
-        if let Some(start_idx) = plain.find(SENTINEL_START) {
-            let rest = &plain[start_idx + SENTINEL_START.len()..];
-            if let Some(end_rel) = rest.find(SENTINEL_END) {
-                let call_id = &rest[..end_rel];
-                started.push(call_id.to_string());
-                continue;
-            }
-        }
-
-        if let Some(exit_idx) = plain.find(SENTINEL_EXIT) {
-            let rest = &plain[exit_idx + SENTINEL_EXIT.len()..];
-            if let Some(end_rel) = rest.find(SENTINEL_END) {
-                let payload = &rest[..end_rel];
-                if let Some((call_id, exit_str)) = payload.rsplit_once(':') {
-                    let exit_code = exit_str.parse::<i32>().unwrap_or(1);
-                    exited.push((call_id.to_string(), exit_code));
-
-                    let suffix_start = exit_idx + SENTINEL_EXIT.len() + end_rel + SENTINEL_END.len();
-                    let original_start = byte_map.get(exit_idx).copied().unwrap_or(0);
-                    let original_end = byte_map
-                        .get(suffix_start)
-                        .copied()
-                        .unwrap_or(line.len());
-                    if original_start > 0 {
-                        cleaned.push_str(&line[..original_start]);
-                    }
-                    if original_end < line.len() {
-                        cleaned.push_str(&line[original_end..]);
-                    }
-                    continue;
-                }
-            }
-        }
-
-        // Strip echoed command lines that contain sentinel text but didn't parse
-        if plain.contains(SENTINEL_START) || plain.contains(SENTINEL_EXIT) {
-            continue;
-        }
-
-        cleaned.push_str(line);
-    }
-
-    SentinelResult { cleaned, started, exited }
+fn has_recent_sentinel_echo_prefix(input: &str) -> bool {
+    SENTINEL_ECHO_PREFIX_PATTERNS.iter().any(|pattern| {
+        input
+            .rfind(pattern)
+            .map(|idx| input[idx..].chars().count() <= 128)
+            .unwrap_or(false)
+    })
 }
 
 fn ensure_zsh_zdotdir() -> Option<String> {
@@ -921,6 +516,27 @@ fn parse_osc7_path(raw: &str) -> Option<String> {
         Some(path.to_string())
     }
 }
+
+ #[cfg(test)]
+ mod tests {
+     use super::{has_recent_sentinel_echo_prefix, strip_blade_sentinels};
+
+     #[test]
+     fn detects_recent_wrapper_echo_even_with_long_prompt_prefix() {
+         let prompt = "stig@spurven:~/dev/ai/zaguan/zblade.dev^main ±                                   26-03-19 - 20:40:23 % ";
+         let input = format!("{prompt}( echo '");
+         assert!(has_recent_sentinel_echo_prefix(&input));
+     }
+
+     #[test]
+     fn strips_full_echoed_wrapper_line_with_sentinel() {
+         let line = "stig@spurven % ( echo '##BLADE_CMD_START:call-1##'; __blade_ec=0 )\n";
+         let result = strip_blade_sentinels(line);
+         assert_eq!(result.cleaned, "");
+         assert_eq!(result.started, vec!["call-1".to_string()]);
+         assert!(result.exited.is_empty());
+     }
+ }
 
 // Execute a command in a terminal (non-interactive, for AI command execution)
 // #[tauri::command]
