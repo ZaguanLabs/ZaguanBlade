@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { Plus } from 'lucide-react';
 
 interface ChatTabBarProps {
@@ -8,6 +9,7 @@ interface ChatTabBarProps {
 }
 
 export const ChatTabBar: React.FC<ChatTabBarProps> = ({ activeTab, onTabChange, onNewConversation }) => {
+    const { t } = useTranslation();
     return (
         <div className="flex h-12 shrink-0 items-center justify-between border-b border-[var(--border-subtle)] bg-[var(--bg-app)]/90 px-3 select-none backdrop-blur-md">
             <div className="flex items-center gap-2 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/60 p-1">
@@ -21,7 +23,7 @@ export const ChatTabBar: React.FC<ChatTabBarProps> = ({ activeTab, onTabChange, 
                         }
                     `}
                 >
-                    Chat
+                    {t('chat.tabs.chat')}
                 </button>
                 <button
                     onClick={() => onTabChange('history')}
@@ -33,13 +35,13 @@ export const ChatTabBar: React.FC<ChatTabBarProps> = ({ activeTab, onTabChange, 
                         }
                     `}
                 >
-                    History
+                    {t('chat.tabs.history')}
                 </button>
             </div>
             <button
                 onClick={onNewConversation}
                 className="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] text-[var(--fg-secondary)] transition-colors hover:border-[var(--accent-primary)]/30 hover:text-[var(--fg-primary)]"
-                title="New Conversation"
+                title={t('chat.newConversation')}
             >
                 <Plus className="w-4 h-4" />
             </button>

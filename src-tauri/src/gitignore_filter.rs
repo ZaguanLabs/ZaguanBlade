@@ -17,7 +17,7 @@ impl GitignoreFilter {
     pub fn new(workspace_root: &Path) -> Self {
         let mut builder = GitignoreBuilder::new(workspace_root);
         let mut gitignore_count = 0;
-        
+
         // First, add the root .gitignore if it exists
         let root_gitignore = workspace_root.join(".gitignore");
         if root_gitignore.exists() {
@@ -25,14 +25,14 @@ impl GitignoreFilter {
                 gitignore_count += 1;
             }
         }
-        
+
         // Also check for global gitignore (~/.gitignore_global or git config)
         if let Some(global_gitignore) = Self::find_global_gitignore() {
             if builder.add(&global_gitignore).is_none() {
                 gitignore_count += 1;
             }
         }
-        
+
         // Recursively find all .gitignore files in subdirectories
         // We need to be careful not to descend into directories that are already ignored
         // For simplicity, we'll do a full walk and collect all .gitignore files
@@ -42,21 +42,32 @@ impl GitignoreFilter {
             .filter_entry(|e| {
                 // Skip common large/ignored directories to speed up the walk
                 let name = e.file_name().to_string_lossy();
-                !matches!(name.as_ref(), 
-                    "node_modules" | ".git" | "target" | "dist" | "build" | 
-                    ".next" | ".nuxt" | "__pycache__" | ".venv" | "venv" |
-                    ".cargo" | ".rustup" | "vendor"
+                !matches!(
+                    name.as_ref(),
+                    "node_modules"
+                        | ".git"
+                        | "target"
+                        | "dist"
+                        | "build"
+                        | ".next"
+                        | ".nuxt"
+                        | "__pycache__"
+                        | ".venv"
+                        | "venv"
+                        | ".cargo"
+                        | ".rustup"
+                        | "vendor"
                 )
             })
             .filter_map(|e| e.ok())
         {
             let path = entry.path();
-            
+
             // Skip the root .gitignore (already added)
             if path == root_gitignore {
                 continue;
             }
-            
+
             // Check if this is a .gitignore file
             if path.file_name().map(|n| n == ".gitignore").unwrap_or(false)
                 && builder.add(path).is_none()
@@ -64,7 +75,7 @@ impl GitignoreFilter {
                 gitignore_count += 1;
             }
         }
-        
+
         let gitignore = if gitignore_count > 0 {
             Some(
                 builder
@@ -80,7 +91,7 @@ impl GitignoreFilter {
             workspace_root: workspace_root.to_path_buf(),
         }
     }
-    
+
     /// Find the global gitignore file if it exists
     fn find_global_gitignore() -> Option<PathBuf> {
         // Check common locations for global gitignore
@@ -90,29 +101,29 @@ impl GitignoreFilter {
             if global.exists() {
                 return Some(global);
             }
-            
+
             // Check ~/.config/git/ignore (XDG standard)
             let xdg_ignore = home.join(".config/git/ignore");
             if xdg_ignore.exists() {
                 return Some(xdg_ignore);
             }
         }
-        
+
         None
     }
 
     /// Check if a path should be ignored according to .gitignore rules.
     /// Returns true if the path SHOULD be ignored (filtered out).
-    /// 
+    ///
     /// # Arguments
     /// * `path` - The path to check (can be absolute or relative)
-    /// 
+    ///
     /// # Returns
     /// * `true` if the path should be ignored
     /// * `false` if the path should be included
     pub fn should_ignore(&self, path: &Path) -> bool {
         let guard = self.inner.read().unwrap();
-        
+
         // If no gitignore loaded, don't filter anything
         let Some(ref gitignore) = *guard else {
             return false;
@@ -136,15 +147,15 @@ impl GitignoreFilter {
 
         // Check if gitignore matches this path
         let matched = gitignore.matched(rel_path, abs_path.is_dir());
-        
+
         // The ignore crate returns:
         // - Ignore if the path should be ignored
         // - Whitelist if the path is whitelisted (negated patterns like !important.txt)
         // - None if no pattern matched
         match matched {
-            ignore::Match::Ignore(_) => true,  // Should be ignored
+            ignore::Match::Ignore(_) => true,     // Should be ignored
             ignore::Match::Whitelist(_) => false, // Explicitly included
-            ignore::Match::None => false,      // No match = include
+            ignore::Match::None => false,         // No match = include
         }
     }
 
@@ -198,7 +209,7 @@ build/
         assert!(filter.should_ignore(&root.join(".env")));
         assert!(filter.should_ignore(&root.join("node_modules")));
         assert!(filter.should_ignore(&root.join("build")));
-        
+
         assert!(!filter.should_ignore(&root.join("test.txt")));
         assert!(!filter.should_ignore(&root.join("src")));
     }
@@ -219,7 +230,7 @@ build/
 
         // test.log should be ignored
         assert!(filter.should_ignore(&root.join("test.log")));
-        
+
         // important.log should NOT be ignored (whitelisted)
         assert!(!filter.should_ignore(&root.join("important.log")));
     }

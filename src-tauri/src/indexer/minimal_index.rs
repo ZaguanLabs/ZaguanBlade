@@ -184,14 +184,7 @@ fn render_directory_tree(index: &ProjectIndex, root: &Path, cfg: RenderConfig) -
     sort_tree_files(&mut root_node);
 
     let mut lines = Vec::new();
-    render_tree_recursive(
-        &root_node,
-        0,
-        cfg,
-        String::new(),
-        &mut lines,
-        true,
-    );
+    render_tree_recursive(&root_node, 0, cfg, String::new(), &mut lines, true);
 
     if lines.is_empty() {
         "(no indexed source files)\n".to_string()
@@ -219,21 +212,17 @@ fn render_tree_recursive(
         return;
     }
 
-    let mut dir_entries: Vec<(&str, &TreeNode)> =
-        node.dirs.iter().map(|(name, child)| (name.as_str(), child)).collect();
+    let mut dir_entries: Vec<(&str, &TreeNode)> = node
+        .dirs
+        .iter()
+        .map(|(name, child)| (name.as_str(), child))
+        .collect();
     dir_entries.sort_by(|a, b| a.0.cmp(b.0));
 
     let visible_dirs = dir_entries.len().min(cfg.max_dirs_per_level);
     for (name, child) in dir_entries.into_iter().take(visible_dirs) {
         lines.push(format!("{}{}/", indent, name));
-        render_tree_recursive(
-            child,
-            depth + 1,
-            cfg,
-            format!("{}  ", indent),
-            lines,
-            false,
-        );
+        render_tree_recursive(child, depth + 1, cfg, format!("{}  ", indent), lines, false);
     }
 
     if node.dirs.len() > visible_dirs {
@@ -301,7 +290,14 @@ fn is_entry_point_path(rel: &str) -> bool {
         return true;
     }
 
-    let keywords = ["handler", "handlers", "route", "router", "websocket", "chat"];
+    let keywords = [
+        "handler",
+        "handlers",
+        "route",
+        "router",
+        "websocket",
+        "chat",
+    ];
     keywords.iter().any(|kw| lower.contains(kw))
 }
 

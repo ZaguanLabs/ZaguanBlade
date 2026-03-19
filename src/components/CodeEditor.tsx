@@ -1,5 +1,6 @@
 "use client";
 import React, { useEffect, useRef, forwardRef, useImperativeHandle, useCallback } from "react";
+import { useTranslation } from 'react-i18next';
 import { EditorState, Compartment, Prec } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightActiveLine, drawSelection, dropCursor, rectangularSelection, crosshairCursor, placeholder, highlightSpecialChars } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
@@ -71,6 +72,7 @@ export interface CodeEditorHandle {
 
 
 const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onChange, onSave, filename, highlightLines, onNavigate, lineWrap, unifiedDiff }, ref) => {
+    const { t } = useTranslation();
     // Auto-enable line wrap for markdown files
     const isMarkdown = filename?.endsWith('.md') || filename?.endsWith('.markdown');
     const shouldWrap = lineWrap ?? isMarkdown;
@@ -390,7 +392,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
         const items: ContextMenuItem[] = [
             {
                 id: 'cut',
-                label: 'Cut',
+                label: t('fileTree.cut'),
                 icon: <Scissors className="w-4 h-4" />,
                 shortcut: 'Ctrl+X',
                 disabled: !hasSelection,
@@ -400,7 +402,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
             },
             {
                 id: 'copy',
-                label: 'Copy',
+                label: t('common.copy'),
                 icon: <Copy className="w-4 h-4" />,
                 shortcut: 'Ctrl+C',
                 disabled: !hasSelection,
@@ -410,7 +412,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
             },
             {
                 id: 'paste',
-                label: 'Paste',
+                label: t('fileTree.paste'),
                 icon: <Clipboard className="w-4 h-4" />,
                 shortcut: 'Ctrl+V',
                 onClick: () => {
@@ -420,7 +422,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
             { id: 'div-1', label: '', divider: true },
             {
                 id: 'undo',
-                label: 'Undo',
+                label: t('common.undo'),
                 icon: <Undo2 className="w-4 h-4" />,
                 shortcut: 'Ctrl+Z',
                 onClick: () => {
@@ -429,7 +431,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
             },
             {
                 id: 'redo',
-                label: 'Redo',
+                label: t('contextMenu.redo'),
                 icon: <Redo2 className="w-4 h-4" />,
                 shortcut: 'Ctrl+Shift+Z',
                 onClick: () => {
@@ -439,7 +441,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
             { id: 'div-2', label: '', divider: true },
             {
                 id: 'find',
-                label: 'Find',
+                label: t('contextMenu.find'),
                 icon: <Search className="w-4 h-4" />,
                 shortcut: 'Ctrl+F',
                 onClick: () => {
@@ -454,7 +456,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
             },
             {
                 id: 'rename',
-                label: 'Rename Symbol',
+                label: t('contextMenu.renameSymbol'),
                 shortcut: 'F2',
                 onClick: () => {
                     // Dispatch F2 key event to trigger the rename extension
@@ -468,7 +470,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
             { id: 'div-3', label: '', divider: true },
             {
                 id: 'graph',
-                label: 'Show Call Graph',
+                label: t('contextMenu.showCallGraph'),
                 icon: <Network className="w-4 h-4" />,
                 onClick: async () => {
                     if (!filename) return;
@@ -510,7 +512,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
         ];
 
         showMenu({ x: e.clientX, y: e.clientY }, items);
-    }, [showMenu]);
+    }, [showMenu, t]);
 
     return (
         <div className="code-editor-scroll h-full w-full relative" onContextMenu={handleContextMenu}>

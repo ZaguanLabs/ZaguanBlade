@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { X, Check } from 'lucide-react';
 
 interface RegionSelectorProps {
@@ -20,6 +21,7 @@ export const RegionSelector: React.FC<RegionSelectorProps> = ({
     onCancel,
     onConfirm,
 }) => {
+    const { t } = useTranslation();
     const wrapperRef = useRef<HTMLDivElement>(null);
     const [dragStart, setDragStart] = useState<Point | null>(null);
     const [dragEnd, setDragEnd] = useState<Point | null>(null);
@@ -110,8 +112,8 @@ export const RegionSelector: React.FC<RegionSelectorProps> = ({
             <div className="relative w-full h-full max-w-6xl max-h-[90vh] mx-6 bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded-xl shadow-2xl overflow-hidden flex flex-col">
                 <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-subtle)] shrink-0">
                     <div>
-                        <div className="text-sm font-semibold text-[var(--fg-primary)]">Capture Region</div>
-                        <div className="text-xs text-[var(--fg-tertiary)]">Drag to select an area</div>
+                        <div className="text-sm font-semibold text-[var(--fg-primary)]">{t('screenshot.regionPickerTitle')}</div>
+                        <div className="text-xs text-[var(--fg-tertiary)]">{t('screenshot.dragToSelectArea')}</div>
                     </div>
                     <button
                         onClick={onCancel}
@@ -129,7 +131,7 @@ export const RegionSelector: React.FC<RegionSelectorProps> = ({
                     >
                         <img
                             src={dataUrl}
-                            alt="Screenshot"
+                            alt={t('screenshot.screenshotAlt')}
                             onLoad={handleImageLoad}
                             className="block max-w-full max-h-[calc(90vh-120px)] select-none pointer-events-none"
                             draggable={false}
@@ -153,7 +155,7 @@ export const RegionSelector: React.FC<RegionSelectorProps> = ({
                         onClick={onCancel}
                         className="px-3 py-1.5 text-xs font-medium text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] rounded transition"
                     >
-                        Cancel
+                        {t('common.cancel')}
                     </button>
                     <button
                         onClick={handleConfirm}
@@ -161,7 +163,7 @@ export const RegionSelector: React.FC<RegionSelectorProps> = ({
                         className="px-3 py-1.5 text-xs font-medium bg-[var(--accent-primary)] text-white rounded transition disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
                     >
                         <Check className="w-3.5 h-3.5" />
-                        Capture
+                        {t('common.capture')}
                     </button>
                 </div>
             </div>

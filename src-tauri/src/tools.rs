@@ -5,10 +5,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use lazy_static::lazy_static;
 use regex::Regex;
 use serde::Deserialize;
 use walkdir::WalkDir;
-use lazy_static::lazy_static;
 
 use crate::gitignore_filter::GitignoreFilter;
 use crate::project_settings;
@@ -375,11 +375,11 @@ impl ToolResult {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_patch_to_string, execute_tool, grep_search, parse_grep_timeout_ms, GREP_TIMEOUT_DEFAULT_MS,
-        GREP_TIMEOUT_MAX_MS, GREP_TIMEOUT_MIN_MS,
+        apply_patch_to_string, execute_tool, grep_search, parse_grep_timeout_ms,
+        GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS, GREP_TIMEOUT_MIN_MS,
     };
-    use std::fs;
     use std::collections::HashMap;
+    use std::fs;
     use tempfile::tempdir;
 
     #[test]
@@ -406,7 +406,10 @@ mod tests {
         }"#;
 
         let result = execute_tool(workspace.path(), "batch", args);
-        assert!(result.success, "batch should return structured all-settled output");
+        assert!(
+            result.success,
+            "batch should return structured all-settled output"
+        );
 
         let payload: serde_json::Value =
             serde_json::from_str(&result.content).expect("batch json output");
@@ -445,16 +448,14 @@ mod tests {
         let empty = HashMap::new();
         assert_eq!(parse_grep_timeout_ms(&empty), GREP_TIMEOUT_DEFAULT_MS);
 
-        let below_min = serde_json::from_str::<HashMap<String, serde_json::Value>>(
-            r#"{"timeout_ms":100}"#,
-        )
-        .expect("parse args");
+        let below_min =
+            serde_json::from_str::<HashMap<String, serde_json::Value>>(r#"{"timeout_ms":100}"#)
+                .expect("parse args");
         assert_eq!(parse_grep_timeout_ms(&below_min), GREP_TIMEOUT_MIN_MS);
 
-        let above_max = serde_json::from_str::<HashMap<String, serde_json::Value>>(
-            r#"{"timeout_ms":999999}"#,
-        )
-        .expect("parse args");
+        let above_max =
+            serde_json::from_str::<HashMap<String, serde_json::Value>>(r#"{"timeout_ms":999999}"#)
+                .expect("parse args");
         assert_eq!(parse_grep_timeout_ms(&above_max), GREP_TIMEOUT_MAX_MS);
     }
 
@@ -592,12 +593,12 @@ fn get_str_arg(args: &HashMap<String, serde_json::Value>, keys: &[&str]) -> Opti
 /// Returns None if gitignore filtering should not be applied
 fn create_gitignore_filter(workspace_root: &Path) -> Option<GitignoreFilter> {
     let settings = project_settings::load_project_settings_or_default(workspace_root);
-    
+
     // If allow_gitignored_files is true, don't create a filter (allow all files)
     if settings.allow_gitignored_files {
         return None;
     }
-    
+
     // Create filter to respect .gitignore
     Some(GitignoreFilter::new(workspace_root))
 }
@@ -712,7 +713,8 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
 /// This handles edge cases like ".", "./src", "src/utils" by prepending workspace root.
 /// Does NOT require the path to exist (useful for write operations).
 fn resolve_path_in_workspace(workspace_root: &Path, path: &Path) -> Result<PathBuf, String> {
-    let ws = fs::canonicalize(workspace_root).map_err(|e| format!("cannot canonicalize workspace: {}", e))?;
+    let ws = fs::canonicalize(workspace_root)
+        .map_err(|e| format!("cannot canonicalize workspace: {}", e))?;
 
     // Handle relative paths by joining with workspace root
     let candidate = if path.is_absolute() {
@@ -740,9 +742,9 @@ fn resolve_path_in_workspace(workspace_root: &Path, path: &Path) -> Result<PathB
 /// This is similar to canonicalize but works for non-existent paths.
 fn normalize_path(path: &Path) -> PathBuf {
     use std::path::Component;
-    
+
     let mut normalized = PathBuf::new();
-    
+
     for component in path.components() {
         match component {
             Component::Prefix(p) => normalized.push(p.as_os_str()),
@@ -755,7 +757,7 @@ fn normalize_path(path: &Path) -> PathBuf {
             Component::Normal(c) => normalized.push(c),
         }
     }
-    
+
     normalized
 }
 
@@ -778,7 +780,7 @@ fn validate_path_under_workspace(workspace_root: &Path, path: &Path) -> Result<P
     // For symlinks, we want to validate the link location, not the target
     // This allows symlinks inside the workspace even if they point outside
     let normalized = normalize_path(&candidate);
-    
+
     // Validate the normalized path is under workspace
     if !normalized.starts_with(&ws) {
         return Err(format!(
@@ -846,7 +848,8 @@ fn read_many_files(workspace_root: &Path, args: &HashMap<String, serde_json::Val
     let include_line_numbers = get_bool_arg(args, &["include_line_numbers"], true);
 
     let started_at = Instant::now();
-    let matched_files = match collect_matching_files(workspace_root, &include_globs, &exclude_globs) {
+    let matched_files = match collect_matching_files(workspace_root, &include_globs, &exclude_globs)
+    {
         Ok(files) => files,
         Err(e) => return ToolResult::err(e),
     };
@@ -882,62 +885,60 @@ fn read_many_files(workspace_root: &Path, args: &HashMap<String, serde_json::Val
         let results = Arc::clone(&results);
         let ws = ws.clone();
 
-        handles.push(std::thread::spawn(move || {
-            loop {
-                let next = {
-                    let mut guard = match queue.lock() {
-                        Ok(g) => g,
-                        Err(_) => return,
+        handles.push(std::thread::spawn(move || loop {
+            let next = {
+                let mut guard = match queue.lock() {
+                    Ok(g) => g,
+                    Err(_) => return,
+                };
+                guard.pop_front()
+            };
+
+            let Some((index, rel_path)) = next else {
+                break;
+            };
+
+            let abs_path = ws.join(&rel_path);
+            let file_json = match fs::read(&abs_path) {
+                Ok(bytes) => {
+                    let original_byte_count = bytes.len();
+                    let truncated = original_byte_count > max_bytes_per_file;
+                    let selected_bytes = if truncated {
+                        &bytes[..max_bytes_per_file]
+                    } else {
+                        &bytes[..]
                     };
-                    guard.pop_front()
-                };
 
-                let Some((index, rel_path)) = next else {
-                    break;
-                };
-
-                let abs_path = ws.join(&rel_path);
-                let file_json = match fs::read(&abs_path) {
-                    Ok(bytes) => {
-                        let original_byte_count = bytes.len();
-                        let truncated = original_byte_count > max_bytes_per_file;
-                        let selected_bytes = if truncated {
-                            &bytes[..max_bytes_per_file]
-                        } else {
-                            &bytes[..]
-                        };
-
-                        let mut content = String::from_utf8_lossy(selected_bytes).to_string();
-                        let line_count = if content.is_empty() {
-                            0
-                        } else {
-                            content.lines().count()
-                        };
-                        if include_line_numbers {
-                            content = render_with_line_numbers(&content);
-                        }
-
-                        serde_json::json!({
-                            "index": index,
-                            "path": rel_path,
-                            "truncated": truncated,
-                            "content": content,
-                            "line_count": line_count,
-                            "byte_count": selected_bytes.len(),
-                            "original_byte_count": original_byte_count,
-                        })
+                    let mut content = String::from_utf8_lossy(selected_bytes).to_string();
+                    let line_count = if content.is_empty() {
+                        0
+                    } else {
+                        content.lines().count()
+                    };
+                    if include_line_numbers {
+                        content = render_with_line_numbers(&content);
                     }
-                    Err(e) => serde_json::json!({
+
+                    serde_json::json!({
                         "index": index,
                         "path": rel_path,
-                        "truncated": false,
-                        "error": e.to_string(),
-                    }),
-                };
-
-                if let Ok(mut guard) = results.lock() {
-                    guard.push(file_json);
+                        "truncated": truncated,
+                        "content": content,
+                        "line_count": line_count,
+                        "byte_count": selected_bytes.len(),
+                        "original_byte_count": original_byte_count,
+                    })
                 }
+                Err(e) => serde_json::json!({
+                    "index": index,
+                    "path": rel_path,
+                    "truncated": false,
+                    "error": e.to_string(),
+                }),
+            };
+
+            if let Ok(mut guard) = results.lock() {
+                guard.push(file_json);
             }
         }));
     }
@@ -958,7 +959,11 @@ fn read_many_files(workspace_root: &Path, args: &HashMap<String, serde_json::Val
     let failed_count = files.len().saturating_sub(successful_count);
     let truncated_files = files
         .iter()
-        .filter(|f| f.get("truncated").and_then(|v| v.as_bool()).unwrap_or(false))
+        .filter(|f| {
+            f.get("truncated")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+        })
         .count();
 
     if successful_count == 0 {
@@ -999,7 +1004,10 @@ fn read_many_files(workspace_root: &Path, args: &HashMap<String, serde_json::Val
     record_tool_metric("read_many_files", elapsed_ms, successful_count > 0);
 
     let mut result_with_metrics = result;
-    if let Some(summary) = result_with_metrics.get_mut("summary").and_then(|v| v.as_object_mut()) {
+    if let Some(summary) = result_with_metrics
+        .get_mut("summary")
+        .and_then(|v| v.as_object_mut())
+    {
         summary.insert("metrics".to_string(), metric_snapshot("read_many_files"));
     }
 
@@ -1119,66 +1127,64 @@ fn batch(
         let editor_state_owned = editor_state_owned.clone();
         let tool_started_at = started_at;
 
-        handles.push(std::thread::spawn(move || {
-            loop {
-                if stop.load(Ordering::Relaxed) {
-                    break;
-                }
-                if let Some(limit) = cancel_after_ms {
-                    if tool_started_at.elapsed().as_millis() as u64 >= limit {
-                        stop.store(true, Ordering::Relaxed);
-                        break;
-                    }
-                }
-
-                let next = {
-                    let mut guard = match queue.lock() {
-                        Ok(g) => g,
-                        Err(_) => return,
-                    };
-                    guard.pop_front()
-                };
-
-                let Some((index, tool_name, args_json)) = next else {
-                    break;
-                };
-
-                let tool_started = Instant::now();
-                let result = execute_tool_with_editor::<tauri::Wry>(
-                    &ws,
-                    &tool_name,
-                    &args_json,
-                    editor_state_owned.as_ref(),
-                    None,
-                );
-                let elapsed_ms = tool_started.elapsed().as_millis() as u64;
-
-                let entry = if result.success {
-                    serde_json::json!({
-                        "index": index,
-                        "tool": tool_name,
-                        "ok": true,
-                        "output": result.to_tool_content_truncated(),
-                        "elapsed_ms": elapsed_ms,
-                    })
-                } else {
-                    serde_json::json!({
-                        "index": index,
-                        "tool": tool_name,
-                        "ok": false,
-                        "error": result.error.unwrap_or_else(|| "unknown error".to_string()),
-                        "skipped": result.skipped,
-                        "elapsed_ms": elapsed_ms,
-                    })
-                };
-
-                if !entry.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) && fail_fast {
+        handles.push(std::thread::spawn(move || loop {
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
+            if let Some(limit) = cancel_after_ms {
+                if tool_started_at.elapsed().as_millis() as u64 >= limit {
                     stop.store(true, Ordering::Relaxed);
+                    break;
                 }
+            }
 
-                if let Ok(mut guard) = results.lock() {
-                    guard.push(entry);
-                }
+            let next = {
+                let mut guard = match queue.lock() {
+                    Ok(g) => g,
+                    Err(_) => return,
+                };
+                guard.pop_front()
+            };
+
+            let Some((index, tool_name, args_json)) = next else {
+                break;
+            };
+
+            let tool_started = Instant::now();
+            let result = execute_tool_with_editor::<tauri::Wry>(
+                &ws,
+                &tool_name,
+                &args_json,
+                editor_state_owned.as_ref(),
+                None,
+            );
+            let elapsed_ms = tool_started.elapsed().as_millis() as u64;
+
+            let entry = if result.success {
+                serde_json::json!({
+                    "index": index,
+                    "tool": tool_name,
+                    "ok": true,
+                    "output": result.to_tool_content_truncated(),
+                    "elapsed_ms": elapsed_ms,
+                })
+            } else {
+                serde_json::json!({
+                    "index": index,
+                    "tool": tool_name,
+                    "ok": false,
+                    "error": result.error.unwrap_or_else(|| "unknown error".to_string()),
+                    "skipped": result.skipped,
+                    "elapsed_ms": elapsed_ms,
+                })
+            };
+
+            if !entry.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) && fail_fast {
+                stop.store(true, Ordering::Relaxed);
+            }
+
+            if let Ok(mut guard) = results.lock() {
+                guard.push(entry);
             }
         }));
     }
@@ -1195,7 +1201,12 @@ fn batch(
     }
 
     if ordered {
-        results.sort_by_key(|value| value.get("index").and_then(|v| v.as_u64()).unwrap_or(u64::MAX));
+        results.sort_by_key(|value| {
+            value
+                .get("index")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(u64::MAX)
+        });
     }
 
     let succeeded = results
@@ -1206,7 +1217,9 @@ fn batch(
     let failed = total.saturating_sub(succeeded);
     let elapsed_ms = started_at.elapsed().as_millis() as u64;
     let cancelled = stop.load(Ordering::Relaxed)
-        && cancel_after_ms.map(|limit| elapsed_ms >= limit).unwrap_or(false);
+        && cancel_after_ms
+            .map(|limit| elapsed_ms >= limit)
+            .unwrap_or(false);
 
     let output = serde_json::json!({
         "results": results,
@@ -1230,7 +1243,10 @@ fn batch(
     record_tool_metric("batch", elapsed_ms, failed == 0);
 
     let mut output_with_metrics = output;
-    if let Some(meta) = output_with_metrics.get_mut("meta").and_then(|v| v.as_object_mut()) {
+    if let Some(meta) = output_with_metrics
+        .get_mut("meta")
+        .and_then(|v| v.as_object_mut())
+    {
         meta.insert("metrics".to_string(), metric_snapshot("batch"));
     }
 
@@ -1239,8 +1255,8 @@ fn batch(
 
 fn extract_objective_keywords(objective: &str) -> Vec<String> {
     const STOPWORDS: &[&str] = &[
-        "the", "and", "for", "with", "where", "what", "that", "from", "into", "when",
-        "how", "find", "show", "this", "these", "those", "code", "repo", "project",
+        "the", "and", "for", "with", "where", "what", "that", "from", "into", "when", "how",
+        "find", "show", "this", "these", "those", "code", "repo", "project",
     ];
 
     let mut keywords = objective
@@ -1260,13 +1276,15 @@ fn extract_objective_keywords(objective: &str) -> Vec<String> {
     keywords
 }
 
-fn codebase_investigator(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {
+fn codebase_investigator(
+    workspace_root: &Path,
+    args: &HashMap<String, serde_json::Value>,
+) -> ToolResult {
     let Some(objective) = get_str_arg(args, &["objective"]) else {
         return ToolResult::err("codebase_investigator requires 'objective'");
     };
 
-    let scope =
-        get_string_array_arg(args, &["scope"]).unwrap_or_else(|| vec!["**/*".to_string()]);
+    let scope = get_string_array_arg(args, &["scope"]).unwrap_or_else(|| vec!["**/*".to_string()]);
     let max_turns = get_bounded_usize_arg(
         args,
         &["max_turns"],
@@ -1279,8 +1297,7 @@ fn codebase_investigator(workspace_root: &Path, args: &HashMap<String, serde_jso
         INVESTIGATOR_DEFAULT_MAX_TOOL_CALLS,
         INVESTIGATOR_MAX_TOOL_CALLS_CAP,
     );
-    let output_format =
-        get_str_arg(args, &["output_format"]).unwrap_or_else(|| "json".to_string());
+    let output_format = get_str_arg(args, &["output_format"]).unwrap_or_else(|| "json".to_string());
     let cancel_after_ms = args.get("cancel_after_ms").and_then(|v| v.as_u64());
 
     let started_at = Instant::now();
@@ -1409,7 +1426,10 @@ fn codebase_investigator(workspace_root: &Path, args: &HashMap<String, serde_jso
     record_tool_metric("codebase_investigator", elapsed_ms, !findings.is_empty());
 
     let mut report_with_metrics = report;
-    if let Some(meta) = report_with_metrics.get_mut("meta").and_then(|v| v.as_object_mut()) {
+    if let Some(meta) = report_with_metrics
+        .get_mut("meta")
+        .and_then(|v| v.as_object_mut())
+    {
         meta.insert(
             "metrics".to_string(),
             metric_snapshot("codebase_investigator"),
@@ -1534,10 +1554,7 @@ fn resolve_index_root(
     let root = resolve_path_in_workspace(workspace_root, Path::new(&path))?;
 
     if !root.exists() {
-        return Err(format!(
-            "project root does not exist: {}",
-            root.display()
-        ));
+        return Err(format!("project root does not exist: {}", root.display()));
     }
     if !root.is_dir() {
         return Err(format!(
@@ -1561,7 +1578,11 @@ fn parse_bounded_usize_arg(
         .unwrap_or(default)
 }
 
-fn slice_by_char_window(content: &str, offset: usize, max_chars: usize) -> (String, usize, usize, bool) {
+fn slice_by_char_window(
+    content: &str,
+    offset: usize,
+    max_chars: usize,
+) -> (String, usize, usize, bool) {
     let total_chars = content.chars().count();
     if offset >= total_chars {
         return (String::new(), total_chars, total_chars, false);
@@ -1596,7 +1617,11 @@ fn write_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) 
     }
 
     match fs::write(&abs, content.as_bytes()) {
-        Ok(()) => ToolResult::ok(format!("wrote {} bytes to {}", content.len(), abs.display())),
+        Ok(()) => ToolResult::ok(format!(
+            "wrote {} bytes to {}",
+            content.len(),
+            abs.display()
+        )),
         Err(e) => ToolResult::err(format!("write failed: {}", e)),
     }
 }
@@ -1682,7 +1707,11 @@ fn build_grep_next_step_hint(include_dependencies: bool) -> String {
     }
 }
 
-fn grep_search(workspace_root: &Path, args: &HashMap<String, serde_json::Value>, enforce_timeout: bool) -> ToolResult {
+fn grep_search(
+    workspace_root: &Path,
+    args: &HashMap<String, serde_json::Value>,
+    enforce_timeout: bool,
+) -> ToolResult {
     let Some(pattern) = get_str_arg(args, &["pattern", "query", "regex"]) else {
         return ToolResult::err(
             "grep_search requires a 'pattern' argument. Example: {\"pattern\": \"Priority\"}",
@@ -1768,12 +1797,7 @@ fn grep_search(workspace_root: &Path, args: &HashMap<String, serde_json::Value>,
             }
 
             if re.is_match(line) {
-                let hit = format!(
-                    "{}:{}:{}",
-                    path.to_string_lossy(),
-                    idx + 1,
-                    line
-                );
+                let hit = format!("{}:{}:{}", path.to_string_lossy(), idx + 1, line);
                 out.push_str(&hit);
                 out.push('\n');
                 partial_results.push(hit);
@@ -1860,7 +1884,7 @@ fn codebase_search(workspace_root: &Path, args: &HashMap<String, serde_json::Val
         }
 
         let path = entry.path();
-        
+
         // Check gitignore filter
         if let Some(ref filter) = gitignore_filter {
             if filter.should_ignore(path) {
@@ -2039,9 +2063,7 @@ fn read_file_range(workspace_root: &Path, args: &HashMap<String, serde_json::Val
     // Adjust for 1-indexed and apply context
     // Clamp final bounds to avoid panics when requested range exceeds file length.
     let requested_start = start_line.saturating_sub(1).saturating_sub(context_lines);
-    let requested_end = end_line
-        .saturating_add(context_lines)
-        .min(total_lines);
+    let requested_end = end_line.saturating_add(context_lines).min(total_lines);
 
     let start = requested_start.min(total_lines);
     let end = requested_end.max(start).min(total_lines);
@@ -2471,8 +2493,14 @@ fn get_workspace_structure(
     args: &HashMap<String, serde_json::Value>,
 ) -> ToolResult {
     let path = get_str_arg(args, &["path", "dir", "directory"]).unwrap_or_else(|| ".".to_string());
-    let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(DEFAULT_LIST_DEPTH as u64) as usize;
-    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(DEFAULT_LIST_LIMIT as u64) as usize;
+    let depth = args
+        .get("depth")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(DEFAULT_LIST_DEPTH as u64) as usize;
+    let limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(DEFAULT_LIST_LIMIT as u64) as usize;
     let limit = limit.min(MAX_LIST_LIMIT); // Cap at maximum
 
     let abs = match validate_path_under_workspace(workspace_root, Path::new(&path)) {
@@ -2485,13 +2513,7 @@ fn get_workspace_structure(
 
     // Collect entries with BFS traversal (like Codex)
     let mut entries: Vec<ListEntry> = Vec::new();
-    collect_dir_entries(
-        &abs,
-        &abs,
-        depth,
-        gitignore_filter.as_ref(),
-        &mut entries,
-    );
+    collect_dir_entries(&abs, &abs, depth, gitignore_filter.as_ref(), &mut entries);
 
     // Sort entries by path for consistent output
     entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
@@ -2509,7 +2531,10 @@ fn get_workspace_structure(
     }
 
     if truncated {
-        output.push_str(&format!("\n(showing {} of more entries, use a more specific path or increase limit)\n", limit));
+        output.push_str(&format!(
+            "\n(showing {} of more entries, use a more specific path or increase limit)\n",
+            limit
+        ));
     }
 
     ToolResult::ok(output)
@@ -2530,7 +2555,9 @@ fn collect_dir_entries(
     gitignore_filter: Option<&GitignoreFilter>,
     entries: &mut Vec<ListEntry>,
 ) {
-    let rel_to_base = current_path.strip_prefix(base_path).unwrap_or(Path::new(""));
+    let rel_to_base = current_path
+        .strip_prefix(base_path)
+        .unwrap_or(Path::new(""));
     let current_depth = rel_to_base.components().count();
 
     if current_depth >= max_depth {
@@ -2586,7 +2613,6 @@ fn collect_dir_entries(
         }
     }
 }
-
 
 fn find_files(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {
     let Some(pattern) = get_str_arg(args, &["pattern"]) else {

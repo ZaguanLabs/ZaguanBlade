@@ -92,14 +92,9 @@ async fn generate_commit_message_via_openai_compat(
     model_id: &str,
     prompt: &str,
 ) -> Result<String, String> {
-    let model_name = model_id
-        .strip_prefix("openai-compat/")
-        .unwrap_or(model_id);
+    let model_name = model_id.strip_prefix("openai-compat/").unwrap_or(model_id);
     let openai_compat_base_url = normalize_openai_compat_url(&api_config.openai_compat_url);
-    let url = format!(
-        "{}/v1/chat/completions",
-        openai_compat_base_url
-    );
+    let url = format!("{}/v1/chat/completions", openai_compat_base_url);
 
     let body = json!({
         "model": model_name,
@@ -309,10 +304,18 @@ impl PendingGitFileStatus {
         } else {
             let x = self
                 .staged_code
-                .unwrap_or(if self.conflicted && self.staged { 'U' } else { '.' });
+                .unwrap_or(if self.conflicted && self.staged {
+                    'U'
+                } else {
+                    '.'
+                });
             let y = self
                 .unstaged_code
-                .unwrap_or(if self.conflicted && self.unstaged { 'U' } else { '.' });
+                .unwrap_or(if self.conflicted && self.unstaged {
+                    'U'
+                } else {
+                    '.'
+                });
             format!("{}{}", x, y)
         };
 
@@ -352,11 +355,13 @@ fn collect_ahead_behind(repo: &gix::Repository) -> Result<(u32, u32), String> {
         return Ok((0, 0));
     };
 
-    let Some(tracking_name_result) = head_ref.remote_tracking_ref_name(gix::remote::Direction::Fetch) else {
+    let Some(tracking_name_result) =
+        head_ref.remote_tracking_ref_name(gix::remote::Direction::Fetch)
+    else {
         return Ok((0, 0));
     };
-    let tracking_name = tracking_name_result
-        .map_err(|e| format!("Failed to resolve tracking branch: {}", e))?;
+    let tracking_name =
+        tracking_name_result.map_err(|e| format!("Failed to resolve tracking branch: {}", e))?;
 
     let local_id = match repo.head_id() {
         Ok(id) => id.detach(),
@@ -431,7 +436,11 @@ fn collect_git_status_snapshot_gix(repo: &gix::Repository) -> Result<GitStatusSn
                     }
                     let file = files_by_path.entry(path).or_default();
                     file.staged = true;
-                    file.staged_code = Some(if previous_entry_mode != entry_mode { 'T' } else { 'M' });
+                    file.staged_code = Some(if previous_entry_mode != entry_mode {
+                        'T'
+                    } else {
+                        'M'
+                    });
                 }
                 gix::diff::index::Change::Rewrite {
                     source_location,
@@ -453,60 +462,60 @@ fn collect_git_status_snapshot_gix(repo: &gix::Repository) -> Result<GitStatusSn
             gix::status::Item::IndexWorktree(item) => {
                 let summary = item.summary();
                 match item {
-                gix::status::index_worktree::Item::Modification { rela_path, .. } => {
-                    let path = bstr_to_string(rela_path.as_ref());
-                    if is_zblade_path(&path) {
-                        continue;
+                    gix::status::index_worktree::Item::Modification { rela_path, .. } => {
+                        let path = bstr_to_string(rela_path.as_ref());
+                        if is_zblade_path(&path) {
+                            continue;
+                        }
+                        let file = files_by_path.entry(path).or_default();
+                        match summary {
+                            Some(gix::status::index_worktree::iter::Summary::Conflict) => {
+                                file.conflicted = true;
+                                file.staged = true;
+                                file.unstaged = true;
+                                file.staged_code = Some('U');
+                                file.unstaged_code = Some('U');
+                            }
+                            Some(gix::status::index_worktree::iter::Summary::Removed) => {
+                                file.unstaged = true;
+                                file.unstaged_code = Some('D');
+                            }
+                            Some(gix::status::index_worktree::iter::Summary::TypeChange) => {
+                                file.unstaged = true;
+                                file.unstaged_code = Some('T');
+                            }
+                            Some(gix::status::index_worktree::iter::Summary::Modified) => {
+                                file.unstaged = true;
+                                file.unstaged_code = Some('M');
+                            }
+                            Some(gix::status::index_worktree::iter::Summary::IntentToAdd) => {
+                                file.unstaged = true;
+                                file.unstaged_code = Some('A');
+                            }
+                            _ => {}
+                        }
                     }
-                    let file = files_by_path.entry(path).or_default();
-                    match summary {
-                        Some(gix::status::index_worktree::iter::Summary::Conflict) => {
-                            file.conflicted = true;
-                            file.staged = true;
-                            file.unstaged = true;
-                            file.staged_code = Some('U');
-                            file.unstaged_code = Some('U');
+                    gix::status::index_worktree::Item::DirectoryContents { entry, .. } => {
+                        let path = bstr_to_string(entry.rela_path.as_ref());
+                        if is_zblade_path(&path) {
+                            continue;
                         }
-                        Some(gix::status::index_worktree::iter::Summary::Removed) => {
-                            file.unstaged = true;
-                            file.unstaged_code = Some('D');
-                        }
-                        Some(gix::status::index_worktree::iter::Summary::TypeChange) => {
-                            file.unstaged = true;
-                            file.unstaged_code = Some('T');
-                        }
-                        Some(gix::status::index_worktree::iter::Summary::Modified) => {
-                            file.unstaged = true;
-                            file.unstaged_code = Some('M');
-                        }
-                        Some(gix::status::index_worktree::iter::Summary::IntentToAdd) => {
-                            file.unstaged = true;
-                            file.unstaged_code = Some('A');
-                        }
-                        _ => {}
+                        let file = files_by_path.entry(path).or_default();
+                        file.unstaged = true;
+                        file.untracked = true;
+                        file.unstaged_code = Some('?');
                     }
-                }
-                gix::status::index_worktree::Item::DirectoryContents { entry, .. } => {
-                    let path = bstr_to_string(entry.rela_path.as_ref());
-                    if is_zblade_path(&path) {
-                        continue;
-                    }
-                    let file = files_by_path.entry(path).or_default();
-                    file.unstaged = true;
-                    file.untracked = true;
-                    file.unstaged_code = Some('?');
-                }
-                gix::status::index_worktree::Item::Rewrite {
-                    source,
-                    dirwalk_entry,
-                    copy,
-                    ..
-                } => {
-                    let path = bstr_to_string(dirwalk_entry.rela_path.as_ref());
-                    if is_zblade_path(&path) {
-                        continue;
-                    }
-                    let source_path = match source {
+                    gix::status::index_worktree::Item::Rewrite {
+                        source,
+                        dirwalk_entry,
+                        copy,
+                        ..
+                    } => {
+                        let path = bstr_to_string(dirwalk_entry.rela_path.as_ref());
+                        if is_zblade_path(&path) {
+                            continue;
+                        }
+                        let source_path = match source {
                         gix::status::index_worktree::RewriteSource::RewriteFromIndex {
                             source_rela_path,
                             ..
@@ -516,12 +525,13 @@ fn collect_git_status_snapshot_gix(repo: &gix::Repository) -> Result<GitStatusSn
                             ..
                         } => bstr_to_string(source_dirwalk_entry.rela_path.as_ref()),
                     };
-                    let file = files_by_path.entry(path.clone()).or_default();
-                    file.display_path = Some(format!("{} → {}", source_path, path));
-                    file.unstaged = true;
-                    file.unstaged_code = Some(if copy { 'C' } else { 'R' });
+                        let file = files_by_path.entry(path.clone()).or_default();
+                        file.display_path = Some(format!("{} → {}", source_path, path));
+                        file.unstaged = true;
+                        file.unstaged_code = Some(if copy { 'C' } else { 'R' });
+                    }
                 }
-            }},
+            }
         }
     }
 
@@ -671,7 +681,11 @@ fn find_last_subject_occurrence(lines: &[&str]) -> Option<(usize, usize)> {
 }
 
 fn extract_commit_message(raw: &str) -> String {
-    let mut normalized = raw.replace("\r\n", "\n").replace('\r', "\n").trim().to_string();
+    let mut normalized = raw
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .trim()
+        .to_string();
     if normalized.is_empty() {
         return String::new();
     }
@@ -695,29 +709,30 @@ fn extract_commit_message(raw: &str) -> String {
         return String::new();
     }
 
-    let mut selected: Vec<String> = if let Some((line_idx, col_idx)) = find_last_subject_occurrence(&lines) {
-        let mut out: Vec<String> = Vec::with_capacity(lines.len().saturating_sub(line_idx));
-        out.push(lines[line_idx][col_idx..].trim_start().to_string());
-        out.extend(lines.iter().skip(line_idx + 1).map(|line| line.to_string()));
-        out
-    } else {
-        // Fallback: if no recognizable conventional subject was found,
-        // use only the trailing paragraph (avoid taking the entire reasoning transcript).
-        let end = lines.iter().rposition(|line| !line.trim().is_empty());
-        let Some(end_idx) = end else {
-            return String::new();
+    let mut selected: Vec<String> =
+        if let Some((line_idx, col_idx)) = find_last_subject_occurrence(&lines) {
+            let mut out: Vec<String> = Vec::with_capacity(lines.len().saturating_sub(line_idx));
+            out.push(lines[line_idx][col_idx..].trim_start().to_string());
+            out.extend(lines.iter().skip(line_idx + 1).map(|line| line.to_string()));
+            out
+        } else {
+            // Fallback: if no recognizable conventional subject was found,
+            // use only the trailing paragraph (avoid taking the entire reasoning transcript).
+            let end = lines.iter().rposition(|line| !line.trim().is_empty());
+            let Some(end_idx) = end else {
+                return String::new();
+            };
+
+            let mut start_idx = end_idx;
+            while start_idx > 0 && !lines[start_idx - 1].trim().is_empty() {
+                start_idx -= 1;
+            }
+
+            lines[start_idx..=end_idx]
+                .iter()
+                .map(|line| line.to_string())
+                .collect()
         };
-
-        let mut start_idx = end_idx;
-        while start_idx > 0 && !lines[start_idx - 1].trim().is_empty() {
-            start_idx -= 1;
-        }
-
-        lines[start_idx..=end_idx]
-            .iter()
-            .map(|line| line.to_string())
-            .collect()
-    };
 
     while selected.first().is_some_and(|line| line.trim().is_empty()) {
         selected.remove(0);
@@ -808,8 +823,8 @@ async fn generate_commit_message_via_ollama(
         ));
     }
 
-    let parsed: serde_json::Value = serde_json::from_str(&payload)
-        .map_err(|e| format!("Invalid Ollama response: {}", e))?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(&payload).map_err(|e| format!("Invalid Ollama response: {}", e))?;
 
     if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
         return Err(format!("Ollama error: {}", err));
@@ -896,26 +911,41 @@ fn collect_changes_for_message(root: &str) -> Result<CommitContext, String> {
         let repo = gix::discover(root).ok();
         if let Some(repo) = repo {
             let branch = repo.head().ok().and_then(|h| {
-                if h.is_detached() { None } else { h.referent_name().map(|n| n.shorten().to_string()) }
+                if h.is_detached() {
+                    None
+                } else {
+                    h.referent_name().map(|n| n.shorten().to_string())
+                }
             });
             let head_id = repo.head_id().ok();
             let last_commit_message = head_id.as_ref().and_then(|id| {
-                id.object().ok().map(|o| {
-                    let c = o.into_commit();
-                    c.decode().ok().map(|cr| cr.message().summary().to_string())
-                }).flatten()
+                id.object()
+                    .ok()
+                    .map(|o| {
+                        let c = o.into_commit();
+                        c.decode().ok().map(|cr| cr.message().summary().to_string())
+                    })
+                    .flatten()
             });
-            let recent_commits: Vec<String> = head_id.map(|id| {
-                id.ancestors().all().ok().map(|walk| {
-                    walk.take(5).filter_map(|info| {
-                        let info = info.ok()?;
-                        let commit = info.id().object().ok()?.into_commit();
-                        let cr = commit.decode().ok()?;
-                        let short = &info.id().to_string()[..7];
-                        Some(format!("{} {}", short, cr.message().summary()))
-                    }).collect()
-                }).unwrap_or_default()
-            }).unwrap_or_default();
+            let recent_commits: Vec<String> = head_id
+                .map(|id| {
+                    id.ancestors()
+                        .all()
+                        .ok()
+                        .map(|walk| {
+                            walk.take(5)
+                                .filter_map(|info| {
+                                    let info = info.ok()?;
+                                    let commit = info.id().object().ok()?.into_commit();
+                                    let cr = commit.decode().ok()?;
+                                    let short = &info.id().to_string()[..7];
+                                    Some(format!("{} {}", short, cr.message().summary()))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                })
+                .unwrap_or_default();
             (branch, last_commit_message, recent_commits)
         } else {
             // Fallback to CLI
@@ -1251,7 +1281,9 @@ pub fn git_commit_preflight(state: State<'_, AppState>) -> Result<CommitPrefligh
     };
 
     // Branch info from HEAD
-    let head = repo.head().map_err(|e| format!("Failed to read HEAD: {}", e))?;
+    let head = repo
+        .head()
+        .map_err(|e| format!("Failed to read HEAD: {}", e))?;
     let is_detached = head.is_detached();
     let branch = if is_detached {
         None
@@ -1271,8 +1303,7 @@ pub fn git_commit_preflight(state: State<'_, AppState>) -> Result<CommitPrefligh
         Some(r) => r,
         None => return Err("No workspace open".to_string()),
     };
-    let status_output = run_git(&root, &["status", "--porcelain=v2"][..])
-        .unwrap_or_default();
+    let status_output = run_git(&root, &["status", "--porcelain=v2"][..]).unwrap_or_default();
     let has_conflicts = status_output.lines().any(|l| l.starts_with("u "));
     let staged_count = status_output
         .lines()
@@ -1400,7 +1431,8 @@ pub async fn git_generate_commit_message_ai(
         return Err("No changes to commit".to_string());
     }
 
-    let file_list = ctx.files
+    let file_list = ctx
+        .files
         .iter()
         .map(|f| format!("- {}", f))
         .collect::<Vec<_>>()
@@ -1426,7 +1458,8 @@ pub async fn git_generate_commit_message_ai(
     };
 
     // Build context sections
-    let branch_section = ctx.branch
+    let branch_section = ctx
+        .branch
         .as_ref()
         .map(|b| format!("BRANCH: {}\n", b))
         .unwrap_or_default();
@@ -1503,7 +1536,8 @@ Do NOT include analysis, reasoning, explanations, or multiple options."#,
     }
 
     let storage_mode = Some({
-        let settings = crate::project_settings::load_project_settings_or_default(std::path::Path::new(&root));
+        let settings =
+            crate::project_settings::load_project_settings_or_default(std::path::Path::new(&root));
         match settings.storage.mode {
             crate::project_settings::StorageMode::Local => "local".to_string(),
             crate::project_settings::StorageMode::Server => "server".to_string(),
@@ -1512,11 +1546,13 @@ Do NOT include analysis, reasoning, explanations, or multiple options."#,
 
     // Use shared WebSocket connection manager from AppState
     let ws_manager = state.ws_connection.clone();
-    
+
     // Connect (or reuse existing connection)
-    let mut ws_rx = ws_manager.ensure_connected().await
+    let mut ws_rx = ws_manager
+        .ensure_connected()
+        .await
         .map_err(|e| format!("WebSocket connection failed: {}", e))?;
-    
+
     // Wait for authentication
     let mut authenticated = false;
     while let Some(event) = ws_rx.recv().await {
@@ -1528,7 +1564,7 @@ Do NOT include analysis, reasoning, explanations, or multiple options."#,
             return Err(format!("Authentication failed: {}", message));
         }
     }
-    
+
     if !authenticated {
         return Err("WebSocket authentication timeout".to_string());
     }
@@ -1596,7 +1632,10 @@ pub struct GitCommitStats {
 }
 
 #[tauri::command]
-pub fn git_commit_stats(state: State<'_, AppState>, hash: String) -> Result<GitCommitStats, String> {
+pub fn git_commit_stats(
+    state: State<'_, AppState>,
+    hash: String,
+) -> Result<GitCommitStats, String> {
     let repo = open_repo(&state)?;
     let commit = repo
         .rev_parse_single(hash.as_str())
@@ -1647,10 +1686,10 @@ pub struct GitLogEntry {
     pub short_hash: String,
     pub author_name: String,
     pub author_email: String,
-    pub date: String,        // ISO 8601
+    pub date: String, // ISO 8601
     pub relative_date: String,
     pub subject: String,
-    pub refs: Vec<String>,   // e.g. ["HEAD -> main", "origin/main", "tag: v1.0"]
+    pub refs: Vec<String>, // e.g. ["HEAD -> main", "origin/main", "tag: v1.0"]
     pub parents: Vec<String>, // short parent hashes
     pub insertions: u32,
     pub deletions: u32,
@@ -1688,9 +1727,14 @@ pub fn git_log(state: State<'_, AppState>, count: Option<u32>) -> Result<Vec<Git
             break;
         }
         let info = info.map_err(|e| format!("Commit walk error: {}", e))?;
-        let commit = info.id().object().map_err(|e| format!("Failed to read commit: {}", e))?;
+        let commit = info
+            .id()
+            .object()
+            .map_err(|e| format!("Failed to read commit: {}", e))?;
         let commit = commit.into_commit();
-        let commit_ref = commit.decode().map_err(|e| format!("Failed to decode commit: {}", e))?;
+        let commit_ref = commit
+            .decode()
+            .map_err(|e| format!("Failed to decode commit: {}", e))?;
 
         let hash = info.id().to_string();
         let short_hash = hash[..7.min(hash.len())].to_string();
@@ -1721,7 +1765,10 @@ pub fn git_log(state: State<'_, AppState>, count: Option<u32>) -> Result<Vec<Git
             })
             .collect();
 
-        let refs = ref_map.get(&info.id().detach()).cloned().unwrap_or_default();
+        let refs = ref_map
+            .get(&info.id().detach())
+            .cloned()
+            .unwrap_or_default();
 
         entries.push(GitLogEntry {
             hash,
@@ -1743,11 +1790,13 @@ pub fn git_log(state: State<'_, AppState>, count: Option<u32>) -> Result<Vec<Git
 }
 
 fn build_ref_map(repo: &gix::Repository) -> std::collections::HashMap<gix::ObjectId, Vec<String>> {
-    let mut map: std::collections::HashMap<gix::ObjectId, Vec<String>> = std::collections::HashMap::new();
+    let mut map: std::collections::HashMap<gix::ObjectId, Vec<String>> =
+        std::collections::HashMap::new();
 
-    let head_ref_name = repo.head().ok().and_then(|h| {
-        h.referent_name().map(|n| n.as_bstr().to_string())
-    });
+    let head_ref_name = repo
+        .head()
+        .ok()
+        .and_then(|h| h.referent_name().map(|n| n.as_bstr().to_string()));
 
     if let Ok(refs) = repo.references() {
         if let Ok(all) = refs.all() {
@@ -1792,10 +1841,7 @@ fn parse_signature_time(raw: &str) -> (i64, i32) {
         .next()
         .and_then(|value| value.parse::<i64>().ok())
         .unwrap_or(0);
-    let offset_secs = parts
-        .next()
-        .and_then(parse_git_tz_offset)
-        .unwrap_or(0);
+    let offset_secs = parts.next().and_then(parse_git_tz_offset).unwrap_or(0);
 
     (ts, offset_secs)
 }
@@ -1817,7 +1863,10 @@ fn parse_git_tz_offset(value: &str) -> Option<i32> {
     Some(sign * (hours * 3600 + minutes * 60))
 }
 
-fn format_relative_date(now: chrono::DateTime<chrono::Utc>, then: chrono::DateTime<chrono::Utc>) -> String {
+fn format_relative_date(
+    now: chrono::DateTime<chrono::Utc>,
+    then: chrono::DateTime<chrono::Utc>,
+) -> String {
     let duration = now.signed_duration_since(then);
     let secs = duration.num_seconds();
     if secs < 0 {
@@ -1829,26 +1878,50 @@ fn format_relative_date(now: chrono::DateTime<chrono::Utc>, then: chrono::DateTi
     }
     let mins = secs / 60;
     if mins < 60 {
-        return if mins == 1 { "1 minute ago".to_string() } else { format!("{} minutes ago", mins) };
+        return if mins == 1 {
+            "1 minute ago".to_string()
+        } else {
+            format!("{} minutes ago", mins)
+        };
     }
     let hours = mins / 60;
     if hours < 24 {
-        return if hours == 1 { "1 hour ago".to_string() } else { format!("{} hours ago", hours) };
+        return if hours == 1 {
+            "1 hour ago".to_string()
+        } else {
+            format!("{} hours ago", hours)
+        };
     }
     let days = hours / 24;
     if days < 7 {
-        return if days == 1 { "1 day ago".to_string() } else { format!("{} days ago", days) };
+        return if days == 1 {
+            "1 day ago".to_string()
+        } else {
+            format!("{} days ago", days)
+        };
     }
     let weeks = days / 7;
     if weeks < 5 {
-        return if weeks == 1 { "1 week ago".to_string() } else { format!("{} weeks ago", weeks) };
+        return if weeks == 1 {
+            "1 week ago".to_string()
+        } else {
+            format!("{} weeks ago", weeks)
+        };
     }
     let months = days / 30;
     if months < 12 {
-        return if months == 1 { "1 month ago".to_string() } else { format!("{} months ago", months) };
+        return if months == 1 {
+            "1 month ago".to_string()
+        } else {
+            format!("{} months ago", months)
+        };
     }
     let years = days / 365;
-    if years == 1 { "1 year ago".to_string() } else { format!("{} years ago", years) }
+    if years == 1 {
+        "1 year ago".to_string()
+    } else {
+        format!("{} years ago", years)
+    }
 }
 
 #[tauri::command]

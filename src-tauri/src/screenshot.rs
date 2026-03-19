@@ -159,7 +159,8 @@ pub fn list_windows() -> Result<Vec<WindowInfo>, String> {
             !w.is_minimized().unwrap_or(true)
                 && w.width().unwrap_or(0) > 50
                 && w.height().unwrap_or(0) > 50
-                && !(w.title().unwrap_or_default().is_empty() && w.app_name().unwrap_or_default().is_empty())
+                && !(w.title().unwrap_or_default().is_empty()
+                    && w.app_name().unwrap_or_default().is_empty())
         })
         .filter_map(|window| {
             let id = window.id().ok()?;
@@ -203,7 +204,13 @@ pub fn capture_full_screen() -> Result<CaptureResult, String> {
     encode_png(image::DynamicImage::ImageRgba8(image))
 }
 
-pub fn capture_window_region(window_id: u32, x: u32, y: u32, width: u32, height: u32) -> Result<CaptureResult, String> {
+pub fn capture_window_region(
+    window_id: u32,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) -> Result<CaptureResult, String> {
     let windows = xcap::Window::all().map_err(|e| e.to_string())?;
     let window = windows
         .into_iter()
@@ -220,7 +227,12 @@ pub fn capture_window_region(window_id: u32, x: u32, y: u32, width: u32, height:
     encode_png(cropped)
 }
 
-pub fn capture_screen_region(x: u32, y: u32, width: u32, height: u32) -> Result<CaptureResult, String> {
+pub fn capture_screen_region(
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) -> Result<CaptureResult, String> {
     let monitors = xcap::Monitor::all().map_err(|e| e.to_string())?;
     let monitor = monitors
         .into_iter()

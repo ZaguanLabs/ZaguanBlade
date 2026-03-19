@@ -1,5 +1,6 @@
 'use client';
 import React, { useState, useEffect, useRef, Suspense } from 'react';
+import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 const MarkdownEditor = React.lazy(() =>
@@ -21,6 +22,7 @@ const PdfViewer = React.lazy(() =>
 );
 
 const WelcomePage: React.FC<{ onOpenSettings?: () => void }> = ({ onOpenSettings }) => {
+    const { t } = useTranslation();
     const [hasApiKey, setHasApiKey] = useState<boolean>(false);
     const [isLoading, setIsLoading] = useState(true);
 
@@ -72,10 +74,10 @@ const WelcomePage: React.FC<{ onOpenSettings?: () => void }> = ({ onOpenSettings
                 </div>
 
                 <h1 className="text-3xl font-bold text-[var(--fg-primary)] mb-3 tracking-tight">
-                    Run AI locally or use cloud models
+                    {t('editor.landing.title')}
                 </h1>
                 <p className="text-[var(--fg-secondary)] text-lg mb-8 leading-relaxed">
-                    Local = private, runs on your machine • Cloud = faster, pay per use
+                    {t('editor.landing.subtitle')}
                 </p>
 
                 <div className="grid gap-3 max-w-sm mx-auto">
@@ -86,7 +88,7 @@ const WelcomePage: React.FC<{ onOpenSettings?: () => void }> = ({ onOpenSettings
                                 className="flex items-center justify-center gap-2 w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium transition-colors shadow-lg shadow-emerald-900/20"
                             >
                                 <Server className="w-4 h-4" />
-                                Use Local AI (no setup)
+                                {t('editor.landing.useLocalAi')}
                             </button>
 
                             <button
@@ -94,7 +96,7 @@ const WelcomePage: React.FC<{ onOpenSettings?: () => void }> = ({ onOpenSettings
                                 className="flex items-center justify-center gap-2 w-full py-3 px-4 bg-[var(--bg-surface)] hover:bg-[var(--bg-surface-hover)] border border-[var(--border-subtle)] hover:border-[var(--border-focus)] text-[var(--fg-primary)] rounded-lg font-medium transition-all"
                             >
                                 <Cloud className="w-4 h-4" />
-                                Use Cloud Models (API key)
+                                {t('editor.landing.useCloudModels')}
                             </button>
 
                             <a
@@ -103,7 +105,7 @@ const WelcomePage: React.FC<{ onOpenSettings?: () => void }> = ({ onOpenSettings
                                 rel="noreferrer"
                                 className="flex items-center justify-center gap-2 w-full py-2 px-4 rounded-lg font-medium transition-all text-[var(--fg-secondary)] hover:text-[var(--fg-primary)]"
                             >
-                                Manage Subscription
+                                {t('editor.landing.manageSubscription')}
                                 <ArrowRight className="w-4 h-4 opacity-70" />
                             </a>
                         </>
@@ -112,9 +114,9 @@ const WelcomePage: React.FC<{ onOpenSettings?: () => void }> = ({ onOpenSettings
 
                 <div className="mt-12 pt-8 border-t border-[var(--border-subtle)]">
                     <p className="text-xs text-[var(--fg-tertiary)]">
-                        No API key? Use Local AI.
+                        {t('editor.landing.noApiKey')}
                         <br />
-                        Your code stays on your machine.
+                        {t('editor.landing.localPrivacy')}
                     </p>
                 </div>
             </div>

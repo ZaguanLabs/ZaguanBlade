@@ -231,9 +231,8 @@ pub fn load_project_settings(project_path: &Path) -> Result<ProjectSettings, Str
 
     let content = fs::read_to_string(&settings_path)
         .map_err(|e| format!("Failed to read settings: {}", e))?;
-    
-    serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse settings: {}", e))
+
+    serde_json::from_str(&content).map_err(|e| format!("Failed to parse settings: {}", e))
 }
 
 /// Load project settings from disk, returning defaults if not found

@@ -17,7 +17,7 @@ fn ansi_regex() -> &'static Regex {
         \x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|# OSC sequences
         \x1b[PX^_][^\x1b]*\x1b\\|         # DCS, SOS, PM, APC sequences
         \x1b[\x20-\x2f]*[\x30-\x7e]       # Other escape sequences
-        "
+        ",
         )
         .expect("valid ANSI regex")
     })
@@ -70,15 +70,20 @@ fn strip_ansi_codes(input: &str) -> String {
 
     // 5. Strip orphaned CSI bracket sequences where ESC byte is already gone
     //    These look like: [0m, [1m, [38;5;4m, [0;1m, [38;5;2m, [39;49m etc.
-    let result = orphan_csi_regex().replace_all(&result, |caps: &regex::Captures| {
-        let params = caps.get(1).map_or("", |m| m.as_str());
-        // Only strip if params are purely digits/semicolons/question marks (ANSI CSI params)
-        if params.chars().all(|c| c.is_ascii_digit() || c == ';' || c == '?') {
-            String::new()
-        } else {
-            caps[0].to_string()
-        }
-    }).to_string();
+    let result = orphan_csi_regex()
+        .replace_all(&result, |caps: &regex::Captures| {
+            let params = caps.get(1).map_or("", |m| m.as_str());
+            // Only strip if params are purely digits/semicolons/question marks (ANSI CSI params)
+            if params
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == ';' || c == '?')
+            {
+                String::new()
+            } else {
+                caps[0].to_string()
+            }
+        })
+        .to_string();
 
     // 6. Strip BEL characters
     let result = result.replace('\x07', "");
@@ -98,7 +103,10 @@ fn truncate_builtin_output(mut output: String) -> String {
     output
 }
 
-fn resolve_command_dir(workspace_root: &Path, cwd: Option<&str>) -> Result<(PathBuf, PathBuf), String> {
+fn resolve_command_dir(
+    workspace_root: &Path,
+    cwd: Option<&str>,
+) -> Result<(PathBuf, PathBuf), String> {
     let ws = fs::canonicalize(workspace_root).map_err(|e| e.to_string())?;
 
     let dir = if let Some(cwd) = cwd {
@@ -181,7 +189,10 @@ fn resolve_workspace_path_allow_missing(
     let mut existing_ancestor = candidate.as_path();
     while !existing_ancestor.exists() {
         existing_ancestor = existing_ancestor.parent().ok_or_else(|| {
-            format!("path is outside workspace or has no existing parent: {}", candidate.display())
+            format!(
+                "path is outside workspace or has no existing parent: {}",
+                candidate.display()
+            )
         })?;
     }
 
@@ -203,7 +214,11 @@ fn resolve_workspace_path_allow_missing(
     Ok(candidate)
 }
 
-fn build_builtin_result(output: String, exit_code: i32, refresh_explorer: bool) -> (crate::tools::ToolResult, String, i32, bool) {
+fn build_builtin_result(
+    output: String,
+    exit_code: i32,
+    refresh_explorer: bool,
+) -> (crate::tools::ToolResult, String, i32, bool) {
     let output = truncate_builtin_output(output);
     let content = output.trim_end_matches('\n').to_string();
     let result = if exit_code == 0 {
@@ -215,20 +230,36 @@ fn build_builtin_result(output: String, exit_code: i32, refresh_explorer: bool) 
             content
         })
     };
-    (result, output, exit_code, refresh_explorer && exit_code == 0)
+    (
+        result,
+        output,
+        exit_code,
+        refresh_explorer && exit_code == 0,
+    )
 }
 
 fn copy_directory_recursive(src: &Path, dest: &Path) -> Result<(), String> {
-    fs::create_dir_all(dest).map_err(|e| format!("failed to create directory {} ({})", dest.display(), e))?;
+    fs::create_dir_all(dest)
+        .map_err(|e| format!("failed to create directory {} ({})", dest.display(), e))?;
 
     let read_dir = fs::read_dir(src)
         .map_err(|e| format!("failed to read directory {} ({})", src.display(), e))?;
     for entry in read_dir {
-        let entry = entry.map_err(|e| format!("failed to read directory entry in {} ({})", src.display(), e))?;
+        let entry = entry.map_err(|e| {
+            format!(
+                "failed to read directory entry in {} ({})",
+                src.display(),
+                e
+            )
+        })?;
         let source_path = entry.path();
         let dest_path = dest.join(entry.file_name());
         let file_type = entry.file_type().map_err(|e| {
-            format!("failed to read file type for {} ({})", source_path.display(), e)
+            format!(
+                "failed to read file type for {} ({})",
+                source_path.display(),
+                e
+            )
         })?;
 
         if file_type.is_dir() {
@@ -291,7 +322,25 @@ fn parse_simple_builtin_command(command: &str) -> Option<(String, Vec<String>)> 
     if trimmed.is_empty() {
         return None;
     }
-    if trimmed.chars().any(|c| matches!(c, '|' | '&' | ';' | '>' | '<' | '$' | '(' | ')' | '{' | '}' | '`' | '\'' | '"' | '\n' | '\r')) {
+    if trimmed.chars().any(|c| {
+        matches!(
+            c,
+            '|' | '&'
+                | ';'
+                | '>'
+                | '<'
+                | '$'
+                | '('
+                | ')'
+                | '{'
+                | '}'
+                | '`'
+                | '\''
+                | '"'
+                | '\n'
+                | '\r'
+        )
+    }) {
         return None;
     }
     let mut parts = trimmed.split_whitespace();
@@ -348,7 +397,8 @@ fn try_execute_builtin_command(
                 let read_dir = match fs::read_dir(&target) {
                     Ok(read_dir) => read_dir,
                     Err(err) => {
-                        let message = format!("failed to list directory {} ({})", target.display(), err);
+                        let message =
+                            format!("failed to list directory {} ({})", target.display(), err);
                         return Some(build_builtin_result(message, 1, false));
                     }
                 };
@@ -398,7 +448,8 @@ fn try_execute_builtin_command(
                 let bytes = match fs::read(&resolved) {
                     Ok(bytes) => bytes,
                     Err(err) => {
-                        let message = format!("failed to read file {} ({})", resolved.display(), err);
+                        let message =
+                            format!("failed to read file {} ({})", resolved.display(), err);
                         return Some(build_builtin_result(message, 1, false));
                     }
                 };
@@ -428,17 +479,19 @@ fn try_execute_builtin_command(
 
             let mut output = String::new();
             for path in paths {
-                let target = match resolve_workspace_path_allow_missing(&workspace_root, &dir, &path) {
-                    Ok(path) => path,
-                    Err(err) => return Some(build_builtin_result(err, 1, false)),
-                };
+                let target =
+                    match resolve_workspace_path_allow_missing(&workspace_root, &dir, &path) {
+                        Ok(path) => path,
+                        Err(err) => return Some(build_builtin_result(err, 1, false)),
+                    };
                 let result = if create_parents {
                     fs::create_dir_all(&target)
                 } else {
                     fs::create_dir(&target)
                 };
                 if let Err(err) = result {
-                    let message = format!("failed to create directory {} ({})", target.display(), err);
+                    let message =
+                        format!("failed to create directory {} ({})", target.display(), err);
                     return Some(build_builtin_result(message, 1, false));
                 }
                 output.push_str(&format!("created directory {}\n", target.display()));
@@ -466,14 +519,19 @@ fn try_execute_builtin_command(
                 Ok(path) => path,
                 Err(err) => return Some(build_builtin_result(err, 1, false)),
             };
-            let dest = match resolve_workspace_path_allow_missing(&workspace_root, &dir, &paths[1]) {
+            let dest = match resolve_workspace_path_allow_missing(&workspace_root, &dir, &paths[1])
+            {
                 Ok(path) => path,
                 Err(err) => return Some(build_builtin_result(err, 1, false)),
             };
 
             let final_dest = if dest.exists() && dest.is_dir() {
                 let Some(file_name) = source.file_name() else {
-                    return Some(build_builtin_result("cp source has no file name".to_string(), 1, false));
+                    return Some(build_builtin_result(
+                        "cp source has no file name".to_string(),
+                        1,
+                        false,
+                    ));
                 };
                 dest.join(file_name)
             } else {
@@ -498,7 +556,11 @@ fn try_execute_builtin_command(
                     return Some(build_builtin_result(message, 1, false));
                 }
                 if final_dest.exists() && final_dest.is_file() {
-                    let message = format!("cannot overwrite file {} with directory {}", final_dest.display(), source.display());
+                    let message = format!(
+                        "cannot overwrite file {} with directory {}",
+                        final_dest.display(),
+                        source.display()
+                    );
                     return Some(build_builtin_result(message, 1, false));
                 }
                 if let Err(err) = copy_directory_recursive(&source, &final_dest) {
@@ -507,12 +569,18 @@ fn try_execute_builtin_command(
             } else {
                 if let Some(parent) = final_dest.parent() {
                     if let Err(err) = fs::create_dir_all(parent) {
-                        let message = format!("failed to create directory {} ({})", parent.display(), err);
+                        let message =
+                            format!("failed to create directory {} ({})", parent.display(), err);
                         return Some(build_builtin_result(message, 1, false));
                     }
                 }
                 if let Err(err) = fs::copy(&source, &final_dest) {
-                    let message = format!("failed to copy {} to {} ({})", source.display(), final_dest.display(), err);
+                    let message = format!(
+                        "failed to copy {} to {} ({})",
+                        source.display(),
+                        final_dest.display(),
+                        err
+                    );
                     return Some(build_builtin_result(message, 1, false));
                 }
             }
@@ -538,7 +606,11 @@ fn try_execute_builtin_command(
             };
             let final_dest = if dest.exists() && dest.is_dir() {
                 let Some(file_name) = source.file_name() else {
-                    return Some(build_builtin_result("mv source has no file name".to_string(), 1, false));
+                    return Some(build_builtin_result(
+                        "mv source has no file name".to_string(),
+                        1,
+                        false,
+                    ));
                 };
                 dest.join(file_name)
             } else {
@@ -560,12 +632,18 @@ fn try_execute_builtin_command(
 
             if let Some(parent) = final_dest.parent() {
                 if let Err(err) = fs::create_dir_all(parent) {
-                    let message = format!("failed to create directory {} ({})", parent.display(), err);
+                    let message =
+                        format!("failed to create directory {} ({})", parent.display(), err);
                     return Some(build_builtin_result(message, 1, false));
                 }
             }
             if let Err(err) = fs::rename(&source, &final_dest) {
-                let message = format!("failed to move {} to {} ({})", source.display(), final_dest.display(), err);
+                let message = format!(
+                    "failed to move {} to {} ({})",
+                    source.display(),
+                    final_dest.display(),
+                    err
+                );
                 return Some(build_builtin_result(message, 1, false));
             }
 
@@ -582,10 +660,11 @@ fn try_execute_builtin_command(
 
             let mut output = String::new();
             for path in paths {
-                let target = match resolve_workspace_path_allow_missing(&workspace_root, &dir, &path) {
-                    Ok(path) => path,
-                    Err(err) => return Some(build_builtin_result(err, 1, false)),
-                };
+                let target =
+                    match resolve_workspace_path_allow_missing(&workspace_root, &dir, &path) {
+                        Ok(path) => path,
+                        Err(err) => return Some(build_builtin_result(err, 1, false)),
+                    };
 
                 if !target.exists() {
                     if force {
@@ -598,19 +677,27 @@ fn try_execute_builtin_command(
                 let target = match fs::canonicalize(&target) {
                     Ok(path) => path,
                     Err(err) => {
-                        let message = format!("path does not exist or is inaccessible: {} ({})", target.display(), err);
+                        let message = format!(
+                            "path does not exist or is inaccessible: {} ({})",
+                            target.display(),
+                            err
+                        );
                         return Some(build_builtin_result(message, 1, false));
                     }
                 };
 
                 if target == workspace_root {
-                    let message = format!("refusing to remove workspace root: {}", target.display());
+                    let message =
+                        format!("refusing to remove workspace root: {}", target.display());
                     return Some(build_builtin_result(message, 1, false));
                 }
 
                 let result = if target.is_dir() {
                     if !recursive {
-                        let message = format!("{} is a directory (use -r to remove directories)", target.display());
+                        let message = format!(
+                            "{} is a directory (use -r to remove directories)",
+                            target.display()
+                        );
                         return Some(build_builtin_result(message, 1, false));
                     }
                     fs::remove_dir_all(&target)
@@ -778,9 +865,10 @@ pub fn approve_tool<R: Runtime>(approved: bool, window: Window<R>, state: State<
                             "User skipped this command: '{}'. Do NOT retry this command or similar commands. Ask the user how they would like to proceed instead.",
                             cmd.command
                         );
-                        batch
-                            .file_results
-                            .push((cmd.call.clone(), crate::tools::ToolResult::skipped(&skip_msg)));
+                        batch.file_results.push((
+                            cmd.call.clone(),
+                            crate::tools::ToolResult::skipped(&skip_msg),
+                        ));
                     }
                 }
                 for conf in &batch.confirms {
@@ -793,9 +881,10 @@ pub fn approve_tool<R: Runtime>(approved: bool, window: Window<R>, state: State<
                             "User skipped this action: '{}'. Do NOT retry this action. Ask the user how they would like to proceed instead.",
                             conf.description
                         );
-                        batch
-                            .file_results
-                            .push((conf.call.clone(), crate::tools::ToolResult::skipped(&skip_msg)));
+                        batch.file_results.push((
+                            conf.call.clone(),
+                            crate::tools::ToolResult::skipped(&skip_msg),
+                        ));
                     }
                 }
             }
@@ -869,12 +958,17 @@ pub fn approve_single_command<R: Runtime>(
             .clone()
             .map(|p| p.to_string_lossy().to_string())
     };
-    
+
     {
         let mut batch_guard = state.pending_batch.lock().unwrap();
         if let Some(batch) = batch_guard.as_mut() {
             // Find the command by call_id
-            if let Some(cmd) = batch.commands.iter().find(|c| c.call.id == call_id).cloned() {
+            if let Some(cmd) = batch
+                .commands
+                .iter()
+                .find(|c| c.call.id == call_id)
+                .cloned()
+            {
                 // Check if result already exists
                 if !batch.file_results.iter().any(|(c, _)| c.id == call_id) {
                     if approved {
@@ -927,7 +1021,7 @@ pub fn approve_single_command<R: Runtime>(
                             cmd.call.clone(),
                             crate::tools::ToolResult::skipped(&error_msg),
                         ));
-                        
+
                         // Emit tool-execution-completed for UI update
                         let _ = app_handle.emit(
                             "tool-execution-completed",
@@ -943,7 +1037,7 @@ pub fn approve_single_command<R: Runtime>(
             }
         }
     }
-    
+
     // Check if all commands have been processed
     check_batch_completion(&*state);
 }
@@ -958,7 +1052,7 @@ pub fn submit_command_result(
 ) -> Result<(), String> {
     // Strip ANSI codes from output for clean display in chat and AI context
     let clean_output = strip_ansi_codes(&output);
-    
+
     let mut batch_guard = state.pending_batch.lock().unwrap();
     if let Some(batch) = batch_guard.as_mut() {
         // Find the command by call_id
@@ -983,23 +1077,15 @@ pub fn submit_command_result(
                     let error_msg = if clean_output.trim().is_empty() {
                         format!("Command failed with exit code {} (no output)", exit_code)
                     } else {
-                        format!("Command failed with exit code {}:\n{}", exit_code, &clean_output)
+                        format!(
+                            "Command failed with exit code {}:\n{}",
+                            exit_code, &clean_output
+                        )
                     };
                     crate::tools::ToolResult::err(error_msg)
                 };
                 let is_skipped = result.skipped;
                 batch.file_results.push((cmd.call.clone(), result));
-
-                // Emit tool-execution-completed event for UI to update status
-                let _ = app_handle.emit(
-                    "tool-execution-completed",
-                    events::ToolExecutionCompletedPayload {
-                        tool_name: "run_command".to_string(),
-                        tool_call_id: call_id.clone(),
-                        success: exit_code == 0,
-                        skipped: is_skipped,
-                    },
-                );
 
                 // Emit command-executed event with RAW output for UI display
                 // (ansi-to-react will render ANSI color codes)
@@ -1012,6 +1098,18 @@ pub fn submit_command_result(
                         exit_code,
                         duration: None,
                         call_id: call_id.clone(),
+                    },
+                );
+
+                // Emit tool-execution-completed after the command payload so the
+                // frontend can associate completion with the rendered execution block.
+                let _ = app_handle.emit(
+                    "tool-execution-completed",
+                    events::ToolExecutionCompletedPayload {
+                        tool_name: "run_command".to_string(),
+                        tool_call_id: call_id.clone(),
+                        success: exit_code == 0,
+                        skipped: is_skipped,
                     },
                 );
             }
@@ -1145,7 +1243,10 @@ mod tests {
         assert!(result.success);
         assert_eq!(exit_code, 0);
         assert!(refresh_explorer);
-        assert_eq!(fs::read_to_string(dir.path().join("dest.txt")).expect("read dest"), "copy me");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("dest.txt")).expect("read dest"),
+            "copy me"
+        );
     }
 
     #[test]
@@ -1177,7 +1278,10 @@ mod tests {
         assert_eq!(exit_code, 0);
         assert!(refresh_explorer);
         assert!(!dir.path().join("before.txt").exists());
-        assert_eq!(fs::read_to_string(dir.path().join("after.txt")).expect("read dest"), "move me");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("after.txt")).expect("read dest"),
+            "move me"
+        );
     }
 
     #[test]

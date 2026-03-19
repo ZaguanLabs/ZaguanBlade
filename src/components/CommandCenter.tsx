@@ -25,34 +25,24 @@ import { detectComposerTrigger, replaceTextRange } from '../utils/composerTrigge
 const COMMANDS = [
     { 
         name: 'web', 
-        description: 'Send link to model',
-        tooltip: 'Fetches content from a URL and uses it as information to help the model make better decisions',
         icon: Globe 
     },
     { 
         name: 'research', 
-        description: 'Research any topic',
-        tooltip: 'Performs deep research on a topic and displays results in a new tab once complete',
         icon: BookOpen 
     },
 ];
 
 const CHAT_MODE_OPTIONS: Array<{
     value: ChatMode;
-    label: string;
-    description: string;
     icon: typeof Code2;
 }> = [
     {
         value: 'code',
-        label: 'Code',
-        description: 'Implement and execute',
         icon: Code2,
     },
     {
         value: 'planning',
-        label: 'Planning',
-        description: 'Investigate and plan first',
         icon: MapIcon,
     },
 ];
@@ -104,6 +94,24 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
     onPrefillConsumed,
 }) => {
     const { t } = useTranslation();
+    const commandOptions = useMemo(() => COMMANDS.map((command) => ({
+        ...command,
+        description: command.name === 'web'
+            ? t('chat.commands.webDescription')
+            : t('chat.commands.researchDescription'),
+        tooltip: command.name === 'web'
+            ? t('chat.commands.webTooltip')
+            : t('chat.commands.researchTooltip'),
+    })), [t]);
+    const chatModeOptions = useMemo(() => CHAT_MODE_OPTIONS.map((option) => ({
+        ...option,
+        label: option.value === 'code'
+            ? t('chat.mode.codeLabel')
+            : t('chat.mode.planningLabel'),
+        description: option.value === 'code'
+            ? t('chat.mode.codeDescription')
+            : t('chat.mode.planningDescription'),
+    })), [t]);
     const [text, setText] = useState('');
     const [showSuggestions, setShowSuggestions] = useState(false);
     const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(0);
@@ -162,10 +170,10 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
         [selectedPathMentions, text]
     );
     const filteredCommands = useMemo(() =>
-        COMMANDS.filter(cmd =>
+        commandOptions.filter(cmd =>
             cmd.name.toLowerCase().startsWith(mentionQuery.toLowerCase())
         ),
-    [mentionQuery]);
+    [commandOptions, mentionQuery]);
     const suggestions = useMemo<ComposerSuggestion[]>(() => {
         const commandSuggestions: ComposerSuggestion[] = filteredCommands.map((cmd) => ({
             kind: 'command',
@@ -751,7 +759,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                     ? 'border-sky-500/25 bg-[var(--bg-app)]/70'
                                     : 'border-[var(--border-subtle)] bg-[var(--bg-app)]/70'
                                     }`}>
-                                    {CHAT_MODE_OPTIONS.map((option) => {
+                                    {chatModeOptions.map((option) => {
                                         const Icon = option.icon;
                                         const isActive = option.value === chatMode;
                                         return (
@@ -807,7 +815,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                             <FileText className="h-3 w-3 shrink-0" />
                                         )}
                                         <span className="font-medium uppercase tracking-[0.12em] text-emerald-400/80">
-                                            Ref
+                                            {t('chat.pathRef')}
                                         </span>
                                         <span className="truncate text-zinc-200">
                                             {mention.path}
@@ -867,7 +875,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                             </div>
                                             <div className="min-w-0 flex-1">
                                                 <span className="block truncate text-[10px] font-semibold">@{suggestion.path}</span>
-                                                <span className="text-[9px] text-[var(--fg-tertiary)]">{suggestion.isDir ? 'Folder' : 'File'}</span>
+                                                <span className="text-[9px] text-[var(--fg-tertiary)]">{suggestion.isDir ? t('chat.pathType.folder') : t('chat.pathType.file')}</span>
                                             </div>
                                         </button>
                                     );
@@ -888,7 +896,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                 onChange={handleTextChange}
                                 onPaste={handlePaste}
                                 onKeyDown={handleKeyDown}
-                                placeholder={chatMode === 'planning' ? 'Investigate the codebase, ask clarifying questions, and build a concrete plan before coding… (Ctrl-L to focus)' : `${t('chat.inputPlaceholder')} (Ctrl-L to focus)`}
+                                placeholder={chatMode === 'planning' ? `${t('chat.planningPlaceholder')} (Ctrl-L to focus)` : `${t('chat.inputPlaceholder')} (Ctrl-L to focus)`}
                                 className="relative z-10 min-h-[88px] max-h-[360px] w-full resize-none overflow-y-auto bg-transparent px-3 pb-3 pt-2.5 pr-14 text-[13px] font-medium leading-6 text-[var(--fg-primary)] outline-none placeholder-[var(--fg-tertiary)]"
                                 rows={1}
                                 disabled={disabled}

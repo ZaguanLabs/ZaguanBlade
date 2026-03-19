@@ -66,9 +66,11 @@ impl EnvironmentInfo {
         // For AppImage: Use OWD (Original Working Directory) if available.
         // AppImages change CWD to their mount point (/tmp/.mount_XXX/usr),
         // but preserve the original directory in OWD.
-        let working_dir = env::var("OWD")
-            .ok()
-            .or_else(|| env::current_dir().ok().map(|p| p.to_string_lossy().to_string()));
+        let working_dir = env::var("OWD").ok().or_else(|| {
+            env::current_dir()
+                .ok()
+                .map(|p| p.to_string_lossy().to_string())
+        });
 
         // Check for available tools
         let has_git = check_command_exists("git");
@@ -166,10 +168,7 @@ fn detect_os_version() -> Option<String> {
     #[cfg(target_os = "windows")]
     {
         // Use systeminfo or registry
-        if let Ok(output) = Command::new("cmd")
-            .args(["/C", "ver"])
-            .output()
-        {
+        if let Ok(output) = Command::new("cmd").args(["/C", "ver"]).output() {
             if output.status.success() {
                 let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 return Some(version);
@@ -191,7 +190,9 @@ fn detect_shell() -> Option<String> {
     }
     #[cfg(windows)]
     {
-        env::var("COMSPEC").ok().or_else(|| Some("powershell".to_string()))
+        env::var("COMSPEC")
+            .ok()
+            .or_else(|| Some("powershell".to_string()))
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -338,10 +339,7 @@ mod tests {
     #[test]
     fn test_extract_version() {
         assert_eq!(extract_version("v20.10.0"), Some("20.10.0".to_string()));
-        assert_eq!(
-            extract_version("Python 3.11.4"),
-            Some("3.11.4".to_string())
-        );
+        assert_eq!(extract_version("Python 3.11.4"), Some("3.11.4".to_string()));
         assert_eq!(
             extract_version("go version go1.22.0 linux/amd64"),
             Some("1.22.0".to_string())

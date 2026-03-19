@@ -5,12 +5,18 @@ pub fn check_batch_completion(state: &AppState) {
     if let Some(batch) = batch_guard.as_mut() {
         // Check if all COMMANDS have results (not all calls - some calls are auto-executed)
         let all_commands_done = batch.commands.iter().all(|cmd| {
-            batch.file_results.iter().any(|(res_call, _)| res_call.id == cmd.call.id)
+            batch
+                .file_results
+                .iter()
+                .any(|(res_call, _)| res_call.id == cmd.call.id)
         });
-        
+
         // Check if all CONFIRMS have results
         let all_confirms_done = batch.confirms.iter().all(|conf| {
-            batch.file_results.iter().any(|(res_call, _)| res_call.id == conf.call.id)
+            batch
+                .file_results
+                .iter()
+                .any(|(res_call, _)| res_call.id == conf.call.id)
         });
 
         // Batch is complete when all pending items (commands + confirms) have results

@@ -10,7 +10,14 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 fn extract_explicit_output_path(message: &str) -> Option<String> {
     message
         .split_whitespace()
-        .map(|token| token.trim_matches(|c: char| matches!(c, '`' | '"' | '\'' | ',' | '.' | ':' | ';' | ')' | '(' | '[' | ']')))
+        .map(|token| {
+            token.trim_matches(|c: char| {
+                matches!(
+                    c,
+                    '`' | '"' | '\'' | ',' | '.' | ':' | ';' | ')' | '(' | '[' | ']'
+                )
+            })
+        })
         .find(|token| token.contains('/') && token.contains('.'))
         .map(|token| token.to_string())
 }
@@ -47,9 +54,16 @@ fn should_allow_planning_artifact_write(mode: Option<&str>, message: &str) -> Op
     let requests_write = ["write", "create", "save", "put"]
         .iter()
         .any(|verb| lowercase.contains(verb));
-    let requests_plan_artifact = ["plan", "implementation plan", "roadmap", "spec", "specification", "design doc"]
-        .iter()
-        .any(|keyword| lowercase.contains(keyword));
+    let requests_plan_artifact = [
+        "plan",
+        "implementation plan",
+        "roadmap",
+        "spec",
+        "specification",
+        "design doc",
+    ]
+    .iter()
+    .any(|keyword| lowercase.contains(keyword));
     if !requests_write || !requests_plan_artifact {
         return None;
     }
@@ -196,12 +210,13 @@ pub async fn handle_send_message<R: Runtime>(
             .join(", ");
         actual_message = format!(
             "[SYSTEM NOTE: The user explicitly referenced these workspace paths: {}]\n\n{}",
-            mention_preview,
-            actual_message
+            mention_preview, actual_message
         );
     }
 
-    let effective_mode = if let Some(output_path) = should_allow_planning_artifact_write(mode.as_deref(), actual_message.as_str()) {
+    let effective_mode = if let Some(output_path) =
+        should_allow_planning_artifact_write(mode.as_deref(), actual_message.as_str())
+    {
         actual_message = format!(
             "[SYSTEM NOTE: The user explicitly requested a planning artifact to be written to {}. You may create or update that planning/documentation file while staying focused on planning. Avoid unrelated source-code edits unless the user also asked for implementation.]\n\n{}",
             output_path,
@@ -221,13 +236,14 @@ pub async fn handle_send_message<R: Runtime>(
         .map(|path| normalize_to_workspace(path))
         .collect::<Vec<_>>();
     for mention in normalized_mentions.iter().filter(|mention| !mention.is_dir) {
-        if !effective_open_files.iter().any(|path| path == &mention.path) {
+        if !effective_open_files
+            .iter()
+            .any(|path| path == &mention.path)
+        {
             effective_open_files.insert(0, mention.path.clone());
         }
     }
-    let mut effective_active_file = active_file
-        .clone()
-        .map(|path| normalize_to_workspace(path));
+    let mut effective_active_file = active_file.clone().map(|path| normalize_to_workspace(path));
     if effective_active_file.is_none() {
         effective_active_file = normalized_mentions
             .iter()
@@ -328,8 +344,7 @@ pub async fn handle_send_message<R: Runtime>(
         *state
             .selection_end_line
             .lock()
-            .map_err(|e| format!("Failed to lock selection_end_line: {}", e))? =
-            selection_end_line;
+            .map_err(|e| format!("Failed to lock selection_end_line: {}", e))? = selection_end_line;
     }
 
     // 1. Add User Message
@@ -548,7 +563,8 @@ pub async fn handle_send_message<R: Runtime>(
                         // RFC-002: Also save to local artifacts if in local storage mode
                         let workspace = state.workspace.lock().unwrap();
                         if let Some(ref ws_path) = workspace.workspace {
-                            let settings = project_settings::load_project_settings_or_default(ws_path);
+                            let settings =
+                                project_settings::load_project_settings_or_default(ws_path);
                             if settings.storage.mode == project_settings::StorageMode::Local {
                                 // Convert to local artifact format
                                 let project_id = crate::project::get_or_create_project_id(ws_path)
@@ -637,7 +653,11 @@ pub async fn handle_send_message<R: Runtime>(
                 let seq = mgr.message_seq;
                 mgr.message_seq += 1;
                 drop(mgr);
-                let msg_id = if msg_id.is_empty() { "streaming-msg".to_string() } else { msg_id };
+                let msg_id = if msg_id.is_empty() {
+                    "streaming-msg".to_string()
+                } else {
+                    msg_id
+                };
 
                 // 2. Emit Blade v1.1 MessageDelta
                 let _ = window.emit(
@@ -664,7 +684,11 @@ pub async fn handle_send_message<R: Runtime>(
                 let seq = mgr.message_seq;
                 mgr.message_seq += 1;
                 drop(mgr);
-                let msg_id = if msg_id.is_empty() { "streaming-msg".to_string() } else { msg_id };
+                let msg_id = if msg_id.is_empty() {
+                    "streaming-msg".to_string()
+                } else {
+                    msg_id
+                };
 
                 let _ = window.emit(
                     "blade-event",
@@ -830,9 +854,20 @@ pub async fn handle_send_message<R: Runtime>(
                         ),
                     },
                 );
-            } else if let DrainResult::ContextLengthExceeded { message, token_count, max_tokens, excess, recoverable, recovery_hint } = result {
+            } else if let DrainResult::ContextLengthExceeded {
+                message,
+                token_count,
+                max_tokens,
+                excess,
+                recoverable,
+                recovery_hint,
+            } = result
+            {
                 // RFC: Context Length Recovery - emit context-length-exceeded event to frontend
-                eprintln!("[LIB] Context length exceeded: {} (tokens: {:?}/{:?})", message, token_count, max_tokens);
+                eprintln!(
+                    "[LIB] Context length exceeded: {} (tokens: {:?}/{:?})",
+                    message, token_count, max_tokens
+                );
                 let _ = window.emit(
                     "context-length-exceeded",
                     serde_json::json!({
@@ -844,9 +879,16 @@ pub async fn handle_send_message<R: Runtime>(
                         "recovery_hint": recovery_hint,
                     }),
                 );
-            } else if let DrainResult::MessageTooLarge { message, recovery_hint } = result {
+            } else if let DrainResult::MessageTooLarge {
+                message,
+                recovery_hint,
+            } = result
+            {
                 // Message size limit exceeded - emit as chat-error (reliable) + store recovery hint
-                eprintln!("[LIB] Message too large: {} (hint: {})", message, recovery_hint);
+                eprintln!(
+                    "[LIB] Message too large: {} (hint: {})",
+                    message, recovery_hint
+                );
                 let error_text = format!("⚠️ Response too large: {} — {}", message, recovery_hint);
                 window.emit("chat-error", &error_text).unwrap_or_default();
                 // Store recovery hint so it gets prepended to the next user message
@@ -1040,9 +1082,15 @@ pub async fn handle_send_message<R: Runtime>(
                                 });
                             }
                             if !actions.is_empty() {
-                                eprintln!("[ORCHESTRATOR] Emitting request-confirmation with {} actions", actions.len());
+                                eprintln!(
+                                    "[ORCHESTRATOR] Emitting request-confirmation with {} actions",
+                                    actions.len()
+                                );
                                 for action in &actions {
-                                    eprintln!("[ORCHESTRATOR]   - action: {} (id={})", action.command, action.id);
+                                    eprintln!(
+                                        "[ORCHESTRATOR]   - action: {} (id={})",
+                                        action.command, action.id
+                                    );
                                 }
                                 window
                                     .emit(
@@ -1124,7 +1172,10 @@ pub async fn handle_send_message<R: Runtime>(
                                                 path.to_string()
                                             }
                                         };
-                                        eprintln!("[AUTO OPEN] Opening file in editor: {}", abs_path);
+                                        eprintln!(
+                                            "[AUTO OPEN] Opening file in editor: {}",
+                                            abs_path
+                                        );
                                         window.emit("open-file", &abs_path).unwrap_or_default();
                                     }
                                 }
@@ -1140,7 +1191,9 @@ pub async fn handle_send_message<R: Runtime>(
                         !mgr.streaming && mgr.rx.is_none()
                     };
                     if user_stopped {
-                        eprintln!("[ORCHESTRATOR] User requested stop — skipping continue_tool_batch");
+                        eprintln!(
+                            "[ORCHESTRATOR] User requested stop — skipping continue_tool_batch"
+                        );
                         // Fall through to let the loop break naturally on next iteration
                     } else if batch.loop_detected {
                         // Check if loop was detected - if so, stop the agentic loop

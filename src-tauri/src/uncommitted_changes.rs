@@ -305,6 +305,9 @@ mod tests {
             added >= 10,
             "expected multi-line insertion to be represented in unified diff, got {added} added lines. diff:\n{diff}"
         );
-        assert_eq!(removed, 0, "insertion-only change should not remove lines. diff:\n{diff}");
+        assert_eq!(
+            removed, 0,
+            "insertion-only change should not remove lines. diff:\n{diff}"
+        );
     }
 }

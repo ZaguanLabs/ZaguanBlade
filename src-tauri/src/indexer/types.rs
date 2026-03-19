@@ -156,18 +156,24 @@ impl DirectoryTree {
 }
 
 pub static CODE_EXTENSIONS: &[&str] = &[
-    "go", "rs", "py", "js", "ts", "tsx", "jsx",
-    "java", "c", "cpp", "h", "hpp", "cs",
-    "rb", "php", "swift", "kt", "scala",
-    "vue", "svelte", "sql", "sh", "bash", "zsh",
-    "yaml", "yml", "toml", "json", "xml",
-    "html", "css", "scss", "less", "md",
+    "go", "rs", "py", "js", "ts", "tsx", "jsx", "java", "c", "cpp", "h", "hpp", "cs", "rb", "php",
+    "swift", "kt", "scala", "vue", "svelte", "sql", "sh", "bash", "zsh", "yaml", "yml", "toml",
+    "json", "xml", "html", "css", "scss", "less", "md",
 ];
 
 pub static SKIP_DIRS: &[&str] = &[
-    "node_modules", "vendor", "dist", "build",
-    "__pycache__", ".git", ".zblade", "target",
-    ".next", ".nuxt", ".output", "coverage",
+    "node_modules",
+    "vendor",
+    "dist",
+    "build",
+    "__pycache__",
+    ".git",
+    ".zblade",
+    "target",
+    ".next",
+    ".nuxt",
+    ".output",
+    "coverage",
 ];
 
 pub fn is_code_file(path: &PathBuf) -> bool {

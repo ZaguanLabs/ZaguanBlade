@@ -91,7 +91,11 @@ fn path_match_rank(query: &str, rel_path: &str) -> Option<(u8, usize, usize)> {
 
     let query_lower = query.to_lowercase();
     let path_lower = rel_path.to_lowercase();
-    let file_name = rel_path.rsplit('/').next().unwrap_or(rel_path).to_lowercase();
+    let file_name = rel_path
+        .rsplit('/')
+        .next()
+        .unwrap_or(rel_path)
+        .to_lowercase();
 
     if file_name.starts_with(&query_lower) {
         return Some((0, rel_path.len(), rel_path.matches('/').count()));
@@ -128,7 +132,10 @@ pub fn search_workspace_paths_logic(
         .into_iter()
         .filter_entry(|entry| {
             let name = entry.file_name().to_string_lossy();
-            !matches!(name.as_ref(), ".git" | "node_modules" | "target" | "dist" | "build" | ".zblade")
+            !matches!(
+                name.as_ref(),
+                ".git" | "node_modules" | "target" | "dist" | "build" | ".zblade"
+            )
         })
         .filter_map(Result::ok)
     {
@@ -150,10 +157,13 @@ pub fn search_workspace_paths_logic(
             continue;
         };
 
-        matches.push((rank, WorkspacePathMatch {
-            path: rel,
-            is_dir: entry.file_type().is_dir(),
-        }));
+        matches.push((
+            rank,
+            WorkspacePathMatch {
+                path: rel,
+                is_dir: entry.file_type().is_dir(),
+            },
+        ));
     }
 
     matches.sort_by(|(left_rank, left_match), (right_rank, right_match)| {
@@ -163,7 +173,10 @@ pub fn search_workspace_paths_logic(
     });
     matches.truncate(max_results);
 
-    Ok(matches.into_iter().map(|(_, path_match)| path_match).collect())
+    Ok(matches
+        .into_iter()
+        .map(|(_, path_match)| path_match)
+        .collect())
 }
 
 pub async fn open_workspace_logic(
@@ -204,7 +217,8 @@ pub async fn open_workspace_logic(
 
     // History service (<workspace>/.zblade/history)
     {
-        let new_history = std::sync::Arc::new(crate::history::HistoryService::new(&project_data_dir));
+        let new_history =
+            std::sync::Arc::new(crate::history::HistoryService::new(&project_data_dir));
         *state.history_service.write().unwrap() = new_history;
     }
 
@@ -346,10 +360,7 @@ pub async fn write_file_content(
 }
 
 #[tauri::command]
-pub async fn open_file_in_editor(
-    path: String,
-    window: tauri::Window,
-) -> Result<(), String> {
+pub async fn open_file_in_editor(path: String, window: tauri::Window) -> Result<(), String> {
     // Emit the open-file event to trigger the frontend to open the file
     window.emit("open-file", &path).map_err(|e| e.to_string())?;
     Ok(())
@@ -362,10 +373,8 @@ mod tests {
     #[test]
     fn resolve_path_blocks_parent_traversal() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let res = resolve_path_under_workspace_root(
-            dir.path(),
-            std::path::Path::new("../../etc/passwd"),
-        );
+        let res =
+            resolve_path_under_workspace_root(dir.path(), std::path::Path::new("../../etc/passwd"));
         assert!(res.is_err());
     }
 
@@ -380,11 +389,9 @@ mod tests {
     #[test]
     fn resolve_path_allows_in_workspace_path() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let resolved = resolve_path_under_workspace_root(
-            dir.path(),
-            std::path::Path::new("src/main.rs"),
-        )
-        .expect("path should resolve");
+        let resolved =
+            resolve_path_under_workspace_root(dir.path(), std::path::Path::new("src/main.rs"))
+                .expect("path should resolve");
         assert!(resolved.starts_with(dir.path()));
         assert!(resolved.ends_with("src/main.rs"));
     }

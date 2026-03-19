@@ -52,7 +52,8 @@ impl FeatureFlags {
     }
 
     pub fn set_editor_backend_authority(&self, value: bool) {
-        self.editor_backend_authority.store(value, Ordering::Relaxed);
+        self.editor_backend_authority
+            .store(value, Ordering::Relaxed);
     }
 
     // Tabs authority

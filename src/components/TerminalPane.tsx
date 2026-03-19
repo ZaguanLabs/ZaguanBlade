@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, forwardRef, useImperativeHandle, useCallback } from "react";
-import Terminal from "./Terminal";
+import { Terminal } from "./Terminal";
 import { Plus, X, Terminal as TerminalIcon } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";

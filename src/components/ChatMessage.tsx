@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { ChatMessage as ChatMessageType, ChatImage, ImageAttachment } from '../types/chat';
 import { User, Bot, Terminal, Brain, ChevronDown, ChevronRight, Loader2, Copy, RotateCcw, Pencil, MessageSquare, Check, FileText, Folder } from 'lucide-react';
 import { ToolCallDisplay } from './ToolCallDisplay';
@@ -191,6 +192,7 @@ const ReferencedPathsDisplay: React.FC<{
     mentions: NonNullable<ChatMessageType['mentions']>;
     onOpenFile?: (path: string) => void;
 }> = ({ mentions, onOpenFile }) => {
+    const { t } = useTranslation();
     if (mentions.length === 0) {
         return null;
     }
@@ -198,7 +200,7 @@ const ReferencedPathsDisplay: React.FC<{
     return (
         <div className="mb-2 overflow-hidden rounded-lg border border-emerald-500/15 bg-emerald-500/6">
             <div className="flex items-center gap-2 border-b border-emerald-500/10 px-3 py-1.5 text-[10px] text-emerald-300/90">
-                <span className="font-semibold uppercase tracking-[0.16em]">Referenced paths</span>
+                <span className="font-semibold uppercase tracking-[0.16em]">{t('chat.referencedPaths')}</span>
                 <span className="text-emerald-400/60">{mentions.length}</span>
             </div>
             <div className="flex flex-wrap gap-1.5 px-3 py-2">
@@ -345,6 +347,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     onStopCommand,
     onOpenFile,
 }) => {
+    const { t } = useTranslation();
     const isUser = message.role === 'User';
     const isSystem = message.role === 'System';
     const isTool = message.role === 'Tool';
@@ -486,7 +489,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
         const items: ContextMenuItem[] = [
             {
                 id: 'copy-message',
-                label: 'Copy Message',
+                label: t('chat.contextMenu.copyMessage'),
                 icon: <Copy className="w-4 h-4" />,
                 shortcut: 'Ctrl+C',
                 onClick: async () => {
@@ -499,7 +502,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
             },
             {
                 id: 'copy-markdown',
-                label: 'Copy as Markdown',
+                label: t('chat.contextMenu.copyAsMarkdown'),
                 icon: <MessageSquare className="w-4 h-4" />,
                 onClick: async () => {
                     try {
@@ -517,7 +520,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                 { id: 'div-1', label: '', divider: true },
                 {
                     id: 'edit-message',
-                    label: 'Edit Message',
+                    label: t('chat.contextMenu.editMessage'),
                     icon: <Pencil className="w-4 h-4" />,
                     onClick: () => {
                         // TODO: Implement edit message functionality
@@ -531,7 +534,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                 { id: 'div-1', label: '', divider: true },
                 {
                     id: 'regenerate',
-                    label: 'Regenerate Response',
+                    label: t('chat.contextMenu.regenerateResponse'),
                     icon: <RotateCcw className="w-4 h-4" />,
                     onClick: () => {
                         // TODO: Implement regenerate
@@ -541,7 +544,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
         }
 
         showMenu({ x: e.clientX, y: e.clientY }, items);
-    }, [message, isUser, isAssistant, showMenu]);
+    }, [message, isUser, isAssistant, showMenu, t]);
 
     return (
         <div

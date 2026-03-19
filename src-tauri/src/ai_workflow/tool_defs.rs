@@ -379,8 +379,7 @@ pub fn get_tool_definitions_for_model(model_id: &str, composite_tools_enabled: b
     get_tool_definitions()
         .into_iter()
         .filter(|def| {
-            !def
-                .get("name")
+            !def.get("name")
                 .and_then(|v| v.as_str())
                 .map(is_composite_tool)
                 .unwrap_or(false)

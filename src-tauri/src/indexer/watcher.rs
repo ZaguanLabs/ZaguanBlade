@@ -1,10 +1,10 @@
-use crate::indexer::types::{FileMetadata, ProjectIndex, is_code_file};
 use crate::indexer::builder::build_tree;
+use crate::indexer::types::{is_code_file, FileMetadata, ProjectIndex};
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
 use std::sync::mpsc;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 pub struct IndexWatcher {
@@ -14,7 +14,7 @@ pub struct IndexWatcher {
 impl IndexWatcher {
     pub fn new(index: Arc<RwLock<ProjectIndex>>) -> Result<Self, Box<dyn std::error::Error>> {
         let (tx, rx) = mpsc::channel();
-        
+
         let mut watcher = RecommendedWatcher::new(
             move |res: Result<Event, notify::Error>| {
                 if let Ok(event) = res {
@@ -23,30 +23,27 @@ impl IndexWatcher {
             },
             Config::default(),
         )?;
-        
+
         let root = {
             let idx = index.read().unwrap();
             idx.root.clone()
         };
-        
+
         watcher.watch(&root, RecursiveMode::Recursive)?;
-        
+
         std::thread::spawn(move || {
             debounced_update_loop(index, rx);
         });
-        
+
         Ok(Self { _watcher: watcher })
     }
 }
 
-fn debounced_update_loop(
-    index: Arc<RwLock<ProjectIndex>>,
-    rx: mpsc::Receiver<Event>,
-) {
+fn debounced_update_loop(index: Arc<RwLock<ProjectIndex>>, rx: mpsc::Receiver<Event>) {
     let mut pending_changes: HashSet<PathBuf> = HashSet::new();
     let mut last_change = Instant::now();
     let debounce_duration = Duration::from_secs(2);
-    
+
     loop {
         match rx.recv_timeout(Duration::from_millis(500)) {
             Ok(event) => {
@@ -79,7 +76,9 @@ fn is_in_skip_dir(path: &PathBuf) -> bool {
 }
 
 fn extract_paths(event: &Event) -> Vec<PathBuf> {
-    event.paths.iter()
+    event
+        .paths
+        .iter()
         .filter(|p| is_code_file(p) && !is_in_skip_dir(p))
         .cloned()
         .collect()
@@ -93,7 +92,7 @@ fn apply_changes(index: &Arc<RwLock<ProjectIndex>>, paths: &HashSet<PathBuf>) {
             return;
         }
     };
-    
+
     for path in paths {
         if path.exists() {
             match FileMetadata::from_path(path) {
@@ -108,7 +107,7 @@ fn apply_changes(index: &Arc<RwLock<ProjectIndex>>, paths: &HashSet<PathBuf>) {
             idx.remove_file(path);
         }
     }
-    
+
     let root = idx.root.clone();
     idx.tree = build_tree(&idx.files, &root);
 }
@@ -125,14 +124,14 @@ mod tests {
     fn test_watcher_detects_new_file() {
         let temp_dir = TempDir::new().unwrap();
         let index = Arc::new(RwLock::new(index_workspace(temp_dir.path()).unwrap()));
-        
+
         let _watcher = IndexWatcher::new(index.clone()).unwrap();
-        
+
         let new_file = temp_dir.path().join("new.rs");
         fs::write(&new_file, "fn test() {}").unwrap();
-        
+
         sleep(Duration::from_secs(3));
-        
+
         let idx = index.read().unwrap();
         assert!(idx.files.contains_key(&new_file));
     }
@@ -142,14 +141,14 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let test_file = temp_dir.path().join("test.rs");
         fs::write(&test_file, "fn main() {}").unwrap();
-        
+
         let index = Arc::new(RwLock::new(index_workspace(temp_dir.path()).unwrap()));
         let _watcher = IndexWatcher::new(index.clone()).unwrap();
-        
+
         fs::remove_file(&test_file).unwrap();
-        
+
         sleep(Duration::from_secs(3));
-        
+
         let idx = index.read().unwrap();
         assert!(!idx.files.contains_key(&test_file));
     }

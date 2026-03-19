@@ -3,7 +3,7 @@
 //! Manages a single, reusable WebSocket connection to zcoderd.
 //! Provides automatic reconnection and connection sharing across all operations.
 
-use crate::blade_ws_client::{BladeWsClient, BladeWsEvent, WorkspaceInfo, ToolResult};
+use crate::blade_ws_client::{BladeWsClient, BladeWsEvent, ToolResult, WorkspaceInfo};
 use tokio::sync::{mpsc, Mutex, RwLock};
 
 /// Connection state
@@ -70,7 +70,7 @@ impl WsConnectionManager {
 
     /// Ensure connection is established, connecting if necessary
     /// Returns a receiver for events from this connection
-    /// 
+    ///
     /// Note: Each call creates a new connection. For true connection reuse,
     /// the caller should maintain the event receiver and reuse it.
     pub async fn ensure_connected(&self) -> Result<mpsc::UnboundedReceiver<BladeWsEvent>, String> {
@@ -103,7 +103,7 @@ impl WsConnectionManager {
         eprintln!("[WS MANAGER] Connecting to {}", blade_url);
 
         let client = BladeWsClient::new(blade_url, api_key);
-        
+
         match client.connect(None).await {
             Ok(event_rx) => {
                 // Store the client
@@ -111,7 +111,7 @@ impl WsConnectionManager {
                     let mut client_lock = self.client.lock().await;
                     *client_lock = Some(client);
                 }
-                
+
                 // Update state
                 {
                     let mut state = self.state.write().await;
@@ -146,7 +146,9 @@ impl WsConnectionManager {
     ) -> Result<(), String> {
         let client_lock = self.client.lock().await;
         let client = client_lock.as_ref().ok_or("Not connected")?;
-        client.send_message(session_id, model_id, message, images, workspace).await
+        client
+            .send_message(session_id, model_id, message, images, workspace)
+            .await
     }
 
     /// Send a chat message with storage mode
@@ -162,7 +164,17 @@ impl WsConnectionManager {
     ) -> Result<(), String> {
         let client_lock = self.client.lock().await;
         let client = client_lock.as_ref().ok_or("Not connected")?;
-        client.send_message_with_storage_mode(session_id, model_id, message, images, workspace, storage_mode, mode).await
+        client
+            .send_message_with_storage_mode(
+                session_id,
+                model_id,
+                message,
+                images,
+                workspace,
+                storage_mode,
+                mode,
+            )
+            .await
     }
 
     /// Send a tool result
@@ -174,7 +186,9 @@ impl WsConnectionManager {
     ) -> Result<(), String> {
         let client_lock = self.client.lock().await;
         let client = client_lock.as_ref().ok_or("Not connected")?;
-        client.send_tool_result(session_id, tool_call_id, result).await
+        client
+            .send_tool_result(session_id, tool_call_id, result)
+            .await
     }
 
     /// Send conversation context
@@ -186,7 +200,9 @@ impl WsConnectionManager {
     ) -> Result<(), String> {
         let client_lock = self.client.lock().await;
         let client = client_lock.as_ref().ok_or("Not connected")?;
-        client.send_conversation_context(request_id, session_id, messages).await
+        client
+            .send_conversation_context(request_id, session_id, messages)
+            .await
     }
 
     /// Disconnect the WebSocket

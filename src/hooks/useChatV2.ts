@@ -13,6 +13,7 @@ import type { ChatImage, ChatMessage, ChatMode, ComposerMention, CommandExecutio
 const FLUSH_INTERVAL_MS = 80;
 const TOOL_ACTIVITY_DISPATCH_INTERVAL_MS = 120;
 const MESSAGE_COMPLETION_GRACE_MS = 1200;
+const STREAM_DEBUG_ENABLED = false;
 
 function pickDefaultModel(models: ModelInfo[]): ModelInfo | null {
     if (models.length === 0) {
@@ -405,6 +406,7 @@ export function useChatV2() {
     const streamingStatesRef = useRef<Map<string, StreamingState>>(new Map());
     const toolChunkCountsRef = useRef<Map<string, { chunkCount: number; startedAt: number; lastChunkAt: number }>>(new Map());
     const messageCompletionCleanupTimersRef = useRef<Map<string, number>>(new Map());
+    const pendingRunCommandCompletionStatusRef = useRef<Map<string, 'complete' | 'error' | 'skipped'>>(new Map());
 
     const toChatMentions = useCallback((mentions?: ComposerMention[]): ChatMention[] | undefined => {
         if (!mentions || mentions.length === 0) {
@@ -686,6 +688,7 @@ export function useChatV2() {
             flushScheduledRef.current = null;
         }
         clearPendingTimers();
+        pendingRunCommandCompletionStatusRef.current.clear();
         toolActivityRef.current = null;
         lastToolActivityDispatchAtRef.current = Date.now();
         dispatchInFlightRef.current = false;
@@ -818,6 +821,30 @@ export function useChatV2() {
         setMessages(updater);
     }, [setMessages]);
 
+    const applyDeferredRunCommandCompletion = useCallback((toolCallId: string) => {
+        const pendingStatus = pendingRunCommandCompletionStatusRef.current.get(toolCallId);
+        if (!pendingStatus) {
+            return;
+        }
+
+        pendingRunCommandCompletionStatusRef.current.delete(toolCallId);
+        updateMessages((messages) => messages.map((message) => {
+            if (!message.tool_calls?.some((toolCall) => toolCall.id === toolCallId)) {
+                return message;
+            }
+            return {
+                ...message,
+                tool_calls: (message.tool_calls || []).map((toolCall) => toolCall.id === toolCallId
+                    ? {
+                        ...toolCall,
+                        status: pendingStatus,
+                        ...(pendingStatus === 'skipped' && !toolCall.result ? { result: 'Skipped by user' } : {}),
+                    }
+                    : toolCall),
+            };
+        }));
+    }, [updateMessages]);
+
     const updateToolCallsStatusLocally = useCallback((
         toolCallIds: string[],
         nextStatus: 'pending' | 'executing' | 'complete' | 'error' | 'skipped',
@@ -913,31 +940,35 @@ export function useChatV2() {
                             accumulatedReasoningRef.current = { id, content: '' };
                         }
                         accumulatedReasoningRef.current.content += chunk;
-                        streamDebugLog('[stream-debug][ui-merge][reasoning]', {
-                            id,
-                            seq,
-                            incomingLength: chunk.length,
-                            previousLength: accumulatedReasoningRef.current.content.length - chunk.length,
-                            appendLength: chunk.length,
-                            changed: chunk.length > 0,
-                            incomingPreview: streamDebugPreview(chunk),
-                            nextPreview: streamDebugPreview(accumulatedReasoningRef.current.content),
-                        });
+                        if (STREAM_DEBUG_ENABLED) {
+                            streamDebugLog('[stream-debug][ui-merge][reasoning]', {
+                                id,
+                                seq,
+                                incomingLength: chunk.length,
+                                previousLength: accumulatedReasoningRef.current.content.length - chunk.length,
+                                appendLength: chunk.length,
+                                changed: chunk.length > 0,
+                                incomingPreview: streamDebugPreview(chunk),
+                                nextPreview: streamDebugPreview(accumulatedReasoningRef.current.content),
+                            });
+                        }
                     } else {
                         if (accumulatedContentRef.current.id !== id) {
                             accumulatedContentRef.current = { id, content: '' };
                         }
                         accumulatedContentRef.current.content += chunk;
-                        streamDebugLog('[stream-debug][ui-merge][text]', {
-                            id,
-                            seq,
-                            incomingLength: chunk.length,
-                            previousLength: accumulatedContentRef.current.content.length - chunk.length,
-                            appendLength: chunk.length,
-                            changed: chunk.length > 0,
-                            incomingPreview: streamDebugPreview(chunk),
-                            nextPreview: streamDebugPreview(accumulatedContentRef.current.content),
-                        });
+                        if (STREAM_DEBUG_ENABLED) {
+                            streamDebugLog('[stream-debug][ui-merge][text]', {
+                                id,
+                                seq,
+                                incomingLength: chunk.length,
+                                previousLength: accumulatedContentRef.current.content.length - chunk.length,
+                                appendLength: chunk.length,
+                                changed: chunk.length > 0,
+                                incomingPreview: streamDebugPreview(chunk),
+                                nextPreview: streamDebugPreview(accumulatedContentRef.current.content),
+                            });
+                        }
                     }
 
                     if (chunk.length === 0) {
@@ -1081,16 +1112,6 @@ export function useChatV2() {
 
         const setupListeners = async () => {
             unlistenDone = await listen('chat-done', () => {
-                const inFlightToolCallIds = Array.from(new Set(
-                    messagesRef.current.flatMap((message) => (message.tool_calls || [])
-                        .filter((toolCall) => toolCall.status === undefined || toolCall.status === 'pending' || toolCall.status === 'executing')
-                        .map((toolCall) => toolCall.id)),
-                ));
-
-                if (inFlightToolCallIds.length > 0) {
-                    updateToolCallsStatusLocally(inFlightToolCallIds, 'complete', 'Completed after conversation ended');
-                }
-
                 dispatchInFlightRef.current = false;
                 dispatch({ type: 'loading/set', loading: false });
                 dispatch({ type: 'pending-actions/set', actions: null });
@@ -1240,15 +1261,33 @@ export function useChatV2() {
                     };
                     return nextMessages;
                 });
+                applyDeferredRunCommandCompletion(callId);
             });
 
             unlistenToolCompleted = await listen<ToolExecutionCompletedPayload>('tool-execution-completed', (event) => {
-                const { tool_call_id: toolCallId, success, skipped } = event.payload;
+                const { tool_call_id: toolCallId, success, skipped, tool_name: toolName } = event.payload;
                 const nextStatus: 'complete' | 'error' | 'skipped' = skipped
                     ? 'skipped'
                     : success
                         ? 'complete'
                         : 'error';
+
+                if (toolName === 'run_command') {
+                    const hasCommandExecution = messagesRef.current.some((message) => (
+                        message.commandExecutions?.some((execution) => execution.id === toolCallId)
+                    ));
+
+                    if (!hasCommandExecution) {
+                        pendingRunCommandCompletionStatusRef.current.set(toolCallId, nextStatus);
+                        if (skipped) {
+                            dispatch({
+                                type: 'pending-actions/set',
+                                actions: pendingActionsRef.current?.filter((action) => action.id !== toolCallId) || null,
+                            });
+                        }
+                        return;
+                    }
+                }
 
                 updateMessages((messages) => messages.map((message) => {
                     if (!message.tool_calls?.some((toolCall) => toolCall.id === toolCallId)) {
@@ -1265,6 +1304,8 @@ export function useChatV2() {
                             : toolCall),
                     };
                 }));
+
+                pendingRunCommandCompletionStatusRef.current.delete(toolCallId);
 
                 if (skipped) {
                     dispatch({
@@ -1296,13 +1337,15 @@ export function useChatV2() {
 
                 const chatEvent = envelope.event.payload as { type: string; payload: any };
                 if (chatEvent.type === 'MessageDelta') {
-                    streamDebugLog('[stream-debug][ui-recv][text]', {
-                        id: chatEvent.payload.id,
-                        seq: chatEvent.payload.seq,
-                        isFinal: chatEvent.payload.is_final,
-                        length: chatEvent.payload.chunk.length,
-                        preview: streamDebugPreview(chatEvent.payload.chunk),
-                    });
+                    if (STREAM_DEBUG_ENABLED) {
+                        streamDebugLog('[stream-debug][ui-recv][text]', {
+                            id: chatEvent.payload.id,
+                            seq: chatEvent.payload.seq,
+                            isFinal: chatEvent.payload.is_final,
+                            length: chatEvent.payload.chunk.length,
+                            preview: streamDebugPreview(chatEvent.payload.chunk),
+                        });
+                    }
                     messageBufferRef.current?.addMessageDelta(
                         chatEvent.payload.id,
                         chatEvent.payload.seq,
@@ -1313,13 +1356,15 @@ export function useChatV2() {
                 }
 
                 if (chatEvent.type === 'ReasoningDelta') {
-                    streamDebugLog('[stream-debug][ui-recv][reasoning]', {
-                        id: chatEvent.payload.id,
-                        seq: chatEvent.payload.seq,
-                        isFinal: chatEvent.payload.is_final,
-                        length: chatEvent.payload.chunk.length,
-                        preview: streamDebugPreview(chatEvent.payload.chunk),
-                    });
+                    if (STREAM_DEBUG_ENABLED) {
+                        streamDebugLog('[stream-debug][ui-recv][reasoning]', {
+                            id: chatEvent.payload.id,
+                            seq: chatEvent.payload.seq,
+                            isFinal: chatEvent.payload.is_final,
+                            length: chatEvent.payload.chunk.length,
+                            preview: streamDebugPreview(chatEvent.payload.chunk),
+                        });
+                    }
                     messageBufferRef.current?.addReasoningDelta(
                         chatEvent.payload.id,
                         chatEvent.payload.seq,
@@ -1507,7 +1552,7 @@ export function useChatV2() {
             }
             clearPendingTimers();
         };
-    }, [clearPendingTimers, flushPendingUpdates, queueMessageUpdate, setMessages, setToolActivity, updateMessages, updateToolCallsStatusLocally]);
+    }, [applyDeferredRunCommandCompletion, clearPendingTimers, flushPendingUpdates, queueMessageUpdate, setMessages, setToolActivity, updateMessages, updateToolCallsStatusLocally]);
 
     const dispatchToBackend = useCallback(async (text: string, attachments?: ImageAttachment[], mentions?: ComposerMention[], mode?: ChatMode) => {
         try {

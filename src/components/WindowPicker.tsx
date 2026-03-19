@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { X, Monitor } from 'lucide-react';
 import type { WindowInfo } from '../types/screenshot';
 
@@ -21,6 +22,7 @@ export const WindowPicker: React.FC<WindowPickerProps> = ({
     onSelect,
     onCancel,
 }) => {
+    const { t } = useTranslation();
     if (!isOpen) return null;
 
     return (
@@ -45,12 +47,12 @@ export const WindowPicker: React.FC<WindowPickerProps> = ({
                 <div className="max-h-[360px] overflow-y-auto p-2">
                     {loading && (
                         <div className="px-3 py-6 text-xs text-[var(--fg-tertiary)] text-center">
-                            Loading windows...
+                            {t('screenshot.loadingWindows')}
                         </div>
                     )}
                     {!loading && windows.length === 0 && (
                         <div className="px-3 py-6 text-xs text-[var(--fg-tertiary)] text-center">
-                            No capturable windows found.
+                            {t('screenshot.noCapturableWindows')}
                         </div>
                     )}
                     {!loading && windows.map((window) => (
@@ -65,7 +67,7 @@ export const WindowPicker: React.FC<WindowPickerProps> = ({
                             </div>
                             <div className="flex-1 min-w-0">
                                 <div className="text-sm text-[var(--fg-primary)] truncate">
-                                    {window.title || window.app_name || 'Unknown'}
+                                    {window.title || window.app_name || t('screenshot.windowUnknown')}
                                 </div>
                                 <div className="text-xs text-[var(--fg-tertiary)] truncate">
                                     {window.app_name ? `${window.app_name} • ` : ''}{window.width}×{window.height}

@@ -20,7 +20,10 @@ pub fn get_core_state(state: State<'_, AppState>) -> CoreStateSnapshot {
     let workspace_snapshot = {
         let ws = state.workspace.lock().unwrap();
         WorkspaceStateSnapshot {
-            path: ws.workspace.as_ref().map(|p| p.to_string_lossy().to_string()),
+            path: ws
+                .workspace
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
             project_id: None, // TODO: Add project_id tracking
         }
     };

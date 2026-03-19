@@ -20,7 +20,8 @@ pub fn get_uncommitted_changes(state: State<'_, AppState>) -> Vec<UncommittedCha
         let current = fs::read_to_string(&change.file_path);
 
         if let (Ok(base_content), Ok(new_content)) = (snapshot, current) {
-            let unified_diff = crate::uncommitted_changes::generate_unified_diff(&base_content, &new_content);
+            let unified_diff =
+                crate::uncommitted_changes::generate_unified_diff(&base_content, &new_content);
             let (added, removed) = crate::uncommitted_changes::count_diff_stats(&unified_diff);
 
             if change.unified_diff != unified_diff
@@ -104,9 +105,7 @@ pub fn reject_file_changes(
 }
 
 #[tauri::command]
-pub fn reject_all_changes(
-    state: State<'_, AppState>,
-) -> Result<Vec<UncommittedChange>, String> {
+pub fn reject_all_changes(state: State<'_, AppState>) -> Result<Vec<UncommittedChange>, String> {
     let history_service = state.history_service.read().unwrap().clone();
     state
         .uncommitted_changes

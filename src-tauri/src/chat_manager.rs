@@ -10,13 +10,12 @@ use crate::chat::handler::merge_tool_call_deltas;
 use crate::config::{normalize_openai_compat_url, ApiConfig};
 use crate::conversation::ConversationHistory;
 use crate::models::registry::ModelInfo;
-use crate::providers::{
-    resolve_model_selection, AiProviderRuntime, OllamaRuntime, OpenAiCompatRuntime, ProviderEvent,
-    ProviderId,
-    ZaguanRuntime,
-};
 use crate::protocol::ToolFunction;
 use crate::protocol::{ChatEvent, ChatMessage, ChatRole, ToolActivityPayload, ToolCall};
+use crate::providers::{
+    resolve_model_selection, AiProviderRuntime, OllamaRuntime, OpenAiCompatRuntime, ProviderEvent,
+    ProviderId, ZaguanRuntime,
+};
 use crate::reasoning_parser::ReasoningParser;
 use crate::xml_parser;
 use futures_util::StreamExt;
@@ -93,7 +92,7 @@ fn is_tools_unsupported_error(status: reqwest::StatusCode, body: &str) -> bool {
 
 pub enum DrainResult {
     None,
-    Update(String, String), // (message_id, delta) - streaming text chunk
+    Update(String, String),    // (message_id, delta) - streaming text chunk
     Reasoning(String, String), // (message_id, delta) - reasoning chunk
     Research {
         content: String,
@@ -162,10 +161,7 @@ impl ProviderEventSender {
         self.send_provider_event(ProviderEvent::Chunk(chunk))
     }
 
-    fn send_reasoning_chunk(
-        &self,
-        chunk: String,
-    ) -> Result<(), mpsc::SendError<ProviderEvent>> {
+    fn send_reasoning_chunk(&self, chunk: String) -> Result<(), mpsc::SendError<ProviderEvent>> {
         self.send_provider_event(ProviderEvent::ReasoningChunk(chunk))
     }
 
@@ -589,7 +585,7 @@ impl ChatManager {
         self.ws_client = Some(ws_client.clone());
         let session_id = self.session_id.clone();
         let model_id = model_id.to_string();
-        
+
         // eprintln!("[CHAT MGR] Starting stream with session_id: {:?}", session_id);
 
         // RFC-002: Keep a live conversation snapshot for local mode context requests.
@@ -630,7 +626,8 @@ impl ChatManager {
                     // Track the first output_index we see to filter parallel streams
                     // (OpenAI Responses API can emit multiple output items simultaneously)
                     let mut accepted_output_index: Option<i64> = None;
-                    let preserve_parallel_outputs = should_preserve_parallel_responses_outputs(&model_id);
+                    let preserve_parallel_outputs =
+                        should_preserve_parallel_responses_outputs(&model_id);
                     while let Some(event) = ws_rx.recv().await {
                         match event {
                             crate::blade_ws_client::BladeWsEvent::Connected { .. } => {
@@ -671,7 +668,11 @@ impl ChatManager {
                                 });
                                 let _ = session_tx.send(session_id);
                             }
-                            crate::blade_ws_client::BladeWsEvent::TextChunk { content: text, output_index, phase } => {
+                            crate::blade_ws_client::BladeWsEvent::TextChunk {
+                                content: text,
+                                output_index,
+                                phase,
+                            } => {
                                 if !preserve_parallel_outputs {
                                     if let Some(idx) = output_index {
                                         match accepted_output_index {
@@ -697,7 +698,11 @@ impl ChatManager {
                                 saw_content = true;
                                 let _ = tx.send_chunk(text);
                             }
-                            crate::blade_ws_client::BladeWsEvent::ReasoningChunk { content: text, output_index, phase: _ } => {
+                            crate::blade_ws_client::BladeWsEvent::ReasoningChunk {
+                                content: text,
+                                output_index,
+                                phase: _,
+                            } => {
                                 if !preserve_parallel_outputs {
                                     if let Some(idx) = output_index {
                                         match accepted_output_index {
@@ -756,14 +761,18 @@ impl ChatManager {
                                     .collect();
                                 let _ = tx.send(ChatEvent::TodoUpdated(protocol_todos));
                             }
-                            crate::blade_ws_client::BladeWsEvent::ChatDone { finish_reason, recoverable } => {
+                            crate::blade_ws_client::BladeWsEvent::ChatDone {
+                                finish_reason,
+                                recoverable,
+                            } => {
                                 // eprintln!("[CHAT MGR] Chat done: {} (recoverable: {:?})", finish_reason, recoverable);
                                 saw_chat_done = true;
-                                
+
                                 // RFC: Context Length Recovery - check for context_length_exceeded finish reason
                                 if finish_reason == "context_length_exceeded" {
                                     let _ = tx.send(ChatEvent::ContextLengthExceeded {
-                                        message: "Context limit reached during generation".to_string(),
+                                        message: "Context limit reached during generation"
+                                            .to_string(),
                                         token_count: None,
                                         max_tokens: None,
                                         excess: None,
@@ -771,14 +780,23 @@ impl ChatManager {
                                         recovery_hint: None,
                                     });
                                 }
-                                
+
                                 let _ = tx.send(ChatEvent::Done);
                                 // Don't break - keep connection alive for tool results
                                 // The connection will close when the user sends a new message
                             }
-                            crate::blade_ws_client::BladeWsEvent::Error { error_type, code: _code, message, token_count, max_tokens, excess, recoverable, recovery_hint } => {
+                            crate::blade_ws_client::BladeWsEvent::Error {
+                                error_type,
+                                code: _code,
+                                message,
+                                token_count,
+                                max_tokens,
+                                excess,
+                                recoverable,
+                                recovery_hint,
+                            } => {
                                 // eprintln!("[CHAT MGR] Error: {} ({}) - {} (tokens: {:?}/{:?})", error_type, code, message, token_count, max_tokens);
-                                
+
                                 // RFC: Error Handling - use error_type for logic, message for display
                                 match error_type.as_str() {
                                     "context_length_exceeded" => {
@@ -794,8 +812,13 @@ impl ChatManager {
                                     }
                                     "rate_limit_error" | "overloaded_error" => {
                                         // Retryable errors - don't break, let user retry
-                                        let hint = recovery_hint.unwrap_or_else(|| "Please wait a moment and try again.".to_string());
-                                        let _ = tx.send(ChatEvent::Error(format!("{} - {}", message, hint)));
+                                        let hint = recovery_hint.unwrap_or_else(|| {
+                                            "Please wait a moment and try again.".to_string()
+                                        });
+                                        let _ = tx.send(ChatEvent::Error(format!(
+                                            "{} - {}",
+                                            message, hint
+                                        )));
                                         // Don't break - these are transient
                                     }
                                     "message_too_large" => {
@@ -860,10 +883,10 @@ impl ChatManager {
                                 //     content.len()
                                 // );
                                 saw_content = true;
-                                
+
                                 // Simple base name - timestamp will be added automatically when saving
                                 let suggested_name = "research.md".to_string();
-                                
+
                                 let _ = tx.send(ChatEvent::Research {
                                     content,
                                     suggested_name,
@@ -926,12 +949,12 @@ impl ChatManager {
                             }
                         }
                     }
-                },
+                }
                 Err(e) => {
                     let _ = tx.send(ChatEvent::Error(e));
                 }
             }
-            
+
             // eprintln!("[CHAT MGR] Async task completed, keeping WebSocket open for tool results");
             // Don't close the connection here - it will be reused for tool results
             // Connection will be closed when a new message starts or conversation ends
@@ -1078,9 +1101,9 @@ impl ChatManager {
             };
 
             let images = if msg.role == ChatRole::User {
-                msg.images.as_ref().map(|imgs| {
-                    imgs.iter().map(|img| img.data.clone()).collect()
-                })
+                msg.images
+                    .as_ref()
+                    .map(|imgs| imgs.iter().map(|img| img.data.clone()).collect())
             } else {
                 None
             };
@@ -1107,18 +1130,16 @@ impl ChatManager {
 
         let (tx, rx) = mpsc::channel();
         let tx = ProviderEventSender::new(tx, self.event_notify.clone());
-        let url = format!(
-            "{}/api/chat",
-            api_config.ollama_url.trim_end_matches('/')
-        );
+        let url = format!("{}/api/chat", api_config.ollama_url.trim_end_matches('/'));
 
         // Send Authorization header whenever cloud is enabled and we have an API key.
         // The Ollama server may require auth for ALL requests, not just :cloud models.
-        let cloud_api_key = if api_config.ollama_cloud_enabled && !api_config.ollama_cloud_api_key.is_empty() {
-            api_config.ollama_cloud_api_key.clone()
-        } else {
-            String::new()
-        };
+        let cloud_api_key =
+            if api_config.ollama_cloud_enabled && !api_config.ollama_cloud_api_key.is_empty() {
+                api_config.ollama_cloud_api_key.clone()
+            } else {
+                String::new()
+            };
 
         let task = tokio::spawn(async move {
             // CRITICAL FIX: Only use reasoning parser for models that actually support reasoning tags.
@@ -1137,16 +1158,14 @@ impl ChatManager {
             // Build the request with optional Authorization header for cloud models
             let mut request_builder = http.post(&url).json(&request);
             if !cloud_api_key.is_empty() {
-                request_builder = request_builder.header("Authorization", format!("Bearer {}", cloud_api_key));
+                request_builder =
+                    request_builder.header("Authorization", format!("Bearer {}", cloud_api_key));
             }
-            
+
             let mut response = match request_builder.send().await {
                 Ok(res) => res,
                 Err(e) => {
-                    let _ = tx.send(ChatEvent::Error(format!(
-                        "Ollama request failed: {}",
-                        e
-                    )));
+                    let _ = tx.send(ChatEvent::Error(format!("Ollama request failed: {}", e)));
                     return;
                 }
             };
@@ -1165,7 +1184,8 @@ impl ChatManager {
 
                     let mut retry_builder = http.post(&url).json(&retry_request);
                     if !cloud_api_key.is_empty() {
-                        retry_builder = retry_builder.header("Authorization", format!("Bearer {}", cloud_api_key));
+                        retry_builder = retry_builder
+                            .header("Authorization", format!("Bearer {}", cloud_api_key));
                     }
 
                     response = match retry_builder.send().await {
@@ -1182,7 +1202,11 @@ impl ChatManager {
                     let err_msg = if status.as_u16() == 401 {
                         format!("Ollama authentication failed (401). Check your cloud API key in Settings.")
                     } else {
-                        format!("Ollama returned HTTP {}: {}", status, body.chars().take(500).collect::<String>())
+                        format!(
+                            "Ollama returned HTTP {}: {}",
+                            status,
+                            body.chars().take(500).collect::<String>()
+                        )
                     };
                     eprintln!("[OLLAMA CHAT] HTTP error: {}", err_msg);
                     let _ = tx.send(ChatEvent::Error(err_msg));
@@ -1194,9 +1218,15 @@ impl ChatManager {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();
                 let err_msg = if status.as_u16() == 401 {
-                    format!("Ollama authentication failed (401). Check your cloud API key in Settings.")
+                    format!(
+                        "Ollama authentication failed (401). Check your cloud API key in Settings."
+                    )
                 } else {
-                    format!("Ollama returned HTTP {}: {}", status, body.chars().take(500).collect::<String>())
+                    format!(
+                        "Ollama returned HTTP {}: {}",
+                        status,
+                        body.chars().take(500).collect::<String>()
+                    )
                 };
                 eprintln!("[OLLAMA CHAT] HTTP error: {}", err_msg);
                 let _ = tx.send(ChatEvent::Error(err_msg));
@@ -1211,10 +1241,7 @@ impl ChatManager {
                 let bytes = match chunk {
                     Ok(data) => data,
                     Err(e) => {
-                        let _ = tx.send(ChatEvent::Error(format!(
-                            "Ollama stream error: {}",
-                            e
-                        )));
+                        let _ = tx.send(ChatEvent::Error(format!("Ollama stream error: {}", e)));
                         return;
                     }
                 };
@@ -1248,10 +1275,7 @@ impl ChatManager {
                     };
 
                     if let Some(err) = parsed.error {
-                        let _ = tx.send(ChatEvent::Error(format!(
-                            "Ollama error: {}",
-                            err
-                        )));
+                        let _ = tx.send(ChatEvent::Error(format!("Ollama error: {}", err)));
                         return;
                     }
 
@@ -1327,7 +1351,9 @@ impl ChatManager {
                                             let _ = tx.send_chunk(text);
                                         }
                                     }
-                                    crate::reasoning_parser::ReasoningSegment::Reasoning(reasoning) => {
+                                    crate::reasoning_parser::ReasoningSegment::Reasoning(
+                                        reasoning,
+                                    ) => {
                                         if !reasoning.is_empty() {
                                             let _ = tx.send_reasoning_chunk(reasoning);
                                         }
@@ -1437,7 +1463,7 @@ impl ChatManager {
         }
 
         let mut messages: Vec<OpenAIMessage> = Vec::new();
-        
+
         // Load and apply per-model system prompt
         if let Ok(Some(prompt)) = crate::config::read_prompt_for_model(&model_name) {
             let rendered_prompt = prompt
@@ -1474,11 +1500,7 @@ impl ChatManager {
                         for image in images {
                             parts.push(OpenAIContentPart::ImageUrl {
                                 image_url: OpenAIImageUrl {
-                                    url: format!(
-                                        "data:{};base64,{}",
-                                        image.mime_type,
-                                        image.data
-                                    ),
+                                    url: format!("data:{};base64,{}", image.mime_type, image.data),
                                 },
                             });
                         }
@@ -1488,7 +1510,9 @@ impl ChatManager {
                         None
                     } else if parts.len() == 1 {
                         match &parts[0] {
-                            OpenAIContentPart::Text { text } => Some(OpenAIContent::Text(text.clone())),
+                            OpenAIContentPart::Text { text } => {
+                                Some(OpenAIContent::Text(text.clone()))
+                            }
                             OpenAIContentPart::ImageUrl { .. } => Some(OpenAIContent::Parts(parts)),
                         }
                     } else {
@@ -1536,17 +1560,13 @@ impl ChatManager {
             model: model_name.clone(),
             messages,
             stream: true,
-            tools: include_tools.then(|| {
-                get_tool_definitions_for_model(&model_name, composite_tools_enabled)
-            }),
+            tools: include_tools
+                .then(|| get_tool_definitions_for_model(&model_name, composite_tools_enabled)),
         };
 
         let openai_compat_base_url = normalize_openai_compat_url(&api_config.openai_compat_url);
         // OpenAI-compatible servers follow the /v1/chat/completions path; base URL should be versionless
-        let url = format!(
-            "{}/v1/chat/completions",
-            openai_compat_base_url
-        );
+        let url = format!("{}/v1/chat/completions", openai_compat_base_url);
         let (tx, rx) = mpsc::channel();
         let tx = ProviderEventSender::new(tx, self.event_notify.clone());
 
@@ -1579,12 +1599,7 @@ impl ChatManager {
                 None
             };
 
-            let mut response = match http
-                .post(&url)
-                .json(&request_body)
-                .send()
-                .await
-            {
+            let mut response = match http.post(&url).json(&request_body).send().await {
                 Ok(r) => r,
                 Err(e) => {
                     let _ = tx.send(ChatEvent::Error(format!(
@@ -1607,12 +1622,7 @@ impl ChatManager {
                         ..request_body.clone()
                     };
 
-                    response = match http
-                        .post(&url)
-                        .json(&retry_request)
-                        .send()
-                        .await
-                    {
+                    response = match http.post(&url).json(&retry_request).send().await {
                         Ok(r) => r,
                         Err(e) => {
                             let _ = tx.send(ChatEvent::Error(format!(
@@ -1814,10 +1824,13 @@ impl ChatManager {
         let is_local_mode = workspace
             .map(|ws| {
                 let settings = crate::project_settings::load_project_settings_or_default(ws);
-                matches!(settings.storage.mode, crate::project_settings::StorageMode::Local)
+                matches!(
+                    settings.storage.mode,
+                    crate::project_settings::StorageMode::Local
+                )
             })
             .unwrap_or(true); // Default to local mode if no workspace
-        // Agentic Loop Check
+                              // Agentic Loop Check
         if self.agentic_loop.is_active() {
             self.agentic_loop.increment_turn();
             if !self.agentic_loop.is_active() {
@@ -1829,10 +1842,7 @@ impl ChatManager {
         // back to the model. This lets the model recover (e.g. re-read file and
         // retry with adjusted edits) instead of dead-ending the turn.
         if !batch.file_results.is_empty()
-            && batch
-                .file_results
-                .iter()
-                .all(|(_, result)| !result.success)
+            && batch.file_results.iter().all(|(_, result)| !result.success)
         {
             let mut details = Vec::new();
             for (call, result) in batch.file_results.iter().take(3) {
@@ -1842,7 +1852,11 @@ impl ChatManager {
                     .unwrap_or_else(|| "unknown tool error".to_string());
                 details.push(format!("{}: {}", call.function.name, reason));
             }
-            let suffix = if batch.file_results.len() > 3 { "; ..." } else { "" };
+            let suffix = if batch.file_results.len() > 3 {
+                "; ..."
+            } else {
+                ""
+            };
             eprintln!(
                 "[CONTINUE TOOLS] All tool calls in batch failed, forwarding failures for model recovery. {}{}",
                 details.join("; "),
@@ -1865,7 +1879,8 @@ impl ChatManager {
 
         // Update tool call status in the assistant message and store for emission
         // RFC: Large Tool Result Handling - truncate in local mode
-        let updated_assistant = conversation.update_tool_call_status_with_truncation(&batch.file_results, is_local_mode);
+        let updated_assistant = conversation
+            .update_tool_call_status_with_truncation(&batch.file_results, is_local_mode);
         self.updated_assistant_message = updated_assistant;
         self.sync_ws_conversation_messages(conversation);
 
@@ -1949,7 +1964,7 @@ impl ChatManager {
         // Send tool results through the existing WebSocket connection
         // No need to create a new connection - reuse the one from start_stream
         // eprintln!("[CHAT MGR] Sending {} tool results through existing connection", results.len());
-        
+
         tokio::spawn(async move {
             // Send ALL results sequentially
             // RFC: Large Tool Result Handling - truncate in local mode
@@ -1980,11 +1995,7 @@ impl ChatManager {
                 };
 
                 if let Err(e) = ws_client
-                    .send_tool_result(
-                        session_id.clone(),
-                        call.id.clone(),
-                        tool_result,
-                    )
+                    .send_tool_result(session_id.clone(), call.id.clone(), tool_result)
                     .await
                 {
                     if let Some(tx) = &provider_event_tx {
@@ -2004,10 +2015,7 @@ impl ChatManager {
         Ok(())
     }
 
-    pub fn drain_events(
-        &mut self,
-        conversation: &mut ConversationHistory,
-    ) -> DrainResult {
+    pub fn drain_events(&mut self, conversation: &mut ConversationHistory) -> DrainResult {
         // v1.1 BATCHING FIX: Process pending results first
         if let Some(res) = self.pending_results.pop_front() {
             return res;
@@ -2081,11 +2089,13 @@ impl ChatManager {
                         if is_openai_text {
                             assistant_msg.content.push_str(&s);
                             let mid = assistant_msg.id.clone().unwrap_or_default();
-                            self.pending_results
-                                .push_back(DrainResult::Update(mid, s));
+                            self.pending_results.push_back(DrainResult::Update(mid, s));
                         } else {
-                            let segments =
-                                self.process_incoming_chunk(&s, assistant_msg, use_reasoning_parser);
+                            let segments = self.process_incoming_chunk(
+                                &s,
+                                assistant_msg,
+                                use_reasoning_parser,
+                            );
                             for segment in segments {
                                 match segment {
                                     crate::reasoning_parser::ReasoningSegment::Text(text) => {
@@ -2102,10 +2112,8 @@ impl ChatManager {
                                             after.push_str(&text);
                                         }
                                         let mid = assistant_msg.id.clone().unwrap_or_default();
-                                        self.pending_results.push_back(DrainResult::Update(
-                                            mid,
-                                            text,
-                                        ));
+                                        self.pending_results
+                                            .push_back(DrainResult::Update(mid, text));
                                     }
                                     crate::reasoning_parser::ReasoningSegment::Reasoning(
                                         reasoning,
@@ -2113,13 +2121,12 @@ impl ChatManager {
                                         if reasoning.is_empty() {
                                             continue;
                                         }
-                                        let r = assistant_msg.reasoning.get_or_insert_with(String::new);
+                                        let r =
+                                            assistant_msg.reasoning.get_or_insert_with(String::new);
                                         r.push_str(&reasoning);
                                         let mid = assistant_msg.id.clone().unwrap_or_default();
-                                        self.pending_results.push_back(DrainResult::Reasoning(
-                                            mid,
-                                            reasoning,
-                                        ));
+                                        self.pending_results
+                                            .push_back(DrainResult::Reasoning(mid, reasoning));
                                     }
                                 }
                             }
@@ -2130,8 +2137,7 @@ impl ChatManager {
                             if is_openai_text {
                                 new_last.content.push_str(&s);
                                 let mid = new_last.id.clone().unwrap_or_default();
-                                self.pending_results
-                                    .push_back(DrainResult::Update(mid, s));
+                                self.pending_results.push_back(DrainResult::Update(mid, s));
                             } else {
                                 let segments =
                                     self.process_incoming_chunk(&s, new_last, use_reasoning_parser);
@@ -2142,10 +2148,8 @@ impl ChatManager {
                                                 continue;
                                             }
                                             let mid = new_last.id.clone().unwrap_or_default();
-                                            self.pending_results.push_back(DrainResult::Update(
-                                                mid,
-                                                text,
-                                            ));
+                                            self.pending_results
+                                                .push_back(DrainResult::Update(mid, text));
                                         }
                                         crate::reasoning_parser::ReasoningSegment::Reasoning(
                                             reasoning,
@@ -2153,13 +2157,12 @@ impl ChatManager {
                                             if reasoning.is_empty() {
                                                 continue;
                                             }
-                                            let r = new_last.reasoning.get_or_insert_with(String::new);
+                                            let r =
+                                                new_last.reasoning.get_or_insert_with(String::new);
                                             r.push_str(&reasoning);
                                             let mid = new_last.id.clone().unwrap_or_default();
-                                            self.pending_results.push_back(DrainResult::Reasoning(
-                                                mid,
-                                                reasoning,
-                                            ));
+                                            self.pending_results
+                                                .push_back(DrainResult::Reasoning(mid, reasoning));
                                         }
                                     }
                                 }
@@ -2202,7 +2205,8 @@ impl ChatManager {
                     // Track tool_call_ids from tool_progress so we can detect dropped tool calls
                     if payload.action == "streaming" {
                         if let Some(ref id) = payload.tool_call_id {
-                            self.pending_tool_progress.insert(id.clone(), payload.tool_name.clone());
+                            self.pending_tool_progress
+                                .insert(id.clone(), payload.tool_name.clone());
                         }
                     }
                     self.pending_results.push_back(DrainResult::ToolActivity {
@@ -2287,8 +2291,9 @@ impl ChatManager {
                         }
                         let existing = last.tool_calls.get_or_insert_with(Vec::new);
                         for call in calls {
-                            if let Some(idx) =
-                                existing.iter().position(|existing_call| existing_call.id == call.id)
+                            if let Some(idx) = existing
+                                .iter()
+                                .position(|existing_call| existing_call.id == call.id)
                             {
                                 existing[idx] = call;
                             } else {
@@ -2296,10 +2301,8 @@ impl ChatManager {
                             }
                         }
 
-                        self.pending_results.push_back(DrainResult::ToolCreated(
-                            last.clone(),
-                            calls_for_emit,
-                        ));
+                        self.pending_results
+                            .push_back(DrainResult::ToolCreated(last.clone(), calls_for_emit));
                     }
                 }
                 ProviderEvent::Progress {
@@ -2381,10 +2384,7 @@ impl ChatManager {
                             if let Some(xml_calls) =
                                 xml_parser::detect_xml_tool_calls(&last.content)
                             {
-                                eprintln!(
-                                    "[QWEN] Detected {} XML tool calls",
-                                    xml_calls.len()
-                                );
+                                eprintln!("[QWEN] Detected {} XML tool calls", xml_calls.len());
                                 self.accumulated_tool_calls
                                     .extend(self.convert_xml_calls(xml_calls));
                             }
@@ -2419,14 +2419,15 @@ impl ChatManager {
                     // RFC: Context Length Recovery - emit the event to frontend
                     // eprintln!("[DRAIN] Context length exceeded: {} (tokens: {:?}/{:?}, recoverable: {})",
                     //     message, token_count, max_tokens, recoverable);
-                    self.pending_results.push_back(DrainResult::ContextLengthExceeded {
-                        message,
-                        token_count,
-                        max_tokens,
-                        excess,
-                        recoverable,
-                        recovery_hint,
-                    });
+                    self.pending_results
+                        .push_back(DrainResult::ContextLengthExceeded {
+                            message,
+                            token_count,
+                            max_tokens,
+                            excess,
+                            recoverable,
+                            recovery_hint,
+                        });
                     // Don't set done=true - session is still valid, user can continue
                 }
                 ProviderEvent::MessageTooLarge {
@@ -2436,10 +2437,11 @@ impl ChatManager {
                     flush_batch!();
                     // Message size limit exceeded - emit the event to frontend
                     // eprintln!("[DRAIN] Message too large: {} (hint: {})", message, recovery_hint);
-                    self.pending_results.push_back(DrainResult::MessageTooLarge {
-                        message,
-                        recovery_hint,
-                    });
+                    self.pending_results
+                        .push_back(DrainResult::MessageTooLarge {
+                            message,
+                            recovery_hint,
+                        });
                     // Don't set done=true - this is recoverable, model can retry
                 }
             }
@@ -2501,16 +2503,12 @@ impl ChatManager {
             //     "[DRAIN] Calling finalize_turn with tool_calls: {:?}",
             //     tool_calls.as_ref().map(|c| c.len())
             // );
-            self.finalize_turn(
-                conversation,
-                tool_calls.clone(),
-                &error_msg,
-            );
+            self.finalize_turn(conversation, tool_calls.clone(), &error_msg);
 
             // Set streaming=false to reduce CPU usage during tool execution.
             // IMPORTANT: Do NOT clear rx if we expect more events (e.g., additional tool calls).
             self.streaming = false;
-            
+
             // Clear reasoning parser since this turn is done
             self.reasoning_parser.reset();
 

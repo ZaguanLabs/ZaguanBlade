@@ -1,6 +1,7 @@
 'use client';
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { useTranslation } from 'react-i18next';
 import { BladeDispatcher } from '../services/blade';
 import { BladeEvent, FileEntry } from '../types/blade';
 import { listen } from '@tauri-apps/api/event';
@@ -15,6 +16,7 @@ interface ExplorerPanelProps {
 }
 
 export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, activeFile }) => {
+    const { t } = useTranslation();
     const [roots, setRoots] = useState<FileEntry[]>([]);
     const [error, setError] = useState<string | null>(null);
     const [refreshKey, setRefreshKey] = useState(0);
@@ -98,8 +100,8 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
             {/* Explorer Section */}
             <div className="flex-1 flex flex-col min-h-0">
                 <div className="h-9 px-4 flex items-center bg-[var(--bg-panel)] border-b border-[var(--border-subtle)] text-[10px] uppercase tracking-wider font-semibold select-none justify-between text-[var(--fg-tertiary)] shrink-0">
-                    <span>Explorer</span>
-                    <button onClick={() => { loadRoot(); setRefreshKey(prev => prev + 1); }} className="hover:text-[var(--fg-primary)]" title="Refresh">
+                    <span>{t('fileTree.title')}</span>
+                    <button onClick={() => { loadRoot(); setRefreshKey(prev => prev + 1); }} className="hover:text-[var(--fg-primary)]" title={t('fileTree.refresh')}>
                         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
                     </button>
                 </div>
@@ -107,11 +109,11 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
                 <div className="flex-1 overflow-y-auto pt-2 scrollbar-thin scrollbar-thumb-zinc-800">
                     {roots.length === 0 ? (
                         <div className="p-4 flex flex-col gap-2">
-                            <p className="text-xs text-[var(--fg-tertiary)] italic text-center">No workspace open.</p>
+                            <p className="text-xs text-[var(--fg-tertiary)] italic text-center">{t('fileTree.noWorkspace')}.</p>
                             <div className="flex gap-1">
                                 <input
                                     className="bg-[var(--bg-surface)] border border-[var(--border-subtle)] text-xs p-1 w-full rounded-sm text-[var(--fg-primary)]"
-                                    placeholder="/path/to/folder"
+                                    placeholder={t('common.pathPlaceholder')}
                                     value={pathInput}
                                     onChange={e => setPathInput(e.target.value)}
                                     onKeyDown={e => e.key === 'Enter' && openSpecificPath()}
@@ -142,7 +144,7 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
             {activeFile && (
                 <div style={{ height: `${outlineHeight}px` }} className="flex flex-col min-h-0 border-t border-[var(--border-subtle)]">
                     <div className="h-7 px-4 flex items-center bg-[var(--bg-panel)] border-b border-[var(--border-subtle)] text-[10px] uppercase tracking-wider font-semibold select-none text-[var(--fg-tertiary)] shrink-0">
-                        <span>Outline</span>
+                        <span>{t('common.outline')}</span>
                     </div>
                     <div className="flex-1 overflow-hidden">
                         <OutlinePanel

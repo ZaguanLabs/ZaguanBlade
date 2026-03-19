@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback } from "react";
+import { useTranslation } from 'react-i18next';
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -57,7 +58,8 @@ interface TerminalProps {
     command?: string;
 }
 
-export default function Terminal({ id = "main-terminal", cwd, command }: TerminalProps) {
+export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, command }) => {
+    const { t } = useTranslation();
     const { themeId } = useTheme();
     const terminalRef = useRef<HTMLDivElement>(null);
     const xtermRef = useRef<XTerm | null>(null);
@@ -66,6 +68,7 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
     const fitIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const resizeFrameRef = useRef<number | null>(null);
     const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null);
+    const prefersBladeEventsRef = useRef(false);
     const initialCwdRef = useRef(cwd);
     const initialCommandRef = useRef(command);
     const { showMenu } = useContextMenu();
@@ -81,7 +84,7 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
         const items: ContextMenuItem[] = [
             {
                 id: 'copy',
-                label: 'Copy',
+                label: t('terminal.copySelection'),
                 icon: <Copy className="w-4 h-4" />,
                 shortcut: 'Ctrl+Shift+C',
                 disabled: !selection,
@@ -97,7 +100,7 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
             },
             {
                 id: 'paste',
-                label: 'Paste',
+                label: t('terminal.paste'),
                 icon: <ClipboardPaste className="w-4 h-4" />,
                 shortcut: 'Ctrl+Shift+V',
                 onClick: async () => {
@@ -117,7 +120,7 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
             { id: 'div-1', label: '', divider: true },
             {
                 id: 'clear',
-                label: 'Clear Terminal',
+                label: t('terminal.clearTerminal'),
                 icon: <Trash2 className="w-4 h-4" />,
                 onClick: () => {
                     if (term) {
@@ -128,7 +131,7 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
             { id: 'div-2', label: '', divider: true },
             {
                 id: 'send-to-chat',
-                label: 'Send to Chat',
+                label: t('terminal.sendToChat'),
                 icon: <MessageSquare className="w-4 h-4" />,
                 disabled: !selection,
                 onClick: async () => {
@@ -141,7 +144,7 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
         ];
 
         showMenu({ x: e.clientX, y: e.clientY }, items);
-    }, [id, showMenu]);
+    }, [id, showMenu, t]);
 
     useEffect(() => {
         if (!terminalRef.current) return;
@@ -352,6 +355,7 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
             terminalBufferRef.current = new TerminalBuffer(
                 (termId, data) => {
                     if (termId === id && xtermRef.current) {
+                        prefersBladeEventsRef.current = true;
                         const cleaned = sanitizeTerminalOutput(data);
                         if (cleaned) xtermRef.current.write(cleaned);
                     }
@@ -363,6 +367,9 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
         const unlistenLegacy = listen<{ id: string; data: string }>(
             "terminal-output",
             (event) => {
+                if (prefersBladeEventsRef.current) {
+                    return;
+                }
                 if (event.payload.id === id) {
                     const cleaned = sanitizeTerminalOutput(event.payload.data);
                     if (cleaned) term.write(cleaned);
@@ -381,19 +388,36 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
 
                     if (terminalEvent.type === 'Output') {
                         const { id: termId, seq, data } = terminalEvent.payload;
+                        if (termId === id) {
+                            prefersBladeEventsRef.current = true;
+                        }
                         if (terminalBufferRef.current) {
                             terminalBufferRef.current.addOutput(termId, seq, data);
                         }
                     } else if (terminalEvent.type === 'Spawned') {
                         const { id: termId, owner } = terminalEvent.payload;
+                        if (termId === id) {
+                            prefersBladeEventsRef.current = true;
+                        }
                         console.debug(`[v1.1 Terminal] Spawned: id=${termId}, owner=${owner.type}`);
                     } else if (terminalEvent.type === 'Exit') {
                         const { id: termId, code } = terminalEvent.payload;
                         if (termId === id && xtermRef.current) {
+                            prefersBladeEventsRef.current = true;
                             xtermRef.current.write(`\r\n\x1b[33mProcess exited with code ${code}\x1b[0m\r\n`);
                         }
                     }
                 }
+            }
+        );
+
+        const previewListener = listen<{ id: string; data: string }>(
+            'terminal-command-preview',
+            (event) => {
+                if (event.payload.id !== id || !xtermRef.current) {
+                    return;
+                }
+                xtermRef.current.write(event.payload.data);
             }
         );
 
@@ -425,6 +449,7 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
             resizeObserver.disconnect();
             unlistenLegacy.then((unlisten) => unlisten());
             unlistenV11.then((unlisten) => unlisten());
+            previewListener.then((unlisten) => unlisten());
 
             BladeDispatcher.terminal({
                 type: "Kill",
@@ -440,6 +465,7 @@ export default function Terminal({ id = "main-terminal", cwd, command }: Termina
 
             xtermRef.current = null;
             fitAddonRef.current = null;
+            prefersBladeEventsRef.current = false;
         };
     }, [id]);
 

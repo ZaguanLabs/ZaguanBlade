@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { useFileHistory } from '../hooks/useFileHistory';
 import { RotateCcw, Clock } from 'lucide-react';
 
@@ -7,6 +8,7 @@ interface FileHistoryPanelProps {
 }
 
 export const FileHistoryPanel: React.FC<FileHistoryPanelProps> = ({ activeFile }) => {
+    const { t } = useTranslation();
     const { history, loading, revertToSnapshot } = useFileHistory(activeFile);
 
     const formatTime = (ts: number) => {
@@ -23,20 +25,20 @@ export const FileHistoryPanel: React.FC<FileHistoryPanelProps> = ({ activeFile }
         return (
             <div className="flex flex-col items-center justify-center h-full text-[var(--fg-tertiary)] p-4 text-center">
                 <Clock className="w-8 h-8 opacity-20 mb-2" />
-                <p className="text-sm">No file selected</p>
+                <p className="text-sm">{t('fileHistory.noFileSelected')}</p>
             </div>
         );
     }
 
     if (loading && history.length === 0) {
-        return <div className="p-4 text-xs text-[var(--fg-tertiary)]">Loading history...</div>;
+        return <div className="p-4 text-xs text-[var(--fg-tertiary)]">{t('fileHistory.loading')}</div>;
     }
 
     if (history.length === 0) {
         return (
             <div className="flex flex-col items-center justify-center h-full text-[var(--fg-tertiary)] p-4 text-center">
                 <Clock className="w-8 h-8 opacity-20 mb-2" />
-                <p className="text-sm">No history for this file</p>
+                <p className="text-sm">{t('fileHistory.empty')}</p>
             </div>
         );
     }
@@ -45,7 +47,7 @@ export const FileHistoryPanel: React.FC<FileHistoryPanelProps> = ({ activeFile }
         <div className="flex flex-col h-full bg-[var(--bg-panel)] w-full">
             <div className="p-3 border-b border-[var(--border-subtle)] font-medium text-xs uppercase tracking-wider text-[var(--fg-secondary)] flex items-center gap-2 select-none">
                 <Clock className="w-3 h-3" />
-                <span>File History</span>
+                <span>{t('fileHistory.title')}</span>
             </div>
 
             <div className="flex-1 overflow-y-auto p-2 space-y-2">
@@ -57,18 +59,18 @@ export const FileHistoryPanel: React.FC<FileHistoryPanelProps> = ({ activeFile }
                             </span>
                             <button
                                 onClick={() => {
-                                    if (confirm('Are you sure you want to revert to this version? This will overwrite the current file.')) {
+                                    if (confirm(t('fileHistory.confirmRevert'))) {
                                         revertToSnapshot(entry.id);
                                     }
                                 }}
-                                title="Revert to this version"
+                                title={t('fileHistory.revertToVersion')}
                                 className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-[var(--bg-app)] rounded transition-opacity text-[var(--fg-link)] hover:text-amber-400"
                             >
                                 <RotateCcw className="w-3.5 h-3.5" />
                             </button>
                         </div>
                         <div className="text-[10px] font-mono text-[var(--fg-tertiary)] truncate" title={entry.id}>
-                            ID: {entry.id.substring(0, 8)}...
+                            {t('fileHistory.snapshotId', { id: entry.id.substring(0, 8) })}
                         </div>
                     </div>
                 ))}

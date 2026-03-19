@@ -6,7 +6,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
-use tokio_tungstenite::{connect_async_with_config, tungstenite::protocol::{Message, WebSocketConfig}};
+use tokio_tungstenite::{
+    connect_async_with_config,
+    tungstenite::protocol::{Message, WebSocketConfig},
+};
 
 lazy_static! {
     static ref FILE_PATH_REGEXES: Vec<Regex> = vec![
@@ -57,8 +60,16 @@ pub enum BladeWsEvent {
         session_id: String,
         model_id: String,
     },
-    TextChunk { content: String, output_index: Option<i64>, phase: Option<String> },
-    ReasoningChunk { content: String, output_index: Option<i64>, phase: Option<String> },
+    TextChunk {
+        content: String,
+        output_index: Option<i64>,
+        phase: Option<String>,
+    },
+    ReasoningChunk {
+        content: String,
+        output_index: Option<i64>,
+        phase: Option<String>,
+    },
     ToolCall {
         id: String,
         name: String,
@@ -236,7 +247,10 @@ impl BladeWsClient {
 
     /// Connect to the WebSocket server and authenticate with retry logic
     /// If `workspace_path` is provided, it overrides `working_dir` in the environment info.
-    pub async fn connect(&self, workspace_path: Option<String>) -> Result<mpsc::UnboundedReceiver<BladeWsEvent>, String> {
+    pub async fn connect(
+        &self,
+        workspace_path: Option<String>,
+    ) -> Result<mpsc::UnboundedReceiver<BladeWsEvent>, String> {
         // Convert HTTP URL to WebSocket URL
         let ws_url = self
             .base_url
@@ -255,7 +269,7 @@ impl BladeWsClient {
             // This prevents "Space limit exceeded" errors for large tool results
             let mut ws_config = WebSocketConfig::default();
             ws_config.max_message_size = Some(64 * 1024 * 1024); // 64MB
-            ws_config.max_frame_size = Some(64 * 1024 * 1024);   // 64MB per frame
+            ws_config.max_frame_size = Some(64 * 1024 * 1024); // 64MB per frame
 
             match connect_async_with_config(&url, Some(ws_config), false).await {
                 Ok((stream, _)) => {
@@ -382,7 +396,7 @@ impl BladeWsClient {
             }
             // eprintln!("[BLADE WS] Environment: os={}, arch={:?}, shell={:?}",
             //     environment.os, environment.arch, environment.shell);
-            
+
             // Send authentication message
             let auth_msg = WsBaseMessage {
                 id: "auth-1".to_string(),
@@ -441,12 +455,14 @@ impl BladeWsClient {
                     Err(e) => {
                         // eprintln!("[BLADE WS] Read error: {}", e);
                         let msg = e.to_string();
-                        
+
                         // Handle specific error types with appropriate recovery hints
                         if msg.contains("Connection reset by peer") {
                             // Treat connection reset as a disconnect so upstream can finish gracefully
                             let _ = event_tx_clone.send(BladeWsEvent::Disconnected);
-                        } else if msg.contains("Space limit exceeded") || msg.contains("Message too long") {
+                        } else if msg.contains("Space limit exceeded")
+                            || msg.contains("Message too long")
+                        {
                             // Message size limit exceeded - tell the model to use smaller responses
                             // eprintln!("[BLADE WS] Message size limit exceeded, sending recoverable error");
                             let _ = event_tx_clone.send(BladeWsEvent::Error {
@@ -492,8 +508,10 @@ impl BladeWsClient {
         images: Option<Vec<crate::protocol::ChatImage>>,
         workspace: Option<WorkspaceInfo>,
     ) -> Result<(), String> {
-        self.send_message_with_storage_mode(session_id, model_id, message, images, workspace, None, None)
-            .await
+        self.send_message_with_storage_mode(
+            session_id, model_id, message, images, workspace, None, None,
+        )
+        .await
     }
 
     /// Send a chat message with explicit storage mode (RFC-002)
@@ -510,7 +528,9 @@ impl BladeWsClient {
         let conn = self.connection.lock().await;
         let conn = conn.as_ref().ok_or("Not connected")?;
 
-        let planning_mode = mode.as_deref().map(|value| value.eq_ignore_ascii_case("planning"));
+        let planning_mode = mode
+            .as_deref()
+            .map(|value| value.eq_ignore_ascii_case("planning"));
 
         let payload = ChatRequestPayload {
             session_id,
@@ -697,27 +717,43 @@ impl BladeWsClient {
             }
             "text_chunk" => {
                 // Parse output_index to distinguish parallel output streams (OpenAI Responses API)
-                let output_index = msg.payload.get("output_index")
+                let output_index = msg
+                    .payload
+                    .get("output_index")
                     .or_else(|| msg.payload.get("content_index"))
                     .or_else(|| msg.payload.get("index"))
                     .and_then(|v| v.as_i64());
-                let phase = msg.payload.get("phase")
+                let phase = msg
+                    .payload
+                    .get("phase")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
                 if let Some(content) = msg.payload.get("content").and_then(|v| v.as_str()) {
-                    let _ = tx.send(BladeWsEvent::TextChunk { content: content.to_string(), output_index, phase });
+                    let _ = tx.send(BladeWsEvent::TextChunk {
+                        content: content.to_string(),
+                        output_index,
+                        phase,
+                    });
                 }
             }
             "reasoning_chunk" => {
-                let output_index = msg.payload.get("output_index")
+                let output_index = msg
+                    .payload
+                    .get("output_index")
                     .or_else(|| msg.payload.get("content_index"))
                     .or_else(|| msg.payload.get("index"))
                     .and_then(|v| v.as_i64());
-                let phase = msg.payload.get("phase")
+                let phase = msg
+                    .payload
+                    .get("phase")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
                 if let Some(content) = msg.payload.get("content").and_then(|v| v.as_str()) {
-                    let _ = tx.send(BladeWsEvent::ReasoningChunk { content: content.to_string(), output_index, phase });
+                    let _ = tx.send(BladeWsEvent::ReasoningChunk {
+                        content: content.to_string(),
+                        output_index,
+                        phase,
+                    });
                 }
             }
             "tool_call" => {
@@ -789,7 +825,10 @@ impl BladeWsClient {
                 let recoverable = msg.payload.get("recoverable").and_then(|v| v.as_bool());
 
                 // eprintln!("[BLADE WS] Chat done: {} (recoverable: {:?})", finish_reason, recoverable);
-                let _ = tx.send(BladeWsEvent::ChatDone { finish_reason, recoverable });
+                let _ = tx.send(BladeWsEvent::ChatDone {
+                    finish_reason,
+                    recoverable,
+                });
             }
             "error" => {
                 // Standardized error type (context_length_exceeded, rate_limit_error, etc.)
@@ -811,19 +850,23 @@ impl BladeWsClient {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                
+
                 // Error detail fields (RFC: Error Handling)
                 let token_count = msg.payload.get("token_count").and_then(|v| v.as_u64());
                 let max_tokens = msg.payload.get("max_tokens").and_then(|v| v.as_u64());
                 let excess = msg.payload.get("excess").and_then(|v| v.as_u64());
                 let recoverable = msg.payload.get("recoverable").and_then(|v| v.as_bool());
-                let recovery_hint = msg.payload.get("recovery_hint").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let recovery_hint = msg
+                    .payload
+                    .get("recovery_hint")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
 
                 // eprintln!("[BLADE WS] Error: {} ({}) - {} (tokens: {:?}/{:?}, recoverable: {:?})",
                 //     error_type, code, message, token_count, max_tokens, recoverable);
-                let _ = tx.send(BladeWsEvent::Error { 
+                let _ = tx.send(BladeWsEvent::Error {
                     error_type,
-                    code, 
+                    code,
                     message,
                     token_count,
                     max_tokens,
@@ -942,26 +985,18 @@ impl BladeWsClient {
                     // Payload is a Base64-encoded string
                     use base64::Engine;
                     match base64::engine::general_purpose::STANDARD.decode(payload_str) {
-                        Ok(decoded_bytes) => {
-                            match String::from_utf8(decoded_bytes) {
-                                Ok(json_str) => match serde_json::from_str::<Value>(&json_str) {
-                                    Ok(json_obj) => json_obj
-                                        .get("session_id")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("")
-                                        .to_string(),
-                                    Err(_e) => {
-                                        "".to_string()
-                                    }
-                                },
-                                Err(_e) => {
-                                    "".to_string()
-                                }
-                            }
-                        }
-                        Err(_e) => {
-                            "".to_string()
-                        }
+                        Ok(decoded_bytes) => match String::from_utf8(decoded_bytes) {
+                            Ok(json_str) => match serde_json::from_str::<Value>(&json_str) {
+                                Ok(json_obj) => json_obj
+                                    .get("session_id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                Err(_e) => "".to_string(),
+                            },
+                            Err(_e) => "".to_string(),
+                        },
+                        Err(_e) => "".to_string(),
                     }
                 } else {
                     // Fallback: payload is a JSON object directly (old format)

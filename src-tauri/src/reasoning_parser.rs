@@ -136,7 +136,7 @@ impl ReasoningParser {
     /// Returns any content that was buffered but not yet emitted
     pub fn flush(&mut self) -> Vec<ReasoningSegment> {
         let mut segments = Vec::new();
-        
+
         // If there's content in the tag buffer, emit it as text (partial tag that never completed)
         if !self.tag_buffer.is_empty() {
             if self.in_reasoning {
@@ -146,7 +146,7 @@ impl ReasoningParser {
             }
             self.tag_buffer.clear();
         }
-        
+
         segments
     }
 
@@ -231,9 +231,7 @@ impl ReasoningParser {
                 if let Some(idx) = remaining.find(format.close_tag()) {
                     let reasoning_content = &remaining[..idx];
                     if !reasoning_content.is_empty() {
-                        segments.push(ReasoningSegment::Reasoning(
-                            reasoning_content.to_string(),
-                        ));
+                        segments.push(ReasoningSegment::Reasoning(reasoning_content.to_string()));
                     }
 
                     // Exit reasoning mode
@@ -245,9 +243,7 @@ impl ReasoningParser {
                 } else if let Some(partial_idx) = self.find_partial_closing(remaining, format) {
                     let reasoning_before = &remaining[..partial_idx];
                     if !reasoning_before.is_empty() {
-                        segments.push(ReasoningSegment::Reasoning(
-                            reasoning_before.to_string(),
-                        ));
+                        segments.push(ReasoningSegment::Reasoning(reasoning_before.to_string()));
                     }
                     self.tag_buffer = remaining[partial_idx..].to_string();
                     break;

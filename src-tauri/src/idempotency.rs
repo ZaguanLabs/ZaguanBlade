@@ -37,18 +37,18 @@ impl IdempotencyCache {
     /// Returns Some(intent_id) if found and not expired, None otherwise
     pub fn check(&self, key: &str) -> Option<(Uuid, IdempotencyResult)> {
         let mut cache = self.cache.lock().unwrap();
-        
+
         // Clean up expired entries while we're here
         let now = Instant::now();
         cache.retain(|_, entry| entry.expires_at > now);
-        
+
         // Check if key exists and is not expired
         if let Some(entry) = cache.get(key) {
             if entry.expires_at > now {
                 return Some((entry.intent_id, entry.result.clone()));
             }
         }
-        
+
         None
     }
 

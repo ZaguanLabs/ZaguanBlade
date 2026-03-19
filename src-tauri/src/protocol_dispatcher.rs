@@ -2,8 +2,8 @@ use crate::app_state::AppState;
 use crate::blade_protocol::{self, BladeError, BladeIntent, SystemEvent, Version};
 use crate::chat_orchestrator::handle_send_message;
 use crate::commands::{chat, files, tools};
-use tauri::{Emitter, State};
 use std::sync::atomic::Ordering;
+use tauri::{Emitter, State};
 
 #[tauri::command]
 pub async fn dispatch(
@@ -257,14 +257,12 @@ pub async fn dispatch(
                 }
             }
             blade_protocol::FileIntent::Create { path, is_dir } => {
-                let resolved_path = files::resolve_path_under_workspace(
-                    &*state,
-                    std::path::Path::new(&path),
-                )
-                .map_err(|e| blade_protocol::BladeError::Internal {
-                    trace_id: intent_id.to_string(),
-                    message: e,
-                })?;
+                let resolved_path =
+                    files::resolve_path_under_workspace(&*state, std::path::Path::new(&path))
+                        .map_err(|e| blade_protocol::BladeError::Internal {
+                            trace_id: intent_id.to_string(),
+                            message: e,
+                        })?;
 
                 let result = if is_dir {
                     std::fs::create_dir_all(&resolved_path)
@@ -299,14 +297,12 @@ pub async fn dispatch(
                 }
             }
             blade_protocol::FileIntent::Delete { path } => {
-                let resolved_path = files::resolve_path_under_workspace(
-                    &*state,
-                    std::path::Path::new(&path),
-                )
-                .map_err(|e| blade_protocol::BladeError::Internal {
-                    trace_id: intent_id.to_string(),
-                    message: e,
-                })?;
+                let resolved_path =
+                    files::resolve_path_under_workspace(&*state, std::path::Path::new(&path))
+                        .map_err(|e| blade_protocol::BladeError::Internal {
+                            trace_id: intent_id.to_string(),
+                            message: e,
+                        })?;
 
                 let result = if resolved_path.is_dir() {
                     std::fs::remove_dir_all(&resolved_path)
@@ -332,22 +328,18 @@ pub async fn dispatch(
                 }
             }
             blade_protocol::FileIntent::Rename { old_path, new_path } => {
-                let resolved_old = files::resolve_path_under_workspace(
-                    &*state,
-                    std::path::Path::new(&old_path),
-                )
-                .map_err(|e| blade_protocol::BladeError::Internal {
-                    trace_id: intent_id.to_string(),
-                    message: e,
-                })?;
-                let resolved_new = files::resolve_path_under_workspace(
-                    &*state,
-                    std::path::Path::new(&new_path),
-                )
-                .map_err(|e| blade_protocol::BladeError::Internal {
-                    trace_id: intent_id.to_string(),
-                    message: e,
-                })?;
+                let resolved_old =
+                    files::resolve_path_under_workspace(&*state, std::path::Path::new(&old_path))
+                        .map_err(|e| blade_protocol::BladeError::Internal {
+                        trace_id: intent_id.to_string(),
+                        message: e,
+                    })?;
+                let resolved_new =
+                    files::resolve_path_under_workspace(&*state, std::path::Path::new(&new_path))
+                        .map_err(|e| blade_protocol::BladeError::Internal {
+                        trace_id: intent_id.to_string(),
+                        message: e,
+                    })?;
 
                 match std::fs::rename(&resolved_old, &resolved_new) {
                     Ok(_) => {
@@ -371,7 +363,7 @@ pub async fn dispatch(
         BladeIntent::Editor(editor_intent) => {
             // Check if backend authority is enabled
             let backend_authority = state.feature_flags.editor_backend_authority();
-            
+
             match editor_intent {
                 blade_protocol::EditorIntent::OpenFile { path } => {
                     if backend_authority {
@@ -386,7 +378,7 @@ pub async fn dispatch(
                                 open.push(path.clone());
                             }
                         }
-                        
+
                         // Emit FileOpened event
                         let _ = window.emit(
                             "blade-event",
@@ -421,7 +413,7 @@ pub async fn dispatch(
                                 *active = None;
                             }
                         }
-                        
+
                         let _ = window.emit(
                             "blade-event",
                             blade_protocol::BladeEventEnvelope {
@@ -445,7 +437,7 @@ pub async fn dispatch(
                             let mut active = state.active_file.lock().unwrap();
                             *active = path.clone();
                         }
-                        
+
                         let _ = window.emit(
                             "blade-event",
                             blade_protocol::BladeEventEnvelope {
@@ -493,7 +485,7 @@ pub async fn dispatch(
                         let cursor_col = state.cursor_column.lock().unwrap();
                         let sel_start = state.selection_start_line.lock().unwrap();
                         let sel_end = state.selection_end_line.lock().unwrap();
-                        
+
                         blade_protocol::EditorEvent::StateSnapshot {
                             active_file: active.clone(),
                             open_files: open.clone(),
@@ -503,7 +495,7 @@ pub async fn dispatch(
                             selection_end: sel_end.map(|l| l as u32),
                         }
                     };
-                    
+
                     let _ = window.emit(
                         "blade-event",
                         blade_protocol::BladeEventEnvelope {
@@ -536,7 +528,7 @@ pub async fn dispatch(
                     suggested_name,
                 } => {
                     let tabs_authority = state.feature_flags.tabs_backend_authority();
-                    
+
                     if tabs_authority {
                         let tab_info = crate::core_state::TabInfo {
                             id: id.clone(),
@@ -551,7 +543,7 @@ pub async fn dispatch(
                                 _ => crate::core_state::TabType::File,
                             },
                         };
-                        
+
                         {
                             let mut tabs = state.tabs.lock().unwrap();
                             // Remove existing tab with same ID if present
@@ -567,7 +559,7 @@ pub async fn dispatch(
                             let mut active_file = state.active_file.lock().unwrap();
                             *active_file = Some(p.clone());
                         }
-                        
+
                         let _ = window.emit(
                             "blade-event",
                             blade_protocol::BladeEventEnvelope {
@@ -589,7 +581,7 @@ pub async fn dispatch(
                 }
                 blade_protocol::EditorIntent::CloseTab { tab_id } => {
                     let tabs_authority = state.feature_flags.tabs_backend_authority();
-                    
+
                     if tabs_authority {
                         {
                             let mut tabs = state.tabs.lock().unwrap();
@@ -601,7 +593,7 @@ pub async fn dispatch(
                                 *active = None;
                             }
                         }
-                        
+
                         let _ = window.emit(
                             "blade-event",
                             blade_protocol::BladeEventEnvelope {
@@ -621,16 +613,18 @@ pub async fn dispatch(
                 }
                 blade_protocol::EditorIntent::SetActiveTab { tab_id } => {
                     let tabs_authority = state.feature_flags.tabs_backend_authority();
-                    
+
                     if tabs_authority {
                         // Get the path of the tab being activated (if it's a file tab)
                         let tab_path = {
                             let tabs = state.tabs.lock().unwrap();
                             tab_id.as_ref().and_then(|id| {
-                                tabs.iter().find(|t| &t.id == id).and_then(|t| t.path.clone())
+                                tabs.iter()
+                                    .find(|t| &t.id == id)
+                                    .and_then(|t| t.path.clone())
                             })
                         };
-                        
+
                         {
                             let mut active = state.active_tab_id.lock().unwrap();
                             *active = tab_id.clone();
@@ -640,7 +634,7 @@ pub async fn dispatch(
                             let mut active_file = state.active_file.lock().unwrap();
                             *active_file = tab_path;
                         }
-                        
+
                         let _ = window.emit(
                             "blade-event",
                             blade_protocol::BladeEventEnvelope {
@@ -660,7 +654,7 @@ pub async fn dispatch(
                 }
                 blade_protocol::EditorIntent::ReorderTabs { tab_ids } => {
                     let tabs_authority = state.feature_flags.tabs_backend_authority();
-                    
+
                     if tabs_authority {
                         {
                             let mut tabs = state.tabs.lock().unwrap();
@@ -673,7 +667,7 @@ pub async fn dispatch(
                             }
                             *tabs = reordered;
                         }
-                        
+
                         let _ = window.emit(
                             "blade-event",
                             blade_protocol::BladeEventEnvelope {
@@ -695,13 +689,13 @@ pub async fn dispatch(
                     let snapshot = {
                         let tabs = state.tabs.lock().unwrap();
                         let active = state.active_tab_id.lock().unwrap();
-                        
+
                         blade_protocol::EditorEvent::TabStateSnapshot {
                             tabs: tabs.clone(),
                             active_tab_id: active.clone(),
                         }
                     };
-                    
+
                     let _ = window.emit(
                         "blade-event",
                         blade_protocol::BladeEventEnvelope {
@@ -773,7 +767,7 @@ pub async fn dispatch(
                 id,
                 command,
                 cwd,
-                owner: _,
+                owner,
                 interactive,
             } => {
                 if interactive {
@@ -781,6 +775,7 @@ pub async fn dispatch(
                         id,
                         cwd,
                         command,
+                        owner,
                         app_handle.clone(),
                         terminal_manager.clone(),
                     )

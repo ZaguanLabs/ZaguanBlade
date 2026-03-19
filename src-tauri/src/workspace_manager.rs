@@ -27,10 +27,7 @@ impl WorkspaceManager {
                     state.last_workspace.and_then(|p| {
                         // Guard against AppImage mount directories
                         if p.contains("/.mount_") || p.contains("/tmp/.mount_") {
-                            eprintln!(
-                                "[WORKSPACE] Ignoring saved AppImage mount directory: {}",
-                                p
-                            );
+                            eprintln!("[WORKSPACE] Ignoring saved AppImage mount directory: {}", p);
                             return None;
                         }
                         let path = PathBuf::from(p);
@@ -78,7 +75,10 @@ impl WorkspaceManager {
             self.workspace = Some(path.clone());
             self.save_state();
         } else if let Some(parent) = path.parent() {
-            eprintln!("[WORKSPACE] Setting workspace to parent: {}", parent.display());
+            eprintln!(
+                "[WORKSPACE] Setting workspace to parent: {}",
+                parent.display()
+            );
             self.workspace = Some(parent.to_path_buf());
             self.save_state();
         }

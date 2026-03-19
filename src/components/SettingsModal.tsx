@@ -384,15 +384,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
     if (!isOpen) return null;
 
     const sections: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
-        { id: 'configuration', label: 'Configuration', icon: <Palette className="w-4 h-4" /> },
-        { id: 'account', label: 'Account', icon: <Key className="w-4 h-4" /> },
-        { id: 'localai', label: 'Local AI', icon: <Server className="w-4 h-4" /> },
-        { id: 'storage', label: 'Storage', icon: <Database className="w-4 h-4" /> },
+        { id: 'configuration', label: t('settings.navigation.configuration'), icon: <Palette className="w-4 h-4" /> },
+        { id: 'account', label: t('settings.navigation.account'), icon: <Key className="w-4 h-4" /> },
+        { id: 'localai', label: t('settings.navigation.localAi'), icon: <Server className="w-4 h-4" /> },
+        { id: 'storage', label: t('settings.navigation.storage'), icon: <Database className="w-4 h-4" /> },
         ...(workspacePath ? [
-            { id: 'context', label: 'Context', icon: <Zap className="w-4 h-4" /> },
+            { id: 'context', label: t('settings.navigation.context'), icon: <Zap className="w-4 h-4" /> },
             // { id: 'privacy', label: 'Privacy', icon: <Shield className="w-4 h-4" /> },
         ] as const : []),
-        { id: 'about', label: 'About', icon: <Info className="w-4 h-4" /> },
+        { id: 'about', label: t('settings.navigation.about'), icon: <Info className="w-4 h-4" /> },
     ];
 
     return (
@@ -408,8 +408,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                 {/* Header */}
                 <div className="flex items-start justify-between px-6 py-4 border-b border-[var(--border-default)] bg-[color-mix(in_srgb,var(--bg-panel)_82%,var(--bg-surface))]">
                     <div>
-                        <h2 className="text-lg font-semibold text-[var(--fg-primary)]">Settings</h2>
-                        <p className="text-xs text-[var(--fg-tertiary)] mt-0.5">Global + project preferences</p>
+                        <h2 className="text-lg font-semibold text-[var(--fg-primary)]">{t('settings.title')}</h2>
+                        <p className="text-xs text-[var(--fg-tertiary)] mt-0.5">{t('settings.subtitle')}</p>
                     </div>
                     <button
                         onClick={onClose}
@@ -511,14 +511,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                 {/* Footer */}
                 <div className="flex items-center justify-between gap-3 px-6 py-3 border-t border-[var(--border-default)] bg-[color-mix(in_srgb,var(--bg-panel)_84%,var(--bg-surface))]">
                     <div className="text-xs text-[var(--fg-tertiary)]">
-                        {hasChanges ? 'You have unsaved changes' : 'All changes saved'}
+                        {hasChanges ? t('settings.unsavedChangesNotice') : t('settings.allChangesSaved')}
                     </div>
                     <div className="flex items-center gap-2">
                         <button
                             onClick={onClose}
                             className="px-4 py-2 text-sm font-medium text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] transition-colors"
                         >
-                            Cancel
+                            {t('common.cancel')}
                         </button>
                         <button
                             onClick={handleSave}
@@ -526,7 +526,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                             className="px-4 py-2 text-sm font-medium bg-[var(--accent-primary)] hover:brightness-110 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                         >
                             {isSaving && <Loader2 className="w-4 h-4 animate-spin" />}
-                            {isSaving ? 'Saving...' : 'Save Changes'}
+                            {isSaving ? t('statusBar.saving') : t('settings.saveChanges')}
                         </button>
                     </div>
                 </div>
@@ -540,10 +540,19 @@ interface ConfigurationSettingsProps {
     onChange: (settings: Partial<SettingsState['configuration']>) => void;
 }
 
+function getThemeI18nLabel(t: ReturnType<typeof useTranslation>['t'], theme: { id: string; label: string }) {
+    return t(`settings.configurationSection.themes.${theme.id}.label`, theme.label);
+}
+
+function getThemeI18nDescription(t: ReturnType<typeof useTranslation>['t'], theme: { id: string; description: string }) {
+    return t(`settings.configurationSection.themes.${theme.id}.description`, theme.description);
+}
+
 const ThemeSelect: React.FC<{
     value: string;
     onChange: (themeId: string) => void;
 }> = ({ value, onChange }) => {
+    const { t } = useTranslation();
     const [isOpen, setIsOpen] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
     const buttonRef = useRef<HTMLButtonElement>(null);
@@ -647,7 +656,7 @@ const ThemeSelect: React.FC<{
                 type="button"
                 aria-haspopup="listbox"
                 aria-expanded={isOpen}
-                aria-label="Select theme"
+                aria-label={t('settings.configurationSection.selectTheme')}
                 onClick={handleToggle}
                 onKeyDown={handleTriggerKeyDown}
                 className={`
@@ -658,7 +667,7 @@ const ThemeSelect: React.FC<{
                     }
                 `}
             >
-                <span className="block truncate">{selectedTheme.label}</span>
+                <span className="block truncate">{getThemeI18nLabel(t, selectedTheme)}</span>
             </button>
 
             <div className={`pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 transition-colors duration-200 ${isOpen ? 'text-(--accent-primary)' : 'text-(--fg-secondary)'}`}>
@@ -669,7 +678,7 @@ const ThemeSelect: React.FC<{
                 <div
                     ref={menuRef}
                     role="listbox"
-                    aria-label="Available themes"
+                    aria-label={t('settings.configurationSection.availableThemesLabel')}
                     className="absolute left-0 right-0 top-[calc(100%+0.375rem)] z-50 overflow-hidden rounded-[calc(var(--panel-radius)+6px)] border border-(--accent-primary) bg-[color-mix(in_srgb,var(--bg-panel)_88%,var(--bg-surface))] p-1.5 shadow-[0_0_0_1px_color-mix(in_srgb,var(--accent-primary)_28%,transparent),0_18px_40px_color-mix(in_srgb,var(--accent-primary)_18%,transparent)] backdrop-blur-[18px]"
                 >
                     <div className="max-h-64 space-y-0.5 overflow-y-auto pr-0.5">
@@ -683,7 +692,7 @@ const ThemeSelect: React.FC<{
                                     role="option"
                                     aria-selected={isSelected}
                                     data-theme-id={theme.id}
-                                    title={theme.description}
+                                    title={getThemeI18nDescription(t, theme)}
                                     onClick={() => handleSelect(theme.id)}
                                     onKeyDown={(event) => handleItemKeyDown(event, index)}
                                     className={`group w-full rounded-[calc(var(--panel-radius)+1px)] border px-2 py-1.5 text-left transition-[border-color,background-color,box-shadow,transform] duration-200 focus:outline-none ${
@@ -694,7 +703,7 @@ const ThemeSelect: React.FC<{
                                 >
                                     <div className="flex items-center gap-2">
                                         <div className="flex min-w-0 flex-1 items-center gap-2">
-                                            <span className="truncate text-[12px] font-semibold text-(--fg-primary)">{theme.label}</span>
+                                            <span className="truncate text-[12px] font-semibold text-(--fg-primary)">{getThemeI18nLabel(t, theme)}</span>
                                             <div className="ml-1 flex shrink-0 items-center gap-1">
                                                 <div className="h-3.5 w-7 rounded-[999px] border border-(--border-subtle)" style={{ backgroundColor: theme.tokens['--bg-app'] }} />
                                                 <div className="h-3.5 w-7 rounded-[999px] border border-(--border-subtle)" style={{ backgroundColor: theme.tokens['--bg-panel'] }} />
@@ -721,28 +730,29 @@ const ThemeSelect: React.FC<{
 };
 
 const ConfigurationSettings: React.FC<ConfigurationSettingsProps> = ({ settings, onChange }) => {
+    const { t } = useTranslation();
     const selectedTheme = availableThemes.find((theme) => theme.id === normalizeThemeId(settings.theme)) ?? availableThemes[0];
 
     return (
         <div className="space-y-6">
             <div>
-                <h3 className="text-base font-semibold text-(--fg-primary) mb-1">Configuration</h3>
+                <h3 className="text-base font-semibold text-(--fg-primary) mb-1">{t('settings.configurationSection.title')}</h3>
                 <p className="text-sm text-(--fg-tertiary) mb-4">
-                    Configure global experience settings for the app.
+                    {t('settings.configurationSection.description')}
                 </p>
             </div>
 
             <div className="border border-(--border-default) rounded-[calc(var(--panel-radius)+4px)] p-5 space-y-5 bg-[color-mix(in_srgb,var(--bg-panel)_88%,var(--bg-editor))] shadow-(--panel-shadow)">
                 <div>
-                    <div className="text-sm font-medium text-(--fg-primary)">Theme</div>
+                    <div className="text-sm font-medium text-(--fg-primary)">{t('settings.configurationSection.themeTitle')}</div>
                     <div className="text-xs text-(--fg-tertiary) mt-1">
-                        Choose which built-in visual theme Zaguán Blade should use.
+                        {t('settings.configurationSection.themeDescription')}
                     </div>
                 </div>
 
                 <div className="space-y-2.5">
                     <label className="text-xs font-medium uppercase tracking-[0.16em] text-(--fg-secondary) block">
-                        Available themes
+                        {t('settings.configurationSection.availableThemes')}
                     </label>
 
                     <ThemeSelect
@@ -754,11 +764,11 @@ const ConfigurationSettings: React.FC<ConfigurationSettingsProps> = ({ settings,
                 <div className="rounded-[calc(var(--panel-radius)+2px)] border border-(--border-subtle) bg-(--bg-surface) p-4 shadow-(--shadow-sm) space-y-3">
                     <div className="flex items-start justify-between gap-4">
                         <div className="space-y-1">
-                            <div className="text-sm font-semibold text-(--fg-primary)">{selectedTheme.label}</div>
-                            <div className="text-xs leading-relaxed text-(--fg-secondary)">{selectedTheme.description}</div>
+                            <div className="text-sm font-semibold text-(--fg-primary)">{getThemeI18nLabel(t, selectedTheme)}</div>
+                            <div className="text-xs leading-relaxed text-(--fg-secondary)">{getThemeI18nDescription(t, selectedTheme)}</div>
                         </div>
                         <div className="shrink-0 rounded-full border border-(--border-default) px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] text-(--accent-primary) bg-[color-mix(in_srgb,var(--accent-primary)_10%,transparent)]">
-                            Live
+                            {t('settings.configurationSection.live')}
                         </div>
                     </div>
 
@@ -771,7 +781,7 @@ const ConfigurationSettings: React.FC<ConfigurationSettingsProps> = ({ settings,
 
                     <div className="flex items-center gap-2 text-[11px] text-(--fg-tertiary)">
                         <span className="h-2 w-2 rounded-full bg-(--accent-primary)" />
-                        <span>This theme updates the app shell, editor, markdown, and terminal together.</span>
+                        <span>{t('settings.configurationSection.themeScopeHelp')}</span>
                     </div>
                 </div>
             </div>
@@ -804,7 +814,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
         try {
             await invoke('test_local_ollama_connection', { ollamaUrl: settings.ollamaUrl });
             setOllamaTestResult('success');
-            setOllamaTestMessage('Connection successful.');
+            setOllamaTestMessage(t('settings.connectionSuccessful'));
         } catch (e) {
             setOllamaTestResult('error');
             setOllamaTestMessage(String(e));
@@ -834,7 +844,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
         try {
             await invoke('test_local_openai_compat_connection', { serverUrl: settings.openaiCompatUrl });
             setOpenaiTestResult('success');
-            setOpenaiTestMessage('Connection successful.');
+            setOpenaiTestMessage(t('settings.connectionSuccessful'));
         } catch (e) {
             setOpenaiTestResult('error');
             setOpenaiTestMessage(String(e));
@@ -1377,7 +1387,7 @@ const AboutSettings: React.FC = () => {
                 <div className="flex items-center gap-4">
                     <img
                         src={zbladeLogoUrl}
-                        alt="Zaguán Blade"
+                        alt={t('settings.aboutSection.appName')}
                         className="w-16 h-16 object-contain"
                         draggable={false}
                     />
@@ -1430,7 +1440,7 @@ const AboutSettings: React.FC = () => {
                         <span>
                             {t('settings.aboutSection.support')}:{' '}
                             <a href="https://github.com/ZaguanLabs/ZaguanBlade/issues" target="_blank" rel="noreferrer" className="text-[var(--accent-primary)] hover:brightness-110">
-                                GitHub Issues
+                                {t('settings.aboutSection.githubIssues')}
                             </a>
                         </span>
                     </li>

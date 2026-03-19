@@ -11,8 +11,8 @@ use crate::workspace_manager::WorkspaceManager;
 use crate::ws_connection_manager::WsConnectionManager;
 use dotenvy::dotenv;
 use notify::RecommendedWatcher;
-use std::sync::{atomic::AtomicBool, Arc, Mutex, RwLock};
 use std::path::PathBuf;
+use std::sync::{atomic::AtomicBool, Arc, Mutex, RwLock};
 
 fn project_data_root(workspace_root: Option<&PathBuf>) -> PathBuf {
     workspace_root
@@ -54,12 +54,12 @@ pub struct AppState {
     pub language_handler: RwLock<crate::language_service::LanguageHandler>, // v1.3: Language Intent Handler
     pub uncommitted_changes: UncommittedChangeTracker, // Track AI changes pending accept/reject
     pub indexer_manager: Mutex<Option<crate::indexer::IndexerManager>>, // Project indexer
-    pub feature_flags: FeatureFlags, // Headless migration feature flags
-    pub tabs: Mutex<Vec<crate::core_state::TabInfo>>, // Headless: tab state
-    pub active_tab_id: Mutex<Option<String>>, // Headless: active tab ID
-    pub ws_connection: Arc<WsConnectionManager>, // Persistent WebSocket connection to zcoderd
+    pub feature_flags: FeatureFlags,                   // Headless migration feature flags
+    pub tabs: Mutex<Vec<crate::core_state::TabInfo>>,  // Headless: tab state
+    pub active_tab_id: Mutex<Option<String>>,          // Headless: active tab ID
+    pub ws_connection: Arc<WsConnectionManager>,       // Persistent WebSocket connection to zcoderd
     pub pending_error_feedback: Mutex<Option<String>>, // Recovery hint to prepend to next user message
-    pub git_dir: RwLock<Option<PathBuf>>, // Path to .git directory for gix::open()
+    pub git_dir: RwLock<Option<PathBuf>>,              // Path to .git directory for gix::open()
 }
 
 impl AppState {
@@ -119,31 +119,30 @@ impl AppState {
             .unwrap_or_else(|e| {
                 eprintln!("Failed to initialize conversation store: {}", e);
                 // Fallback to temp directory
-                conversation_store::ConversationStore::new(std::env::temp_dir().join("zblade_conversations"))
+                conversation_store::ConversationStore::new(
+                    std::env::temp_dir().join("zblade_conversations"),
+                )
                 .expect("Failed to create conversation store in temp directory")
             });
 
         // Initialize History Service
         // Keep project history under <workspace>/.zblade/history
-        let history_service = std::sync::Arc::new(crate::history::HistoryService::new(
-            &project_data_dir,
-        ));
+        let history_service =
+            std::sync::Arc::new(crate::history::HistoryService::new(&project_data_dir));
 
         // Discover git repository from workspace path
         let git_dir = workspace_manager
             .workspace
             .as_ref()
-            .and_then(|ws_path| {
-                match gix::discover(ws_path) {
-                    Ok(repo) => {
-                        let path = repo.path().to_path_buf();
-                        eprintln!("[GIT] Discovered repository at: {:?}", path);
-                        Some(path)
-                    }
-                    Err(e) => {
-                        eprintln!("[GIT] No repository found: {}", e);
-                        None
-                    }
+            .and_then(|ws_path| match gix::discover(ws_path) {
+                Ok(repo) => {
+                    let path = repo.path().to_path_buf();
+                    eprintln!("[GIT] Discovered repository at: {:?}", path);
+                    Some(path)
+                }
+                Err(e) => {
+                    eprintln!("[GIT] No repository found: {}", e);
+                    None
                 }
             });
 
@@ -173,11 +172,8 @@ impl AppState {
         );
 
         let language_service = std::sync::Arc::new(
-            crate::language_service::LanguageService::new(
-                ls_root,
-                symbol_store,
-            )
-            .expect("Failed to initialize Language Service"),
+            crate::language_service::LanguageService::new(ls_root, symbol_store)
+                .expect("Failed to initialize Language Service"),
         );
 
         // Initialize Language Handler

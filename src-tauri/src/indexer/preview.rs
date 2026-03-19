@@ -20,21 +20,21 @@ pub fn get_or_load_preview(
             }
         }
     }
-    
+
     let content = fs::read_to_string(path)?;
     let lines: Vec<String> = content.lines().take(max_lines).map(String::from).collect();
-    
+
     let metadata = fs::metadata(path)?;
     let modified = metadata.modified()?;
-    
+
     let preview = CachedPreview::new(lines.clone(), modified);
     let result = lines.join("\n");
-    
+
     {
         let mut idx = index.write().unwrap();
         idx.previews.insert(path.clone(), preview);
     }
-    
+
     Ok(result)
 }
 
@@ -55,9 +55,9 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let test_file = temp_dir.path().join("test.rs");
         fs::write(&test_file, "line1\nline2\nline3").unwrap();
-        
+
         let index = Arc::new(RwLock::new(index_workspace(temp_dir.path()).unwrap()));
-        
+
         let preview = get_or_load_preview(&index, &test_file, 50).unwrap();
         assert_eq!(preview, "line1\nline2\nline3");
     }
@@ -67,16 +67,16 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let test_file = temp_dir.path().join("test.rs");
         fs::write(&test_file, "line1\nline2\nline3").unwrap();
-        
+
         let index = Arc::new(RwLock::new(index_workspace(temp_dir.path()).unwrap()));
-        
+
         let preview1 = get_or_load_preview(&index, &test_file, 50).unwrap();
-        
+
         {
             let idx = index.read().unwrap();
             assert!(idx.previews.contains_key(&test_file));
         }
-        
+
         let preview2 = get_or_load_preview(&index, &test_file, 50).unwrap();
         assert_eq!(preview1, preview2);
     }
@@ -86,9 +86,9 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let test_file = temp_dir.path().join("test.rs");
         fs::write(&test_file, "line1\nline2\nline3\nline4\nline5").unwrap();
-        
+
         let index = Arc::new(RwLock::new(index_workspace(temp_dir.path()).unwrap()));
-        
+
         let preview = get_or_load_preview(&index, &test_file, 3).unwrap();
         assert_eq!(preview, "line1\nline2\nline3");
     }
@@ -98,13 +98,13 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let test_file = temp_dir.path().join("test.rs");
         fs::write(&test_file, "line1").unwrap();
-        
+
         let index = Arc::new(RwLock::new(index_workspace(temp_dir.path()).unwrap()));
-        
+
         get_or_load_preview(&index, &test_file, 50).unwrap();
-        
+
         invalidate_preview(&index, &test_file);
-        
+
         let idx = index.read().unwrap();
         assert!(!idx.previews.contains_key(&test_file));
     }

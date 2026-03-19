@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ModelInfo } from '../types/chat';
 import { ChevronDown, Check, Box, Cpu, Sparkles, BrainCircuit } from 'lucide-react';
 import { ThemedDropdownEmptyState, ThemedDropdownScrollArea, ThemedDropdownSectionLabel, ThemedDropdownSurface } from './ui/ThemedDropdown';
@@ -11,6 +12,7 @@ interface CompactModelSelectorProps {
 }
 
 const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ models, selectedId, onSelect, disabled }) => {
+    const { t } = useTranslation();
     const [isOpen, setIsOpen] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
     const dropdownRef = useRef<HTMLDivElement>(null);
@@ -126,7 +128,7 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
                         {selectedModel ? getModelIcon(selectedModel.id) : <Box className="w-3 h-3" />}
                     </div>
                     <span className="truncate text-[10px] font-medium text-(--fg-secondary)">
-                        {selectedModel?.name || 'Select Model'}
+                        {selectedModel?.name || t('chat.modelSelection')}
                     </span>
                 </div>
                 <ChevronDown className={`h-2.5 w-2.5 text-(--fg-tertiary) transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
@@ -142,20 +144,20 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
                 >
                     {models.length === 0 && (
                         <ThemedDropdownEmptyState className="px-2 py-1.5 text-[9px]">
-                            No models available
+                            {t('chat.modelPicker.empty')}
                         </ThemedDropdownEmptyState>
                     )}
                     <ThemedDropdownScrollArea ref={dropdownRef} className="max-h-[240px] space-y-0.5 pr-0.5">
                         {cloudModels.map(renderModelItem)}
                         {ollamaModels.length > 0 && (
                             <ThemedDropdownSectionLabel className="px-2 pt-1.5 text-[8px]">
-                                Ollama
+                                {t('chat.modelPicker.ollama')}
                             </ThemedDropdownSectionLabel>
                         )}
                         {ollamaModels.map(renderModelItem)}
                         {openaiCompatModels.length > 0 && (
                             <ThemedDropdownSectionLabel className="px-2 pt-1.5 text-[8px]">
-                                Local Server
+                                {t('chat.modelPicker.localServer')}
                             </ThemedDropdownSectionLabel>
                         )}
                         {openaiCompatModels.map(renderModelItem)}

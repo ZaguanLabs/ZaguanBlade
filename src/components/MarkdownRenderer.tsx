@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
@@ -48,6 +49,7 @@ interface CodeBlockProps {
 
 // Memoized CodeBlock - only re-renders when language or value changes
 const CodeBlock = React.memo<CodeBlockProps>(({ language, value }) => {
+    const { t } = useTranslation();
     const [copied, setCopied] = useState(false);
 
     const handleCopy = useCallback(async () => {
@@ -73,17 +75,17 @@ const CodeBlock = React.memo<CodeBlockProps>(({ language, value }) => {
                     onClick={handleCopy}
                     className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-(--markdown-marker) hover:text-(--markdown-heading) transition-colors"
                     style={{ backgroundColor: copied ? 'color-mix(in srgb, var(--accent-primary) 14%, transparent)' : undefined }}
-                    title="Copy code"
+                    title={t('common.copy')}
                 >
                     {copied ? (
                         <>
                             <Check className="w-3 h-3 text-(--markdown-link)" />
-                            <span className="text-(--markdown-link)">Copied</span>
+                            <span className="text-(--markdown-link)">{t('common.copied')}</span>
                         </>
                     ) : (
                         <>
                             <Copy className="w-3 h-3" />
-                            <span>Copy</span>
+                            <span>{t('common.copy')}</span>
                         </>
                     )}
                 </button>

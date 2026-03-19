@@ -1,5 +1,5 @@
-use crate::models::registry::ModelInfo;
 use crate::config::normalize_openai_compat_url;
+use crate::models::registry::ModelInfo;
 use serde::Deserialize;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -44,7 +44,10 @@ async fn fetch_models_from_server(
     let models_response: OpenAIModelsResponse = match serde_json::from_str(&response_text) {
         Ok(res) => res,
         Err(e) => {
-            eprintln!("[OPENAI-COMPAT MODELS] Failed to deserialize response: {}", e);
+            eprintln!(
+                "[OPENAI-COMPAT MODELS] Failed to deserialize response: {}",
+                e
+            );
             eprintln!(
                 "[OPENAI-COMPAT MODELS] Raw response preview: {:.1000}",
                 response_text

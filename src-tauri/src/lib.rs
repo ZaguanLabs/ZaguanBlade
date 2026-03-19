@@ -11,14 +11,14 @@ pub mod commands;
 pub mod config;
 pub mod context_assembly;
 pub mod conversation;
-pub mod core_state;
 pub mod conversation_store;
+pub mod core_state;
 pub mod environment;
 pub mod ephemeral_commands;
-pub mod feature_flags;
 pub mod ephemeral_documents;
 pub mod events;
 pub mod explorer;
+pub mod feature_flags;
 pub mod fs_watcher;
 pub mod git;
 pub mod gitignore_filter;
@@ -37,14 +37,14 @@ pub mod protocol;
 pub mod protocol_dispatcher;
 pub mod providers;
 pub mod reasoning_parser;
+pub mod screenshot;
 pub mod semantic_patch;
 pub mod symbol_index;
-pub mod screenshot;
 pub mod terminal;
 pub mod tool_execution;
-pub mod uncommitted_changes;
 pub mod tools;
 pub mod tree_sitter;
+pub mod uncommitted_changes;
 pub mod utils;
 pub mod warmup;
 pub mod workflow_controller;
@@ -79,7 +79,7 @@ pub fn run() {
                 .ok()
                 .map(std::path::PathBuf::from)
                 .or_else(|| std::env::current_dir().ok());
-            
+
             cwd.map(|dir| dir.join(&path))
                 .and_then(|full| std::fs::canonicalize(&full).ok())
                 .map(|abs| abs.to_string_lossy().to_string())
@@ -140,7 +140,10 @@ pub fn run() {
                 let workspace = state.workspace.lock().unwrap().workspace.clone();
 
                 if let Some(path) = workspace {
-                    eprintln!("[Indexer] Starting background initialization for {:?}", path);
+                    eprintln!(
+                        "[Indexer] Starting background initialization for {:?}",
+                        path
+                    );
                     match crate::indexer::IndexerManager::new(&path) {
                         Ok(manager) => {
                             eprintln!("[Indexer] Initialized with {} files", manager.file_count());

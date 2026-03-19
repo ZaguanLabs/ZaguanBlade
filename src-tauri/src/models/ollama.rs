@@ -36,12 +36,12 @@ async fn fetch_models_from_server(
         .build()?;
 
     let mut request = client.get(&url);
-    
+
     // Add Authorization header if cloud is enabled and we have an API key
     if cloud_enabled && !cloud_api_key.is_empty() {
         request = request.header("Authorization", format!("Bearer {}", cloud_api_key));
     }
-    
+
     let response = request.send().await?;
     let response_text = response.text().await?;
 

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ChevronDown, Plus, Monitor, Scan, ImageUp } from 'lucide-react';
 
 interface FeatureMenuProps {
@@ -8,6 +9,7 @@ interface FeatureMenuProps {
 }
 
 export const FeatureMenu: React.FC<FeatureMenuProps> = ({ onScreenshot, onUploadImage, disabled }) => {
+    const { t } = useTranslation();
     const [isOpen, setIsOpen] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
 
@@ -38,7 +40,7 @@ export const FeatureMenu: React.FC<FeatureMenuProps> = ({ onScreenshot, onUpload
                 <div className="flex h-4 w-4 items-center justify-center rounded-sm border border-[var(--border-subtle)] bg-[var(--bg-surface)]">
                     <Plus className="h-2.5 w-2.5 text-[var(--accent-primary)]" />
                 </div>
-                <span>Add</span>
+                <span>{t('common.add')}</span>
                 <ChevronDown className={`h-2.5 w-2.5 text-[var(--fg-tertiary)] transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
             </button>
 
@@ -48,7 +50,7 @@ export const FeatureMenu: React.FC<FeatureMenuProps> = ({ onScreenshot, onUpload
                     style={{ boxShadow: '0 8px 30px rgba(0, 0, 0, 0.4), 0 0 1px rgba(255, 255, 255, 0.1)' }}
                 >
                     <div className="px-2 py-1 text-[8px] uppercase tracking-[0.16em] text-[var(--fg-tertiary)]">
-                        Capture
+                        {t('screenshot.featureMenu.captureSection')}
                     </div>
                     <button
                         type="button"
@@ -61,7 +63,7 @@ export const FeatureMenu: React.FC<FeatureMenuProps> = ({ onScreenshot, onUpload
                         <div className="flex h-6 w-6 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-app)]">
                             <Monitor className="h-3 w-3 text-[var(--accent-primary)]" />
                         </div>
-                        <span>Capture Window</span>
+                        <span>{t('screenshot.featureMenu.captureWindow')}</span>
                     </button>
                     <button
                         type="button"
@@ -74,11 +76,11 @@ export const FeatureMenu: React.FC<FeatureMenuProps> = ({ onScreenshot, onUpload
                         <div className="flex h-6 w-6 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-app)]">
                             <Scan className="h-3 w-3 text-[var(--accent-primary)]" />
                         </div>
-                        <span>Capture Region</span>
+                        <span>{t('screenshot.featureMenu.captureRegion')}</span>
                     </button>
                     <div className="my-0.5 border-t border-[var(--border-subtle)]/30" />
                     <div className="px-2 py-1 text-[8px] uppercase tracking-[0.16em] text-[var(--fg-tertiary)]">
-                        Attach
+                        {t('screenshot.featureMenu.attachSection')}
                     </div>
                     <button
                         type="button"
@@ -91,7 +93,7 @@ export const FeatureMenu: React.FC<FeatureMenuProps> = ({ onScreenshot, onUpload
                         <div className="flex h-6 w-6 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-app)]">
                             <ImageUp className="h-3 w-3 text-[var(--accent-primary)]" />
                         </div>
-                        <span>Upload Image</span>
+                        <span>{t('screenshot.featureMenu.uploadImage')}</span>
                     </button>
                 </div>
             )}

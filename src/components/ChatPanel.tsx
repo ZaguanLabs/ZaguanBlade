@@ -82,23 +82,23 @@ function getPlanTextFromMessage(message: ChatMessageType): string | null {
     return null;
 }
 
-const pendingResponseWords = [
-    'Working...',
-    'Thinking...',
-    'Waiting...',
-    'Ruminating...',
-] as const;
-
 const PendingResponseIndicator: React.FC = () => {
+    const { t } = useTranslation();
     const [wordIndex, setWordIndex] = useState(0);
+    const words = useMemo(() => [
+        t('chat.pendingResponse.working'),
+        t('chat.pendingResponse.thinking'),
+        t('chat.pendingResponse.waiting'),
+        t('chat.pendingResponse.ruminating'),
+    ], [t]);
 
     useEffect(() => {
         const intervalId = window.setInterval(() => {
-            setWordIndex((prev) => (prev + 1) % pendingResponseWords.length);
+            setWordIndex((prev) => (prev + 1) % words.length);
         }, 1800);
 
         return () => window.clearInterval(intervalId);
-    }, []);
+    }, [words.length]);
 
     return (
         <div className="px-4 py-3">
@@ -108,10 +108,10 @@ const PendingResponseIndicator: React.FC = () => {
                 </div>
                 <div className="flex flex-col items-start">
                     <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-300/80">
-                        Assistant is responding
+                        {t('chat.assistantResponding')}
                     </span>
-                    <span key={pendingResponseWords[wordIndex]} className="pending-response-word text-sm font-semibold text-(--fg-primary)">
-                        {pendingResponseWords[wordIndex]}
+                    <span key={words[wordIndex]} className="pending-response-word text-sm font-semibold text-(--fg-primary)">
+                        {words[wordIndex]}
                     </span>
                 </div>
                 <div className="ml-1 flex items-center gap-1">
@@ -473,21 +473,21 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                                 <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-emerald-500/20 bg-emerald-500/10 text-2xl shadow-[0_0_40px_rgba(16,185,129,0.15)]">
                                     🗡️
                                 </div>
-                                <h2 className="text-sm font-semibold uppercase tracking-[0.24em] text-[var(--fg-secondary)]">Zaguán Blade</h2>
+                                <h2 className="text-sm font-semibold uppercase tracking-[0.24em] text-[var(--fg-secondary)]">{t('app.name')}</h2>
                                 <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-[var(--fg-tertiary)]">
-                                    Ask for a fix, paste code, or describe what you want to build.
+                                    {t('chat.emptyState.intro')}
                                 </p>
                                 <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-[var(--fg-secondary)]">
-                                    Tip: Local AI runs on your machine — no API costs.
+                                    {t('chat.emptyState.tip')}
                                 </p>
                                 <div className="mt-5 flex flex-wrap items-center justify-center gap-2 text-[11px] text-[var(--fg-tertiary)]">
-                                    <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-app)] px-3 py-1">Understand this file</span>
-                                    <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-app)] px-3 py-1">Plan the next change</span>
-                                    <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-app)] px-3 py-1">Review command output</span>
-                                    <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-app)] px-3 py-1">Attach screenshots</span>
+                                    <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-app)] px-3 py-1">{t('chat.emptyState.understandFile')}</span>
+                                    <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-app)] px-3 py-1">{t('chat.emptyState.planNextChange')}</span>
+                                    <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-app)] px-3 py-1">{t('chat.emptyState.reviewCommandOutput')}</span>
+                                    <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-app)] px-3 py-1">{t('chat.emptyState.attachScreenshots')}</span>
                                 </div>
                                 <p className="mt-5 text-xs font-mono uppercase tracking-[0.2em] text-[var(--fg-tertiary)]/70">
-                                    Start with a fix, question, or build idea
+                                    {t('chat.emptyState.startPrompt')}
                                 </p>
                             </div>
                         )}
@@ -553,7 +553,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                                 className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-surface)]/95 px-4 py-2 text-xs font-medium text-[var(--fg-secondary)] shadow-[0_18px_48px_rgba(0,0,0,0.25)] backdrop-blur-md transition-colors hover:text-[var(--fg-primary)]"
                             >
                                 <ArrowDown className="h-3.5 w-3.5" />
-                                Jump to latest
+                                {t('chat.jumpToLatest')}
                             </button>
                         </div>
                     )}
@@ -594,7 +594,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                             disabled={loading || !canUseAi}
                             className="inline-flex items-center rounded-md border border-emerald-500/30 bg-emerald-500/12 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-200 transition-colors hover:border-emerald-400/50 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
                         >
-                            Implement
+                            {t('chat.implement')}
                         </button>
                     </div>
                 </div>

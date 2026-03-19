@@ -115,7 +115,9 @@ impl From<ChatEvent> for ProviderEvent {
 impl From<ProviderEvent> for ChatEvent {
     fn from(value: ProviderEvent) -> Self {
         match value {
-            ProviderEvent::Session { session_id, model } => ChatEvent::Session { session_id, model },
+            ProviderEvent::Session { session_id, model } => {
+                ChatEvent::Session { session_id, model }
+            }
             ProviderEvent::Chunk(text) => ChatEvent::Chunk(text),
             ProviderEvent::ReasoningChunk(text) => ChatEvent::ReasoningChunk(text),
             ProviderEvent::Research {

@@ -1,7 +1,10 @@
 {
   "app": {
     "name": "Zaguán Blade",
-    "tagline": "AI-Powered Code Editor"
+    "tagline": "AI-Powered Code Editor",
+    "menu": {
+      "file": "File"
+    }
   },
   "common": {
     "loading": "Loading...",
@@ -9,15 +12,20 @@
     "success": "Success",
     "cancel": "Cancel",
     "save": "Save",
+    "saveAs": "Save As...",
     "delete": "Delete",
+    "copy": "Copy",
+    "copied": "Copied",
     "edit": "Edit",
     "close": "Close",
     "ok": "OK",
     "yes": "Yes",
     "no": "No",
+    "open": "Open",
     "search": "Search",
     "filter": "Filter",
     "clear": "Clear",
+    "add": "Add",
     "apply": "Apply",
     "reset": "Reset",
     "confirm": "Confirm",
@@ -25,7 +33,24 @@
     "next": "Next",
     "previous": "Previous",
     "finish": "Finish",
-    "retry": "Retry"
+    "retry": "Retry",
+    "refresh": "Refresh",
+    "undo": "Undo",
+    "remove": "Remove",
+    "capture": "Capture",
+    "history": "History",
+    "recommended": "Recommended",
+    "getStarted": "Get Started",
+    "exit": "Exit",
+    "unknown": "Unknown",
+    "reveal": "Reveal in File Manager",
+    "copyPath": "Copy Path",
+    "copyRelativePath": "Copy Relative Path",
+    "searchPlaceholder": "Search...",
+    "folderNamePlaceholder": "folder name...",
+    "fileNamePlaceholder": "file name...",
+    "pathPlaceholder": "/path/to/folder",
+    "outline": "Outline"
   },
   "editor": {
     "title": "Editor",
@@ -49,7 +74,16 @@
     "toggleEditView": "Toggle Edit/View Mode (Ctrl+E)",
     "untitled": "Untitled.md",
     "editing": "Editing",
-    "viewing": "Viewing"
+    "viewing": "Viewing",
+    "landing": {
+      "title": "Run AI locally or use cloud models",
+      "subtitle": "Local = private, runs on your machine • Cloud = faster, pay per use",
+      "useLocalAi": "Use Local AI (no setup)",
+      "useCloudModels": "Use Cloud Models (API key)",
+      "manageSubscription": "Manage Subscription",
+      "noApiKey": "No API key? Use Local AI.",
+      "localPrivacy": "Your code stays on your machine."
+    }
   },
   "chat": {
     "title": "AI Chat",
@@ -64,19 +98,79 @@
     "clearHistory": "Clear History",
     "confirmClear": "Are you sure you want to clear the chat history?",
     "newChat": "New Chat",
+    "newConversation": "New Conversation",
     "modelSelection": "Select Model",
     "attachFile": "Attach File",
     "captureScreenshot": "Capture Screenshot",
     "screenshotShortcut": "Ctrl+Shift+S",
     "imageNoSubscription": "Image support requires a subscription. Go to Settings.",
-    "imageNotSupported": "GLM models do not support image attachments. Please select a different model."
+    "imageNotSupported": "GLM models do not support image attachments. Please select a different model.",
+    "referencedPaths": "Referenced paths",
+    "assistantResponding": "Assistant is responding",
+    "pendingResponse": {
+      "working": "Working...",
+      "thinking": "Thinking...",
+      "waiting": "Waiting...",
+      "ruminating": "Ruminating..."
+    },
+    "emptyState": {
+      "intro": "Ask for a fix, paste code, or describe what you want to build.",
+      "tip": "Tip: Local AI runs on your machine — no API costs.",
+      "understandFile": "Understand this file",
+      "planNextChange": "Plan the next change",
+      "reviewCommandOutput": "Review command output",
+      "attachScreenshots": "Attach screenshots",
+      "startPrompt": "Start with a fix, question, or build idea"
+    },
+    "jumpToLatest": "Jump to latest",
+    "implement": "Implement",
+    "mode": {
+      "codeLabel": "Code",
+      "codeDescription": "Implement and execute",
+      "planningLabel": "Planning",
+      "planningDescription": "Investigate and plan first"
+    },
+    "planningPlaceholder": "Investigate the codebase, ask clarifying questions, and build a concrete plan before coding…",
+    "pathRef": "Ref",
+    "pathType": {
+      "file": "File",
+      "folder": "Folder"
+    },
+    "commands": {
+      "webDescription": "Send link to model",
+      "webTooltip": "Fetches content from a URL and uses it as information to help the model make better decisions",
+      "researchDescription": "Research any topic",
+      "researchTooltip": "Performs deep research on a topic and displays results in a new tab once complete"
+    },
+    "contextMenu": {
+      "copyMessage": "Copy Message",
+      "copyAsMarkdown": "Copy as Markdown",
+      "editMessage": "Edit Message",
+      "regenerateResponse": "Regenerate Response"
+    },
+    "modelPicker": {
+      "empty": "No models available",
+      "ollama": "Ollama",
+      "localServer": "Local Server"
+    },
+    "tabs": {
+      "chat": "Chat",
+      "history": "History"
+    },
+    "queue": {
+      "title": "Queued requests ({{count}})",
+      "imageOnlyRequest": "(image-only request)",
+      "editQueuedRequest": "Edit queued request",
+      "deleteQueuedRequest": "Delete queued request"
+    },
+    "attachments": {
+      "title": "Attachments",
+      "attachmentAlt": "Attachment",
+      "removeImage": "Remove image"
+    }
   },
   "fileTree": {
     "title": "Explorer",
-    "noWorkspace": "No workspace open",
-    "openFolder": "Open Folder",
-    "refresh": "Refresh",
-    "collapse": "Collapse All",
     "newFile": "New File",
     "newFolder": "New Folder",
     "rename": "Rename",
@@ -90,7 +184,17 @@
     "copyRelativePath": "Copy Relative Path",
     "searchPlaceholder": "Search...",
     "folderNamePlaceholder": "folder name...",
-    "fileNamePlaceholder": "file name..."
+    "fileNamePlaceholder": "file name...",
+    "openInTerminal": "Open in Terminal",
+    "deleteConfirmMessage": "Are you sure you want to delete \"{{name}}\"? This action cannot be undone.",
+    "loadingTree": "Loading tree...",
+    "waitingForWorkspace": "Waiting for workspace..."
+  },
+  "contextMenu": {
+    "redo": "Redo",
+    "find": "Find",
+    "renameSymbol": "Rename Symbol",
+    "showCallGraph": "Show Call Graph"
   },
   "terminal": {
     "title": "Terminal",
@@ -102,7 +206,8 @@
     "copySelection": "Copy",
     "paste": "Paste",
     "selectAll": "Select All",
-    "findInTerminal": "Find"
+    "findInTerminal": "Find",
+    "sendToChat": "Send to Chat"
   },
   "tabs": {
     "closeTab": "Close Tab",
@@ -152,6 +257,7 @@
   },
   "settings": {
     "title": "Settings",
+    "subtitle": "Global + project preferences",
     "general": "General",
     "editor": "Editor",
     "appearance": "Appearance",
@@ -181,6 +287,47 @@
     "testing": "Testing...",
     "refreshModels": "Refresh Models",
     "refreshing": "Refreshing...",
+    "saveChanges": "Save Changes",
+    "unsavedChangesNotice": "You have unsaved changes",
+    "allChangesSaved": "All changes saved",
+    "connectionSuccessful": "Connection successful.",
+    "navigation": {
+      "configuration": "Configuration",
+      "account": "Account",
+      "localAi": "Local AI",
+      "storage": "Storage",
+      "context": "Context",
+      "about": "About"
+    },
+    "configurationSection": {
+      "title": "Configuration",
+      "description": "Configure global experience settings for the app.",
+      "themeTitle": "Theme",
+      "themeDescription": "Choose which built-in visual theme Zaguán Blade should use.",
+      "availableThemes": "Available themes",
+      "selectTheme": "Select theme",
+      "availableThemesLabel": "Available themes",
+      "live": "Live",
+      "themeScopeHelp": "This theme updates the app shell, editor, markdown, and terminal together.",
+      "themes": {
+        "zaguan-dark": {
+          "label": "Zaguán Dark",
+          "description": "The current Zaguán Blade look with deep surfaces and electric violet accents."
+        },
+        "blade-coder": {
+          "label": "Blade Coder",
+          "description": "A warm cinematic dark theme with soft beige highlights, rounded panels, and deep layered shadows."
+        },
+        "blade-cream": {
+          "label": "Blade Cream",
+          "description": "A warm light theme with creamy surfaces, sage accents, coral highlights, and soft editorial contrast."
+        },
+        "blade-robot": {
+          "label": "Blade Robot",
+          "description": "An industrial light theme with steel-gray surfaces, charcoal framing, rust accents, and brutalist contrast."
+        }
+      }
+    },
     "ollama": {
       "title": "Ollama (Local)",
       "description": "Enable local AI model support through Ollama.",
@@ -280,6 +427,7 @@
       "website": "Website",
       "github": "GitHub",
       "support": "Support",
+      "githubIssues": "GitHub Issues",
       "prsWelcome": "PRs and suggestions are welcome."
     },
     "account": {
@@ -487,7 +635,64 @@
     "windowPickerTitle": "Capture Window",
     "regionPickerTitle": "Select Window for Region Capture",
     "windowPickerSubtitle": "Select a window to capture",
-    "regionPickerSubtitle": "Pick a window, then select a region to crop"
+    "regionPickerSubtitle": "Pick a window, then select a region to crop",
+    "featureMenu": {
+      "captureSection": "Capture",
+      "attachSection": "Attach",
+      "captureWindow": "Capture Window",
+      "captureRegion": "Capture Region",
+      "uploadImage": "Upload Image"
+    },
+    "loadingWindows": "Loading windows...",
+    "noCapturableWindows": "No capturable windows found.",
+    "dragToSelectArea": "Drag to select an area",
+    "screenshotAlt": "Screenshot",
+    "windowUnknown": "Unknown"
+  },
+  "pdf": {
+    "loading": "Loading PDF...",
+    "loadFailed": "Failed to load PDF",
+    "previousPage": "Previous page",
+    "nextPage": "Next page",
+    "zoomOut": "Zoom out",
+    "zoomIn": "Zoom in",
+    "fitToWidth": "Fit to width"
+  },
+  "gitGraph": {
+    "title": "Graph",
+    "loadingCommits": "Loading commits...",
+    "noCommits": "No commits found",
+    "copyFullCommitHash": "Copy full commit hash",
+    "openOnGitHub": "Open on GitHub",
+    "filesChanged": "{{count}} file changed",
+    "filesChanged_other": "{{count}} files changed",
+    "insertions": "{{count}} insertion(+)",
+    "insertions_other": "{{count}} insertions(+)",
+    "deletions": "{{count}} deletion(-)",
+    "deletions_other": "{{count}} deletions(-)"
+  },
+  "fileHistory": {
+    "title": "File History",
+    "noFileSelected": "No file selected",
+    "loading": "Loading history...",
+    "empty": "No history for this file",
+    "revertToVersion": "Revert to this version",
+    "confirmRevert": "Are you sure you want to revert to this version? This will overwrite the current file.",
+    "snapshotId": "ID: {{id}}..."
+  },
+  "storageSetup": {
+    "title": "Welcome to ZaguanBlade",
+    "description": "Choose how you want to store your conversation history for this project.",
+    "changeLater": "You can change this later in Settings",
+    "settingUp": "Setting up...",
+    "localTitle": "Local Storage",
+    "localDescription": "Your code and conversations stay on your machine. Maximum privacy.",
+    "localCodePrivate": "Code never leaves your machine",
+    "localStoredInProject": "Stored in .zblade/",
+    "serverTitle": "Server Storage",
+    "serverDescription": "Conversations stored on server for faster context assembly.",
+    "serverFasterResponses": "Faster responses",
+    "serverEncrypted": "Encrypted on server"
   },
   "workspace": {
     "title": "Workspace",
@@ -513,5 +718,9 @@
     "chinese": "中文",
     "japanese": "日本語",
     "korean": "한국어"
+  },
+  "outline": {
+    "loadingStructure": "Parsing structure...",
+    "noSymbols": "No symbols found."
   }
 }

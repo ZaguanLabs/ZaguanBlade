@@ -43,11 +43,7 @@ pub fn resolve_model_index(models: &[ModelInfo], model_id: &str) -> Option<usize
                 .position(|m| m.id.to_lowercase() == id_lower)
                 .or_else(|| {
                     models.iter().position(|m| {
-                        m.api_id
-                            .as_ref()
-                            .map(|s| s.to_lowercase())
-                            .as_deref()
-                            == Some(&id_lower)
+                        m.api_id.as_ref().map(|s| s.to_lowercase()).as_deref() == Some(&id_lower)
                     })
                 })
         })

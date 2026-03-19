@@ -84,7 +84,8 @@ impl WarmupClient {
         trigger: WarmupTrigger,
     ) -> Result<WarmupResponse, String> {
         let provider = detect_provider(model).to_lowercase();
-        let (cache_strategy, preferred_artifacts) = if provider_requires_explicit_minimal(&provider) {
+        let (cache_strategy, preferred_artifacts) = if provider_requires_explicit_minimal(&provider)
+        {
             (
                 Some(WarmupCacheStrategy::ExplicitMinimal),
                 Some(vec!["project_index_min.md".to_string()]),
@@ -152,18 +153,22 @@ pub fn detect_provider(model: &str) -> &str {
 
 /// Providers where zcoderd should explicitly warm only the compact deterministic index.
 pub fn provider_requires_explicit_minimal(provider: &str) -> bool {
-    matches!(provider.to_lowercase().as_str(), "anthropic" | "qwen" | "minimax")
+    matches!(
+        provider.to_lowercase().as_str(),
+        "anthropic" | "qwen" | "minimax"
+    )
 }
 
 /// Providers that already optimize caching without forced artifact preload.
 pub fn provider_prefers_opportunistic_cache(provider: &str) -> bool {
-    matches!(provider.to_lowercase().as_str(), "openai" | "groq" | "novita")
+    matches!(
+        provider.to_lowercase().as_str(),
+        "openai" | "groq" | "novita"
+    )
 }
 
 /// Check if a provider supports prompt caching
 #[allow(dead_code)]
 pub fn provider_supports_cache(provider: &str) -> bool {
-    provider_requires_explicit_minimal(provider)
-        || provider_prefers_opportunistic_cache(provider)
+    provider_requires_explicit_minimal(provider) || provider_prefers_opportunistic_cache(provider)
 }
-

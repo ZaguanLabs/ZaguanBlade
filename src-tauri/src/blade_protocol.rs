@@ -97,8 +97,12 @@ pub enum ChatIntent {
     },
     StopGeneration {},
     ClearHistory {},
-    NewConversation { model: String },
-    SetSelectedModel { model: String },
+    NewConversation {
+        model: String,
+    },
+    SetSelectedModel {
+        model: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

@@ -59,10 +59,8 @@ mod tests {
 
     #[test]
     fn parse_run_command_defaults_to_blocking() {
-        let parsed = parse_run_command_args(
-            r#"{"command":"echo test","cwd":"/tmp"}"#,
-        )
-        .expect("should parse run_command args");
+        let parsed = parse_run_command_args(r#"{"command":"echo test","cwd":"/tmp"}"#)
+            .expect("should parse run_command args");
 
         assert_eq!(parsed.command, "echo test");
         assert_eq!(parsed.spec.command_line.as_deref(), Some("echo test"));
@@ -85,14 +83,16 @@ mod tests {
 
     #[test]
     fn parse_run_command_program_args_defaults_non_shell() {
-        let parsed = parse_run_command_args(
-            r#"{"program":"echo","args":["hello","world"],"cwd":"/tmp"}"#,
-        )
-        .expect("should parse program/args command");
+        let parsed =
+            parse_run_command_args(r#"{"program":"echo","args":["hello","world"],"cwd":"/tmp"}"#)
+                .expect("should parse program/args command");
 
         assert_eq!(parsed.command, "echo hello world");
         assert_eq!(parsed.spec.program.as_deref(), Some("echo"));
-        assert_eq!(parsed.spec.args, vec!["hello".to_string(), "world".to_string()]);
+        assert_eq!(
+            parsed.spec.args,
+            vec!["hello".to_string(), "world".to_string()]
+        );
         assert!(!parsed.spec.shell);
     }
 }
@@ -433,7 +433,8 @@ impl AiWorkflow {
                             let state = app.state::<crate::app_state::AppState>();
                             let history_service = state.history_service.read().unwrap().clone();
                             if full_path.exists() {
-                                match history_service.create_snapshot(&full_path, Some(call.id.clone()))
+                                match history_service
+                                    .create_snapshot(&full_path, Some(call.id.clone()))
                                 {
                                     Ok(entry) => {
                                         println!("[HISTORY] Snapshot created for {}", change.path);
@@ -514,7 +515,8 @@ impl AiWorkflow {
 
                                     // Track as uncommitted change if we have a snapshot
                                     if let Some(snap_id) = &snapshot_id {
-                                        let existing = state.uncommitted_changes.get_by_path(&full_path);
+                                        let existing =
+                                            state.uncommitted_changes.get_by_path(&full_path);
 
                                         // Preserve the earliest snapshot baseline for a file so
                                         // repeated edits to the same file are represented as one
@@ -524,7 +526,9 @@ impl AiWorkflow {
                                                 let history_service =
                                                     state.history_service.read().unwrap().clone();
                                                 let baseline = history_service
-                                                    .get_snapshot_content(&existing_change.snapshot_id)
+                                                    .get_snapshot_content(
+                                                        &existing_change.snapshot_id,
+                                                    )
                                                     .unwrap_or_else(|_| original_content.clone());
                                                 (
                                                     existing_change.id,
@@ -540,27 +544,35 @@ impl AiWorkflow {
                                             };
 
                                         // Read new content for diff
-                                        let new_content = fs::read_to_string(&full_path).unwrap_or_default();
-                                        let diff = crate::uncommitted_changes::generate_unified_diff(
-                                            &base_content,
-                                            &new_content,
-                                        );
-                                        let (added, removed) = crate::uncommitted_changes::count_diff_stats(&diff);
+                                        let new_content =
+                                            fs::read_to_string(&full_path).unwrap_or_default();
+                                        let diff =
+                                            crate::uncommitted_changes::generate_unified_diff(
+                                                &base_content,
+                                                &new_content,
+                                            );
+                                        let (added, removed) =
+                                            crate::uncommitted_changes::count_diff_stats(&diff);
 
-                                        let uncommitted = crate::uncommitted_changes::UncommittedChange {
-                                            id: change_id,
-                                            file_path: full_path.clone(),
-                                            snapshot_id: base_snapshot_id,
-                                            unified_diff: diff,
-                                            added_lines: added,
-                                            removed_lines: removed,
-                                            timestamp: std::time::SystemTime::now()
-                                                .duration_since(std::time::UNIX_EPOCH)
-                                                .unwrap_or_default()
-                                                .as_millis() as u64,
-                                        };
+                                        let uncommitted =
+                                            crate::uncommitted_changes::UncommittedChange {
+                                                id: change_id,
+                                                file_path: full_path.clone(),
+                                                snapshot_id: base_snapshot_id,
+                                                unified_diff: diff,
+                                                added_lines: added,
+                                                removed_lines: removed,
+                                                timestamp: std::time::SystemTime::now()
+                                                    .duration_since(std::time::UNIX_EPOCH)
+                                                    .unwrap_or_default()
+                                                    .as_millis()
+                                                    as u64,
+                                            };
                                         state.uncommitted_changes.track(uncommitted);
-                                        println!("[UNCOMMITTED] Tracking cumulative change for {}", change.path);
+                                        println!(
+                                            "[UNCOMMITTED] Tracking cumulative change for {}",
+                                            change.path
+                                        );
                                     }
 
                                     let abs_path_str = full_path.to_string_lossy().to_string();
@@ -616,7 +628,8 @@ impl AiWorkflow {
                             let state = app.state::<crate::app_state::AppState>();
                             let history_service = state.history_service.read().unwrap().clone();
                             if full_path.exists() {
-                                match history_service.create_snapshot(&full_path, Some(call.id.clone()))
+                                match history_service
+                                    .create_snapshot(&full_path, Some(call.id.clone()))
                                 {
                                     Ok(entry) => {
                                         println!("[HISTORY] Snapshot created for {}", change.path);
@@ -838,7 +851,10 @@ impl AiWorkflow {
                         );
                         file_results.push((call.clone(), res.clone()));
                         if res.success
-                            && matches!(call.function.name.as_str(), "read_file" | "read_file_range")
+                            && matches!(
+                                call.function.name.as_str(),
+                                "read_file" | "read_file_range"
+                            )
                         {
                             self.recent_file_tool_cache.push_back((
                                 (
@@ -853,7 +869,10 @@ impl AiWorkflow {
                         }
                     }
                     Err(e) => {
-                        eprintln!("[TOOL RESULT] Thread panicked during parallel read: {:?}", e);
+                        eprintln!(
+                            "[TOOL RESULT] Thread panicked during parallel read: {:?}",
+                            e
+                        );
                         // Thread panicked - this shouldn't happen but handle it gracefully
                         // The tool call will be missing from results, which will cause an error downstream
                     }

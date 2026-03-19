@@ -197,14 +197,14 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
         const items: ContextMenuItem[] = [
             {
                 id: 'new-file',
-                label: 'New File',
+                label: t('fileTree.newFile'),
                 icon: <FilePlus className="w-4 h-4" />,
                 shortcut: 'Ctrl+N',
                 onClick: () => startNewItem(targetFolder, false)
             },
             {
                 id: 'new-folder',
-                label: 'New Folder',
+                label: t('fileTree.newFolder'),
                 icon: <FolderPlus className="w-4 h-4" />,
                 shortcut: 'Ctrl+Shift+N',
                 onClick: () => startNewItem(targetFolder, true)
@@ -216,7 +216,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
         items.push(
             {
                 id: 'cut',
-                label: 'Cut',
+                label: t('fileTree.cut'),
                 icon: <Scissors className="w-4 h-4" />,
                 shortcut: 'Ctrl+X',
                 onClick: () => {
@@ -226,7 +226,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
             },
             {
                 id: 'copy',
-                label: 'Copy',
+                label: t('fileTree.copy'),
                 icon: <Copy className="w-4 h-4" />,
                 shortcut: 'Ctrl+C',
                 onClick: () => {
@@ -236,7 +236,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
             },
             {
                 id: 'paste',
-                label: 'Paste',
+                label: t('fileTree.paste'),
                 icon: <Clipboard className="w-4 h-4" />,
                 shortcut: 'Ctrl+V',
                 disabled: !clipboard,
@@ -248,7 +248,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
             { id: 'div-2', label: '', divider: true },
             {
                 id: 'rename',
-                label: 'Rename',
+                label: t('fileTree.rename'),
                 icon: <Pencil className="w-4 h-4" />,
                 shortcut: 'F2',
                 onClick: () => {
@@ -261,15 +261,15 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
             },
             {
                 id: 'delete',
-                label: 'Delete',
+                label: t('fileTree.delete'),
                 icon: <Trash2 className="w-4 h-4" />,
                 shortcut: 'Delete',
                 danger: true,
                 onClick: () => {
                     setConfirmModal({
                         isOpen: true,
-                        title: 'Delete',
-                        message: `Are you sure you want to delete "${itemName}"? This action cannot be undone.`,
+                        title: t('fileTree.delete'),
+                        message: t('fileTree.deleteConfirmMessage', { name: itemName }),
                         targetPath: itemId
                     });
                 }
@@ -277,7 +277,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
             { id: 'div-3', label: '', divider: true },
             {
                 id: 'copy-path',
-                label: 'Copy Path',
+                label: t('fileTree.copyPath'),
                 icon: <Copy className="w-4 h-4" />,
                 shortcut: 'Ctrl+Shift+C',
                 onClick: async () => {
@@ -291,7 +291,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
             },
             {
                 id: 'open-in-terminal',
-                label: 'Open in Terminal',
+                label: t('fileTree.openInTerminal'),
                 icon: <Terminal className="w-4 h-4" />,
                 onClick: async () => {
                     // For folders, open terminal at the folder path
@@ -304,7 +304,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
         );
 
         return items;
-    }, [clipboard, startNewItem]);
+    }, [clipboard, startNewItem, t]);
 
     // Context menu for item right-click
     const handleContextMenu = useCallback((e: React.MouseEvent, itemId: string, isFolder: boolean, itemName: string) => {
@@ -328,14 +328,14 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
         const items: ContextMenuItem[] = [
             {
                 id: 'new-file',
-                label: 'New File',
+                label: t('fileTree.newFile'),
                 icon: <FilePlus className="w-4 h-4" />,
                 shortcut: 'Ctrl+N',
                 onClick: () => startNewItem(workspaceRoot, false)
             },
             {
                 id: 'new-folder',
-                label: 'New Folder',
+                label: t('fileTree.newFolder'),
                 icon: <FolderPlus className="w-4 h-4" />,
                 shortcut: 'Ctrl+Shift+N',
                 onClick: () => startNewItem(workspaceRoot, true)
@@ -343,7 +343,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
             { id: 'div-1', label: '', divider: true },
             {
                 id: 'paste',
-                label: 'Paste',
+                label: t('fileTree.paste'),
                 icon: <Clipboard className="w-4 h-4" />,
                 shortcut: 'Ctrl+V',
                 disabled: !clipboard,
@@ -354,7 +354,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
         ];
 
         showMenu({ x: e.clientX, y: e.clientY }, items);
-    }, [showMenu, clipboard, getWorkspaceRoot, startNewItem]);
+    }, [showMenu, clipboard, getWorkspaceRoot, startNewItem, t]);
 
     // Keyboard shortcuts: Ctrl+N (new file), Ctrl+Shift+N (new folder)
     useEffect(() => {
@@ -793,7 +793,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
 
                 {tree.getItems().length === 0 && (
                     <div className="p-4 text-[var(--fg-tertiary)] italic">
-                        {roots.length > 0 ? "Loading tree..." : "Waiting for workspace..."}
+                        {roots.length > 0 ? t('fileTree.loadingTree') : t('fileTree.waitingForWorkspace')}
                     </div>
                 )}
             </div>
@@ -803,7 +803,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                 isOpen={confirmModal.isOpen}
                 title={confirmModal.title}
                 message={confirmModal.message}
-                confirmLabel="Delete"
+                confirmLabel={t('fileTree.delete')}
                 confirmVariant="danger"
                 onConfirm={() => {
                     handleDeleteFile(confirmModal.targetPath);

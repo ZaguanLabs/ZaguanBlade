@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { StructureNode } from '../types/zlp';
 import { ZLPService } from '../services/zlp';
 import { ChevronRight, Box, FunctionSquare, Variable, Tag, FileText, Layout, Braces } from 'lucide-react';
@@ -107,6 +108,7 @@ const OutlineItem: React.FC<{
 };
 
 export const OutlinePanel: React.FC<OutlinePanelProps> = ({ filePath, onNavigate }) => {
+    const { t } = useTranslation();
     const [structure, setStructure] = useState<StructureNode[]>([]);
     const [loading, setLoading] = useState(false);
 
@@ -156,7 +158,7 @@ export const OutlinePanel: React.FC<OutlinePanelProps> = ({ filePath, onNavigate
     if (loading) {
         return (
             <div className="flex items-center justify-center p-8 text-[var(--fg-tertiary)]">
-                <div className="animate-pulse text-xs italic">Parsing structure...</div>
+                <div className="animate-pulse text-xs italic">{t('outline.loadingStructure')}</div>
             </div>
         );
     }
@@ -164,7 +166,7 @@ export const OutlinePanel: React.FC<OutlinePanelProps> = ({ filePath, onNavigate
     if (structure.length === 0) {
         return (
             <div className="p-4 text-[10px] text-[var(--fg-tertiary)] italic text-center">
-                No symbols found.
+                {t('outline.noSymbols')}
             </div>
         );
     }

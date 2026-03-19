@@ -186,7 +186,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                                     : 'text-[var(--fg-tertiary)] hover:bg-[var(--bg-surface)] hover:text-[var(--fg-secondary)]'
                             }`}
                         >
-                            File
+                            {t('app.menu.file')}
                             <ChevronDown className={`w-3 h-3 transition-transform ${fileMenuOpen ? 'rotate-180' : ''}`} />
                         </button>
 
@@ -206,14 +206,14 @@ export const AppBar: React.FC<AppBarProps> = ({
                                     }}
                                     className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] transition-colors"
                                 >
-                                    <span>New File</span>
+                                    <span>{t('fileTree.newFile')}</span>
                                     <span className="text-[10px] text-[var(--fg-tertiary)] font-mono">Ctrl+N</span>
                                 </button>
                                 <button
                                     onClick={() => { setFileMenuOpen(false); }}
                                     className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] transition-colors"
                                 >
-                                    <span>Open Folder...</span>
+                                    <span>{t('fileTree.openFolder')}...</span>
                                     <span className="text-[10px] text-[var(--fg-tertiary)] font-mono">Ctrl+O</span>
                                 </button>
                                 <div className="my-1.5 mx-2 h-px" style={{ backgroundColor: 'var(--border-subtle)' }} />
@@ -221,14 +221,14 @@ export const AppBar: React.FC<AppBarProps> = ({
                                     onClick={() => { setFileMenuOpen(false); }}
                                     className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] transition-colors"
                                 >
-                                    <span>Save</span>
+                                    <span>{t('common.save')}</span>
                                     <span className="text-[10px] text-[var(--fg-tertiary)] font-mono">Ctrl+S</span>
                                 </button>
                                 <button
                                     onClick={() => { setFileMenuOpen(false); }}
                                     className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] transition-colors"
                                 >
-                                    <span>Save As...</span>
+                                    <span>{t('common.saveAs')}</span>
                                     <span className="text-[10px] text-[var(--fg-tertiary)] font-mono">Ctrl+Shift+S</span>
                                 </button>
                                 <div className="my-1.5 mx-2 h-px" style={{ backgroundColor: 'var(--border-subtle)' }} />
@@ -236,7 +236,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                                     onClick={() => { setFileMenuOpen(false); appWindow.close(); }}
                                     className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] transition-colors"
                                 >
-                                    <span>Exit</span>
+                                    <span>{t('common.exit')}</span>
                                     <span className="text-[10px] text-[var(--fg-tertiary)] font-mono">Alt+F4</span>
                                 </button>
                             </div>

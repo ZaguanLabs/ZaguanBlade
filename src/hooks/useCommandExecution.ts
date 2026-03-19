@@ -29,6 +29,7 @@ type PendingCommand = {
     waitMsBeforeAsync?: number;
     started: boolean;
     fallbackAttempted: boolean;
+    previewEmitted: boolean;
 };
 
 type ManagedTerminal = {
@@ -310,10 +311,18 @@ export function useCommandExecution() {
 
     const sendCommandToBlade = useCallback(async (pending: PendingCommand) => {
         const payload = buildInteractiveCommandPayload(pending);
+        const visibleCommand = pending.command;
 
         try {
             await openManagedTerminal(pending.terminalId, pending.terminalTitle, pending.cwd);
             updateTerminal(pending.terminalId, terminal => terminal ? { ...terminal, ready: true, opening: false } : terminal);
+            if (!pending.previewEmitted && visibleCommand.trim().length > 0) {
+                pending.previewEmitted = true;
+                await emit('terminal-command-preview', {
+                    id: pending.terminalId,
+                    data: `${visibleCommand}\r\n`,
+                });
+            }
             await BladeDispatcher.terminal({
                 type: 'Input',
                 payload: {
@@ -415,6 +424,7 @@ export function useCommandExecution() {
                     waitMsBeforeAsync: event.payload.wait_ms_before_async,
                     started: false,
                     fallbackAttempted: false,
+                    previewEmitted: false,
                 };
                 pendingCommandsRef.current.set(event.payload.call_id, pending);
 

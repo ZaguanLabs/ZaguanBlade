@@ -112,10 +112,7 @@ pub async fn save_ephemeral_document_to_workspace(
     // Write file
     std::fs::write(&file_path, &doc.content).map_err(|e| e.to_string())?;
 
-    println!(
-        "[EPHEMERAL] Saved document to workspace: {}",
-        file_path_str
-    );
+    println!("[EPHEMERAL] Saved document to workspace: {}", file_path_str);
 
     // Remove from ephemeral storage after successful save
     state.ephemeral_docs.remove(&id);

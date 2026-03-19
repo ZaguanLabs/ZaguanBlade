@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { Check, X } from 'lucide-react';
 import type { UncommittedChange } from '../../types/uncommitted';
 
@@ -15,6 +16,7 @@ export const GlobalChangeActions: React.FC<GlobalChangeActionsProps> = ({
   onRejectAll,
   disabled = false,
 }) => {
+  const { t } = useTranslation();
   if (changes.length === 0) {
     return null;
   }
@@ -39,20 +41,20 @@ export const GlobalChangeActions: React.FC<GlobalChangeActionsProps> = ({
           disabled={disabled}
           className="flex items-center gap-1 px-1 py-0.5 transition-colors disabled:cursor-not-allowed disabled:opacity-50 hover:opacity-80"
           style={{ color: 'var(--accent-green)' }}
-          title="Accept all AI changes"
+          title={t('diff.acceptAll')}
         >
           <Check className="w-3 h-3" />
-          Accept All
+          {t('diff.acceptAll')}
         </button>
         <button
           onClick={onRejectAll}
           disabled={disabled}
           className="flex items-center gap-1 px-1 py-0.5 transition-colors disabled:cursor-not-allowed disabled:opacity-50 hover:opacity-80"
           style={{ color: 'var(--accent-error)' }}
-          title="Reject all AI changes (revert to original)"
+          title={t('diff.rejectAll')}
         >
           <X className="w-3 h-3" />
-          Reject All
+          {t('diff.rejectAll')}
         </button>
       </div>
     </div>

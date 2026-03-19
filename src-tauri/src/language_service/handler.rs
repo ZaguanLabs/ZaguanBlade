@@ -184,10 +184,13 @@ impl LanguageHandler {
                 // Clone the indexer manager to avoid holding the lock across await
                 let indexer_manager = {
                     let guard = state.indexer_manager.lock().unwrap();
-                    guard.as_ref().cloned().ok_or_else(|| BladeError::Internal {
-                        trace_id: intent_id.to_string(),
-                        message: "IndexerManager not initialized".to_string(),
-                    })?
+                    guard
+                        .as_ref()
+                        .cloned()
+                        .ok_or_else(|| BladeError::Internal {
+                            trace_id: intent_id.to_string(),
+                            message: "IndexerManager not initialized".to_string(),
+                        })?
                 };
 
                 let file_path = indexer_manager
