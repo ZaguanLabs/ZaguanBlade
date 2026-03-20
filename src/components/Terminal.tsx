@@ -410,17 +410,6 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
                 }
             }
         );
-
-        const previewListener = listen<{ id: string; data: string }>(
-            'terminal-command-preview',
-            (event) => {
-                if (event.payload.id !== id || !xtermRef.current) {
-                    return;
-                }
-                xtermRef.current.write(event.payload.data);
-            }
-        );
-
         // 4. Send input to backend
         term.onData((data) => {
             BladeDispatcher.terminal({
@@ -449,8 +438,7 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
             resizeObserver.disconnect();
             unlistenLegacy.then((unlisten) => unlisten());
             unlistenV11.then((unlisten) => unlisten());
-            previewListener.then((unlisten) => unlisten());
-
+    
             BladeDispatcher.terminal({
                 type: "Kill",
                 payload: { id }

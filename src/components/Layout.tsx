@@ -709,6 +709,7 @@ const AppLayoutInner: React.FC = () => {
                                 setChatMode={chat.setChatMode}
                                 pendingActions={chat.pendingActions}
                                 approveToolDecision={chat.approveToolDecision}
+                                approveSingleCommand={chat.approveSingleCommand}
                                 skipSingleCommand={chat.skipSingleCommand}
 
                                 projectId={projectId || "default-project"}

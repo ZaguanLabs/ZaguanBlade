@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -10,6 +10,26 @@ import { Copy, Check } from 'lucide-react';
 interface MarkdownRendererProps {
     content: string;
     className?: string;
+}
+
+interface StreamingMarkdownSegmentation {
+    stableBlocks: string[];
+    liveTail: string;
+    liveTailInFence: boolean;
+    liveFenceMarker: string;
+}
+
+interface StreamingMarkdownCacheEntry {
+    content: string;
+    segmentation: StreamingMarkdownSegmentation;
+}
+
+type StructuredTailKind = 'none' | 'list' | 'table';
+
+interface StructuredTailAnalysis {
+    kind: StructuredTailKind;
+    stableMarkdown: string;
+    unstableTail: string;
 }
 
 // Stable theme object - defined outside component to prevent recreation
@@ -107,6 +127,58 @@ const CodeBlock = React.memo<CodeBlockProps>(({ language, value }) => {
 });
 CodeBlock.displayName = 'CodeBlock';
 
+const PlainCodeBlock = React.memo<CodeBlockProps>(({ language, value }) => {
+    const { t } = useTranslation();
+    const [copied, setCopied] = useState(false);
+
+    const handleCopy = useCallback(async () => {
+        try {
+            await navigator.clipboard.writeText(value);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        } catch (err) {
+            console.error('Failed to copy code:', err);
+        }
+    }, [value]);
+
+    const displayLanguage = language || 'text';
+
+    return (
+        <div className="group relative my-3 overflow-hidden rounded-lg border border-(--markdown-border) bg-(--markdown-block-bg)">
+            <div className="flex items-center justify-between border-b border-(--markdown-border) px-3 py-1.5" style={{ backgroundColor: 'var(--markdown-block-header-bg)' }}>
+                <span className="text-[10px] font-mono uppercase tracking-wider text-(--markdown-marker)">
+                    {displayLanguage}
+                </span>
+                <button
+                    onClick={handleCopy}
+                    className="flex items-center gap-1 rounded px-2 py-0.5 text-[10px] text-(--markdown-marker) transition-colors hover:text-(--markdown-heading)"
+                    style={{ backgroundColor: copied ? 'color-mix(in srgb, var(--accent-primary) 14%, transparent)' : undefined }}
+                    title={t('common.copy')}
+                >
+                    {copied ? (
+                        <>
+                            <Check className="h-3 w-3 text-(--markdown-link)" />
+                            <span className="text-(--markdown-link)">{t('common.copied')}</span>
+                        </>
+                    ) : (
+                        <>
+                            <Copy className="h-3 w-3" />
+                            <span>{t('common.copy')}</span>
+                        </>
+                    )}
+                </button>
+            </div>
+
+            <div className="overflow-x-auto px-4 py-3">
+                <pre className="m-0 whitespace-pre-wrap wrap-break-word bg-transparent p-0 text-[12px] leading-6 text-(--markdown-body)">
+                    <code style={codeTagStyle}>{value}</code>
+                </pre>
+            </div>
+        </div>
+    );
+});
+PlainCodeBlock.displayName = 'PlainCodeBlock';
+
 // Simple inline code - no need for heavy memoization
 const InlineCode: React.FC<{ children: React.ReactNode }> = ({ children }) => (
     <code
@@ -124,6 +196,299 @@ const InlineCode: React.FC<{ children: React.ReactNode }> = ({ children }) => (
 
 // Stable remark plugins array - defined outside to prevent recreation
 const remarkPlugins = [remarkGfm, remarkBreaks];
+
+function extractFenceMarker(line: string): string | null {
+    const match = /^(?:\s*)(`{3,}|~{3,})(.*)$/.exec(line);
+    return match ? match[1] : null;
+}
+
+function isFenceClose(line: string, marker: string): boolean {
+    const match = /^(?:\s*)(`{3,}|~{3,})\s*$/.exec(line);
+    return !!match && match[1][0] === marker[0] && match[1].length >= marker.length;
+}
+
+function segmentStreamingMarkdown(content: string): StreamingMarkdownSegmentation {
+    if (!content) {
+        return {
+            stableBlocks: [],
+            liveTail: '',
+            liveTailInFence: false,
+            liveFenceMarker: '',
+        };
+    }
+
+    const stableBlocks: string[] = [];
+    const lines = content.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+    let currentBlock = '';
+    let liveTailInFence = false;
+    let fenceMarker = '';
+
+    for (const line of lines) {
+        const normalizedLine = line.endsWith('\n') ? line.slice(0, -1) : line;
+        const trimmedLine = normalizedLine.trim();
+
+        if (liveTailInFence) {
+            currentBlock += line;
+            if (isFenceClose(trimmedLine, fenceMarker)) {
+                liveTailInFence = false;
+                fenceMarker = '';
+                if (line.endsWith('\n')) {
+                    stableBlocks.push(currentBlock);
+                    currentBlock = '';
+                }
+            }
+            continue;
+        }
+
+        const nextFenceMarker = extractFenceMarker(trimmedLine);
+        if (nextFenceMarker) {
+            if (currentBlock.trim().length > 0) {
+                stableBlocks.push(currentBlock);
+                currentBlock = '';
+            }
+            currentBlock += line;
+            liveTailInFence = true;
+            fenceMarker = nextFenceMarker;
+            continue;
+        }
+
+        currentBlock += line;
+
+        if (trimmedLine === '') {
+            if (currentBlock.trim().length > 0) {
+                stableBlocks.push(currentBlock);
+            }
+            currentBlock = '';
+            continue;
+        }
+
+        if ((/^#{1,6}\s/.test(trimmedLine) || /^(-{3,}|\*{3,}|_{3,})\s*$/.test(trimmedLine)) && line.endsWith('\n')) {
+            stableBlocks.push(currentBlock);
+            currentBlock = '';
+        }
+    }
+
+    return {
+        stableBlocks,
+        liveTail: currentBlock,
+        liveTailInFence,
+        liveFenceMarker: fenceMarker,
+    };
+}
+
+function segmentStreamingMarkdownIncremental(
+    content: string,
+    previous?: StreamingMarkdownCacheEntry | null,
+): StreamingMarkdownSegmentation {
+    if (!previous || !content.startsWith(previous.content)) {
+        return segmentStreamingMarkdown(content);
+    }
+
+    if (content === previous.content) {
+        return previous.segmentation;
+    }
+
+    const appendedSuffix = content.slice(previous.content.length);
+    const tailToRescan = `${previous.segmentation.liveTail}${appendedSuffix}`;
+    const rescannedTail = segmentStreamingMarkdown(tailToRescan);
+
+    return {
+        stableBlocks: [...previous.segmentation.stableBlocks, ...rescannedTail.stableBlocks],
+        liveTail: rescannedTail.liveTail,
+        liveTailInFence: rescannedTail.liveTailInFence,
+        liveFenceMarker: rescannedTail.liveFenceMarker,
+    };
+}
+
+function findTrailingBlockStart(content: string): number {
+    if (!content) {
+        return 0;
+    }
+
+    const normalized = content.replace(/\n+$/, '');
+    if (!normalized) {
+        return 0;
+    }
+
+    const separatorIndex = normalized.lastIndexOf('\n\n');
+    return separatorIndex === -1 ? 0 : separatorIndex + 2;
+}
+
+function isListStart(line: string): boolean {
+    return /^\s*(?:[-+*]\s+|\d+[.)]\s+)/.test(line);
+}
+
+function isListContinuation(line: string): boolean {
+    return line.trim().length === 0 || /^\s+/.test(line);
+}
+
+function isTableSeparator(line: string): boolean {
+    return /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/.test(line);
+}
+
+function isTableRow(line: string): boolean {
+    return line.includes('|');
+}
+
+function analyzeStructuredTail(content: string): StructuredTailAnalysis {
+    if (!content.trim()) {
+        return { kind: 'none', stableMarkdown: content, unstableTail: '' };
+    }
+
+    const trailingBlockStart = findTrailingBlockStart(content);
+    const stableMarkdown = content.slice(0, trailingBlockStart);
+    const unstableTail = content.slice(trailingBlockStart);
+    const normalizedTail = unstableTail.replace(/\n+$/, '');
+    const lines = normalizedTail.split('\n');
+
+    if (lines.length >= 2 && isTableRow(lines[0]) && isTableSeparator(lines[1]) && lines.slice(2).every((line) => line.trim().length === 0 || isTableRow(line))) {
+        return {
+            kind: 'table',
+            stableMarkdown,
+            unstableTail,
+        };
+    }
+
+    if (isListStart(lines[0]) && lines.every((line, index) => index === 0 || isListStart(line) || isListContinuation(line))) {
+        return {
+            kind: 'list',
+            stableMarkdown,
+            unstableTail,
+        };
+    }
+
+    return {
+        kind: 'none',
+        stableMarkdown: content,
+        unstableTail: '',
+    };
+}
+
+function stripOuterPipes(value: string): string {
+    return value.trim().replace(/^\|/, '').replace(/\|$/, '').trim();
+}
+
+function splitMarkdownTableRow(row: string): string[] {
+    return stripOuterPipes(row).split('|').map((cell) => cell.trim());
+}
+
+const StreamingListTail: React.FC<{ content: string }> = ({ content }) => {
+    const lines = content.replace(/\n+$/, '').split('\n');
+    const items: string[] = [];
+    let currentItem = '';
+    let ordered = false;
+
+    for (const line of lines) {
+        const unorderedMatch = /^(\s*)([-+*])\s+(.*)$/.exec(line);
+        const orderedMatch = /^(\s*)(\d+[.)])\s+(.*)$/.exec(line);
+        if (unorderedMatch || orderedMatch) {
+            if (currentItem.trim()) {
+                items.push(currentItem.trim());
+            }
+            ordered = ordered || !!orderedMatch;
+            currentItem = (unorderedMatch?.[3] ?? orderedMatch?.[3] ?? '').trim();
+            continue;
+        }
+
+        currentItem = currentItem.length > 0
+            ? `${currentItem}\n${line.trimStart()}`
+            : line.trimStart();
+    }
+
+    if (currentItem.trim()) {
+        items.push(currentItem.trim());
+    }
+
+    if (items.length === 0) {
+        return renderMarkdownBody(content, lightweightMarkdownComponents);
+    }
+
+    const ListTag = ordered ? 'ol' : 'ul';
+    const listClassName = ordered
+        ? 'my-2 ml-4 space-y-1 list-decimal marker:text-(--markdown-marker)'
+        : 'my-2 ml-4 space-y-1 list-disc marker:text-(--markdown-marker)';
+
+    return (
+        <ListTag className={listClassName}>
+            {items.map((item, index) => (
+                <li key={`streaming-list-item-${index}`} className="pl-1 text-[12px] font-medium leading-relaxed text-(--markdown-body)">
+                    {renderMarkdownBody(item, lightweightMarkdownComponents)}
+                </li>
+            ))}
+        </ListTag>
+    );
+};
+
+const StreamingTableTail: React.FC<{ content: string }> = ({ content }) => {
+    const lines = content.replace(/\n+$/, '').split('\n');
+    if (lines.length < 2) {
+        return renderMarkdownBody(content, lightweightMarkdownComponents);
+    }
+
+    const headers = splitMarkdownTableRow(lines[0]);
+    const rows = lines.slice(2)
+        .filter((line) => line.trim().length > 0)
+        .map(splitMarkdownTableRow);
+    const completeRows = rows.filter((row) => row.length === headers.length);
+    const incompleteRows = rows.filter((row) => row.length !== headers.length);
+
+    return (
+        <div className="my-3 overflow-hidden rounded-lg border border-(--markdown-border)">
+            <div className="overflow-x-auto">
+                <table className="w-full text-[12px]">
+                    <thead className="border-b border-(--markdown-border)" style={{ backgroundColor: 'var(--markdown-block-header-bg)' }}>
+                        <tr>
+                            {headers.map((header, index) => (
+                                <th key={`streaming-table-header-${index}`} className="px-3 py-2 text-left font-semibold text-(--markdown-heading)">
+                                    {header}
+                                </th>
+                            ))}
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-(--markdown-border)">
+                        {completeRows.map((row, rowIndex) => (
+                            <tr key={`streaming-table-row-${rowIndex}`} className="transition-colors hover:bg-(--markdown-table-hover)">
+                                {row.map((cell, cellIndex) => (
+                                    <td key={`streaming-table-cell-${rowIndex}-${cellIndex}`} className="px-3 py-2 text-(--markdown-body)">
+                                        {cell}
+                                    </td>
+                                ))}
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+            {incompleteRows.length > 0 && (
+                <div className="border-t border-(--markdown-border) px-3 py-2 text-[11px] text-(--markdown-marker)" style={{ backgroundColor: 'var(--markdown-block-bg)' }}>
+                    {incompleteRows.map((row, index) => (
+                        <pre key={`streaming-table-incomplete-${index}`} className="m-0 whitespace-pre-wrap wrap-break-word font-mono leading-5 text-(--markdown-body)">
+                            <code style={codeTagStyle}>{row.join(' | ')}</code>
+                        </pre>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
+const StreamingStructuredTail: React.FC<{ content: string }> = ({ content }) => {
+    const analysis = analyzeStructuredTail(content);
+
+    if (analysis.kind === 'none') {
+        return renderMarkdownBody(content, lightweightMarkdownComponents);
+    }
+
+    return (
+        <>
+            {analysis.stableMarkdown && renderMarkdownBody(analysis.stableMarkdown, lightweightMarkdownComponents)}
+            {analysis.kind === 'list' ? (
+                <StreamingListTail content={analysis.unstableTail} />
+            ) : (
+                <StreamingTableTail content={analysis.unstableTail} />
+            )}
+        </>
+    );
+};
 
 // Stable components object - defined outside to prevent recreation on every render
 // This is CRITICAL for performance - ReactMarkdown does deep comparison
@@ -298,21 +663,82 @@ const markdownComponents = {
     },
 };
 
+const lightweightMarkdownComponents = {
+    ...markdownComponents,
+    code({ className, children }: { className?: string; children?: React.ReactNode }) {
+        const match = /language-(\w+)/.exec(className || '');
+        const language = match ? match[1] : '';
+        const value = String(children).replace(/\n$/, '');
+        const isCodeBlock = !!match || value.includes('\n');
+
+        if (isCodeBlock) {
+            return <PlainCodeBlock language={language} value={value} />;
+        }
+
+        return <InlineCode>{children}</InlineCode>;
+    },
+};
+
+function renderMarkdownBody(content: string, components: typeof markdownComponents) {
+    return (
+        <ReactMarkdown
+            remarkPlugins={remarkPlugins}
+            components={components}
+        >
+            {content}
+        </ReactMarkdown>
+    );
+}
+
 const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, className = '' }) => {
     return (
         <div className={`markdown-content select-text ${className}`}>
-            <ReactMarkdown
-                remarkPlugins={remarkPlugins}
-                components={markdownComponents}
-            >
-                {content}
-            </ReactMarkdown>
+            {renderMarkdownBody(content, markdownComponents)}
+        </div>
+    );
+};
+
+const StreamingMarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, className = '' }) => {
+    const segmentationCacheRef = useRef<StreamingMarkdownCacheEntry | null>(null);
+    const cachedSegmentation = segmentationCacheRef.current;
+    const nextSegmentation = cachedSegmentation?.content === content
+        ? cachedSegmentation.segmentation
+        : segmentStreamingMarkdownIncremental(content, cachedSegmentation);
+
+    segmentationCacheRef.current = {
+        content,
+        segmentation: nextSegmentation,
+    };
+
+    const { stableBlocks, liveTail, liveTailInFence } = nextSegmentation;
+
+    return (
+        <div className={`markdown-content select-text ${className}`}>
+            {stableBlocks.map((block, index) => (
+                <React.Fragment key={`stable-${index}`}>
+                    {renderMarkdownBody(block, markdownComponents)}
+                </React.Fragment>
+            ))}
+            {liveTail && (liveTailInFence ? (
+                (() => {
+                    const firstLineBreakIndex = liveTail.indexOf('\n');
+                    const fenceLine = firstLineBreakIndex === -1 ? liveTail : liveTail.slice(0, firstLineBreakIndex);
+                    const language = fenceLine.replace(/^(?:\s*)(`{3,}|~{3,})/, '').trim();
+                    const value = firstLineBreakIndex === -1 ? '' : liveTail.slice(firstLineBreakIndex + 1);
+                    return <PlainCodeBlock language={language} value={value} />;
+                })()
+            ) : (
+                <StreamingStructuredTail content={liveTail} />
+            ))}
         </div>
     );
 };
 
 // Custom comparison - only re-render if content actually changed
 export const MarkdownRenderer = React.memo(MarkdownRendererComponent, (prevProps, nextProps) => {
+    return prevProps.content === nextProps.content && prevProps.className === nextProps.className;
+});
+export const StreamingMarkdownRenderer = React.memo(StreamingMarkdownRendererComponent, (prevProps, nextProps) => {
     return prevProps.content === nextProps.content && prevProps.className === nextProps.className;
 });
 export default MarkdownRenderer;

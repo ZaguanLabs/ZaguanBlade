@@ -1,5 +1,4 @@
 import React, { useEffect, useRef, useCallback, useState, useMemo } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
 import { ArrowDown, Check, X, Loader2 } from 'lucide-react';
 import { useCommandExecution } from '../hooks/useCommandExecution';
@@ -40,6 +39,7 @@ interface ChatPanelProps {
     setChatMode: (mode: ChatMode) => void;
     pendingActions: StructuredAction[] | null;
     approveToolDecision: (decision: string) => void;
+    approveSingleCommand: (callId: string) => void;
     skipSingleCommand: (callId: string) => void;
     projectId: string;
     onLoadConversation: (messages: ChatMessageType[]) => void;
@@ -137,6 +137,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     setChatMode,
     pendingActions,
     approveToolDecision,
+    approveSingleCommand,
     skipSingleCommand,
     projectId,
     onLoadConversation,
@@ -404,10 +405,9 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         approveToolDecision('reject');
     }, [approveToolDecision]);
 
-    // Individual command approval/skip handlers
     const handleApproveSingleCommand = useCallback((callId: string) => {
-        invoke('approve_single_command', { callId, approved: true });
-    }, []);
+        approveSingleCommand(callId);
+    }, [approveSingleCommand]);
 
     const handleSkipSingleCommand = useCallback((callId: string) => {
         skipSingleCommand(callId);

@@ -6,7 +6,7 @@ import { ToolCallDisplay } from './ToolCallDisplay';
 import { CommandOutputDisplay } from './CommandOutputDisplay';
 import { CommandApprovalCard } from './CommandApprovalCard';
 import { useContextMenu, ContextMenuItem } from './ui/ContextMenu';
-import { MarkdownRenderer } from './MarkdownRenderer';
+import { MarkdownRenderer, StreamingMarkdownRenderer } from './MarkdownRenderer';
 import { deriveMessageRenderSegments, type DerivedActivityGroupItem } from '../utils/chatTimeline';
 
 const REVERTIBLE_TOOLS = new Set([
@@ -130,10 +130,14 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
                     style={contentStyle}
                 >
                     <div
-                        className="select-text overflow-wrap-anywhere whitespace-pre-wrap break-words font-mono text-[10px] leading-relaxed"
+                        className="select-text overflow-wrap-anywhere text-[11px] leading-relaxed"
                         style={contentTextStyle}
                     >
-                        {displayContent}
+                        {isActive ? (
+                            <StreamingMarkdownRenderer content={displayContent} />
+                        ) : (
+                            <MarkdownRenderer content={displayContent} />
+                        )}
                     </div>
                 </div>
             )}
@@ -328,12 +332,6 @@ interface ChatMessageProps {
     onOpenFile?: (path: string) => void;
 }
 
-const StreamingTextPreview: React.FC<{ content: string }> = ({ content }) => (
-    <div className="whitespace-pre-wrap break-words text-[13px] font-normal leading-7 text-(--markdown-body)">
-        {content}
-    </div>
-);
-
 const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     message,
     pendingActions,
@@ -364,6 +362,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     const hasReasoning = !!message.reasoning || message.blocks?.some(b => b.type === 'reasoning');
     const stream = message.streaming;
     const hasChunkCounter = isAssistant && !!stream && stream.seq > 0;
+    const shouldUseStreamingMarkdown = isAssistant && isActive;
     const streamAgeMs = stream ? Date.now() - stream.lastSeqAt : 0;
     const streamElapsedSec = stream
         ? ((stream.endTime ?? Date.now()) - stream.startTime) / 1000
@@ -686,8 +685,8 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                         {previousSegment?.kind === 'activity_group' && (
                                             <div className="mb-3 h-px w-full bg-zinc-800/80" style={assistantDividerStyle} />
                                         )}
-                                        {isActive ? (
-                                            <StreamingTextPreview content={block.content} />
+                                        {shouldUseStreamingMarkdown ? (
+                                            <StreamingMarkdownRenderer content={block.content} />
                                         ) : (
                                             <MarkdownRenderer content={block.content} />
                                         )}
@@ -770,8 +769,8 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 )}
                                 {initialText && (
                                     <div className="mb-2 select-text">
-                                        {isActive ? (
-                                            <StreamingTextPreview content={initialText} />
+                                        {shouldUseStreamingMarkdown ? (
+                                            <StreamingMarkdownRenderer content={initialText} />
                                         ) : (
                                             <MarkdownRenderer content={initialText} />
                                         )}
@@ -820,8 +819,8 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 {finalText && (
                                     <div className="select-text">
                                         {hasToolCalls && <div className="mb-3 h-px w-full bg-zinc-800/80" style={assistantDividerStyle} />}
-                                        {isActive ? (
-                                            <StreamingTextPreview content={finalText} />
+                                        {shouldUseStreamingMarkdown ? (
+                                            <StreamingMarkdownRenderer content={finalText} />
                                         ) : (
                                             <MarkdownRenderer content={finalText} />
                                         )}

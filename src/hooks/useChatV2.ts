@@ -848,7 +848,7 @@ export function useChatV2() {
     const updateToolCallsStatusLocally = useCallback((
         toolCallIds: string[],
         nextStatus: 'pending' | 'executing' | 'complete' | 'error' | 'skipped',
-        fallbackResultText: string,
+        fallbackResultText?: string,
     ) => {
         if (toolCallIds.length === 0) {
             return;
@@ -864,12 +864,16 @@ export function useChatV2() {
                     ? {
                         ...toolCall,
                         status: nextStatus,
-                        ...(toolCall.result ? {} : { result: fallbackResultText }),
+                        ...(!toolCall.result && fallbackResultText ? { result: fallbackResultText } : {}),
                     }
                     : toolCall),
             };
         }));
     }, [updateMessages]);
+
+    const markToolCallsExecutingLocally = useCallback((toolCallIds: string[]) => {
+        updateToolCallsStatusLocally(toolCallIds, 'executing');
+    }, [updateToolCallsStatusLocally]);
 
     const markToolCallsSkippedLocally = useCallback((toolCallIds: string[], skippedResultText = 'Skipped by user') => {
         updateToolCallsStatusLocally(toolCallIds, 'skipped', skippedResultText);
@@ -1682,6 +1686,19 @@ export function useChatV2() {
         }
     }, [markToolCallsSkippedLocally]);
 
+    const approveSingleCommand = useCallback(async (callId: string) => {
+        markToolCallsExecutingLocally([callId]);
+        dispatch({
+            type: 'pending-actions/set',
+            actions: pendingActionsRef.current?.filter((action) => action.id !== callId) || null,
+        });
+        try {
+            await invoke('approve_single_command', { callId, approved: true });
+        } catch (error) {
+            console.error('[useChatV2] Failed to approve single command:', error);
+        }
+    }, [markToolCallsExecutingLocally]);
+
     const newConversation = useCallback(async () => {
         try {
             await BladeDispatcher.chat({
@@ -1745,6 +1762,7 @@ export function useChatV2() {
         pendingActions: state.pendingActions,
         approveTool,
         approveToolDecision,
+        approveSingleCommand,
         skipSingleCommand,
         newConversation,
         undoTool,
