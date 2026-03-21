@@ -39,6 +39,63 @@ pub fn get_tool_definitions() -> Vec<Value> {
         }),
         serde_json::json!({
             "type": "function",
+            "name": "symbol_search",
+            "function": {
+                "name": "symbol_search",
+                "description": "Search indexed symbols by name or qualified name and return compact structural matches",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Symbol name or qualified-name query" },
+                        "path": { "type": "string", "description": "Optional file path filter" },
+                        "kind": { "type": "string", "description": "Optional symbol kind filter" },
+                        "limit": { "type": "integer", "description": "Optional max results" }
+                    },
+                    "required": ["query"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "name": "symbol_resolve",
+            "function": {
+                "name": "symbol_resolve",
+                "description": "Resolve one symbol to its exact current structural record using a stable symbol ID or file-scoped name",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "symbol_id": { "type": "string", "description": "Stable symbol ID" },
+                        "path": { "type": "string", "description": "Optional file path when resolving by name" },
+                        "qualified_name": { "type": "string", "description": "Optional exact qualified name" },
+                        "name": { "type": "string", "description": "Optional simple symbol name" }
+                    },
+                    "required": [],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "name": "symbol_outline",
+            "function": {
+                "name": "symbol_outline",
+                "description": "Return the hierarchical symbol outline for one file using the local code-intelligence index",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "File path whose symbol hierarchy should be returned" }
+                    },
+                    "required": ["path"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
             "name": "read_file_range",
             "function": {
                 "name": "read_file_range",

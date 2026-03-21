@@ -50,24 +50,21 @@ impl SymbolStore {
             CREATE TABLE IF NOT EXISTS symbols (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
+                qualified_name TEXT NOT NULL DEFAULT '',
                 symbol_type TEXT NOT NULL,
                 file_path TEXT NOT NULL,
                 start_line INTEGER NOT NULL,
                 start_char INTEGER NOT NULL,
                 end_line INTEGER NOT NULL,
                 end_char INTEGER NOT NULL,
+                byte_offset INTEGER NOT NULL DEFAULT 0,
+                byte_length INTEGER NOT NULL DEFAULT 0,
                 parent_id TEXT,
                 docstring TEXT,
                 signature TEXT,
+                content_hash TEXT NOT NULL DEFAULT '',
                 indexed_at INTEGER NOT NULL
             );
-
-            -- Indexes for common queries
-            CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
-            CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_path);
-            CREATE INDEX IF NOT EXISTS idx_symbols_type ON symbols(symbol_type);
-            CREATE INDEX IF NOT EXISTS idx_symbols_parent ON symbols(parent_id);
-            CREATE INDEX IF NOT EXISTS idx_symbols_indexed ON symbols(indexed_at);
 
             -- Full-text search using FTS5
             CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts USING fts5(
@@ -105,6 +102,23 @@ impl SymbolStore {
             "#,
         )?;
 
+        ensure_column(&conn, "symbols", "qualified_name", "TEXT NOT NULL DEFAULT ''")?;
+        ensure_column(&conn, "symbols", "byte_offset", "INTEGER NOT NULL DEFAULT 0")?;
+        ensure_column(&conn, "symbols", "byte_length", "INTEGER NOT NULL DEFAULT 0")?;
+        ensure_column(&conn, "symbols", "content_hash", "TEXT NOT NULL DEFAULT ''")?;
+
+        conn.execute_batch(
+            r#"
+            -- Indexes for common queries
+            CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
+            CREATE INDEX IF NOT EXISTS idx_symbols_qualified_name ON symbols(qualified_name);
+            CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_path);
+            CREATE INDEX IF NOT EXISTS idx_symbols_type ON symbols(symbol_type);
+            CREATE INDEX IF NOT EXISTS idx_symbols_parent ON symbols(parent_id);
+            CREATE INDEX IF NOT EXISTS idx_symbols_indexed ON symbols(indexed_at);
+            "#,
+        )?;
+
         Ok(())
     }
 
@@ -126,22 +140,26 @@ impl SymbolStore {
             tx.execute(
                 r#"
                 INSERT OR REPLACE INTO symbols 
-                (id, name, symbol_type, file_path, start_line, start_char, end_line, end_char, 
-                 parent_id, docstring, signature, indexed_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                (id, name, qualified_name, symbol_type, file_path, start_line, start_char, end_line, end_char,
+                 byte_offset, byte_length, parent_id, docstring, signature, content_hash, indexed_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
                 "#,
                 params![
-                    symbol.id,
-                    symbol.name,
+                    &symbol.id,
+                    &symbol.name,
+                    &symbol.qualified_name,
                     symbol.symbol_type.to_string(),
-                    symbol.file_path,
+                    &symbol.file_path,
                     symbol.range.start.line,
                     symbol.range.start.character,
                     symbol.range.end.line,
                     symbol.range.end.character,
-                    symbol.parent_id,
-                    symbol.docstring,
-                    symbol.signature,
+                    symbol.byte_offset as i64,
+                    symbol.byte_length as i64,
+                    symbol.parent_id.as_deref(),
+                    symbol.docstring.as_deref(),
+                    symbol.signature.as_deref(),
+                    &symbol.content_hash,
                     now,
                 ],
             )?;
@@ -156,8 +174,8 @@ impl SymbolStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             r#"
-            SELECT id, name, symbol_type, file_path, start_line, start_char, 
-                   end_line, end_char, parent_id, docstring, signature
+            SELECT id, name, qualified_name, symbol_type, file_path, start_line, start_char,
+                   end_line, end_char, byte_offset, byte_length, parent_id, docstring, signature, content_hash
             FROM symbols WHERE id = ?1
             "#,
         )?;
@@ -175,8 +193,8 @@ impl SymbolStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             r#"
-            SELECT id, name, symbol_type, file_path, start_line, start_char, 
-                   end_line, end_char, parent_id, docstring, signature
+            SELECT id, name, qualified_name, symbol_type, file_path, start_line, start_char,
+                   end_line, end_char, byte_offset, byte_length, parent_id, docstring, signature, content_hash
             FROM symbols WHERE file_path = ?1
             ORDER BY start_line, start_char
             "#,
@@ -200,8 +218,8 @@ impl SymbolStore {
         // Use FTS5 for searching
         let mut stmt = conn.prepare(
             r#"
-            SELECT s.id, s.name, s.symbol_type, s.file_path, s.start_line, s.start_char, 
-                   s.end_line, s.end_char, s.parent_id, s.docstring, s.signature
+            SELECT s.id, s.name, s.qualified_name, s.symbol_type, s.file_path, s.start_line, s.start_char,
+                   s.end_line, s.end_char, s.byte_offset, s.byte_length, s.parent_id, s.docstring, s.signature, s.content_hash
             FROM symbols s
             JOIN symbols_fts fts ON s.rowid = fts.rowid
             WHERE symbols_fts MATCH ?1
@@ -229,18 +247,25 @@ impl SymbolStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             r#"
-            SELECT id, name, symbol_type, file_path, start_line, start_char, 
-                   end_line, end_char, parent_id, docstring, signature
+            SELECT id, name, qualified_name, symbol_type, file_path, start_line, start_char,
+                   end_line, end_char, byte_offset, byte_length, parent_id, docstring, signature, content_hash
             FROM symbols 
-            WHERE name LIKE ?1
-            ORDER BY name
-            LIMIT ?2
+            WHERE name LIKE ?1 OR qualified_name LIKE ?1
+            ORDER BY CASE
+                WHEN qualified_name = ?2 THEN 0
+                WHEN name = ?2 THEN 1
+                WHEN qualified_name LIKE ?3 THEN 2
+                WHEN name LIKE ?3 THEN 3
+                ELSE 4
+            END, name
+            LIMIT ?4
             "#,
         )?;
 
         let like_pattern = format!("%{}%", pattern);
+        let prefix_pattern = format!("{}%", pattern);
         let symbols = stmt
-            .query_map(params![like_pattern, limit as i64], |row| {
+            .query_map(params![like_pattern, pattern, prefix_pattern, limit as i64], |row| {
                 row_to_symbol(row)
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -258,8 +283,8 @@ impl SymbolStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             r#"
-            SELECT id, name, symbol_type, file_path, start_line, start_char, 
-                   end_line, end_char, parent_id, docstring, signature
+            SELECT id, name, qualified_name, symbol_type, file_path, start_line, start_char,
+                   end_line, end_char, byte_offset, byte_length, parent_id, docstring, signature, content_hash
             FROM symbols 
             WHERE file_path = ?1
               AND start_line <= ?2 AND end_line >= ?2
@@ -287,8 +312,8 @@ impl SymbolStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             r#"
-            SELECT id, name, symbol_type, file_path, start_line, start_char, 
-                   end_line, end_char, parent_id, docstring, signature
+            SELECT id, name, qualified_name, symbol_type, file_path, start_line, start_char,
+                   end_line, end_char, byte_offset, byte_length, parent_id, docstring, signature, content_hash
             FROM symbols 
             WHERE symbol_type = ?1
             ORDER BY name
@@ -389,7 +414,7 @@ impl SymbolStore {
 fn row_to_symbol(row: &rusqlite::Row) -> rusqlite::Result<Symbol> {
     use crate::tree_sitter::{Position, Range};
 
-    let symbol_type_str: String = row.get(2)?;
+    let symbol_type_str: String = row.get(3)?;
     let symbol_type = symbol_type_str
         .parse::<SymbolType>()
         .unwrap_or(SymbolType::Function);
@@ -397,22 +422,41 @@ fn row_to_symbol(row: &rusqlite::Row) -> rusqlite::Result<Symbol> {
     Ok(Symbol {
         id: row.get(0)?,
         name: row.get(1)?,
+        qualified_name: row.get(2)?,
         symbol_type,
-        file_path: row.get(3)?,
+        file_path: row.get(4)?,
         range: Range {
             start: Position {
-                line: row.get::<_, i32>(4)? as u32,
-                character: row.get::<_, i32>(5)? as u32,
+                line: row.get::<_, i32>(5)? as u32,
+                character: row.get::<_, i32>(6)? as u32,
             },
             end: Position {
-                line: row.get::<_, i32>(6)? as u32,
-                character: row.get::<_, i32>(7)? as u32,
+                line: row.get::<_, i32>(7)? as u32,
+                character: row.get::<_, i32>(8)? as u32,
             },
         },
-        parent_id: row.get(8)?,
-        docstring: row.get(9)?,
-        signature: row.get(10)?,
+        byte_offset: row.get::<_, i64>(9)? as usize,
+        byte_length: row.get::<_, i64>(10)? as usize,
+        parent_id: row.get(11)?,
+        docstring: row.get(12)?,
+        signature: row.get(13)?,
+        content_hash: row.get(14)?,
     })
+}
+
+fn ensure_column(conn: &Connection, table_name: &str, column_name: &str, definition: &str) -> Result<(), SymbolStoreError> {
+    let pragma = format!("PRAGMA table_info({})", table_name);
+    let mut stmt = conn.prepare(&pragma)?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if !columns.iter().any(|existing| existing == column_name) {
+        let alter = format!("ALTER TABLE {} ADD COLUMN {} {}", table_name, column_name, definition);
+        conn.execute(&alter, [])?;
+    }
+
+    Ok(())
 }
 
 /// Error type for symbol store operations
@@ -452,8 +496,9 @@ mod tests {
 
     fn create_test_symbol(name: &str, file_path: &str) -> Symbol {
         Symbol {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: format!("{}::{}#function", file_path, name),
             name: name.to_string(),
+            qualified_name: name.to_string(),
             symbol_type: SymbolType::Function,
             file_path: file_path.to_string(),
             range: Range {
@@ -466,9 +511,12 @@ mod tests {
                     character: 0,
                 },
             },
+            byte_offset: 0,
+            byte_length: 0,
             parent_id: None,
             docstring: Some("Test function".to_string()),
             signature: Some("(param: string): void".to_string()),
+            content_hash: "hash".to_string(),
         }
     }
 

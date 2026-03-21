@@ -68,7 +68,6 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
     const fitIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const resizeFrameRef = useRef<number | null>(null);
     const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null);
-    const prefersBladeEventsRef = useRef(false);
     const initialCwdRef = useRef(cwd);
     const initialCommandRef = useRef(command);
     const { showMenu } = useContextMenu();
@@ -355,27 +354,12 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
             terminalBufferRef.current = new TerminalBuffer(
                 (termId, data) => {
                     if (termId === id && xtermRef.current) {
-                        prefersBladeEventsRef.current = true;
                         const cleaned = sanitizeTerminalOutput(data);
                         if (cleaned) xtermRef.current.write(cleaned);
                     }
                 }
             );
         }
-
-        // 3. Listen for output from backend (legacy)
-        const unlistenLegacy = listen<{ id: string; data: string }>(
-            "terminal-output",
-            (event) => {
-                if (prefersBladeEventsRef.current) {
-                    return;
-                }
-                if (event.payload.id === id) {
-                    const cleaned = sanitizeTerminalOutput(event.payload.data);
-                    if (cleaned) term.write(cleaned);
-                }
-            }
-        );
 
         // v1.1: Listen for blade-event with sequence numbers
         const unlistenV11 = listen<BladeEventEnvelope>(
@@ -388,22 +372,15 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
 
                     if (terminalEvent.type === 'Output') {
                         const { id: termId, seq, data } = terminalEvent.payload;
-                        if (termId === id) {
-                            prefersBladeEventsRef.current = true;
-                        }
                         if (terminalBufferRef.current) {
                             terminalBufferRef.current.addOutput(termId, seq, data);
                         }
                     } else if (terminalEvent.type === 'Spawned') {
                         const { id: termId, owner } = terminalEvent.payload;
-                        if (termId === id) {
-                            prefersBladeEventsRef.current = true;
-                        }
                         console.debug(`[v1.1 Terminal] Spawned: id=${termId}, owner=${owner.type}`);
                     } else if (terminalEvent.type === 'Exit') {
                         const { id: termId, code } = terminalEvent.payload;
                         if (termId === id && xtermRef.current) {
-                            prefersBladeEventsRef.current = true;
                             xtermRef.current.write(`\r\n\x1b[33mProcess exited with code ${code}\x1b[0m\r\n`);
                         }
                     }
@@ -436,7 +413,6 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
             }
 
             resizeObserver.disconnect();
-            unlistenLegacy.then((unlisten) => unlisten());
             unlistenV11.then((unlisten) => unlisten());
     
             BladeDispatcher.terminal({
@@ -453,7 +429,6 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
 
             xtermRef.current = null;
             fitAddonRef.current = null;
-            prefersBladeEventsRef.current = false;
         };
     }, [id]);
 

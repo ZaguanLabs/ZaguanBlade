@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
 import { BladeDispatcher } from '../services/blade';
-import { BladeEvent, FileEntry } from '../types/blade';
+import { BladeEventEnvelope, FileEntry, FileEvent } from '../types/blade';
 import { listen } from '@tauri-apps/api/event';
 import { FileExplorer } from './FileExplorer';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -42,10 +42,10 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
     useEffect(() => {
         let unlisten: (() => void) | undefined;
         const setupListener = async () => {
-            unlisten = await listen<BladeEvent>('sys-event', (event) => {
-                const bladeEvent = event.payload;
+            unlisten = await listen<BladeEventEnvelope>('blade-event', (event) => {
+                const bladeEvent = event.payload.event;
                 if (bladeEvent.type === 'File') {
-                    const fileEvent = bladeEvent.payload;
+                    const fileEvent = bladeEvent.payload as FileEvent;
                     if (fileEvent.type === 'Listing' && fileEvent.payload.path === null) {
                         setRoots(fileEvent.payload.entries);
                     }

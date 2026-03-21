@@ -59,18 +59,6 @@ impl TerminalManager {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct TerminalOutput {
-    id: String,
-    data: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct TerminalExit {
-    id: String,
-    exit_code: i32,
-}
-
-#[derive(Debug, Clone, Serialize)]
 struct BladeCmdStarted {
     terminal_id: String,
     call_id: String,
@@ -131,11 +119,6 @@ fn emit_terminal_output<R: Runtime>(
     }
 
     let current_seq = next_seq(seq);
-    let payload = TerminalOutput {
-        id: id.to_string(),
-        data: data.clone(),
-    };
-    let _ = app.emit("terminal-output", payload);
     let _ = app.emit(
         "blade-event",
         crate::blade_protocol::BladeEventEnvelope {
@@ -154,11 +137,6 @@ fn emit_terminal_output<R: Runtime>(
 }
 
 fn emit_terminal_exit<R: Runtime>(app: &tauri::AppHandle<R>, id: String, exit_code: i32) {
-    let payload = TerminalExit {
-        id: id.clone(),
-        exit_code,
-    };
-    let _ = app.emit("terminal-exit", payload);
     let _ = app.emit(
         "blade-event",
         crate::blade_protocol::BladeEventEnvelope {

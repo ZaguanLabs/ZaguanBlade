@@ -226,8 +226,9 @@ mod tests {
 
     fn create_test_symbol(name: &str, symbol_type: SymbolType) -> Symbol {
         Symbol {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: format!("test.ts::{}#{}", name, symbol_type),
             name: name.to_string(),
+            qualified_name: name.to_string(),
             symbol_type,
             file_path: "test.ts".to_string(),
             range: Range {
@@ -240,9 +241,12 @@ mod tests {
                     character: 0,
                 },
             },
+            byte_offset: 0,
+            byte_length: 0,
             parent_id: None,
             docstring: None,
             signature: None,
+            content_hash: "hash".to_string(),
         }
     }
 

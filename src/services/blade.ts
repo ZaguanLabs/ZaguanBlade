@@ -20,8 +20,8 @@ import type {
  * Handles envelope wrapping, UUID generation, and error unwrapping.
  */
 export class BladeDispatcher {
-    // v1.1: Semantic versioning
-    private static readonly PROTOCOL_VERSION: Version = { major: 1, minor: 1, patch: 0 };
+    // v1.4: Semantic versioning
+    private static readonly PROTOCOL_VERSION: Version = { major: 1, minor: 4, patch: 0 };
     private static readonly PROTOCOL_NAME = "BCP";
 
     /**

@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { listen, emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { BladeDispatcher } from '../services/blade';
+import type { BladeEventEnvelope } from '../types/blade';
 
 import { BLADE_TERMINAL_ID, BLADE_TERMINAL_TITLE } from '../constants/terminal';
 
@@ -459,8 +460,18 @@ export function useCommandExecution() {
                 handleCommandComplete(callId, output, exitCode);
             });
 
-            unlistenExit = await listen<{ id: string; exit_code: number }>('terminal-exit', (event) => {
-                const terminalId = event.payload.id;
+            unlistenExit = await listen<BladeEventEnvelope>('blade-event', (event) => {
+                const envelope = event.payload;
+                if (envelope.event.type !== 'Terminal') {
+                    return;
+                }
+
+                const terminalEvent = envelope.event.payload;
+                if (terminalEvent.type !== 'Exit') {
+                    return;
+                }
+
+                const { id: terminalId, code: exitCode } = terminalEvent.payload;
                 invalidateTerminal(terminalId);
                 resolveTerminalReady(terminalId);
                 const pending = Array.from(pendingCommandsRef.current.values()).find(
@@ -473,8 +484,8 @@ export function useCommandExecution() {
                     }
                     handleCommandComplete(
                         pending.callId,
-                        `Command terminal exited before sentinel completion (exit ${event.payload.exit_code}).`,
-                        event.payload.exit_code,
+                        `Command terminal exited before sentinel completion (exit ${exitCode}).`,
+                        exitCode,
                     );
                 }
             });

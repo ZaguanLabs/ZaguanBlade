@@ -10,7 +10,7 @@ import {
     dragAndDropFeature
 } from '@headless-tree/core';
 import { BladeDispatcher } from '../services/blade';
-import { FileEntry } from '../types/blade';
+import { BladeEventEnvelope, FileEntry, FileEvent } from '../types/blade';
 import { Folder, ChevronRight, FileCode, FileText, FileBox, Search, FilePlus, FolderPlus, Pencil, Trash2, Copy, Scissors, Clipboard, Terminal, Loader2 } from 'lucide-react';
 import { useContextMenu, ContextMenuItem } from './ui/ContextMenu';
 import { ConfirmModal } from './ui/Modal';
@@ -536,12 +536,11 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
 
     // Listen for file system events to update tree dynamically
     React.useEffect(() => {
-        const unlistenPromise = listen<any>('sys-event', (eventRaw) => {
-                let evt = eventRaw.payload;
-                if (evt.event) evt = evt.event;
+        const unlistenPromise = listen<BladeEventEnvelope>('blade-event', (eventRaw) => {
+                const evt = eventRaw.payload.event;
 
                 if (evt.type === 'File') {
-                    const filePayload = evt.payload;
+                    const filePayload = evt.payload as FileEvent;
                     const pathsToInvalidate: string[] = [];
 
                     if (filePayload.type === 'Created' || filePayload.type === 'Deleted') {

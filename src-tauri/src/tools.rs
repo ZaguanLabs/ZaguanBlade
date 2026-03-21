@@ -146,6 +146,9 @@ fn render_with_line_numbers(content: &str) -> String {
 fn is_batch_read_only_tool(tool_name: &str) -> bool {
     match tool_name {
         "get_editor_state"
+        | "symbol_search"
+        | "symbol_resolve"
+        | "symbol_outline"
         | "read_file"
         | "read_file_range"
         | "read_many_files"
@@ -670,6 +673,9 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
 
         // Phase 1 IDE-specific tools
         "get_editor_state" => get_editor_state(editor_state),
+        "symbol_search" => symbol_search_tool(workspace_root, &args, app_handle),
+        "symbol_resolve" => symbol_resolve_tool(workspace_root, &args, app_handle),
+        "symbol_outline" => symbol_outline_tool(workspace_root, &args, app_handle),
         "read_file_range" => read_file_range(workspace_root, &args),
         "apply_edit" | "apply_patch" => apply_edit_tool(workspace_root, &args),
         "get_workspace_structure" => get_workspace_structure(workspace_root, &args),
@@ -1971,6 +1977,237 @@ fn codebase_search(workspace_root: &Path, args: &HashMap<String, serde_json::Val
 }
 
 // ===== Phase 1 IDE-Specific Tools =====
+
+fn language_service_from_app_handle<R: tauri::Runtime>(
+    app_handle: Option<&tauri::AppHandle<R>>,
+) -> Result<std::sync::Arc<crate::language_service::LanguageService>, String> {
+    let Some(app_handle) = app_handle else {
+        return Err("language service unavailable: missing app handle".to_string());
+    };
+
+    use tauri::Manager;
+
+    app_handle.state::<crate::app_state::AppState>().language_service()
+}
+
+fn symbol_path_arg(workspace_root: &Path, raw_path: &str) -> Result<String, String> {
+    let resolved = validate_path_under_workspace(workspace_root, Path::new(raw_path))?;
+    let workspace = fs::canonicalize(workspace_root).map_err(|e| e.to_string())?;
+    let relative = resolved.strip_prefix(&workspace).map_err(|e| e.to_string())?;
+    Ok(normalize_rel_path(relative))
+}
+
+fn symbol_to_json(symbol: &crate::tree_sitter::Symbol) -> serde_json::Value {
+    serde_json::json!({
+        "id": symbol.id,
+        "name": symbol.name,
+        "qualified_name": symbol.qualified_name,
+        "symbol_type": symbol.symbol_type.to_string(),
+        "file_path": symbol.file_path,
+        "range": {
+            "start": {
+                "line": symbol.range.start.line,
+                "character": symbol.range.start.character,
+            },
+            "end": {
+                "line": symbol.range.end.line,
+                "character": symbol.range.end.character,
+            }
+        },
+        "byte_offset": symbol.byte_offset,
+        "byte_length": symbol.byte_length,
+        "parent_id": symbol.parent_id,
+        "docstring": symbol.docstring,
+        "signature": symbol.signature,
+        "content_hash": symbol.content_hash,
+        "source": "persisted"
+    })
+}
+
+fn outline_nodes_for_parent(
+    by_parent: &HashMap<Option<String>, Vec<crate::tree_sitter::Symbol>>,
+    parent_id: Option<&str>,
+) -> Vec<serde_json::Value> {
+    let mut symbols = by_parent
+        .get(&parent_id.map(|id| id.to_string()))
+        .cloned()
+        .unwrap_or_default();
+    symbols.sort_by_key(|symbol| (symbol.range.start.line, symbol.range.start.character));
+
+    symbols
+        .into_iter()
+        .map(|symbol| {
+            let mut value = symbol_to_json(&symbol);
+            value["children"] = serde_json::Value::Array(outline_nodes_for_parent(by_parent, Some(&symbol.id)));
+            value
+        })
+        .collect()
+}
+
+fn symbol_search_tool<R: tauri::Runtime>(
+    workspace_root: &Path,
+    args: &HashMap<String, serde_json::Value>,
+    app_handle: Option<&tauri::AppHandle<R>>,
+) -> ToolResult {
+    let Some(query) = get_str_arg(args, &["query"]) else {
+        return ToolResult::err("symbol_search requires 'query'");
+    };
+
+    let limit = parse_bounded_usize_arg(args, "limit", 20, 100);
+    let file_path = get_str_arg(args, &["path", "file", "file_path"]);
+    let symbol_types = match get_str_arg(args, &["kind", "symbol_type"]) {
+        Some(kind) => match kind.parse::<crate::tree_sitter::SymbolType>() {
+            Ok(symbol_type) => Some(vec![symbol_type]),
+            Err(_) => return ToolResult::err(format!("unknown symbol kind: {}", kind)),
+        },
+        None => None,
+    };
+
+    let file_filter = match file_path {
+        Some(path) => match symbol_path_arg(workspace_root, &path) {
+            Ok(path) => Some(path),
+            Err(err) => return ToolResult::err(err),
+        },
+        None => None,
+    };
+
+    let service = match language_service_from_app_handle(app_handle) {
+        Ok(service) => service,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    let started = Instant::now();
+    let results = match service.search_symbols_filtered(
+        &query,
+        file_filter.as_deref(),
+        symbol_types,
+        limit,
+    ) {
+        Ok(results) => results,
+        Err(err) => return ToolResult::err(err.to_string()),
+    };
+    let result_count = results.len();
+
+    let payload = serde_json::json!({
+        "query": query,
+        "results": results.into_iter().map(|result| {
+            let mut value = symbol_to_json(&result.symbol);
+            value["score"] = serde_json::json!(result.score);
+            value
+        }).collect::<Vec<_>>(),
+        "_meta": {
+            "tool": "symbol_search",
+            "count": result_count,
+            "timing_ms": started.elapsed().as_millis(),
+            "source": "language_service",
+            "truncated": false
+        }
+    });
+
+    ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
+}
+
+fn symbol_resolve_tool<R: tauri::Runtime>(
+    workspace_root: &Path,
+    args: &HashMap<String, serde_json::Value>,
+    app_handle: Option<&tauri::AppHandle<R>>,
+) -> ToolResult {
+    let service = match language_service_from_app_handle(app_handle) {
+        Ok(service) => service,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    let started = Instant::now();
+    let resolved = if let Some(symbol_id) = get_str_arg(args, &["symbol_id", "id"]) {
+        match service.get_symbol(&symbol_id) {
+            Ok(symbol) => symbol,
+            Err(err) => return ToolResult::err(err.to_string()),
+        }
+    } else {
+        let Some(file_path) = get_str_arg(args, &["path", "file", "file_path"]) else {
+            return ToolResult::err("symbol_resolve requires 'symbol_id' or 'path'");
+        };
+        let file_path = match symbol_path_arg(workspace_root, &file_path) {
+            Ok(path) => path,
+            Err(err) => return ToolResult::err(err),
+        };
+        let qualified_name = get_str_arg(args, &["qualified_name"]);
+        let name = get_str_arg(args, &["name"]);
+        let symbols = match service.get_file_symbols(&file_path) {
+            Ok(symbols) => symbols,
+            Err(err) => return ToolResult::err(err.to_string()),
+        };
+
+        symbols.into_iter().find(|symbol| {
+            qualified_name
+                .as_ref()
+                .map(|value| &symbol.qualified_name == value)
+                .unwrap_or(false)
+                || name
+                    .as_ref()
+                    .map(|value| &symbol.name == value)
+                    .unwrap_or(false)
+        })
+    };
+
+    let payload = serde_json::json!({
+        "symbol": resolved.as_ref().map(symbol_to_json),
+        "_meta": {
+            "tool": "symbol_resolve",
+            "timing_ms": started.elapsed().as_millis(),
+            "resolved": resolved.is_some(),
+            "source": "language_service"
+        }
+    });
+
+    ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
+}
+
+fn symbol_outline_tool<R: tauri::Runtime>(
+    workspace_root: &Path,
+    args: &HashMap<String, serde_json::Value>,
+    app_handle: Option<&tauri::AppHandle<R>>,
+) -> ToolResult {
+    let Some(file_path) = get_str_arg(args, &["path", "file", "file_path"]) else {
+        return ToolResult::err("symbol_outline requires 'path'");
+    };
+    let file_path = match symbol_path_arg(workspace_root, &file_path) {
+        Ok(path) => path,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    let service = match language_service_from_app_handle(app_handle) {
+        Ok(service) => service,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    let started = Instant::now();
+    let symbols = match service.get_file_symbols(&file_path) {
+        Ok(symbols) => symbols,
+        Err(err) => return ToolResult::err(err.to_string()),
+    };
+
+    let mut by_parent: HashMap<Option<String>, Vec<crate::tree_sitter::Symbol>> = HashMap::new();
+    for symbol in symbols {
+        by_parent
+            .entry(symbol.parent_id.clone())
+            .or_default()
+            .push(symbol);
+    }
+
+    let outline = outline_nodes_for_parent(&by_parent, None);
+    let payload = serde_json::json!({
+        "file_path": file_path,
+        "symbols": outline,
+        "_meta": {
+            "tool": "symbol_outline",
+            "timing_ms": started.elapsed().as_millis(),
+            "source": "language_service"
+        }
+    });
+
+    ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
+}
 
 fn get_editor_state(editor_state: Option<&EditorState>) -> ToolResult {
     let Some(state) = editor_state else {

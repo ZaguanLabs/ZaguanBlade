@@ -9,7 +9,7 @@ const MarkdownEditor = React.lazy(() =>
 import type { CodeEditorHandle } from './CodeEditor';
 import { useEditorActions } from '../contexts/EditorContext';
 import { BladeDispatcher } from '../services/blade';
-import { BladeEvent, FileEvent } from '../types/blade';
+import { BladeEventEnvelope, FileEvent } from '../types/blade';
 import { ArrowRight, Server, Cloud } from 'lucide-react';
 import zbladeLogoUrl from '../assets/zblade-in-app-logo.png';
 import { FileChangeBar } from './editor/FileChangeBar';
@@ -240,10 +240,10 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     useEffect(() => {
         if (!activeFile) return;
 
-        const unlistenSysPromise = listen<BladeEvent>('sys-event', (event) => {
-                const bladeEvent = event.payload;
+        const unlistenBladePromise = listen<BladeEventEnvelope>('blade-event', (event) => {
+                const bladeEvent = event.payload.event;
                 if (bladeEvent.type === 'File') {
-                    const fileEvent = bladeEvent.payload;
+                    const fileEvent = bladeEvent.payload as FileEvent;
                     if (fileEvent.type === 'Content' && pathsMatch(fileEvent.payload.path, activeFile)) {
                         console.debug('[EDITOR] Received content for:', activeFile);
                         setContent(fileEvent.payload.data);
@@ -277,7 +277,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             });
 
         return () => {
-            unlistenSysPromise
+            unlistenBladePromise
                 .then(unlisten => unlisten())
                 .catch(console.error);
         };

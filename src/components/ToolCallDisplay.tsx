@@ -191,7 +191,39 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
         || parsedArgs.absolute_path as string
         || ''
     );
-    
+
+    const toLineNumber = (value: unknown): number | null => {
+        if (typeof value === 'number' && Number.isFinite(value)) {
+            return value;
+        }
+        if (typeof value === 'string') {
+            const parsed = Number.parseInt(value, 10);
+            return Number.isNaN(parsed) ? null : parsed;
+        }
+        return null;
+    };
+    const startLine = toLineNumber(
+        parsedArgs.start_line
+        ?? parsedArgs.startLine
+        ?? parsedArgs.line_start
+        ?? parsedArgs.lineStart
+        ?? parsedArgs.from_line
+        ?? parsedArgs.fromLine
+    );
+    const endLine = toLineNumber(
+        parsedArgs.end_line
+        ?? parsedArgs.endLine
+        ?? parsedArgs.line_end
+        ?? parsedArgs.lineEnd
+        ?? parsedArgs.to_line
+        ?? parsedArgs.toLine
+    );
+    const rangeSuffix = startLine !== null && endLine !== null
+        ? `:${startLine}-${endLine}`
+        : startLine !== null
+            ? `:${startLine}`
+            : '';
+
     // For search tools, extract the search query
     const searchQuery = (parsedArgs.pattern as string || parsedArgs.query as string || parsedArgs.regex as string || parsedArgs.Query as string || '');
     const filenameOnlyTools = new Set([
@@ -214,11 +246,14 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
         const parts = value.split(/[/\\]/).filter(Boolean);
         return parts.slice(-count).join('/');
     };
-    const displayPathText = toolCall.function.name === 'list_directory'
+    const baseDisplayPathText = toolCall.function.name === 'list_directory'
         ? getLastPathSegments(pathText, 2) || pathText
         : filenameOnlyTools.has(toolCall.function.name)
             ? pathText.split(/[/\\]/).pop() || pathText
             : pathText;
+    const displayPathText = toolCall.function.name === 'read_file_range' && baseDisplayPathText
+        ? `${baseDisplayPathText}${rangeSuffix}`
+        : baseDisplayPathText;
     const detailItems = [
         pathText ? { label: t('toolCall.details.path'), value: pathText } : null,
         searchQuery ? { label: t('toolCall.details.query'), value: searchQuery } : null,
