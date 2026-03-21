@@ -419,10 +419,6 @@ pub async fn handle_send_message<R: Runtime>(
             let matched_idx = crate::models::catalog::resolve_model_index(&models, id);
 
             if let Some(idx) = matched_idx {
-                eprintln!(
-                    "[MODEL DEBUG] Resolved '{}' to index {} ({})",
-                    id, idx, models[idx].id
-                );
                 selected_model = idx;
             } else {
                 eprintln!(
@@ -529,12 +525,6 @@ pub async fn handle_send_message<R: Runtime>(
             // Otherwise, old tool-call history can cause false-positive loop detection
             // (e.g., read_file blocked immediately in a fresh session).
             if session_id != last_session_id {
-                if let Some(ref sid) = session_id {
-                    eprintln!(
-                        "[AI WORKFLOW] Session changed: clearing tool history (session_id={})",
-                        sid
-                    );
-                }
                 {
                     let mut workflow = state.workflow.lock().unwrap();
                     workflow.clear_history();

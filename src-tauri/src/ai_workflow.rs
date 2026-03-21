@@ -248,19 +248,11 @@ impl AiWorkflow {
 
                     const STAGNANT_TOOL_TURN_LIMIT: usize = 4;
                     if self.stagnant_tool_turns >= STAGNANT_TOOL_TURN_LIMIT {
-                        eprintln!(
-                            "[AI WORKFLOW] Tool-spam detected: assistant content unchanged for {} tool turns",
-                            self.stagnant_tool_turns
-                        );
-
                         // Check if any of the calls are run_command - these must go through approval
                         let has_run_command =
                             calls.iter().any(|c| c.function.name == "run_command");
 
                         if has_run_command {
-                            eprintln!(
-                                "[AI WORKFLOW] run_command detected in spam batch - allowing through for approval"
-                            );
                             // Don't block run_command - let it go through normal interception
                             // Reset spam counter since we're allowing this through
                             self.stagnant_tool_turns = 0;
@@ -361,10 +353,6 @@ impl AiWorkflow {
                 };
 
                 if total_seen >= limit {
-                    eprintln!(
-                        "[AI WORKFLOW] Loop detected for tool: {}",
-                        call.function.name
-                    );
                     loop_detected = true;
                     file_results.push((
                         call.clone(),
@@ -514,7 +502,6 @@ impl AiWorkflow {
 
                         match apply_result {
                             Ok(_) => {
-                                println!("[AI WORKFLOW] Auto-applied change to {}", change.path);
                                 if let Some(app) = &context.app_handle {
                                     use tauri::Manager;
                                     let state = app.state::<crate::app_state::AppState>();
@@ -610,7 +597,6 @@ impl AiWorkflow {
                                 ));
                             }
                             Err(e) => {
-                                eprintln!("[AI WORKFLOW] Failed to auto-apply change: {}", e);
                                 file_results.push((
                                     call.clone(),
                                     tools::ToolResult::err(format!(
@@ -697,7 +683,6 @@ impl AiWorkflow {
                             }
                             Err(e) => {
                                 let err_msg = e.to_string();
-                                eprintln!("[AI WORKFLOW] Failed to auto-delete file: {}", err_msg);
                                 file_results.push((
                                     call.clone(),
                                     tools::ToolResult::err(format!(
@@ -821,15 +806,6 @@ impl AiWorkflow {
                     &call.function.name,
                     &call.function.arguments,
                 );
-                let preview = if res.content.chars().count() > 100 {
-                    res.content.chars().take(100).collect::<String>() + "..."
-                } else {
-                    res.content.clone()
-                };
-                eprintln!(
-                    "[TOOL RESULT] name={} success={} content={:?}",
-                    call.function.name, res.success, preview
-                );
 
                 if res.success
                     && matches!(call.function.name.as_str(), "read_file" | "read_file_range")
@@ -860,15 +836,6 @@ impl AiWorkflow {
             for handle in handles {
                 match handle.join() {
                     Ok((call, res)) => {
-                        let preview = if res.content.chars().count() > 100 {
-                            res.content.chars().take(100).collect::<String>() + "..."
-                        } else {
-                            res.content.clone()
-                        };
-                        eprintln!(
-                            "[TOOL RESULT] name={} success={} content={:?} (parallel read)",
-                            call.function.name, res.success, preview
-                        );
                         file_results.push((call.clone(), res.clone()));
                         if res.success
                             && matches!(
@@ -889,10 +856,7 @@ impl AiWorkflow {
                         }
                     }
                     Err(e) => {
-                        eprintln!(
-                            "[TOOL RESULT] Thread panicked during parallel read: {:?}",
-                            e
-                        );
+                        let _ = e;
                         // Thread panicked - this shouldn't happen but handle it gracefully
                         // The tool call will be missing from results, which will cause an error downstream
                     }

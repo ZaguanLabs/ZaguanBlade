@@ -314,37 +314,17 @@ impl BladeWsClient {
 
         // Spawn write task
         let _write_task = tokio::spawn(async move {
-            eprintln!("[WS WRITE] Write task started");
             while let Some(msg) = msg_rx.recv().await {
-                let t0 = std::time::Instant::now();
                 match msg {
                     WsMessage::Send(text) => {
-                        let preview: String = text.chars().take(80).collect();
-                        eprintln!(
-                            "[WS WRITE] T+{:?} Received from channel: {}...",
-                            t0.elapsed(),
-                            preview
-                        );
-
-                        eprintln!("[WS WRITE] T+{:?} Calling write.send()...", t0.elapsed());
-                        if let Err(e) = write.send(Message::Text(text.into())).await {
-                            eprintln!("[WS WRITE] Write error after {:?}: {}", t0.elapsed(), e);
+                        if let Err(_e) = write.send(Message::Text(text.into())).await {
                             break;
                         }
-                        eprintln!(
-                            "[WS WRITE] T+{:?} write.send() complete, now flushing...",
-                            t0.elapsed()
-                        );
 
                         // CRITICAL: flush() is required! send() only queues the message
-                        if let Err(e) = futures_util::SinkExt::flush(&mut write).await {
-                            eprintln!("[WS WRITE] Flush error after {:?}: {}", t0.elapsed(), e);
+                        if let Err(_e) = futures_util::SinkExt::flush(&mut write).await {
                             break;
                         }
-                        eprintln!(
-                            "[WS WRITE] T+{:?} Flush complete - message on wire!",
-                            t0.elapsed()
-                        );
                     }
                     WsMessage::Ping => {
                         if let Err(_e) = write.send(Message::Ping(Vec::new().into())).await {
@@ -357,13 +337,11 @@ impl BladeWsClient {
                         }
                     }
                     WsMessage::Close => {
-                        eprintln!("[WS WRITE] Close requested");
                         let _ = write.close().await;
                         break;
                     }
                 }
             }
-            eprintln!("[WS WRITE] Write task exiting");
         });
 
         // Heartbeat: send websocket ping periodically to keep connection alive

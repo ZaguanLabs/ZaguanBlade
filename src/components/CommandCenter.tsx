@@ -897,7 +897,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                 onPaste={handlePaste}
                                 onKeyDown={handleKeyDown}
                                 placeholder={chatMode === 'planning' ? `${t('chat.planningPlaceholder')} (Ctrl-L to focus)` : `${t('chat.inputPlaceholder')} (Ctrl-L to focus)`}
-                                className="relative z-10 min-h-[88px] max-h-[360px] w-full resize-none overflow-y-auto bg-transparent px-3 pb-3 pt-2.5 pr-14 text-[13px] font-medium leading-6 text-[var(--fg-primary)] outline-none placeholder-[var(--fg-tertiary)]"
+                                className="relative z-10 min-h-[88px] max-h-[360px] w-full resize-none overflow-y-auto bg-transparent px-3 pb-3 pt-2.5 pr-14 text-[13px] font-medium leading-[18px] text-[var(--fg-primary)] outline-none placeholder-[var(--fg-tertiary)]"
                                 rows={1}
                                 disabled={disabled}
                             />

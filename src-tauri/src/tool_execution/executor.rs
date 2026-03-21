@@ -56,12 +56,6 @@ pub fn execute_tool_with_context<R: Runtime>(
         .map(|s| Path::new(s))
         .unwrap_or_else(|| Path::new("."));
 
-    // DEBUG: Log workspace path
-    eprintln!(
-        "[TOOL EXEC] tool={}, workspace={:?}, args={}",
-        tool_name, workspace_path, args
-    );
-
     // Build EditorState for IDE-specific tools
     let editor_state = tools::EditorState {
         active_file: context.active_file.clone(),

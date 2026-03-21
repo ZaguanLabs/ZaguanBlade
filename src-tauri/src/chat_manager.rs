@@ -1974,10 +1974,6 @@ impl ChatManager {
                 } else {
                     result.to_tool_content()
                 };
-                eprintln!(
-                    "[TOOL RESULT SEND] call_id={}, success={}",
-                    call.id, result.success
-                );
 
                 let tool_result = crate::blade_ws_client::ToolResult {
                     success: result.success,
@@ -2285,7 +2281,6 @@ impl ChatManager {
                     let calls_for_emit = calls.clone();
 
                     if let Some(last) = conversation.last_assistant_mut() {
-                        eprintln!("[TOOL CALLS] Adding {} tool calls", calls.len());
                         if last.content_before_tools.is_none() {
                             last.content_before_tools = Some(last.content.clone());
                         }
@@ -2655,10 +2650,6 @@ impl ChatManager {
         // 2. Add tool calls to history
         if let Some(last) = conversation.last_assistant_mut() {
             if let Some(calls) = tool_calls.clone() {
-                eprintln!(
-                    "[FINALIZE] Adding {} tool calls to Assistant message",
-                    calls.len()
-                );
                 last.tool_calls = Some(calls);
             }
 
