@@ -59,4 +59,6 @@ export interface PendingApproval {
 export interface FeatureFlagsSnapshot {
     editor_backend_authority: boolean;
     tabs_backend_authority: boolean;
+    composite_tools_enabled: boolean;
+    grep_timeout_enforced: boolean;
 }

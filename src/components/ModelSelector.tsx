@@ -1,5 +1,6 @@
 'use client';
 import React, { useState, useRef, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ModelInfo } from '../types/chat';
 import { ChevronDown, Check, Box, Cpu, Sparkles, BrainCircuit } from 'lucide-react';
 import { ThemedDropdownEmptyState, ThemedDropdownScrollArea, ThemedDropdownSurface, themedDropdownItemClassName } from './ui/ThemedDropdown';
@@ -12,6 +13,7 @@ interface ModelSelectorProps {
 }
 
 export const ModelSelector: React.FC<ModelSelectorProps> = ({ models, selectedId, onSelect, disabled }) => {
+    const { t } = useTranslation();
     const [isOpen, setIsOpen] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
     const selectedModel = models.find(m => m.id === selectedId) || null;
@@ -103,7 +105,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ models, selectedId
                     </div>
                     <div className="flex flex-col items-start min-w-0">
                         <span className="text-[11px] font-medium text-(--fg-secondary) truncate w-full text-left">
-                            {selectedModel?.name || 'Select Model'}
+                            {selectedModel?.name || t('chat.modelSelection')}
                         </span>
                     </div>
                 </div>
@@ -120,7 +122,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ models, selectedId
                 >
                     {models.length === 0 && (
                         <ThemedDropdownEmptyState className="text-xs">
-                            No models available
+                            {t('chat.modelPicker.empty')}
                         </ThemedDropdownEmptyState>
                     )}
                     <ThemedDropdownScrollArea className="max-h-[300px]">

@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Clock, MessageSquare, Loader2 } from 'lucide-react';
 import { useHistory } from '../hooks/useHistory';
 import type { ConversationSummary } from '../types/history';
@@ -9,6 +10,7 @@ interface HistoryTabProps {
 }
 
 export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConversation }) => {
+    const { t } = useTranslation();
     const { conversations, loading, error, fetchConversations } = useHistory();
 
     const getConversationTitle = (conversation: ConversationSummary) => {
@@ -22,7 +24,9 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
             return preview.slice(0, 80);
         }
 
-        return `Conversation ${formatTimestamp(conversation.last_active_at)}`;
+        return t('historyTab.conversationFallback', {
+            timestamp: formatTimestamp(conversation.last_active_at),
+        });
     };
 
     useEffect(() => {
@@ -33,12 +37,12 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
 
     const formatTimestamp = (timestamp: string) => {
         if (!timestamp) {
-            return 'Unknown';
+            return t('historyTab.unknown');
         }
 
         const date = new Date(timestamp);
         if (Number.isNaN(date.getTime())) {
-            return 'Unknown';
+            return t('historyTab.unknown');
         }
 
         const now = new Date();
@@ -51,11 +55,11 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
         const diffHours = Math.floor(diffMs / 3600000);
         const diffDays = Math.floor(diffMs / 86400000);
 
-        if (diffMins < 1) return 'Just now';
-        if (diffMins < 60) return `${diffMins}m ago`;
-        if (diffHours < 24) return `${diffHours}h ago`;
-        if (diffDays === 1) return 'Yesterday';
-        if (diffDays < 7) return `${diffDays}d ago`;
+        if (diffMins < 1) return t('historyTab.justNow');
+        if (diffMins < 60) return t('historyTab.minutesAgo', { count: diffMins });
+        if (diffHours < 24) return t('historyTab.hoursAgo', { count: diffHours });
+        if (diffDays === 1) return t('historyTab.yesterday');
+        if (diffDays < 7) return t('historyTab.daysAgo', { count: diffDays });
         return date.toLocaleDateString();
     };
 
@@ -66,7 +70,7 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
                     <div className="flex h-14 w-14 items-center justify-center rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-app)]">
                         <Loader2 className="h-7 w-7 animate-spin" />
                     </div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.18em]">Loading conversations...</p>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em]">{t('historyTab.loading')}</p>
                 </div>
             </div>
         );
@@ -76,7 +80,7 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
         return (
             <div className="flex flex-1 items-center justify-center bg-[var(--bg-app)] px-4">
                 <div className="flex flex-col items-center gap-3 rounded-3xl border border-red-500/20 bg-red-500/5 px-8 py-8 text-red-300 shadow-[0_24px_70px_rgba(0,0,0,0.26)]">
-                    <p className="text-xs font-semibold uppercase tracking-[0.18em]">Failed to load conversations</p>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em]">{t('historyTab.loadFailed')}</p>
                     <p className="text-[10px] opacity-70">{error}</p>
                 </div>
             </div>
@@ -92,10 +96,10 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
                     </div>
                     <div className="text-center">
                         <h3 className="mb-2 text-sm font-semibold uppercase tracking-[0.18em] text-[var(--fg-secondary)]">
-                            No Conversations Yet
+                            {t('historyTab.emptyTitle')}
                         </h3>
                         <p className="text-xs opacity-70">
-                            Start a new conversation to see it here
+                            {t('historyTab.emptyDescription')}
                         </p>
                     </div>
                 </div>
@@ -110,14 +114,14 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
 
     const grouped = conversations.reduce<Record<string, ConversationSummary[]>>((acc, conversation) => {
         const date = new Date(conversation.last_active_at);
-        let bucket = 'Older';
+        let bucket = t('historyTab.bucketOlder');
         if (!Number.isNaN(date.getTime())) {
             if (date >= startOfToday) {
-                bucket = 'Today';
+                bucket = t('historyTab.bucketToday');
             } else if (date >= startOfYesterday) {
-                bucket = 'Yesterday';
+                bucket = t('historyTab.bucketYesterday');
             } else if (date >= startOfWeek) {
-                bucket = 'Previous 7 days';
+                bucket = t('historyTab.bucketPrevious7Days');
             }
         }
 
@@ -128,17 +132,22 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
         return acc;
     }, {});
 
-    const orderedBuckets = ['Today', 'Yesterday', 'Previous 7 days', 'Older'] as const;
+    const orderedBuckets = [
+        t('historyTab.bucketToday'),
+        t('historyTab.bucketYesterday'),
+        t('historyTab.bucketPrevious7Days'),
+        t('historyTab.bucketOlder'),
+    ] as const;
 
     return (
         <div className="flex-1 overflow-y-auto bg-[var(--bg-app)]">
             <div className="mx-auto max-w-4xl px-4 py-4">
                 <div className="mb-4 rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/70 px-5 py-4 shadow-[0_18px_50px_rgba(0,0,0,0.18)]">
                     <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--fg-tertiary)]">
-                        Conversation History
+                        {t('historyTab.title')}
                     </div>
                     <div className="mt-1 text-sm font-semibold text-[var(--fg-primary)]">
-                        Resume previous sessions and revisit older agent runs.
+                        {t('historyTab.subtitle')}
                     </div>
                 </div>
                 <div className="space-y-5">
@@ -168,12 +177,12 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
                                                     {getConversationTitle(conversation)}
                                                 </h4>
                                                 <div className="mt-1 text-[11px] text-[var(--fg-tertiary)] truncate">
-                                                    {conversation.preview || 'No preview available'}
+                                                    {conversation.preview || t('historyTab.noPreview')}
                                                 </div>
                                             </div>
                                             <div className="shrink-0 text-right text-[10px] text-[var(--fg-tertiary)]">
                                                 <div>{formatTimestamp(conversation.last_active_at)}</div>
-                                                <div className="mt-1">{conversation.message_count} msgs</div>
+                                                <div className="mt-1">{t('historyTab.messageCount', { count: conversation.message_count })}</div>
                                             </div>
                                         </div>
                                     </button>

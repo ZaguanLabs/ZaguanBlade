@@ -5,17 +5,23 @@ use std::path::PathBuf;
 use tauri::State;
 
 #[tauri::command]
-pub fn get_uncommitted_changes(state: State<'_, AppState>) -> Vec<UncommittedChange> {
-    let history_service = state.history_service.read().unwrap().clone();
+pub fn get_uncommitted_changes(state: State<'_, AppState>) -> Result<Vec<UncommittedChange>, String> {
+    let history_service = state.history_service()?;
     let existing = state.uncommitted_changes.get_all();
     if existing.is_empty() {
-        return existing;
+        return Ok(existing);
     }
 
     let mut refreshed = Vec::with_capacity(existing.len());
     let mut changed_any = false;
 
     for mut change in existing {
+        let current_modified_ms = crate::uncommitted_changes::file_modified_ms(&change.file_path);
+        if current_modified_ms == change.file_modified_ms {
+            refreshed.push(change);
+            continue;
+        }
+
         let snapshot = history_service.get_snapshot_content(&change.snapshot_id);
         let current = fs::read_to_string(&change.file_path);
 
@@ -33,6 +39,11 @@ pub fn get_uncommitted_changes(state: State<'_, AppState>) -> Vec<UncommittedCha
                 change.removed_lines = removed;
                 changed_any = true;
             }
+
+            if change.file_modified_ms != current_modified_ms {
+                change.file_modified_ms = current_modified_ms;
+                changed_any = true;
+            }
         }
 
         refreshed.push(change);
@@ -42,7 +53,7 @@ pub fn get_uncommitted_changes(state: State<'_, AppState>) -> Vec<UncommittedCha
         state.uncommitted_changes.replace_all(refreshed.clone());
     }
 
-    refreshed
+    Ok(refreshed)
 }
 
 #[tauri::command]
@@ -87,7 +98,7 @@ pub fn accept_all_changes(state: State<'_, AppState>) -> Vec<UncommittedChange> 
 
 #[tauri::command]
 pub fn reject_change(state: State<'_, AppState>, id: String) -> Result<UncommittedChange, String> {
-    let history_service = state.history_service.read().unwrap().clone();
+    let history_service = state.history_service()?;
     state
         .uncommitted_changes
         .reject(&id, history_service.as_ref())
@@ -98,7 +109,7 @@ pub fn reject_file_changes(
     state: State<'_, AppState>,
     file_path: String,
 ) -> Result<UncommittedChange, String> {
-    let history_service = state.history_service.read().unwrap().clone();
+    let history_service = state.history_service()?;
     state
         .uncommitted_changes
         .reject_by_path(&PathBuf::from(file_path), history_service.as_ref())
@@ -106,7 +117,7 @@ pub fn reject_file_changes(
 
 #[tauri::command]
 pub fn reject_all_changes(state: State<'_, AppState>) -> Result<Vec<UncommittedChange>, String> {
-    let history_service = state.history_service.read().unwrap().clone();
+    let history_service = state.history_service()?;
     state
         .uncommitted_changes
         .reject_all(history_service.as_ref())

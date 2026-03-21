@@ -7,17 +7,18 @@ use crate::indexer::types::{detect_language, ProjectIndex};
 use crate::indexer::watcher::IndexWatcher;
 use chrono::Utc;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 #[derive(Clone)]
 pub struct IndexerManager {
+    workspace_root: PathBuf,
     index: Arc<RwLock<ProjectIndex>>,
     _watcher: Arc<Option<IndexWatcher>>,
 }
 
 impl IndexerManager {
-    pub fn new(workspace_root: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(workspace_root: &Path) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let index = match load_cache(workspace_root) {
             Ok(cached_index) => {
                 eprintln!(
@@ -48,6 +49,7 @@ impl IndexerManager {
         };
 
         let manager = Self {
+            workspace_root: workspace_root.to_path_buf(),
             index,
             _watcher: Arc::new(watcher),
         };
@@ -162,7 +164,7 @@ impl IndexerManager {
         handle_get_full_context(&self.index, options).await
     }
 
-    pub fn save_cache(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn save_cache(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let idx = self.index.read().unwrap();
         save_cache(&*idx)
     }
@@ -170,5 +172,9 @@ impl IndexerManager {
     pub fn file_count(&self) -> usize {
         let idx = self.index.read().unwrap();
         idx.file_count()
+    }
+
+    pub fn matches_workspace(&self, workspace_root: &Path) -> bool {
+        self.workspace_root == workspace_root
     }
 }

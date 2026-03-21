@@ -12,7 +12,9 @@ pub struct IndexWatcher {
 }
 
 impl IndexWatcher {
-    pub fn new(index: Arc<RwLock<ProjectIndex>>) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(
+        index: Arc<RwLock<ProjectIndex>>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let (tx, rx) = mpsc::channel();
 
         let mut watcher = RecommendedWatcher::new(

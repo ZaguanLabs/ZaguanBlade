@@ -15,16 +15,20 @@ import zbladeLogoUrl from '../assets/zblade-in-app-logo.png';
 import { FileChangeBar } from './editor/FileChangeBar';
 import { Breadcrumb } from './editor/Breadcrumb';
 import { useUncommittedChanges } from '../hooks/useUncommittedChanges';
+import { formatBladeError, formatUnknownBackendError } from '../utils/backendErrors';
 
 const CodeEditor = React.lazy(() => import('./CodeEditor'));
 const PdfViewer = React.lazy(() =>
     import('./PdfViewer').then((module) => ({ default: module.PdfViewer }))
 );
 
-const WelcomePage: React.FC<{ onOpenSettings?: () => void }> = ({ onOpenSettings }) => {
+const WelcomePage: React.FC<{
+    hasRemoteApiKey?: boolean | null;
+    onOpenSettings?: () => void;
+}> = ({ hasRemoteApiKey = null, onOpenSettings }) => {
     const { t } = useTranslation();
     const [hasApiKey, setHasApiKey] = useState<boolean>(false);
-    const [isLoading, setIsLoading] = useState(true);
+    const [isLoading, setIsLoading] = useState(hasRemoteApiKey === null);
 
     const openSettingsSection = (section?: 'account' | 'localai') => {
         if (onOpenSettings) {
@@ -35,6 +39,12 @@ const WelcomePage: React.FC<{ onOpenSettings?: () => void }> = ({ onOpenSettings
     };
 
     useEffect(() => {
+        if (hasRemoteApiKey !== null) {
+            setHasApiKey(hasRemoteApiKey);
+            setIsLoading(false);
+            return;
+        }
+
         // Check for API key on mount
         const checkApiKey = async () => {
             if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
@@ -59,7 +69,7 @@ const WelcomePage: React.FC<{ onOpenSettings?: () => void }> = ({ onOpenSettings
         return () => {
             unlistenPromise.then(unlisten => unlisten());
         };
-    }, []);
+    }, [hasRemoteApiKey]);
 
     return (
         <div className="h-full flex flex-col items-center justify-center bg-[var(--bg-editor)] text-center p-8 animate-in fade-in duration-300">
@@ -128,22 +138,39 @@ const WelcomePage: React.FC<{ onOpenSettings?: () => void }> = ({ onOpenSettings
 interface EditorPanelProps {
     activeFile: string | null;
     highlightLines?: { startLine: number; endLine: number } | null;
+    workspaceRoot?: string | null;
+    hasRemoteApiKey?: boolean | null;
+    savedContent?: string | null;
+    draftContent?: string | null;
+    isDirty?: boolean;
+    onContentStateChange?: (state: {
+        savedContent?: string;
+        draftContent?: string;
+        isDirty: boolean;
+    }) => void;
     onOpenSettings?: () => void;
 }
 
 export const EditorPanel: React.FC<EditorPanelProps> = ({
     activeFile,
     highlightLines,
+    workspaceRoot,
+    hasRemoteApiKey,
+    savedContent,
+    draftContent,
+    isDirty = false,
+    onContentStateChange,
     onOpenSettings,
 }) => {
-    const [content, setContent] = useState('');
+    const { t } = useTranslation();
+    const [content, setContent] = useState(() => draftContent ?? savedContent ?? '');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [reloadTrigger, setReloadTrigger] = useState(0);
-    const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
     const { setActiveFile } = useEditorActions();
     const editorRef = useRef<CodeEditorHandle>(null);
     const pendingNavigation = useRef<{ path: string, line: number, col: number } | null>(null);
+    const baseContentRef = useRef(savedContent ?? '');
 
     const pathsMatch = (a: string, b: string): boolean => {
         if (a === b) return true;
@@ -156,6 +183,27 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     //     // Update editor context when active file changes
     //     setActiveFile(activeFile);
     // }, [activeFile, setActiveFile]);
+
+    useEffect(() => {
+        if (!activeFile) {
+            setContent('');
+            baseContentRef.current = '';
+            return;
+        }
+
+        if (isDirty && draftContent != null) {
+            setContent(draftContent);
+            if (savedContent != null) {
+                baseContentRef.current = savedContent;
+            }
+            return;
+        }
+
+        if (savedContent != null) {
+            setContent(savedContent);
+            baseContentRef.current = savedContent;
+        }
+    }, [activeFile, draftContent, isDirty, savedContent]);
 
     useEffect(() => {
         if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
@@ -199,6 +247,12 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     if (fileEvent.type === 'Content' && pathsMatch(fileEvent.payload.path, activeFile)) {
                         console.debug('[EDITOR] Received content for:', activeFile);
                         setContent(fileEvent.payload.data);
+                        baseContentRef.current = fileEvent.payload.data;
+                        onContentStateChange?.({
+                            savedContent: fileEvent.payload.data,
+                            draftContent: undefined,
+                            isDirty: false,
+                        });
                         setLoading(false);
                         setError(null);
                     } else if (fileEvent.type === 'Written' && pathsMatch(fileEvent.payload.path, activeFile)) {
@@ -214,7 +268,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                             // Ideally check sysEvent.payload.error
                             const err = sysEvent.payload.error;
                             if ('details' in err && (err.details as any).id?.includes(activeFile)) {
-                                setError(`Failed to load: ${JSON.stringify(err)}`);
+                                setError(`${t('editor.loadFailed')}: ${formatBladeError(err)}`);
                                 setLoading(false);
                             }
                         }
@@ -227,12 +281,17 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 .then(unlisten => unlisten())
                 .catch(console.error);
         };
-    }, [activeFile, loading]);
+    }, [activeFile, loading, onContentStateChange]);
 
     useEffect(() => {
         async function loadFile() {
             if (!activeFile) {
                 setContent('');
+                return;
+            }
+
+            if (isDirty && draftContent != null && reloadTrigger === 0) {
+                setLoading(false);
                 return;
             }
 
@@ -249,13 +308,13 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 }
             } catch (e) {
                 console.error(e);
-                setError(String(e));
+                setError(`${t('editor.loadFailed')}: ${formatUnknownBackendError(e)}`);
             } finally {
                 setLoading(false);
             }
         }
         loadFile();
-    }, [activeFile, reloadTrigger]);
+    }, [activeFile, draftContent, isDirty, reloadTrigger]);
 
     // Handle pending navigation after content load
     useEffect(() => {
@@ -271,19 +330,6 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         }
     }, [content, loading, activeFile]);
 
-    // Get workspace root on mount
-    useEffect(() => {
-        const getWorkspace = async () => {
-            try {
-                const root = await invoke<string | null>('get_current_workspace');
-                setWorkspaceRoot(root);
-            } catch (e) {
-                console.error('Failed to get workspace root:', e);
-            }
-        };
-        getWorkspace();
-    }, []);
-
     // Handle save (Ctrl+S)
     const handleSave = async (text: string) => {
         if (activeFile) {
@@ -291,6 +337,12 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 await BladeDispatcher.file({
                     type: 'Write',
                     payload: { path: activeFile, content: text }
+                });
+                baseContentRef.current = text;
+                onContentStateChange?.({
+                    savedContent: text,
+                    draftContent: undefined,
+                    isDirty: false,
                 });
                 console.debug("Save intent dispatched:", activeFile);
                 // ToDo: Toast notification
@@ -300,6 +352,17 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         }
     };
 
+    const handleContentChange = (nextContent: string) => {
+        setContent(nextContent);
+
+        const nextIsDirty = nextContent !== baseContentRef.current;
+        onContentStateChange?.({
+            savedContent: nextIsDirty ? baseContentRef.current : nextContent,
+            draftContent: nextIsDirty ? nextContent : undefined,
+            isDirty: nextIsDirty,
+        });
+    };
+
     const handleNavigate = (path: string, line: number, character: number) => {
         console.debug("Navigating to:", path, line, character);
         setActiveFile(path);
@@ -307,7 +370,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     };
 
     if (!activeFile) {
-        return <WelcomePage onOpenSettings={onOpenSettings} />;
+        return <WelcomePage hasRemoteApiKey={hasRemoteApiKey} onOpenSettings={onOpenSettings} />;
     }
 
     // Check file type
@@ -338,7 +401,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     <Suspense fallback={<div className="h-full w-full bg-[var(--bg-editor)]" />}>
                         <MarkdownEditor
                             content={content}
-                            onChange={setContent}
+                            onChange={handleContentChange}
                             onSave={handleSave}
                             filename={activeFile}
                         />
@@ -347,7 +410,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     <EditorWithChangeBar
                         editorRef={editorRef}
                         content={content}
-                        setContent={setContent}
+                        setContent={handleContentChange}
                         handleSave={handleSave}
                         activeFile={activeFile}
                         highlightLines={highlightLines ?? null}

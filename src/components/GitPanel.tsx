@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { GitFileStatus, GitStatusSummary, CommitPreflightResult } from '../hooks/useGitStatus';
 import { Sparkles, GitCommit, Upload, ChevronDown, ChevronRight, Plus, Minus, RefreshCw, AlertTriangle } from 'lucide-react';
 import { GitGraph } from './GitGraph';
+import { formatUnknownBackendError } from '../utils/backendErrors';
 
 interface GitPanelProps {
     status: GitStatusSummary | null;
@@ -93,7 +94,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
         try {
             await action();
         } catch (e) {
-            setActionError(String(e));
+            setActionError(formatUnknownBackendError(e));
         } finally {
             setBusyAction(null);
         }
@@ -113,7 +114,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
             setPushSuccess(true);
             setTimeout(() => setPushSuccess(false), 2500);
         } catch (e) {
-            setActionError(String(e));
+            setActionError(formatUnknownBackendError(e));
         } finally {
             setBusyAction(null);
         }
@@ -158,7 +159,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                 [key]: {
                     expanded: true,
                     loading: false,
-                    error: String(e),
+                    error: formatUnknownBackendError(e),
                 },
             }));
         }
@@ -219,7 +220,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
         <div className="h-full bg-[var(--bg-panel)] border-r border-[var(--border-subtle)] flex flex-col text-[var(--fg-secondary)]">
             {/* Header */}
             <div className="h-9 px-4 flex items-center bg-[var(--bg-panel)] border-b border-[var(--border-subtle)] text-[10px] uppercase tracking-wider font-semibold select-none justify-between text-[var(--fg-secondary)]">
-                <span>Source Control</span>
+                <span>{t('git.sourceControlTitle')}</span>
                 <button
                     onClick={() => runAction('refresh', async () => onRefresh())}
                     className="hover:text-[var(--fg-primary)] transition-colors"
@@ -231,7 +232,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
 
             <div className="flex-1 min-h-0 flex flex-col">
                 {!isRepo && (
-                    <div className="p-4 text-[var(--fg-secondary)] italic text-xs">Not a Git repository.</div>
+                    <div className="p-4 text-[var(--fg-secondary)] italic text-xs">{t('git.notRepository')}</div>
                 )}
 
                 {isRepo && (
@@ -243,9 +244,9 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                             {/* Branch info inline */}
                             <div className="flex items-center justify-between mb-2 text-[10px]">
                                 <div className="flex items-center gap-2">
-                                    <span className="text-[var(--fg-secondary)]">Branch:</span>
+                                    <span className="text-[var(--fg-secondary)]">{t('git.branchLabel')}</span>
                                     <span className="text-[var(--fg-primary)] font-medium">
-                                        {status?.branch ?? 'detached'}
+                                        {status?.branch ?? t('git.detachedHead')}
                                     </span>
                                 </div>
                                 {(status?.ahead ?? 0) > 0 || (status?.behind ?? 0) > 0 ? (
@@ -288,7 +289,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                     title={t('git.generateCommitMessage')}
                                 >
                                     <Sparkles className={`w-3 h-3 ${busyAction === 'generate-message' ? 'animate-pulse' : ''}`} />
-                                    Generate
+                                    {t('git.generate')}
                                 </button>
 
                                 <div className="flex-1" />
@@ -365,12 +366,12 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                             {pushSuccess ? (
                                                 <>
                                                     <svg className="w-3.5 h-3.5 animate-[push-check_0.3s_ease-out]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
-                                                    Pushed!
+                                                    {t('git.pushed')}
                                                 </>
                                             ) : isPushing ? (
                                                 <>
                                                     <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round"><path d="M12 2a10 10 0 0 1 10 10" /></svg>
-                                                    Pushing
+                                                    {t('git.pushing')}
                                                 </>
                                             ) : (
                                                 <>
@@ -396,16 +397,16 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                                 }
                                                 const preflight = await onCommitPreflight();
                                                 if (!preflight.isRepo) {
-                                                    throw new Error('Not a Git repository');
+                                                    throw new Error(preflight.errorMessage || t(preflight.errorKey || 'git.notRepository'));
                                                 }
                                                 if (preflight.hasConflicts) {
-                                                    throw new Error('Resolve merge conflicts before committing');
+                                                    throw new Error(t('git.resolveConflictsBeforeCommit'));
                                                 }
                                                 if (preflight.isDetached) {
-                                                    setPreflightWarning('HEAD is detached. Commits may be lost if you switch branches.');
+                                                    setPreflightWarning(t('git.detachedHeadWarning'));
                                                 }
                                                 if (!preflight.canCommit && preflight.errorMessage) {
-                                                    throw new Error(preflight.errorMessage);
+                                                    throw new Error(formatUnknownBackendError(preflight.errorMessage));
                                                 }
                                                 await onCommit(commitMessage);
                                                 setCommitMessage('');
@@ -414,7 +415,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                         }
                                     >
                                         <GitCommit className={`w-3 h-3 ${busyAction === 'commit' ? 'animate-spin' : ''}`} />
-                                        Commit
+                                        {t('git.commit')}
                                     </button>
                                 )}
                             </div>
@@ -430,7 +431,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                             {/* Contextual hints */}
                             {stagedCount === 0 && changedCount > 0 && (
                                 <div className="text-[10px] text-[var(--fg-tertiary)] mt-2 italic">
-                                    Unstaged changes will be staged on commit
+                                    {t('git.unstagedCommitHint')}
                                 </div>
                             )}
                         </div>
@@ -439,7 +440,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                         <div>
                             {changedCount === 0 ? (
                                 <div className="p-4 text-[var(--fg-secondary)] italic text-xs text-center">
-                                    ✓ Working tree clean
+                                    {t('git.workingTreeClean')}
                                 </div>
                             ) : (
                                 <div className="text-xs">
@@ -451,7 +452,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                         >
                                             <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-[var(--fg-secondary)] font-semibold">
                                                 {stagedExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                                                Staged
+                                                {t('git.stagedSection')}
                                                 <span className="text-emerald-400 font-normal normal-case">
                                                     ({stagedFiles.length})
                                                 </span>
@@ -465,7 +466,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                                     }}
                                                     disabled={busyAction === 'unstage-all'}
                                                 >
-                                                    Unstage All
+                                                    {t('git.unstageAll')}
                                                 </button>
                                             )}
                                         </button>
@@ -476,10 +477,10 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                                         <FileRow file={file} isStaged={true} />
                                                         {diffs[file.path]?.expanded && (
                                                             <div className="ml-6 mr-2 mb-1 rounded bg-[var(--bg-app)] border border-[var(--border-subtle)] p-2 text-[10px] font-mono whitespace-pre-wrap overflow-x-auto max-h-48 overflow-y-auto">
-                                                                {diffs[file.path]?.loading && <div className="text-[var(--fg-tertiary)]">Loading...</div>}
+                                                                {diffs[file.path]?.loading && <div className="text-[var(--fg-tertiary)]">{t('common.loading')}</div>}
                                                                 {diffs[file.path]?.error && <div className="text-[var(--accent-error)]">{diffs[file.path]?.error}</div>}
                                                                 {!diffs[file.path]?.loading && !diffs[file.path]?.error && (
-                                                                    <pre className="text-[var(--fg-secondary)]">{diffs[file.path]?.staged || 'No changes'}</pre>
+                                                                    <pre className="text-[var(--fg-secondary)]">{diffs[file.path]?.staged || t('git.noChanges')}</pre>
                                                                 )}
                                                             </div>
                                                         )}
@@ -497,7 +498,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                         >
                                             <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-[var(--fg-secondary)] font-semibold">
                                                 {unstagedExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                                                Changes
+                                                {t('git.changes')}
                                                 <span className="text-amber-400 font-normal normal-case">
                                                     ({unstagedFiles.length})
                                                 </span>
@@ -511,7 +512,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                                     }}
                                                     disabled={busyAction === 'stage-all'}
                                                 >
-                                                    Stage All
+                                                    {t('git.stageAll')}
                                                 </button>
                                             )}
                                         </button>
@@ -522,10 +523,10 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                                         <FileRow file={file} isStaged={false} />
                                                         {diffs[file.path]?.expanded && !file.untracked && (
                                                             <div className="ml-6 mr-2 mb-1 rounded bg-[var(--bg-app)] border border-[var(--border-subtle)] p-2 text-[10px] font-mono whitespace-pre-wrap overflow-x-auto max-h-48 overflow-y-auto">
-                                                                {diffs[file.path]?.loading && <div className="text-[var(--fg-tertiary)]">Loading...</div>}
+                                                                {diffs[file.path]?.loading && <div className="text-[var(--fg-tertiary)]">{t('common.loading')}</div>}
                                                                 {diffs[file.path]?.error && <div className="text-[var(--accent-error)]">{diffs[file.path]?.error}</div>}
                                                                 {!diffs[file.path]?.loading && !diffs[file.path]?.error && (
-                                                                    <pre className="text-[var(--fg-secondary)]">{diffs[file.path]?.unstaged || 'No changes'}</pre>
+                                                                    <pre className="text-[var(--fg-secondary)]">{diffs[file.path]?.unstaged || t('git.noChanges')}</pre>
                                                                 )}
                                                             </div>
                                                         )}

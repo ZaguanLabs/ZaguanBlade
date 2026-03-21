@@ -4,6 +4,7 @@
 /// Events flow in one direction: Backend → Frontend (via Tauri's emit)
 /// Frontend → Backend communication uses invoke() commands instead.
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Event names as constants to prevent typos
 pub mod event_names {
@@ -125,7 +126,42 @@ pub struct ChatUpdatePayload {
 /// Payload for chat-error event
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatErrorPayload {
-    pub error: String,
+    pub code: String,
+    pub error: Option<String>,
+    pub message: Option<String>,
+    pub detail: Option<String>,
+    #[serde(rename = "i18nKey")]
+    pub i18n_key: Option<String>,
+    #[serde(rename = "i18nParams")]
+    pub i18n_params: Option<BTreeMap<String, String>>,
+}
+
+/// Payload for context-length-exceeded event
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextLengthExceededPayload {
+    pub message: String,
+    pub token_count: Option<u64>,
+    pub max_tokens: Option<u64>,
+    pub excess: Option<u64>,
+    pub recoverable: bool,
+    pub recovery_hint: Option<String>,
+    #[serde(rename = "titleKey")]
+    pub title_key: Option<String>,
+    #[serde(rename = "recoverableHintKey")]
+    pub recoverable_hint_key: Option<String>,
+    #[serde(rename = "nonRecoverableHintKey")]
+    pub non_recoverable_hint_key: Option<String>,
+}
+
+/// Payload for message-too-large event
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageTooLargePayload {
+    pub message: String,
+    pub recovery_hint: String,
+    #[serde(rename = "titleKey")]
+    pub title_key: Option<String>,
+    #[serde(rename = "recoveryHintLabelKey")]
+    pub recovery_hint_label_key: Option<String>,
 }
 
 /// Payload for request-confirmation event
@@ -135,10 +171,23 @@ pub struct RequestConfirmationPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StructuredActionKind {
+    Command,
+    GenericTool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StructuredAction {
     pub id: String,
     pub command: String,
     pub description: String,
+    #[serde(rename = "actionKind")]
+    pub action_kind: StructuredActionKind,
+    #[serde(rename = "descriptionKey")]
+    pub description_key: Option<String>,
+    #[serde(rename = "descriptionParams")]
+    pub description_params: Option<BTreeMap<String, String>>,
     pub cwd: Option<String>,
     pub root_command: Option<String>,
     pub cwd_outside_workspace: Option<bool>,

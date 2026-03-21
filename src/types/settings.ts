@@ -4,6 +4,7 @@ export interface RemoteAiConfig {
     user_id: string;
     theme: string;
     markdown_view: string;
+    language: string;
 }
 
 export interface LocalAiConfig {

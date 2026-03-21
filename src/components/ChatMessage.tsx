@@ -21,6 +21,7 @@ const REVERTIBLE_TOOLS = new Set([
 ]);
 
 const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent?: boolean }> = ({ content, isActive, hasContent }) => {
+    const { t } = useTranslation();
     const [isExpanded, setIsExpanded] = useState(true); // Start expanded
     const [userToggled, setUserToggled] = useState(false); // Track if user manually toggled
     const contentRef = useRef<HTMLDivElement>(null);
@@ -110,7 +111,7 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
                     <Brain className={`h-3 w-3 flex-shrink-0 ${isStreaming ? 'animate-pulse text-(--accent-primary)' : 'text-(--fg-tertiary)'}`} />
                     <span className={`flex-shrink-0 font-mono text-[9px] uppercase tracking-[0.16em] ${isStreaming ? 'text-(--accent-primary)' : 'text-(--fg-tertiary)'
                         }`}>
-                        Reasoning
+                        {t('chatMessage.reasoning')}
                     </span>
                 </div>
                 {isStreaming && (
@@ -159,6 +160,7 @@ const resolveImageUrls = (image: ChatImage) => {
 };
 
 const PlanSummaryDisplay: React.FC<{ todos: import('../types/events').TodoItem[] }> = ({ todos }) => {
+    const { t } = useTranslation();
     const [isExpanded, setIsExpanded] = useState(false);
     const completedCount = todos.filter(t => t.status === 'completed').length;
 
@@ -170,7 +172,7 @@ const PlanSummaryDisplay: React.FC<{ todos: import('../types/events').TodoItem[]
             >
                 <Check className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
                 <span className="text-[11px] text-emerald-400 font-medium">
-                    Plan completed ({completedCount}/{todos.length} tasks)
+                    {t('chatMessage.planCompleted', { completed: completedCount, total: todos.length })}
                 </span>
                 {isExpanded ? (
                     <ChevronDown className="w-3 h-3 text-zinc-500 ml-auto flex-shrink-0" />
@@ -239,7 +241,7 @@ const ReferencedPathsDisplay: React.FC<{
                             type="button"
                             onClick={() => onOpenFile?.(mention.path)}
                             className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-emerald-500/15 bg-zinc-950/30 px-2 py-1 text-[10px] text-zinc-300 transition-colors hover:bg-emerald-500/10 hover:text-emerald-200"
-                            title={`Open ${mention.path}`}
+                            title={t('chatMessage.openPath', { path: mention.path })}
                         >
                             {content}
                         </button>
@@ -576,12 +578,12 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                                 ? 'border-yellow-500/20 bg-yellow-500/10 text-yellow-300'
                                                 : 'border-purple-500/20 bg-purple-500/10 text-purple-300'
                                 }`} style={isUser ? userLabelStyle : assistantLabelStyle}>
-                                    {isUser ? 'You' : (isAssistant ? 'Assistant' : message.role)}
+                                    {isUser ? t('chatMessage.you') : (isAssistant ? t('chatMessage.assistant') : message.role)}
                                 </span>
                                 {isActive && isAssistant && (
                                     <span className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[9px] font-medium text-(--accent-primary)" style={assistantLiveStyle}>
                                         <Loader2 className="h-2.5 w-2.5 animate-spin" />
-                                        Live
+                                        {t('chatMessage.live')}
                                     </span>
                                 )}
                                 {isTool && message.tool_call_id && (

@@ -135,7 +135,31 @@ export interface TerminalCwdChangedPayload {
  * Payload for chat-error event
  */
 export interface ChatErrorPayload {
-  error: string;
+  code: string;
+  error?: string | null;
+  message?: string | null;
+  detail?: string | null;
+  i18nKey?: string | null;
+  i18nParams?: Record<string, string> | null;
+}
+
+export interface ContextLengthExceededPayload {
+  message: string;
+  token_count: number | null;
+  max_tokens: number | null;
+  excess: number | null;
+  recoverable: boolean;
+  recovery_hint: string | null;
+  titleKey?: string | null;
+  recoverableHintKey?: string | null;
+  nonRecoverableHintKey?: string | null;
+}
+
+export interface MessageTooLargePayload {
+  message: string;
+  recovery_hint: string;
+  titleKey?: string | null;
+  recoveryHintLabelKey?: string | null;
 }
 
 /**
@@ -149,6 +173,9 @@ export interface StructuredAction {
   id: string;
   command: string;
   description: string;
+  actionKind?: 'command' | 'generic_tool';
+  descriptionKey?: string | null;
+  descriptionParams?: Record<string, string> | null;
   cwd?: string;
   root_command?: string;
   cwd_outside_workspace?: boolean;

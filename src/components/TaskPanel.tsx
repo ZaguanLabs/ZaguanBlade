@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Check, Circle, Loader2, ChevronDown, ChevronRight, Zap } from 'lucide-react';
 import type { TodoItem } from '../types/events';
 
@@ -20,6 +21,7 @@ const StatusIcon: React.FC<{ status: TodoItem['status'] }> = ({ status }) => {
 };
 
 const TaskPanelComponent: React.FC<TaskPanelProps> = ({ todos, isCollapsed, onToggleCollapse }) => {
+    const { t } = useTranslation();
     const [isVisible, setIsVisible] = useState(false);
     const [allDoneState, setAllDoneState] = useState(false);
     const panelRef = useRef<HTMLDivElement>(null);
@@ -27,7 +29,9 @@ const TaskPanelComponent: React.FC<TaskPanelProps> = ({ todos, isCollapsed, onTo
     const completedCount = todos.filter(t => t.status === 'completed').length;
     const totalCount = todos.length;
     const allCompleted = totalCount > 0 && completedCount === totalCount;
-    const summaryText = allDoneState ? 'All tasks completed' : `${completedCount}/${totalCount} completed`;
+    const summaryText = allDoneState
+        ? t('taskPanel.allTasksCompleted')
+        : t('taskPanel.completedSummary', { completed: completedCount, total: totalCount });
 
     // Slide-in animation on mount
     useEffect(() => {
@@ -66,7 +70,7 @@ const TaskPanelComponent: React.FC<TaskPanelProps> = ({ todos, isCollapsed, onTo
                     {summaryText}
                 </span>
                 <span className="shrink-0 text-[10px] text-zinc-500">
-                    {totalCount} {totalCount === 1 ? 'item' : 'items'}
+                    {t('taskPanel.itemsCount', { count: totalCount })}
                 </span>
                 {isCollapsed ? (
                     <ChevronRight className="w-3 h-3 text-zinc-500 shrink-0" />

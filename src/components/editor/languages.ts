@@ -1,116 +1,112 @@
-import { Extension } from "@codemirror/state";
-import { rust } from "@codemirror/lang-rust";
-import { javascript } from "@codemirror/lang-javascript";
-import { python } from "@codemirror/lang-python";
-import { json } from "@codemirror/lang-json";
-import { css } from "@codemirror/lang-css";
-import { html } from "@codemirror/lang-html";
-import { markdown } from "@codemirror/lang-markdown";
-import { yaml } from "@codemirror/lang-yaml";
-import { cpp } from "@codemirror/lang-cpp";
-import { go } from "@codemirror/lang-go";
+import type { Extension } from "@codemirror/state";
 
-// Map file extensions to language support
-export function getLanguageExtension(filename?: string): Extension[] {
+export async function loadLanguageExtension(filename?: string): Promise<Extension[]> {
     if (!filename) return [];
-    
+
     const ext = filename.split(".").pop()?.toLowerCase();
-    
+
     switch (ext) {
-        // Rust
-        case "rs":
+        case "rs": {
+            const { rust } = await import("@codemirror/lang-rust");
             return [rust()];
-        
-        // JavaScript/TypeScript
+        }
+
         case "js":
         case "mjs":
-        case "cjs":
+        case "cjs": {
+            const { javascript } = await import("@codemirror/lang-javascript");
             return [javascript()];
-        case "jsx":
+        }
+        case "jsx": {
+            const { javascript } = await import("@codemirror/lang-javascript");
             return [javascript({ jsx: true })];
+        }
         case "ts":
         case "mts":
-        case "cts":
+        case "cts": {
+            const { javascript } = await import("@codemirror/lang-javascript");
             return [javascript({ typescript: true })];
-        case "tsx":
+        }
+        case "tsx": {
+            const { javascript } = await import("@codemirror/lang-javascript");
             return [javascript({ jsx: true, typescript: true })];
-        
-        // Python
+        }
+
         case "py":
         case "pyw":
-        case "pyi":
+        case "pyi": {
+            const { python } = await import("@codemirror/lang-python");
             return [python()];
-        
-        // JSON
+        }
+
         case "json":
         case "jsonc":
-        case "json5":
+        case "json5": {
+            const { json } = await import("@codemirror/lang-json");
             return [json()];
-        
-        // CSS/SCSS/LESS
+        }
+
         case "css":
         case "scss":
-        case "less":
+        case "less": {
+            const { css } = await import("@codemirror/lang-css");
             return [css()];
-        
-        // HTML (including Astro, Vue, Svelte templates)
+        }
+
         case "html":
         case "htm":
         case "xhtml":
         case "astro":
         case "vue":
-        case "svelte":
+        case "svelte": {
+            const { html } = await import("@codemirror/lang-html");
             return [html()];
-        
-        // Markdown
+        }
+
         case "md":
         case "markdown":
-        case "mdx":
+        case "mdx": {
+            const { markdown } = await import("@codemirror/lang-markdown");
             return [markdown()];
-        
-        // YAML
+        }
+
         case "yaml":
-        case "yml":
+        case "yml": {
+            const { yaml } = await import("@codemirror/lang-yaml");
             return [yaml()];
-        
-        // C/C++
+        }
+
         case "c":
         case "h":
-            return [cpp()];
         case "cpp":
         case "cc":
         case "cxx":
         case "hpp":
         case "hxx":
-        case "hh":
+        case "hh": {
+            const { cpp } = await import("@codemirror/lang-cpp");
             return [cpp()];
-        
-        // Go
-        case "go":
+        }
+
+        case "go": {
+            const { go } = await import("@codemirror/lang-go");
             return [go()];
-        
-        // Config files (treat as JSON or YAML)
+        }
+
         case "toml":
-            return []; // No TOML support yet, fallback to plain text
-        
-        // Shell scripts
         case "sh":
         case "bash":
         case "zsh":
-            return []; // No shell support yet
-        
-        // Default: no language support
         default:
             return [];
     }
 }
 
-// Get language name for display
 export function getLanguageName(filename?: string): string {
     if (!filename) return "Plain Text";
-    
+
     const ext = filename.split(".").pop()?.toLowerCase();
-    
+
     switch (ext) {
         case "rs":
             return "Rust";

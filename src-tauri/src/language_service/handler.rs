@@ -181,17 +181,7 @@ impl LanguageHandler {
                     message: "AppState not available for GetFullContext".to_string(),
                 })?;
 
-                // Clone the indexer manager to avoid holding the lock across await
-                let indexer_manager = {
-                    let guard = state.indexer_manager.lock().unwrap();
-                    guard
-                        .as_ref()
-                        .cloned()
-                        .ok_or_else(|| BladeError::Internal {
-                            trace_id: intent_id.to_string(),
-                            message: "IndexerManager not initialized".to_string(),
-                        })?
-                };
+                let indexer_manager = get_or_init_indexer_manager(state, intent_id).await?;
 
                 let file_path = indexer_manager
                     .get_full_context(max_files, preview_lines)
@@ -227,4 +217,48 @@ impl LanguageHandler {
             event: BladeEvent::Language(event_payload),
         }))
     }
+}
+
+async fn get_or_init_indexer_manager(
+    state: &State<'_, crate::AppState>,
+    intent_id: Uuid,
+) -> Result<crate::indexer::IndexerManager, BladeError> {
+    let workspace_root = {
+        let workspace = state.workspace.lock().unwrap();
+        workspace.workspace.clone().ok_or_else(|| BladeError::Internal {
+            trace_id: intent_id.to_string(),
+            message: "No workspace is open".to_string(),
+        })?
+    };
+
+    {
+        let guard = state.indexer_manager.lock().unwrap();
+        if let Some(manager) = guard.as_ref() {
+            if manager.matches_workspace(&workspace_root) {
+                return Ok(manager.clone());
+            }
+        }
+    }
+
+    let workspace_root_for_build = workspace_root.clone();
+    let manager = spawn_blocking(move || crate::indexer::IndexerManager::new(&workspace_root_for_build))
+        .await
+        .map_err(|e| BladeError::Internal {
+            trace_id: intent_id.to_string(),
+            message: format!("Indexer task join error: {}", e),
+        })?
+        .map_err(|e| BladeError::Internal {
+            trace_id: intent_id.to_string(),
+            message: format!("Failed to initialize IndexerManager: {}", e),
+        })?;
+
+    let mut guard = state.indexer_manager.lock().unwrap();
+    if let Some(existing) = guard.as_ref() {
+        if existing.matches_workspace(&workspace_root) {
+            return Ok(existing.clone());
+        }
+    }
+
+    *guard = Some(manager.clone());
+    Ok(manager)
 }

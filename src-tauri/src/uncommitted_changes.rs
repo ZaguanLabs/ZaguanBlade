@@ -15,6 +15,8 @@ pub struct UncommittedChange {
     pub added_lines: usize,
     pub removed_lines: usize,
     pub timestamp: u64,
+    #[serde(default)]
+    pub file_modified_ms: Option<u64>,
 }
 
 pub struct UncommittedChangeTracker {
@@ -205,6 +207,15 @@ pub fn count_diff_stats(diff: &str) -> (usize, usize) {
     (added, removed)
 }
 
+pub fn file_modified_ms(path: &PathBuf) -> Option<u64> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let modified = metadata.modified().ok()?;
+    modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_millis() as u64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,6 +248,7 @@ mod tests {
             added_lines: 1,
             removed_lines: 1,
             timestamp: 12345,
+            file_modified_ms: None,
         };
 
         tracker.track(change.clone());

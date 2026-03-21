@@ -3,6 +3,8 @@ import { Extension } from "@codemirror/state";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { classHighlighter, tags as t } from "@lezer/highlight";
 
+const EDITOR_MONO_STACK = '"JetBrains Mono", "Cascadia Mono", "SFMono-Regular", "Consolas", "Liberation Mono", monospace';
+
 // Zaguan Blade Theme — Intentional "dimmed structural" palette with selective pop colors.
 // Structural tokens (keywords, operators, punctuation) recede; data tokens (strings,
 // numbers, functions, types) pop. Matches the OLED-dark spatial UI theme.
@@ -64,13 +66,13 @@ const zaguanEditorThemeSpec = {
         backgroundColor: colors.bg,
         color: colors.fg,
         fontSize: "14px",
-        fontFamily: '"JetBrains Mono", "Fira Code", "Symbols Nerd Font Mono", monospace',
+        fontFamily: EDITOR_MONO_STACK,
     },
     
     // Content area
     ".cm-content": {
         caretColor: colors.cursor,
-        fontFamily: '"JetBrains Mono", "Fira Code", "Symbols Nerd Font Mono", monospace',
+        fontFamily: EDITOR_MONO_STACK,
         lineHeight: "1.6",
         padding: "12px 0",
     },
@@ -114,7 +116,7 @@ const zaguanEditorThemeSpec = {
         opacity: "0.35",
         padding: "0 12px 0 8px",
         minWidth: "40px",
-        fontFamily: '"JetBrains Mono", "Fira Code", monospace',
+        fontFamily: EDITOR_MONO_STACK,
         fontSize: "12px",
     },
     
@@ -228,7 +230,7 @@ const zaguanEditorThemeSpec = {
     
     ".cm-tooltip.cm-tooltip-autocomplete": {
         "& > ul": {
-            fontFamily: '"Fira Code", monospace',
+            fontFamily: EDITOR_MONO_STACK,
             fontSize: "13px",
         },
         "& > ul > li": {
@@ -283,7 +285,7 @@ const zaguanEditorThemeSpec = {
     // Scroller
     ".cm-scroller": {
         overflow: "auto",
-        fontFamily: '"JetBrains Mono", "Fira Code", "Symbols Nerd Font Mono", monospace',
+        fontFamily: EDITOR_MONO_STACK,
     },
     
     // ZLP Hover Tooltip
@@ -314,7 +316,7 @@ const zaguanEditorThemeSpec = {
     },
     
     ".cm-zlp-signature": {
-        fontFamily: '"JetBrains Mono", "Fira Code", monospace',
+        fontFamily: EDITOR_MONO_STACK,
         fontSize: "12px",
         color: colors.fgMuted,
         marginBottom: "4px",
@@ -441,7 +443,7 @@ export const zaguanHighlightStyle = HighlightStyle.define([
     { tag: t.strikethrough, textDecoration: "line-through" },
     
     // Code
-    { tag: t.monospace, fontFamily: '"JetBrains Mono", "Fira Code", monospace' },
+    { tag: t.monospace, fontFamily: EDITOR_MONO_STACK },
     
     // Invalid
     { tag: t.invalid, color: "#ef4444", textDecoration: "underline wavy" },

@@ -1,7 +1,9 @@
 'use client';
 import React, { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Terminal, Play, X, Folder, Loader2 } from 'lucide-react';
 import type { StructuredAction } from '../types/events';
+import { getStructuredActionDescription } from '../utils/localizedEvents';
 
 interface CommandApprovalCardProps {
     actions: StructuredAction[];
@@ -18,6 +20,7 @@ export const CommandApprovalCard: React.FC<CommandApprovalCardProps> = ({
     onRunSingle,
     onSkipSingle,
 }) => {
+    const { t } = useTranslation();
     const currentAction = actions[0];
     const [pendingIntent, setPendingIntent] = useState<'run' | 'skip' | null>(null);
 
@@ -40,14 +43,14 @@ export const CommandApprovalCard: React.FC<CommandApprovalCardProps> = ({
                 </div>
                 <div className="min-w-0">
                     <span className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-(--fg-secondary)">
-                        {isWaiting ? 'Command queued' : 'Command approval'}
+                        {isWaiting ? t('approval.commandQueued') : t('approval.commandApproval')}
                     </span>
                     <span className="block text-[11px] text-(--fg-tertiary)">
                         {pendingIntent === 'run'
-                            ? 'Waiting for execution to start'
+                            ? t('approval.waitingForExecution')
                             : pendingIntent === 'skip'
-                                ? 'Skipping command'
-                                : 'Review before execution'}
+                                ? t('approval.skippingCommand')
+                                : t('approval.reviewBeforeExecution')}
                     </span>
                 </div>
             </div>
@@ -65,10 +68,10 @@ export const CommandApprovalCard: React.FC<CommandApprovalCardProps> = ({
 
                     <div className="px-2.5 py-2">
                         <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-(--fg-tertiary)">
-                            Pending action
+                            {t('approval.pendingAction')}
                         </div>
                         <code className="block break-all text-[11px] font-mono leading-5 text-(--fg-primary)">
-                            {currentAction.description}
+                            {getStructuredActionDescription(currentAction)}
                         </code>
                     </div>
                 </div>
@@ -91,7 +94,7 @@ export const CommandApprovalCard: React.FC<CommandApprovalCardProps> = ({
                         ) : (
                             <X className="h-3 w-3" />
                         )}
-                        {pendingIntent === 'skip' ? 'Skipping' : 'Skip'}
+                        {pendingIntent === 'skip' ? t('approval.skipping') : t('approval.skip')}
                     </button>
                     <button
                         disabled={isWaiting}
@@ -119,7 +122,7 @@ export const CommandApprovalCard: React.FC<CommandApprovalCardProps> = ({
                         ) : (
                             <Play className="h-3 w-3" />
                         )}
-                        {pendingIntent === 'run' ? 'Waiting' : 'Run'}
+                        {pendingIntent === 'run' ? t('approval.waiting') : t('approval.run')}
                     </button>
                 </div>
             </div>

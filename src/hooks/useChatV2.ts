@@ -6,14 +6,16 @@ import { EditorFacade } from '../services/editorFacade';
 import { useEditorState } from '../contexts/EditorContext';
 import { MessageBuffer } from '../utils/eventBuffer';
 import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertToolCallBlockPreservingOrder, upsertSplitTextBlocks } from '../utils/messageBlocks';
-import { EventNames, type RequestConfirmationPayload, type StructuredAction, type ToolExecutionCompletedPayload, type TodoItem } from '../types/events';
+import { EventNames, type ChatErrorPayload, type ContextLengthExceededPayload, type MessageTooLargePayload, type RequestConfirmationPayload, type StructuredAction, type ToolExecutionCompletedPayload, type TodoItem } from '../types/events';
 import type { BladeEventEnvelope, ChatMention } from '../types/blade';
 import type { ChatImage, ChatMessage, ChatMode, ComposerMention, CommandExecution, ImageAttachment, MessageBlock, ModelInfo, QueuedRequest, StreamingState, ToolActivityState, ToolCall } from '../types/chat';
+import { buildContextLengthSystemMessage, buildMessageTooLargeSystemMessage, formatChatErrorPayload } from '../utils/localizedEvents';
 
 const FLUSH_INTERVAL_MS = 80;
 const TOOL_ACTIVITY_DISPATCH_INTERVAL_MS = 120;
 const MESSAGE_COMPLETION_GRACE_MS = 1200;
 const STREAM_DEBUG_ENABLED = false;
+const MODEL_CACHE_STORAGE_KEY = 'zblade.chat.models.v1';
 
 function pickDefaultModel(models: ModelInfo[]): ModelInfo | null {
     if (models.length === 0) {
@@ -23,6 +25,44 @@ function pickDefaultModel(models: ModelInfo[]): ModelInfo | null {
     return models.find((model) => model.id === 'anthropic/claude-sonnet-4-5-20250929')
         || models.find((model) => model.id === 'openai/gpt-5.2')
         || models[0];
+}
+
+function readCachedModels(): ModelInfo[] {
+    if (typeof window === 'undefined') {
+        return [];
+    }
+
+    try {
+        const raw = window.localStorage.getItem(MODEL_CACHE_STORAGE_KEY);
+        if (!raw) {
+            return [];
+        }
+
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) {
+            return [];
+        }
+
+        return parsed.filter((model): model is ModelInfo => {
+            return typeof model?.id === 'string'
+                && typeof model?.name === 'string'
+                && typeof model?.description === 'string';
+        });
+    } catch {
+        return [];
+    }
+}
+
+function writeCachedModels(models: ModelInfo[]): void {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    try {
+        window.localStorage.setItem(MODEL_CACHE_STORAGE_KEY, JSON.stringify(models));
+    } catch {
+        // Ignore storage failures; cache is an optimization only.
+    }
 }
 
 function areToolActivitiesEqual(a: ToolActivityState | null, b: ToolActivityState | null): boolean {
@@ -656,6 +696,7 @@ export function useChatV2() {
     const refreshModels = useCallback(async () => {
         const models = await invoke<ModelInfo[]>('list_models');
         dispatch({ type: 'models/set', models });
+        writeCachedModels(models);
 
         if (models.length === 0) {
             return models;
@@ -886,38 +927,32 @@ export function useChatV2() {
                     return;
                 }
 
-                const [history, modelList, isStreaming] = await Promise.all([
+                const cachedModels = readCachedModels();
+                if (cachedModels.length > 0) {
+                    dispatch({ type: 'models/set', models: cachedModels });
+                }
+
+                const [history, isStreaming] = await Promise.all([
                     invoke<ChatMessage[]>('get_conversation'),
-                    invoke<ModelInfo[]>('list_models'),
                     invoke<boolean>('get_chat_status'),
                 ]);
 
                 replaceMessagesPreservingImagePreviews(ensureMessagesHaveBlocks(history));
-                dispatch({ type: 'models/set', models: modelList });
 
                 if (isStreaming) {
                     dispatch({ type: 'loading/set', loading: true });
                 }
-
-                if (modelList.length > 0) {
-                    const hasSelectedModel = modelList.some((model) => (
-                        model.id === selectedModelIdRef.current || model.api_id === selectedModelIdRef.current
-                    ));
-
-                    if (!hasExplicitModelRef.current || !hasSelectedModel) {
-                        const defaultModel = pickDefaultModel(modelList);
-                        if (defaultModel) {
-                            await syncSelectedModel(defaultModel.id, hasExplicitModelRef.current && hasSelectedModel);
-                        }
-                    }
-                }
             } catch (error) {
                 console.error('[useChatV2] Failed to initialize chat:', error);
             }
+
+            void refreshModels().catch((error) => {
+                console.error('[useChatV2] Failed to refresh models in background:', error);
+            });
         }
 
         void init();
-    }, [syncSelectedModel]);
+    }, [refreshModels]);
 
     useEffect(() => {
         if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
@@ -1136,31 +1171,23 @@ export function useChatV2() {
                 pendingTimeoutsRef.current.push(settleTodosTimer);
             });
 
-            unlistenError = await listen<string>('chat-error', (event) => {
+            unlistenError = await listen<ChatErrorPayload>('chat-error', (event) => {
+                const errorText = formatChatErrorPayload(event.payload);
                 const inFlightToolCallIds = Array.from(new Set(
                     messagesRef.current.flatMap((message) => (message.tool_calls || [])
                         .filter((toolCall) => toolCall.status === undefined || toolCall.status === 'pending' || toolCall.status === 'executing')
                         .map((toolCall) => toolCall.id)),
                 ));
                 if (inFlightToolCallIds.length > 0) {
-                    updateToolCallsStatusLocally(inFlightToolCallIds, 'error', event.payload);
+                    updateToolCallsStatusLocally(inFlightToolCallIds, 'error', errorText);
                 }
                 dispatchInFlightRef.current = false;
                 dispatch({ type: 'loading/set', loading: false });
                 dispatch({ type: 'pending-actions/set', actions: null });
-                dispatch({ type: 'error/set', error: event.payload });
+                dispatch({ type: 'error/set', error: errorText });
             });
 
-            unlistenContextLength = await listen<{
-                message: string;
-                token_count: number | null;
-                max_tokens: number | null;
-                excess: number | null;
-                recoverable: boolean;
-                recovery_hint: string | null;
-            }>('context-length-exceeded', (event) => {
-                const { message, token_count, max_tokens, recoverable, recovery_hint } = event.payload;
-                const tokenInfo = token_count && max_tokens ? ` (${token_count.toLocaleString()} / ${max_tokens.toLocaleString()} tokens)` : '';
+            unlistenContextLength = await listen<ContextLengthExceededPayload>('context-length-exceeded', (event) => {
                 dispatchInFlightRef.current = false;
                 dispatch({ type: 'loading/set', loading: false });
                 dispatch({ type: 'pending-actions/set', actions: null });
@@ -1168,24 +1195,19 @@ export function useChatV2() {
                     ...messages,
                     buildSystemAssistantMessage(
                         `system-context-${Date.now()}`,
-                        `⚠️ **Context Limit Reached**${tokenInfo}\n\n${message}\n\n${recoverable
-                            ? (recovery_hint || 'The AI is attempting to recover automatically. You can also try:\n- Starting a new conversation\n- Asking the AI to summarize the conversation')
-                            : 'Please start a new conversation to continue.'}`,
+                        buildContextLengthSystemMessage(event.payload),
                     ),
                 ]);
             });
 
-            unlistenMessageTooLarge = await listen<{
-                message: string;
-                recovery_hint: string;
-            }>('message-too-large', (event) => {
+            unlistenMessageTooLarge = await listen<MessageTooLargePayload>('message-too-large', (event) => {
                 dispatchInFlightRef.current = false;
                 dispatch({ type: 'loading/set', loading: false });
                 updateMessages((messages) => [
                     ...messages,
                     buildSystemAssistantMessage(
                         `system-size-${Date.now()}`,
-                        `⚠️ **Response Too Large**\n\n${event.payload.message}\n\n**Recovery hint:** ${event.payload.recovery_hint}`,
+                        buildMessageTooLargeSystemMessage(event.payload),
                     ),
                 ]);
             });

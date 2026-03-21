@@ -6,8 +6,10 @@ import { emit } from '@tauri-apps/api/event';
 import { getVersion } from '@tauri-apps/api/app';
 import { X, Database, Cloud, Shield, Zap, HardDrive, Server, ChevronRight, ChevronDown, Info, Loader2, Code, Key, CheckCircle2, Palette, Check } from 'lucide-react';
 import type { BackendSettings, LocalAiConfig, RemoteAiConfig } from '../types/settings';
+import i18n, { normalizeAppLanguage, type AppLanguage } from '../i18n';
 import zbladeLogoUrl from '../assets/zblade-in-app-logo.png';
 import { availableThemes, normalizeThemeId } from '../themes';
+import { formatUnknownBackendError } from '../utils/backendErrors';
 
 type StorageMode = 'local' | 'server';
 
@@ -39,6 +41,7 @@ interface SettingsState {
     configuration: {
         theme: string;
         markdownView: string;
+        language: AppLanguage;
     };
     account: {
         bladeUrl: string;
@@ -79,6 +82,7 @@ const defaultSettings: SettingsState = {
     configuration: {
         theme: 'zaguan-dark',
         markdownView: 'split',
+        language: normalizeAppLanguage(i18n.resolvedLanguage || i18n.language),
     },
     account: {
         bladeUrl: '',
@@ -107,6 +111,7 @@ function backendRemoteToFrontend(backend: RemoteAiConfig): Pick<SettingsState, '
         configuration: {
             theme: normalizeThemeId(backend.theme),
             markdownView: backend.markdown_view || 'split',
+            language: normalizeAppLanguage(backend.language || i18n.resolvedLanguage || i18n.language),
         },
         account: {
             bladeUrl: '', // Always empty, internal only
@@ -136,6 +141,7 @@ function frontendRemoteToBackend(frontend: SettingsState): RemoteAiConfig {
         user_id: frontend.account.userId,
         theme: normalizeThemeId(frontend.configuration.theme),
         markdown_view: frontend.configuration.markdownView,
+        language: normalizeAppLanguage(frontend.configuration.language),
     };
 }
 
@@ -274,7 +280,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                 console.debug('[Settings] Loaded settings:', mergedSettings);
             } catch (e) {
                 console.error('[Settings] Failed to load global settings:', e);
-                setError(String(e));
+                setError(formatUnknownBackendError(e));
                 setSettings(defaultSettings);
                 setLoadedSettings(defaultSettings);
             } finally {
@@ -327,11 +333,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                 const localSettingsChanged = JSON.stringify(localSettings) !== JSON.stringify(previousLocalSettings);
                 const projectSettingsChanged = JSON.stringify(projectSettings) !== JSON.stringify(previousProjectSettings);
                 const themeChanged = remoteSettings.theme !== previousRemoteSettings.theme;
+                const languageChanged = remoteSettings.language !== previousRemoteSettings.language;
                 const remoteAccountChanged =
                     remoteSettings.api_key !== previousRemoteSettings.api_key
                     || remoteSettings.user_id !== previousRemoteSettings.user_id
                     || remoteSettings.blade_url !== previousRemoteSettings.blade_url;
-                const remoteConfigurationChanged = remoteSettings.markdown_view !== previousRemoteSettings.markdown_view;
+                const remoteConfigurationChanged =
+                    remoteSettings.markdown_view !== previousRemoteSettings.markdown_view
+                    || languageChanged;
 
                 if (remoteSettingsChanged) {
                     await invoke('save_remote_ai_settings', {
@@ -355,6 +364,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
 
                 if (themeChanged) {
                     await emit('theme-changed');
+                }
+
+                if (languageChanged) {
+                    await i18n.changeLanguage(normalizeAppLanguage(remoteSettings.language));
                 }
 
                 if (remoteAccountChanged || remoteConfigurationChanged) {
@@ -732,6 +745,7 @@ const ThemeSelect: React.FC<{
 const ConfigurationSettings: React.FC<ConfigurationSettingsProps> = ({ settings, onChange }) => {
     const { t } = useTranslation();
     const selectedTheme = availableThemes.find((theme) => theme.id === normalizeThemeId(settings.theme)) ?? availableThemes[0];
+    const languageOptions: AppLanguage[] = ['en', 'es'];
 
     return (
         <div className="space-y-6">
@@ -785,6 +799,64 @@ const ConfigurationSettings: React.FC<ConfigurationSettingsProps> = ({ settings,
                     </div>
                 </div>
             </div>
+
+            <div className="border border-(--border-default) rounded-[calc(var(--panel-radius)+4px)] p-5 space-y-5 bg-[color-mix(in_srgb,var(--bg-panel)_88%,var(--bg-editor))] shadow-(--panel-shadow)">
+                <div>
+                    <div className="text-sm font-medium text-(--fg-primary)">{t('settings.configurationSection.languageTitle')}</div>
+                    <div className="text-xs text-(--fg-tertiary) mt-1">
+                        {t('settings.configurationSection.languageDescription')}
+                    </div>
+                </div>
+
+                <div className="space-y-2.5">
+                    <label className="text-xs font-medium uppercase tracking-[0.16em] text-(--fg-secondary) block">
+                        {t('settings.configurationSection.interfaceLanguage')}
+                    </label>
+
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        {languageOptions.map((language) => {
+                            const isSelected = settings.language === language;
+                            return (
+                                <button
+                                    key={language}
+                                    type="button"
+                                    onClick={() => onChange({ language })}
+                                    className={`group rounded-[calc(var(--panel-radius)+2px)] border p-4 text-left transition-[border-color,background-color,box-shadow] duration-200 ${
+                                        isSelected
+                                            ? 'border-(--accent-primary) bg-[color-mix(in_srgb,var(--accent-primary)_12%,var(--bg-surface))] shadow-[0_0_0_1px_color-mix(in_srgb,var(--accent-primary)_24%,transparent)]'
+                                            : 'border-(--border-default) bg-(--bg-surface) hover:border-(--border-focus) hover:bg-(--bg-surface-hover)'
+                                    }`}
+                                >
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="space-y-1">
+                                            <div className="text-sm font-semibold text-(--fg-primary)">
+                                                {language === 'en' ? t('language.english') : t('language.spanish')}
+                                            </div>
+                                            <div className="text-xs text-(--fg-secondary)">
+                                                {language === 'en'
+                                                    ? t('settings.configurationSection.languageOptionEnglish')
+                                                    : t('settings.configurationSection.languageOptionSpanish')}
+                                            </div>
+                                        </div>
+                                        <div className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${
+                                            isSelected
+                                                ? 'border-(--accent-primary) bg-[color-mix(in_srgb,var(--accent-primary)_18%,transparent)] text-(--accent-primary)'
+                                                : 'border-(--border-default) text-transparent group-hover:text-(--fg-tertiary)'
+                                        }`}>
+                                            <Check className="h-3.5 w-3.5" />
+                                        </div>
+                                    </div>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                <div className="flex items-center gap-2 text-[11px] text-(--fg-tertiary)">
+                    <span className="h-2 w-2 rounded-full bg-(--accent-primary)" />
+                    <span>{t('settings.configurationSection.languageSaveHint')}</span>
+                </div>
+            </div>
         </div>
     );
 };
@@ -817,7 +889,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
             setOllamaTestMessage(t('settings.connectionSuccessful'));
         } catch (e) {
             setOllamaTestResult('error');
-            setOllamaTestMessage(String(e));
+            setOllamaTestMessage(formatUnknownBackendError(e));
         } finally {
             setIsTestingOllama(false);
         }
@@ -847,7 +919,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
             setOpenaiTestMessage(t('settings.connectionSuccessful'));
         } catch (e) {
             setOpenaiTestResult('error');
-            setOpenaiTestMessage(String(e));
+            setOpenaiTestMessage(formatUnknownBackendError(e));
         } finally {
             setIsTestingOpenAI(false);
         }

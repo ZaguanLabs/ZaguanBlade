@@ -13,6 +13,9 @@ export interface Tab {
     content?: string;
     suggestedName?: string;
     highlightLines?: { startLine: number; endLine: number };
+    savedContent?: string;
+    draftContent?: string;
+    isDirty?: boolean;
 }
 
 // Helper to convert backend TabInfo to frontend Tab
@@ -153,7 +156,7 @@ export function useTabManager(uncommittedChanges: UncommittedChange[]) {
             id: t.id,
             title: t.title,
             isEphemeral: t.type === 'ephemeral',
-            isDirty: false,
+            isDirty: Boolean(t.isDirty),
             hasVirtualChanges: isFileTab ? hasPendingVirtualChanges(path) : false,
             isAiEdited: isFileTab ? aiEditedFilePaths.has(path!) : false,
             hasUnreadAiEdit: isFileTab ? unseenAiEditedFilePaths.has(path!) : false,

@@ -1,7 +1,9 @@
 'use client';
 import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { HardDrive, Cloud, Shield, Zap, ArrowRight, Loader2 } from 'lucide-react';
+import { formatUnknownBackendError } from '../utils/backendErrors';
 
 interface StorageSetupModalProps {
     isOpen: boolean;
@@ -16,6 +18,7 @@ export const StorageSetupModal: React.FC<StorageSetupModalProps> = ({
     workspacePath,
     onComplete,
 }) => {
+    const { t } = useTranslation();
     const [selectedMode, setSelectedMode] = useState<StorageMode>('local');
     const [isSettingUp, setIsSettingUp] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -59,7 +62,7 @@ export const StorageSetupModal: React.FC<StorageSetupModalProps> = ({
             onComplete();
         } catch (e) {
             console.error('[StorageSetup] Failed:', e);
-            setError(String(e));
+            setError(formatUnknownBackendError(e));
         } finally {
             setIsSettingUp(false);
         }
@@ -77,10 +80,10 @@ export const StorageSetupModal: React.FC<StorageSetupModalProps> = ({
                 {/* Header */}
                 <div className="px-8 pt-8 pb-4">
                     <h2 className="text-2xl font-bold text-[var(--fg-primary)]">
-                        Welcome to ZaguanBlade
+                        {t('storageSetup.title')}
                     </h2>
                     <p className="mt-2 text-[var(--fg-secondary)]">
-                        Choose how you want to store your conversation history for this project.
+                        {t('storageSetup.description')}
                     </p>
                 </div>
 
@@ -105,20 +108,20 @@ export const StorageSetupModal: React.FC<StorageSetupModalProps> = ({
                             </div>
                             <div className="flex-1">
                                 <div className="flex items-center gap-2">
-                                    <h3 className="font-semibold text-[var(--fg-primary)]">Local Storage</h3>
+                                    <h3 className="font-semibold text-[var(--fg-primary)]">{t('storageSetup.localTitle')}</h3>
                                     <span className="px-2 py-0.5 text-xs font-medium bg-emerald-500/20 text-emerald-400 rounded">
-                                        Recommended
+                                        {t('common.recommended')}
                                     </span>
                                 </div>
                                 <p className="mt-1 text-sm text-[var(--fg-secondary)]">
-                                    Your code and conversations stay on your machine. Maximum privacy.
+                                    {t('storageSetup.localDescription')}
                                 </p>
                                 <div className="mt-3 flex items-center gap-4 text-xs text-[var(--fg-tertiary)]">
                                     <span className="flex items-center gap-1">
-                                        <Shield className="w-3.5 h-3.5" /> Code never leaves your machine
+                                        <Shield className="w-3.5 h-3.5" /> {t('storageSetup.localCodePrivate')}
                                     </span>
                                     <span className="flex items-center gap-1">
-                                        <HardDrive className="w-3.5 h-3.5" /> Stored in .zblade/
+                                        <HardDrive className="w-3.5 h-3.5" /> {t('storageSetup.localStoredInProject')}
                                     </span>
                                 </div>
                             </div>
@@ -143,16 +146,16 @@ export const StorageSetupModal: React.FC<StorageSetupModalProps> = ({
                                 }`} />
                             </div>
                             <div className="flex-1">
-                                <h3 className="font-semibold text-[var(--fg-primary)]">Server Storage</h3>
+                                <h3 className="font-semibold text-[var(--fg-primary)]">{t('storageSetup.serverTitle')}</h3>
                                 <p className="mt-1 text-sm text-[var(--fg-secondary)]">
-                                    Conversations stored on server for faster context assembly.
+                                    {t('storageSetup.serverDescription')}
                                 </p>
                                 <div className="mt-3 flex items-center gap-4 text-xs text-[var(--fg-tertiary)]">
                                     <span className="flex items-center gap-1">
-                                        <Zap className="w-3.5 h-3.5" /> Faster responses
+                                        <Zap className="w-3.5 h-3.5" /> {t('storageSetup.serverFasterResponses')}
                                     </span>
                                     <span className="flex items-center gap-1">
-                                        <Cloud className="w-3.5 h-3.5" /> Encrypted on server
+                                        <Cloud className="w-3.5 h-3.5" /> {t('storageSetup.serverEncrypted')}
                                     </span>
                                 </div>
                             </div>
@@ -170,7 +173,7 @@ export const StorageSetupModal: React.FC<StorageSetupModalProps> = ({
                 {/* Footer */}
                 <div className="px-8 py-6 flex items-center justify-between">
                     <p className="text-xs text-[var(--fg-tertiary)]">
-                        You can change this later in Settings
+                        {t('storageSetup.changeLater')}
                     </p>
                     <button
                         onClick={handleSetup}
@@ -180,11 +183,11 @@ export const StorageSetupModal: React.FC<StorageSetupModalProps> = ({
                         {isSettingUp ? (
                             <>
                                 <Loader2 className="w-4 h-4 animate-spin" />
-                                Setting up...
+                                {t('storageSetup.settingUp')}
                             </>
                         ) : (
                             <>
-                                Get Started
+                                {t('common.getStarted')}
                                 <ArrowRight className="w-4 h-4" />
                             </>
                         )}

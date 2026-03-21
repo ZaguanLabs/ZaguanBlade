@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { X, ArrowRight, ArrowLeft, Loader2, Network } from 'lucide-react';
 import { ZLPService } from '../services/zlp';
 import { ZLPGraphResponse, CallGraphNode, CallGraphEdge } from '../types/zlp';
+import { formatUnknownBackendError } from '../utils/backendErrors';
 
 interface GraphInspectorProps {
     symbolId: string;
@@ -18,6 +20,7 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
     onClose,
     onNavigate
 }) => {
+    const { t } = useTranslation();
     const [graph, setGraph] = useState<ZLPGraphResponse | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -35,7 +38,7 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
                 const data = await ZLPService.getCallGraph(symbolId);
                 if (isMounted) setGraph(data);
             } catch (e: any) {
-                if (isMounted) setError(e.message || "Failed to load graph");
+                if (isMounted) setError(`${t('gitGraph.loadFailed')}: ${formatUnknownBackendError(e)}`);
             } finally {
                 if (isMounted) setLoading(false);
             }
@@ -128,19 +131,19 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
                     </div>
                 ) : graph ? (
                     <>
-                        {renderNodeList(getIncomingNodes(), "Incoming Calls", <ArrowLeft className="w-3.5 h-3.5 text-orange-400" />)}
+                        {renderNodeList(getIncomingNodes(), t('graphInspector.incomingCalls'), <ArrowLeft className="w-3.5 h-3.5 text-orange-400" />)}
 
                         {/* Current Node Representation */}
                         <div className="my-6 p-3 bg-[var(--accent-surface)] border border-[var(--accent-border)] rounded text-center">
-                            <div className="text-[10px] uppercase text-[var(--accent-text-secondary)] font-bold mb-1">Focus</div>
+                            <div className="text-[10px] uppercase text-[var(--accent-text-secondary)] font-bold mb-1">{t('graphInspector.focus')}</div>
                             <div className="font-mono text-sm font-bold text-[var(--accent-text-primary)]">{symbolName}</div>
                         </div>
 
-                        {renderNodeList(getOutgoingNodes(), "Outgoing Calls", <ArrowRight className="w-3.5 h-3.5 text-blue-400" />)}
+                        {renderNodeList(getOutgoingNodes(), t('graphInspector.outgoingCalls'), <ArrowRight className="w-3.5 h-3.5 text-blue-400" />)}
 
                         {getIncomingNodes().length === 0 && getOutgoingNodes().length === 0 && (
                             <div className="text-center text-xs text-[var(--fg-tertiary)] italic py-4">
-                                No calls found.
+                                {t('graphInspector.noCallsFound')}
                             </div>
                         )}
                     </>

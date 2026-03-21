@@ -40,6 +40,7 @@ pub mod reasoning_parser;
 pub mod screenshot;
 pub mod semantic_patch;
 pub mod symbol_index;
+pub mod startup;
 pub mod terminal;
 pub mod tool_execution;
 pub mod tools;
@@ -54,7 +55,6 @@ pub mod xml_parser;
 
 pub use app_state::AppState;
 use clap::Parser;
-use tauri::Manager;
 
 /// ZaguanBlade - AI-Native Intelligent Code Editor
 #[derive(Parser, Debug)]
@@ -98,64 +98,8 @@ pub fn run() {
     tauri::Builder::default()
         .manage(AppState::new(resolved_path))
         .manage(terminal::TerminalManager::new())
-        .on_page_load(|webview, _payload| {
-            // Show window after webview content has loaded
-            let _ = webview.window().show();
-        })
-        .setup(|app| {
+        .setup(|_app| {
             let start = std::time::Instant::now();
-            crate::fs_watcher::restart_fs_watcher(&app.handle());
-
-            // Background workspace indexing
-            let app_handle = app.handle().clone();
-            std::thread::spawn(move || {
-                let state = app_handle.state::<AppState>();
-                // Check if we have a workspace set
-                let workspace = state.workspace.lock().unwrap().workspace.clone();
-
-                if let Some(path) = workspace {
-                    let path_str = path.to_string_lossy().to_string();
-                    eprintln!(
-                        "[LanguageService] Triggering startup indexing for: {}",
-                        path_str
-                    );
-                    let service = state.language_service.read().unwrap().clone();
-
-                    match service.index_directory(".") {
-                        Ok(stats) => {
-                            eprintln!(
-                                "[LanguageService] Startup indexing complete: {} files in {}ms",
-                                stats.files_indexed, stats.duration_ms
-                            );
-                        }
-                        Err(_) => {}
-                    }
-                }
-            });
-
-            // Background IndexerManager initialization (non-blocking)
-            let app_handle_indexer = app.handle().clone();
-            std::thread::spawn(move || {
-                let state = app_handle_indexer.state::<AppState>();
-                let workspace = state.workspace.lock().unwrap().workspace.clone();
-
-                if let Some(path) = workspace {
-                    eprintln!(
-                        "[Indexer] Starting background initialization for {:?}",
-                        path
-                    );
-                    match crate::indexer::IndexerManager::new(&path) {
-                        Ok(manager) => {
-                            eprintln!("[Indexer] Initialized with {} files", manager.file_count());
-                            *state.indexer_manager.lock().unwrap() = Some(manager);
-                        }
-                        Err(e) => {
-                            eprintln!("[Indexer] Failed to initialize: {}", e);
-                        }
-                    }
-                }
-            });
-
             eprintln!("[PERF] setup initialization took {:?}", start.elapsed());
             Ok(())
         })
@@ -169,6 +113,7 @@ pub fn run() {
             commands::misc::greet,
             commands::misc::toggle_devtools,
             commands::misc::log_frontend,
+            commands::misc::frontend_shell_ready,
             // commands::misc::set_virtual_buffer,
             // commands::misc::clear_virtual_buffer,
             // commands::misc::has_virtual_buffer,
@@ -252,6 +197,7 @@ pub fn run() {
             commands::local_context::get_file_context,
             commands::local_context::delete_local_conversation,
             // State (Headless Core)
+            commands::state::bootstrap_state,
             commands::state::get_core_state,
             commands::state::get_feature_flags,
             commands::state::set_feature_flag,

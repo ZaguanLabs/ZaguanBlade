@@ -4,6 +4,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Maximize2, FileText } from 'lucide-react';
 import { readFile } from '@tauri-apps/plugin-fs';
+import { formatUnknownBackendError } from '../utils/backendErrors';
 
 // Use the Vite-bundled worker URL. In Tauri's custom protocol (tauri://),
 // PDF.js's origin check fails and it wraps the URL in a blob with
@@ -55,7 +56,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
                 setLoading(false);
             } catch (err) {
                 console.error('[PDF] Error loading PDF:', err);
-                setError(err instanceof Error ? err.message : 'Failed to load PDF');
+                setError(`${t('pdf.loadFailed')}: ${formatUnknownBackendError(err)}`);
                 setLoading(false);
             }
         }
@@ -92,7 +93,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
                 await page.render(renderContext as any).promise;
             } catch (err) {
                 console.error('Error rendering page:', err);
-                setError(err instanceof Error ? err.message : 'Failed to render page');
+                setError(`${t('pdf.renderFailed')}: ${formatUnknownBackendError(err)}`);
             }
         }
 

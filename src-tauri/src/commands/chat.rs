@@ -56,14 +56,12 @@ pub fn get_conversation(state: State<'_, AppState>) -> Vec<crate::protocol::Chat
 pub fn list_conversations(
     state: State<'_, AppState>,
 ) -> Result<Vec<conversation_store::ConversationMetadata>, String> {
-    let store = state.conversation_store.lock().unwrap();
-    Ok(store.list_conversations())
+    state.with_conversation_store(|store| Ok(store.list_conversations()))
 }
 
 #[tauri::command]
 pub fn load_conversation(id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let store = state.conversation_store.lock().unwrap();
-    let stored = store.load_conversation(&id)?;
+    let stored = state.with_conversation_store(|store| store.load_conversation(&id))?;
 
     let mut conversation = state.conversation.lock().unwrap();
     *conversation = ConversationHistory::from_stored(stored.clone());
@@ -89,7 +87,6 @@ pub fn new_conversation(model_id: String, state: State<'_, AppState>) -> Result<
     {
         let conversation = state.conversation.lock().unwrap();
         if conversation.len() > 0 {
-            let mut store = state.conversation_store.lock().unwrap();
             let stored = conversation.to_stored();
             // Note: session_id is auto-saved by background loop, but we should make sure
             // we don't lose the current session ID if we switch away.
@@ -97,7 +94,7 @@ pub fn new_conversation(model_id: String, state: State<'_, AppState>) -> Result<
             // This logic relies on `store` having the correct metadata already or creating new.
             // The background loop in chat_orchestrator handles continuous saving with session_id.
 
-            store.save_conversation(&stored)?;
+            state.with_conversation_store(|store| store.save_conversation(&stored))?;
         }
     }
 
@@ -108,8 +105,7 @@ pub fn new_conversation(model_id: String, state: State<'_, AppState>) -> Result<
     }
 
     // Create new conversation
-    let mut store = state.conversation_store.lock().unwrap();
-    let metadata = store.create_new_conversation(model_id);
+    let metadata = state.with_conversation_store(|store| Ok(store.create_new_conversation(model_id)))?;
     let id = metadata.id.clone();
 
     let mut conversation = state.conversation.lock().unwrap();
@@ -123,16 +119,14 @@ pub fn new_conversation(model_id: String, state: State<'_, AppState>) -> Result<
 
 #[tauri::command]
 pub fn delete_conversation(id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let mut store = state.conversation_store.lock().unwrap();
-    store.delete_conversation(&id)
+    state.with_conversation_store(|store| store.delete_conversation(&id))
 }
 
 #[tauri::command]
 pub fn save_conversation(state: State<'_, AppState>) -> Result<(), String> {
     let conversation = state.conversation.lock().unwrap();
-    let mut store = state.conversation_store.lock().unwrap();
     let stored = conversation.to_stored();
-    store.save_conversation(&stored)
+    state.with_conversation_store(|store| store.save_conversation(&stored))
 }
 
 #[tauri::command]

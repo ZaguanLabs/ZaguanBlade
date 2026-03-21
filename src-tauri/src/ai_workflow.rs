@@ -431,12 +431,12 @@ impl AiWorkflow {
                         if let Some(app) = &context.app_handle {
                             use tauri::Manager;
                             let state = app.state::<crate::app_state::AppState>();
-                            let history_service = state.history_service.read().unwrap().clone();
+                            let history_service = state.history_service().ok();
                             if full_path.exists() {
-                                match history_service
-                                    .create_snapshot(&full_path, Some(call.id.clone()))
-                                {
-                                    Ok(entry) => {
+                                match history_service.as_ref().map(|service| {
+                                    service.create_snapshot(&full_path, Some(call.id.clone()))
+                                }) {
+                                    Some(Ok(entry)) => {
                                         println!("[HISTORY] Snapshot created for {}", change.path);
                                         snapshot_id = Some(entry.id.clone());
                                         let _ = app.emit(
@@ -444,10 +444,16 @@ impl AiWorkflow {
                                             crate::events::HistoryEntryAddedPayload { entry },
                                         );
                                     }
-                                    Err(e) => {
+                                    Some(Err(e)) => {
                                         eprintln!(
                                             "[HISTORY] Failed to create snapshot for {}: {}",
                                             change.path, e
+                                        );
+                                    }
+                                    None => {
+                                        eprintln!(
+                                            "[HISTORY] Failed to initialize history service for {}",
+                                            change.path
                                         );
                                     }
                                 }
@@ -523,13 +529,17 @@ impl AiWorkflow {
                                         // cumulative diff (instead of only the most recent edit).
                                         let (change_id, base_snapshot_id, base_content) =
                                             if let Some(existing_change) = existing {
-                                                let history_service =
-                                                    state.history_service.read().unwrap().clone();
-                                                let baseline = history_service
-                                                    .get_snapshot_content(
-                                                        &existing_change.snapshot_id,
-                                                    )
-                                                    .unwrap_or_else(|_| original_content.clone());
+                                                let baseline = state
+                                                    .history_service()
+                                                    .ok()
+                                                    .and_then(|history_service| {
+                                                        history_service
+                                                            .get_snapshot_content(
+                                                                &existing_change.snapshot_id,
+                                                            )
+                                                            .ok()
+                                                    })
+                                                    .unwrap_or_else(|| original_content.clone());
                                                 (
                                                     existing_change.id,
                                                     existing_change.snapshot_id,
@@ -567,6 +577,10 @@ impl AiWorkflow {
                                                     .unwrap_or_default()
                                                     .as_millis()
                                                     as u64,
+                                                file_modified_ms:
+                                                    crate::uncommitted_changes::file_modified_ms(
+                                                        &full_path,
+                                                    ),
                                             };
                                         state.uncommitted_changes.track(uncommitted);
                                         println!(
@@ -626,22 +640,28 @@ impl AiWorkflow {
                         if let Some(app) = &context.app_handle {
                             use tauri::Manager;
                             let state = app.state::<crate::app_state::AppState>();
-                            let history_service = state.history_service.read().unwrap().clone();
+                            let history_service = state.history_service().ok();
                             if full_path.exists() {
-                                match history_service
-                                    .create_snapshot(&full_path, Some(call.id.clone()))
-                                {
-                                    Ok(entry) => {
+                                match history_service.as_ref().map(|service| {
+                                    service.create_snapshot(&full_path, Some(call.id.clone()))
+                                }) {
+                                    Some(Ok(entry)) => {
                                         println!("[HISTORY] Snapshot created for {}", change.path);
                                         let _ = app.emit(
                                             crate::events::event_names::HISTORY_ENTRY_ADDED,
                                             crate::events::HistoryEntryAddedPayload { entry },
                                         );
                                     }
-                                    Err(e) => {
+                                    Some(Err(e)) => {
                                         eprintln!(
                                             "[HISTORY] Failed to create snapshot for {}: {}",
                                             change.path, e
+                                        );
+                                    }
+                                    None => {
+                                        eprintln!(
+                                            "[HISTORY] Failed to initialize history service for {}",
+                                            change.path
                                         );
                                     }
                                 }

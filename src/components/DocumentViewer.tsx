@@ -1,9 +1,8 @@
 'use client';
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Save, X, FileText } from 'lucide-react';
-import { save } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
-import { MarkdownRenderer } from './MarkdownRenderer';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import ReactMarkdown from 'react-markdown';
@@ -32,6 +31,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
   onImplementPlan,
 
 }) => {
+  const { t } = useTranslation();
   const [isSaving, setIsSaving] = useState(false);
   const trimmedContent = content.trim();
   const sourceName = `${suggestedName || ''} ${title}`.toLowerCase();
@@ -97,7 +97,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
               onClick={() => onImplementPlan?.(trimmedContent)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 border border-emerald-500/25 transition-colors"
             >
-              Implement
+              {t('chat.implement')}
             </button>
           )}
           {isEphemeral && (
@@ -107,7 +107,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/20 transition-colors disabled:opacity-50"
             >
               <Save className="w-3.5 h-3.5" />
-              {isSaving ? 'Saving...' : 'Save'}
+              {isSaving ? t('statusBar.saving') : t('common.save')}
             </button>
           )}
           <button

@@ -17,12 +17,14 @@ export const WindowPicker: React.FC<WindowPickerProps> = ({
     isOpen,
     windows,
     loading = false,
-    title = 'Capture Window',
-    subtitle = 'Select a window to capture',
+    title,
+    subtitle,
     onSelect,
     onCancel,
 }) => {
     const { t } = useTranslation();
+    const resolvedTitle = title ?? t('screenshot.windowPickerTitle');
+    const resolvedSubtitle = subtitle ?? t('screenshot.windowPickerSubtitle');
     if (!isOpen) return null;
 
     return (
@@ -34,8 +36,8 @@ export const WindowPicker: React.FC<WindowPickerProps> = ({
             <div className="relative w-full max-w-xl mx-4 bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded-xl shadow-2xl">
                 <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-subtle)]">
                     <div>
-                        <div className="text-sm font-semibold text-[var(--fg-primary)]">{title}</div>
-                        <div className="text-xs text-[var(--fg-tertiary)]">{subtitle}</div>
+                        <div className="text-sm font-semibold text-[var(--fg-primary)]">{resolvedTitle}</div>
+                        <div className="text-xs text-[var(--fg-tertiary)]">{resolvedSubtitle}</div>
                     </div>
                     <button
                         onClick={onCancel}

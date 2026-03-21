@@ -14,20 +14,31 @@ import type { FeatureFlagsSnapshot } from '../types/coreState';
 
 let featureFlags: FeatureFlagsSnapshot | null = null;
 
+function fallbackFeatureFlags(): FeatureFlagsSnapshot {
+    return {
+        editor_backend_authority: false,
+        tabs_backend_authority: false,
+        composite_tools_enabled: false,
+        grep_timeout_enforced: false,
+    };
+}
+
 /**
  * Initialize the editor facade by loading feature flags from backend.
  * Should be called once at app startup.
  */
-export async function initEditorFacade(): Promise<void> {
+export async function initEditorFacade(initialFlags?: FeatureFlagsSnapshot | null): Promise<void> {
+    if (initialFlags) {
+        featureFlags = initialFlags;
+        return;
+    }
+
     try {
         featureFlags = await invoke<FeatureFlagsSnapshot>('get_feature_flags');
         console.debug('[EditorFacade] Initialized with flags:', featureFlags);
     } catch (e) {
         console.warn('[EditorFacade] Failed to load feature flags, using defaults:', e);
-        featureFlags = {
-            editor_backend_authority: false,
-            tabs_backend_authority: false,
-        };
+        featureFlags = fallbackFeatureFlags();
     }
 }
 

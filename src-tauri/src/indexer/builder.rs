@@ -3,7 +3,9 @@ use ignore::WalkBuilder;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-pub fn index_workspace(root: &Path) -> Result<ProjectIndex, Box<dyn std::error::Error>> {
+pub fn index_workspace(
+    root: &Path,
+) -> Result<ProjectIndex, Box<dyn std::error::Error + Send + Sync>> {
     let mut index = ProjectIndex::new(root.to_path_buf());
 
     let walker = WalkBuilder::new(root)

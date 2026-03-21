@@ -9,7 +9,9 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { listen, UnlistenFn } from '@tauri-apps/api/event';
+import { listen } from '@tauri-apps/api/event';
+import { useOptionalStartupBootstrap } from '../contexts/StartupBootstrapContext';
+import type { BootstrapState } from '../types/bootstrap';
 import type { CoreStateSnapshot, FeatureFlagsSnapshot } from '../types/coreState';
 import type { BladeEventEnvelope, EditorEvent } from '../types/blade';
 
@@ -37,49 +39,63 @@ export interface CoreStateSyncResult {
  * Also listens for editor state events to keep local cache updated.
  */
 export function useCoreStateSync(): CoreStateSyncResult {
+    const bootstrapContext = useOptionalStartupBootstrap();
     const [isRecovering, setIsRecovering] = useState(true);
     const [coreState, setCoreState] = useState<CoreStateSnapshot | null>(null);
     const [featureFlags, setFeatureFlags] = useState<FeatureFlagsSnapshot | null>(null);
     const [error, setError] = useState<string | null>(null);
+
+    const applyBootstrap = useCallback((bootstrap: BootstrapState) => {
+        const state = bootstrap.core_state;
+        const flags = bootstrap.feature_flags;
+
+        setFeatureFlags(flags);
+        setCoreState(state);
+        setError(null);
+        setIsRecovering(false);
+
+        window.dispatchEvent(new CustomEvent('core-state-recovered', {
+            detail: { state, flags }
+        }));
+
+        console.debug('[CoreStateSync] Recovery complete:', {
+            workspace: state.workspace.path,
+            activeFile: state.editor.active_file,
+            openFiles: state.editor.open_files.length,
+            messageCount: state.chat.message_count,
+            capabilities: state.protocol.capabilities,
+        });
+    }, []);
 
     const recover = useCallback(async () => {
         setIsRecovering(true);
         setError(null);
 
         try {
-            // Load feature flags first
-            const flags = await invoke<FeatureFlagsSnapshot>('get_feature_flags');
-            setFeatureFlags(flags);
-
-            // Then load core state
-            const state = await invoke<CoreStateSnapshot>('get_core_state');
-            setCoreState(state);
-
-            // Dispatch custom event for other components to react
-            window.dispatchEvent(new CustomEvent('core-state-recovered', {
-                detail: { state, flags }
-            }));
-
-            console.debug('[CoreStateSync] Recovery complete:', {
-                workspace: state.workspace.path,
-                activeFile: state.editor.active_file,
-                openFiles: state.editor.open_files.length,
-                messageCount: state.chat.message_count,
-                capabilities: state.protocol.capabilities,
-            });
+            const bootstrap = bootstrapContext?.bootstrap
+                ?? await invoke<BootstrapState>('bootstrap_state');
+            applyBootstrap(bootstrap);
         } catch (e) {
             const message = e instanceof Error ? e.message : String(e);
             console.error('[CoreStateSync] Recovery failed:', message);
             setError(message);
-        } finally {
             setIsRecovering(false);
         }
-    }, []);
+    }, [applyBootstrap, bootstrapContext?.bootstrap]);
 
     // Initial recovery on mount
     useEffect(() => {
-        recover();
-    }, [recover]);
+        if (bootstrapContext?.bootstrap) {
+            void recover();
+            return;
+        }
+
+        if (bootstrapContext?.isLoading) {
+            return;
+        }
+
+        void recover();
+    }, [bootstrapContext?.bootstrap, bootstrapContext?.isLoading, recover]);
 
     // Listen for editor state events to keep cache updated
     useEffect(() => {

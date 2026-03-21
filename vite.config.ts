@@ -47,6 +47,9 @@ export default defineConfig(async () => ({
                 manualChunks: (id) => {
                     if (id.includes('node_modules')) {
                         // CodeMirror (Editor)
+                        if (id.includes('@codemirror/lang-')) {
+                            return 'vendor-codemirror-lang';
+                        }
                         if (id.includes('@codemirror') || id.includes('codemirror') || id.includes('@lezer')) {
                             return 'vendor-codemirror';
                         }
@@ -62,27 +65,30 @@ export default defineConfig(async () => ({
                         if (id.includes('pdfjs-dist')) {
                             return 'vendor-pdf';
                         }
-                        // Core React Framework + Markdown + Syntax Highlighting
-                        // These are merged to avoid circular dependencies:
-                        // react-syntax-highlighter -> refractor, react-markdown -> unified -> refractor
+                        // Markdown + syntax highlighting are only needed once rich content renders.
+                        if (
+                            id.includes('react-syntax-highlighter') ||
+                            id.includes('react-markdown') ||
+                            id.includes('refractor') ||
+                            id.includes('prismjs') ||
+                            id.includes('remark') ||
+                            id.includes('rehype') ||
+                            id.includes('unified') ||
+                            id.includes('unist') ||
+                            id.includes('vfile') ||
+                            id.includes('micromark') ||
+                            id.includes('mdast')
+                        ) {
+                            return 'vendor-markdown';
+                        }
+                        // Core React Framework
                         if (
                             id.includes('/react/') ||
                             id.includes('/react-dom/') ||
                             id.includes('/react-router') ||
                             id.includes('@remix-run') ||
                             id.includes('/scheduler/') ||
-                            id.includes('i18next') ||
-                            id.includes('lucide-react') ||
-                            id.includes('react-syntax-highlighter') ||
-                            id.includes('react-markdown') ||
-                            id.includes('refractor') ||
-                            id.includes('prismjs') ||
-                            id.includes('remark') ||
-                            id.includes('unified') ||
-                            id.includes('unist') ||
-                            id.includes('vfile') ||
-                            id.includes('micromark') ||
-                            id.includes('mdast')
+                            id.includes('i18next')
                         ) {
                             return 'vendor-react';
                         }

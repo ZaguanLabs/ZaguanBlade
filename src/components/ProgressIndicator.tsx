@@ -1,5 +1,6 @@
 'use client';
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { Search, FileText, Scale, Sparkles, CheckCircle2, Loader2 } from 'lucide-react';
 import { ProgressInfo } from '../types/chat';
 
@@ -8,12 +9,13 @@ interface ProgressIndicatorProps {
 }
 
 export const ProgressIndicator: React.FC<ProgressIndicatorProps> = ({ progress }) => {
+    const { t } = useTranslation();
     const getPrettyStageLabel = () => {
         const rawStage = progress.stage || '';
         const stage = rawStage.toLowerCase();
 
         const prettyStageMap: Record<string, string> = {
-            considering_next_steps: 'Planning Next Step',
+            considering_next_steps: t('progress.planningNextStep'),
         };
 
         if (prettyStageMap[stage]) {

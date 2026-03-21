@@ -3,27 +3,27 @@ import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { ExplorerPanel } from './ExplorerPanel';
 import { EditorPanel } from './EditorPanel';
 import { TerminalPane, TerminalPaneHandle } from './TerminalPane';
-import { DocumentViewer } from './DocumentViewer';
 import { AppBar } from './AppBar';
 import { GitBranch, Settings, Clock } from 'lucide-react';
+import { useStartupBootstrap } from '../contexts/StartupBootstrapContext';
 import { EditorProvider, useEditorActions } from '../contexts/EditorContext';
 import { useUncommittedChanges } from '../hooks/useUncommittedChanges';
 import { useChat } from '../hooks/useChat';
-import { StorageSetupModal } from './StorageSetupModal';
 import { useProjectState, type ProjectState } from '../hooks/useProjectState';
 import { useWarmup } from '../hooks/useWarmup';
 import { useGitStatus } from '../hooks/useGitStatus';
 import { useTabManager, type Tab } from '../hooks/useTabManager';
 import { useResizeHandlers } from '../hooks/useResizeHandlers';
 import { useLayoutEvents } from '../hooks/useLayoutEvents';
-import type { BackendSettings } from '../types/settings';
+const ExplorerPanel = React.lazy(() => import('./ExplorerPanel').then(module => ({ default: module.ExplorerPanel })));
 const ChatPanel = React.lazy(() => import('./ChatPanel').then(module => ({ default: module.ChatPanel })));
 const GitPanel = React.lazy(() => import('./GitPanel').then(module => ({ default: module.GitPanel })));
 const FileHistoryPanel = React.lazy(() => import('./FileHistoryPanel').then(module => ({ default: module.FileHistoryPanel })));
+const DocumentViewer = React.lazy(() => import('./DocumentViewer').then(module => ({ default: module.DocumentViewer })));
 const SettingsModal = React.lazy(() => import('./SettingsModal').then(module => ({ default: module.SettingsModal })));
+const StorageSetupModal = React.lazy(() => import('./StorageSetupModal').then(module => ({ default: module.StorageSetupModal })));
 const ProtocolExplorer = React.lazy(() => import('./dev/ProtocolExplorer').then(module => ({ default: module.ProtocolExplorer })));
 
 function normalizePath(value: string): string {
@@ -70,10 +70,12 @@ function findMatchingChangeRange(
 const AppLayoutInner: React.FC = () => {
     const { t } = useTranslation();
     const appWindow = getCurrentWindow();
+    const { bootstrap } = useStartupBootstrap();
 
     // Sidebar State
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [activeSidebar, setActiveSidebar] = useState<'explorer' | 'git' | 'history'>('explorer');
+    const isGitSidebarVisible = isSidebarOpen && activeSidebar === 'git';
 
     const chat = useChat();
     const [wasStoppedByUser, setWasStoppedByUser] = useState(false);
@@ -94,7 +96,7 @@ const AppLayoutInner: React.FC = () => {
         diff: diffGit,
         generateCommitMessage: generateGitCommitMessage,
         commitPreflight: commitPreflightGit,
-    } = useGitStatus();
+    } = useGitStatus({ includeFiles: isGitSidebarVisible });
     const gitChangedCount = gitStatus?.changedCount ?? 0;
     const { selectedModelId, setSelectedModelId, refreshModels } = chat;
     const terminalPaneRef = useRef<TerminalPaneHandle>(null);
@@ -151,6 +153,27 @@ const AppLayoutInner: React.FC = () => {
         );
     }, [chat]);
 
+    const handleActiveTabContentStateChange = useCallback((state: {
+        savedContent?: string;
+        draftContent?: string;
+        isDirty: boolean;
+    }) => {
+        if (!activeTabId) return;
+
+        setTabs(prev => prev.map(tab => {
+            if (tab.id !== activeTabId) {
+                return tab;
+            }
+
+            return {
+                ...tab,
+                savedContent: state.savedContent ?? tab.savedContent,
+                draftContent: state.draftContent,
+                isDirty: state.isDirty,
+            };
+        }));
+    }, [activeTabId, setTabs]);
+
     // Tauri event listeners (file open, research progress, change-applied, etc.)
     const { researchProgress, finalizeResearchActivities } = useLayoutEvents({
         setTabs,
@@ -180,11 +203,13 @@ const AppLayoutInner: React.FC = () => {
 
     // First-time setup modal state (RFC-002)
     const [showStorageSetup, setShowStorageSetup] = useState(false);
-    const [hasCheckedZblade, setHasCheckedZblade] = useState(false);
-
     const [workspacePath, setWorkspacePath] = useState<string | null>(null);
-    const [userId, setUserId] = useState<string | null>(null);
     const [projectId, setProjectId] = useState<string | null>(null);
+    const bootstrapAppliedRef = useRef(false);
+    const bootstrapHasApiKey = useMemo(() => {
+        const apiKey = bootstrap?.remote_settings.api_key;
+        return apiKey ? apiKey.length > 0 : null;
+    }, [bootstrap]);
 
     const projectName = useMemo(() => {
         if (!workspacePath) return null;
@@ -202,87 +227,22 @@ const AppLayoutInner: React.FC = () => {
         });
     }, [appWindow, projectName, activeFilename]);
 
-    // Trigger backend to load project settings on mount and when settings change
     useEffect(() => {
-        if (!workspacePath) return;
+        if (!bootstrap || bootstrapAppliedRef.current) return;
 
-        const loadSettings = async () => {
-            try {
-                await invoke<BackendSettings>('load_project_settings', {
-                    projectPath: workspacePath,
-                });
-            } catch (e) {
-                console.error('[Layout] Failed to load project settings:', e);
+        bootstrapAppliedRef.current = true;
+        setWorkspacePath(bootstrap.core_state.workspace.path);
+        setProjectId(bootstrap.core_state.workspace.project_id);
+
+        if (bootstrap.has_zblade_directory !== null) {
+            const exists = bootstrap.has_zblade_directory;
+            if (!exists) {
+                setShowStorageSetup(true);
             }
-        };
-
-        loadSettings();
-
-        // Listen for project settings changes from SettingsModal
-        const unlistenPromise = listen('project-settings-changed', loadSettings);
-
-        return () => {
-            unlistenPromise.then(unlisten => unlisten());
-        };
-    }, [workspacePath]);
-
-    // Fetch current workspace and user_id on mount
-    const initializedRef = useRef(false);
-    useEffect(() => {
-        if (initializedRef.current) return;
-        initializedRef.current = true;
-
-        const fetchWorkspace = async () => {
-            try {
-                const path = await invoke<string | null>('get_current_workspace');
-                setWorkspacePath(path);
-
-                // Fetch project_id for this workspace
-                if (path) {
-                    try {
-                        const id = await invoke<string | null>('get_project_id', { workspacePath: path });
-                        setProjectId(id);
-                    } catch (e) {
-                        console.error('[Layout] Failed to get project_id:', e);
-                    }
-                }
-            } catch (e) {
-                console.error('[Layout] Failed to get workspace:', e);
-            }
-        };
-        const fetchUserId = async () => {
-            try {
-                const id = await invoke<string | null>('get_user_id');
-                if (id) {
-                    setUserId(id);
-                }
-            } catch (e) {
-                console.error('[Layout] Failed to get user_id:', e);
-            }
-        };
-        fetchWorkspace();
-        fetchUserId();
-    }, []);
-
-    // RFC-002: Check if .zblade directory exists for first-time setup
-    useEffect(() => {
-        const checkZbladeDir = async () => {
-            if (!workspacePath || hasCheckedZblade) return;
-
-            try {
-                const exists = await invoke<boolean>('has_zblade_directory', { projectPath: workspacePath });
-                setHasCheckedZblade(true);
-                if (!exists) {
-                    setShowStorageSetup(true);
-                }
-            } catch (e) {
-                console.error('[Layout] Failed to check .zblade directory:', e);
-                setHasCheckedZblade(true);
-            }
-        };
-
-        checkZbladeDir();
-    }, [workspacePath, hasCheckedZblade]);
+        } else {
+            setShowStorageSetup(false);
+        }
+    }, [bootstrap]);
 
     // Resize handlers (terminal + chat panel drag) — must be before handleStateLoaded
     const editorColumnRef = useRef<HTMLDivElement>(null);
@@ -524,7 +484,9 @@ const AppLayoutInner: React.FC = () => {
                     }}
                 >
                     {activeSidebar === 'explorer' && (
-                        <ExplorerPanel onFileSelect={handleExplorerFileSelect} activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
+                        <Suspense fallback={<div className="h-full flex items-center justify-center text-[var(--fg-subtle)]">{t('sidebar.loadingExplorer', 'Loading explorer...')}</div>}>
+                            <ExplorerPanel onFileSelect={handleExplorerFileSelect} activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
+                        </Suspense>
                     )}
                     {activeSidebar === 'git' && (
                         <Suspense fallback={<div className="h-full flex items-center justify-center text-[var(--fg-subtle)]">{t('sidebar.loadingGit')}</div>}>
@@ -572,66 +534,57 @@ const AppLayoutInner: React.FC = () => {
                         <div
                             className="flex-1 overflow-hidden relative"
                         >
-                            {(() => {
-                                const activeTab = tabs.find(t => t.id === activeTabId);
+                            {activeTab?.type === 'file' && (
+                                <div
+                                    key={activeTab.id}
+                                    className="absolute inset-x-0 top-0 z-10"
+                                    style={{ bottom: editorViewportBottomInset }}
+                                >
+                                    <EditorPanel
+                                        activeFile={activeTab.path || null}
+                                        highlightLines={activeTab.highlightLines || null}
+                                        workspaceRoot={workspacePath}
+                                        hasRemoteApiKey={bootstrapHasApiKey}
+                                        savedContent={activeTab.savedContent ?? null}
+                                        draftContent={activeTab.draftContent ?? null}
+                                        isDirty={Boolean(activeTab.isDirty)}
+                                        onContentStateChange={handleActiveTabContentStateChange}
+                                        onOpenSettings={() => setIsSettingsOpen(true)}
+                                    />
+                                </div>
+                            )}
 
-                                return (
-                                    <>
-                                        {/* Render all file tabs (hidden when not active) */}
-                                        {tabs.filter(t => t.type === 'file').map(tab => {
-                                            const isActive = tab.id === activeTabId;
+                            {tabs.length === 0 && (
+                                <div className="absolute inset-x-0 top-0 z-10" style={{ bottom: editorViewportBottomInset }}>
+                                    <EditorPanel
+                                        activeFile={null}
+                                        workspaceRoot={workspacePath}
+                                        hasRemoteApiKey={bootstrapHasApiKey}
+                                        onOpenSettings={() => setIsSettingsOpen(true)}
+                                    />
+                                </div>
+                            )}
 
-                                            return (
-                                                <div
-                                                    key={tab.id}
-                                                    className={`absolute inset-x-0 top-0 ${isActive ? 'z-10' : 'z-0 pointer-events-none opacity-0'}`}
-                                                    style={{ bottom: editorViewportBottomInset }}
-                                                >
-                                                    <EditorPanel
-                                                        activeFile={tab.path || null}
-                                                        highlightLines={tab.highlightLines || null}
-                                                        onOpenSettings={() => setIsSettingsOpen(true)}
-                                                    />
-                                                </div>
-                                            );
-                                        })}
-
-                                        {/* Render Welcome Page if no tabs */}
-                                        {tabs.length === 0 && (
-                                            <div className="absolute inset-x-0 top-0 z-10" style={{ bottom: editorViewportBottomInset }}>
-                                                <EditorPanel
-                                                    activeFile={null}
-                                                    onOpenSettings={() => setIsSettingsOpen(true)}
-                                                />
-                                            </div>
-                                        )}
-
-                                        {/* Render ephemeral tabs */}
-                                        {tabs.filter(t => t.type === 'ephemeral').map(tab => {
-                                            const isActive = tab.id === activeTabId;
-                                            return (
-                                                <div
-                                                    key={tab.id}
-                                                    className={`absolute inset-x-0 top-0 ${isActive ? 'z-10' : 'z-0 pointer-events-none opacity-0'}`}
-                                                    style={{ bottom: editorViewportBottomInset }}
-                                                >
-                                                    <DocumentViewer
-                                                        documentId={tab.id}
-                                                        title={tab.title}
-                                                        content={tab.content || ''}
-                                                        isEphemeral={true}
-                                                        suggestedName={tab.suggestedName}
-                                                        onClose={() => handleTabClose(tab.id)}
-                                                        onSave={(savedPath) => handleEphemeralSave(tab.id, savedPath)}
-                                                        onImplementPlan={handleImplementPlan}
-                                                    />
-                                                </div>
-                                            );
-                                        })}
-
-                                    </>
-                                );
-                            })()}
+                            {activeTab?.type === 'ephemeral' && (
+                                <div
+                                    key={activeTab.id}
+                                    className="absolute inset-x-0 top-0 z-10"
+                                    style={{ bottom: editorViewportBottomInset }}
+                                >
+                                    <Suspense fallback={<div className="h-full w-full bg-[var(--bg-editor)]" />}>
+                                        <DocumentViewer
+                                            documentId={activeTab.id}
+                                            title={activeTab.title}
+                                            content={activeTab.content || ''}
+                                            isEphemeral={true}
+                                            suggestedName={activeTab.suggestedName}
+                                            onClose={() => handleTabClose(activeTab.id)}
+                                            onSave={(savedPath) => handleEphemeralSave(activeTab.id, savedPath)}
+                                            onImplementPlan={handleImplementPlan}
+                                        />
+                                    </Suspense>
+                                </div>
+                            )}
                         </div>
 
                         {/* Terminal Drawer — floats over the editor from the bottom */}
@@ -659,7 +612,7 @@ const AppLayoutInner: React.FC = () => {
                                 />
                             </div>
                             <div className="flex-1 min-h-0 overflow-hidden">
-                                <TerminalPane ref={terminalPaneRef} />
+                                <TerminalPane ref={terminalPaneRef} workspaceRoot={workspacePath} />
                             </div>
                         </div>
                     </div>
@@ -797,11 +750,13 @@ const AppLayoutInner: React.FC = () => {
 
             {/* First-time Storage Setup Modal (RFC-002) */}
             {workspacePath && (
-                <StorageSetupModal
-                    isOpen={showStorageSetup}
-                    workspacePath={workspacePath}
-                    onComplete={() => setShowStorageSetup(false)}
-                />
+                <Suspense fallback={null}>
+                    <StorageSetupModal
+                        isOpen={showStorageSetup}
+                        workspacePath={workspacePath}
+                        onComplete={() => setShowStorageSetup(false)}
+                    />
+                </Suspense>
             )}
         </div>
     );

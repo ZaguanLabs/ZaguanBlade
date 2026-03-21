@@ -11,7 +11,7 @@ import { lintGutter } from "@codemirror/lint";
 
 // Custom theme and extensions
 import { getZaguanTheme } from "./editor/theme/zaguanTheme";
-import { getLanguageExtension } from "./editor/languages";
+import { loadLanguageExtension } from "./editor/languages";
 import {
     lineHighlightField,
     addLineHighlight,
@@ -91,6 +91,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
 
     // Track whether a content change was user-initiated (to avoid update loops)
     const isUserEditRef = useRef(false);
+    const languageRequestIdRef = useRef(0);
 
     // Ref to capture the latest onSave callback (avoids stale closure in keymap)
     const onSaveRef = useRef(onSave);
@@ -123,6 +124,24 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
             view.focus();
         }
     }));
+
+    const reconfigureLanguage = useCallback(async (targetFilename?: string) => {
+        const requestId = ++languageRequestIdRef.current;
+        const extensions = await loadLanguageExtension(targetFilename);
+
+        if (requestId !== languageRequestIdRef.current) {
+            return;
+        }
+
+        const view = viewRef.current;
+        if (!view) {
+            return;
+        }
+
+        view.dispatch({
+            effects: languageConf.current.reconfigure(extensions),
+        });
+    }, []);
 
     // Initial setup
     useEffect(() => {
@@ -184,7 +203,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 }),
 
                 // Language support (dynamic)
-                languageConf.current.of(getLanguageExtension(filename)),
+                languageConf.current.of([]),
 
                 // ZLP Linter and Hover Tooltip (disabled for markdown - not applicable)
                 ...(isMarkdown ? [] : [
@@ -253,12 +272,14 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
         });
 
         viewRef.current = view;
+        void reconfigureLanguage(filename);
 
         return () => {
+            languageRequestIdRef.current += 1;
             view.destroy();
             viewRef.current = null;
         };
-    }, [filename, isMarkdown, setCursorPosition, setSelection, clearSelection, shouldWrap]);
+    }, [filename, isMarkdown, reconfigureLanguage, setCursorPosition, setSelection, clearSelection, shouldWrap]);
 
     useEffect(() => {
         const view = viewRef.current;
@@ -278,6 +299,10 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
         });
     }, [shouldWrap]);
 
+    useEffect(() => {
+        void reconfigureLanguage(filename);
+    }, [filename, reconfigureLanguage]);
+
     // Handle file switch and content updates
     const lastFilename = useRef(filename);
     useEffect(() => {
@@ -295,7 +320,6 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
             view.dispatch({
                 changes: { from: 0, to: view.state.doc.length, insert: content },
                 effects: [
-                    languageConf.current.reconfigure(getLanguageExtension(filename)),
                     setBaseContent.of(content), // Initialize virtual buffer with base content
                     setDiffState.of(diffState),
                 ]

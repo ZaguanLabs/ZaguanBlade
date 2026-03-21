@@ -9,6 +9,7 @@ import { FileExplorer } from './FileExplorer';
 import { ErrorBoundary } from './ErrorBoundary';
 import { ChevronRight } from 'lucide-react';
 import { OutlinePanel } from './OutlinePanel';
+import { formatUnknownBackendError } from '../utils/backendErrors';
 
 interface ExplorerPanelProps {
     onFileSelect: (path: string, line?: number, character?: number) => void;
@@ -33,7 +34,7 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
             setError(null);
         } catch (e) {
             console.warn("Failed to load root:", e);
-            setError(String(e));
+            setError(formatUnknownBackendError(e));
         }
     }, []);
 
@@ -91,7 +92,7 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
             loadRoot();
         } catch (e) {
             console.error(e);
-            setError(String(e));
+            setError(formatUnknownBackendError(e));
         }
     };
 

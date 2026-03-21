@@ -202,56 +202,23 @@ pub async fn open_workspace_logic(
     };
     *state.git_dir.write().unwrap() = new_git_dir;
 
-    // Initialize project-local .zblade structure and migrate project-scoped services
+    // Ensure project-local .zblade exists for workspace-scoped persistence
     let workspace_root = std::path::PathBuf::from(&path);
     crate::project_settings::init_zblade_dir(&workspace_root)?;
-    let project_data_dir = workspace_root.join(".zblade");
-
-    // Conversation store (<workspace>/.zblade/artifacts/conversations)
-    {
-        let storage_path = project_data_dir.join("artifacts").join("conversations");
-        let new_store = crate::conversation_store::ConversationStore::new(storage_path)
-            .map_err(|e| format!("Failed to initialize conversation store: {}", e))?;
-        *state.conversation_store.lock().unwrap() = new_store;
-    }
-
-    // History service (<workspace>/.zblade/history)
-    {
-        let new_history =
-            std::sync::Arc::new(crate::history::HistoryService::new(&project_data_dir));
-        *state.history_service.write().unwrap() = new_history;
-    }
-
-    // Language service + symbol store (<workspace>/.zblade/index/symbols.db)
-    let language_service = {
-        let db_path = project_data_dir.join("index").join("symbols.db");
-        if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        let symbol_store = std::sync::Arc::new(
-            crate::symbol_index::store::SymbolStore::new(&db_path)
-                .map_err(|e| format!("Failed to create SymbolStore: {}", e))?,
-        );
-
-        std::sync::Arc::new(
-            crate::language_service::LanguageService::new(workspace_root.clone(), symbol_store)
-                .map_err(|e| format!("Failed to initialize LanguageService: {}", e))?,
-        )
-    };
-
-    {
-        *state.language_service.write().unwrap() = language_service.clone();
-        *state.language_handler.write().unwrap() =
-            crate::language_service::LanguageHandler::new(language_service.clone());
-    }
+    state.reset_project_services()?;
 
     crate::fs_watcher::restart_fs_watcher(app_handle);
     let _ = app_handle.emit(crate::events::event_names::REFRESH_EXPLORER, ());
 
-    let language_service = language_service;
-    tokio::task::spawn_blocking(move || {
-        let _ = language_service.index_directory(".");
-    });
+    if state
+        .startup_services_started
+        .load(std::sync::atomic::Ordering::Acquire)
+    {
+        let language_service = state.language_service()?;
+        tokio::task::spawn_blocking(move || {
+            let _ = language_service.index_directory(".");
+        });
+    }
 
     Ok(())
 }

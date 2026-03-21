@@ -11,6 +11,9 @@ import { MessageBuffer } from '../utils/eventBuffer';
 import type { BladeEventEnvelope } from '../types/blade';
 import { getOrCreateIdempotencyKey, IDEMPOTENT_OPERATIONS } from '../utils/idempotency';
 import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertToolCallBlockPreservingOrder } from '../utils/messageBlocks';
+import { buildContextLengthSystemMessage, buildMessageTooLargeSystemMessage, formatChatErrorPayload } from '../utils/localizedEvents';
+import type { ChatErrorPayload, ContextLengthExceededPayload, MessageTooLargePayload } from '../types/events';
+import { formatUnknownBackendError } from '../utils/backendErrors';
 
 const MAX_DELTA_OVERLAP_CHECK = 512;
 const MIN_SNAPSHOT_PREFIX = 48;
@@ -755,47 +758,28 @@ export function useChatLegacy() {
             });
             unlistenDone = u2;
 
-            const u3 = await listen<string>('chat-error', (event) => {
+            const u3 = await listen<ChatErrorPayload>('chat-error', (event) => {
                 dispatchInFlightRef.current = false;
                 setLoading(false);
                 setPendingActions(null);
-                setError(event.payload);
+                setError(formatChatErrorPayload(event.payload));
             });
             unlistenError = u3;
 
             // RFC: Context Length Recovery - listen for context limit exceeded events
-            const uContextLength = await listen<{
-                message: string;
-                token_count: number | null;
-                max_tokens: number | null;
-                excess: number | null;
-                recoverable: boolean;
-                recovery_hint: string | null;
-            }>('context-length-exceeded', (event) => {
+            const uContextLength = await listen<ContextLengthExceededPayload>('context-length-exceeded', (event) => {
                 console.debug('[useChat] Context length exceeded:', event.payload);
-                const { message, token_count, max_tokens, recoverable, recovery_hint } = event.payload;
                 
                 dispatchInFlightRef.current = false;
                 setLoading(false);
                 setPendingActions(null);
-                
-                // Show a user-friendly notification in the chat
-                const tokenInfo = token_count && max_tokens 
-                    ? ` (${token_count.toLocaleString()} / ${max_tokens.toLocaleString()} tokens)`
-                    : '';
-                
+
                 // Add a system message to the chat to inform the user
                 const msgId = `system-context-${Date.now()}`;
                 const systemMessage: ChatMessage = {
                     id: msgId,
                     role: 'Assistant',
-                    content: `⚠️ **Context Limit Reached**${tokenInfo}\n\n` +
-                        `${message}\n\n` +
-                        (recoverable 
-                            ? (recovery_hint || 'The AI is attempting to recover automatically. You can also try:\n' +
-                              '- Starting a new conversation\n' +
-                              '- Asking the AI to summarize the conversation')
-                            : 'Please start a new conversation to continue.'),
+                    content: buildContextLengthSystemMessage(event.payload),
                     blocks: [{ type: 'text', content: '', id: msgId }],
                 };
                 setMessages(prev => [...prev, systemMessage]);
@@ -803,12 +787,8 @@ export function useChatLegacy() {
             unlistenContextLength = uContextLength;
 
             // Listen for message-too-large errors
-            const uMessageTooLarge = await listen<{
-                message: string;
-                recovery_hint: string;
-            }>('message-too-large', (event) => {
+            const uMessageTooLarge = await listen<MessageTooLargePayload>('message-too-large', (event) => {
                 console.debug('[useChat] Message too large:', event.payload);
-                const { message, recovery_hint } = event.payload;
                 
                 dispatchInFlightRef.current = false;
                 setLoading(false);
@@ -818,9 +798,7 @@ export function useChatLegacy() {
                 const systemMessage: ChatMessage = {
                     id: msgId,
                     role: 'Assistant',
-                    content: `⚠️ **Response Too Large**\n\n` +
-                        `${message}\n\n` +
-                        `**Recovery hint:** ${recovery_hint}`,
+                    content: buildMessageTooLargeSystemMessage(event.payload),
                     blocks: [{ type: 'text', content: '', id: msgId }],
                 };
                 setMessages(prev => [...prev, systemMessage]);
@@ -1203,7 +1181,7 @@ export function useChatLegacy() {
         } catch (e) {
             console.error('Failed to send message:', e);
             dispatchInFlightRef.current = false;
-            setError(e instanceof Error ? e.message : String(e));
+            setError(formatUnknownBackendError(e));
             setLoading(false); // Ensure loading is cleared on immediate error
         }
     }, [

@@ -64,6 +64,7 @@ pub struct CommitPreflightResult {
     pub has_conflicts: bool,
     pub staged_count: u32,
     pub error_message: Option<String>,
+    pub error_key: Option<String>,
 }
 
 fn empty_summary() -> GitStatusSummary {
@@ -1276,6 +1277,7 @@ pub fn git_commit_preflight(state: State<'_, AppState>) -> Result<CommitPrefligh
                 has_conflicts: false,
                 staged_count: 0,
                 error_message: Some("Not a Git repository".to_string()),
+                error_key: Some("git.notRepository".to_string()),
             });
         }
     };
@@ -1341,6 +1343,7 @@ pub fn git_commit_preflight(state: State<'_, AppState>) -> Result<CommitPrefligh
         has_conflicts,
         staged_count,
         error_message,
+        error_key: None,
     })
 }
 

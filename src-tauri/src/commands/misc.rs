@@ -32,4 +32,9 @@ pub fn log_frontend(message: String) {
     println!("[FRONTEND] {}", message);
 }
 
+#[tauri::command]
+pub fn frontend_shell_ready(app: AppHandle) {
+    crate::startup::ensure_post_ui_startup(&app);
+}
+
 // Virtual Buffer Management Commands - Removed

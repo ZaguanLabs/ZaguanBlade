@@ -153,7 +153,7 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
         // 1. Initialize xterm with Tokyo Night theme
         const term = new XTerm({
             cursorBlink: false,
-            fontFamily: "\"Fira Code\", \"Symbols Nerd Font Mono\", monospace",
+            fontFamily: "\"JetBrains Mono\", \"Symbols Nerd Font Mono\", monospace",
             fontSize: 12,
             lineHeight: 1.2,
             theme: getTerminalTheme(),

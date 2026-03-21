@@ -938,8 +938,8 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                             </button>
                         </div>
                         <div className="flex items-center justify-between border-t border-[var(--border-subtle)]/40 px-2 py-1 text-[10px] text-[var(--fg-tertiary)]">
-                            <span>{chatMode === 'planning' ? 'Planning mode is read-only' : 'Enter to send'}</span>
-                            <span>{chatMode === 'planning' ? 'No edits or commands should run' : 'Shift+Enter for newline'}</span>
+                            <span>{chatMode === 'planning' ? t('chat.composer.planningReadonly') : t('chat.composer.enterToSend')}</span>
+                            <span>{chatMode === 'planning' ? t('chat.composer.planningNoEdits') : t('chat.composer.shiftEnterNewline')}</span>
                         </div>
                     </div>
                 </div>

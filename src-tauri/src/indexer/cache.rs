@@ -2,7 +2,7 @@ use crate::indexer::types::ProjectIndex;
 use std::fs;
 use std::path::Path;
 
-pub fn save_cache(index: &ProjectIndex) -> Result<(), Box<dyn std::error::Error>> {
+pub fn save_cache(index: &ProjectIndex) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cache_dir = index.root.join(".zblade/cache");
     fs::create_dir_all(&cache_dir)?;
 
@@ -13,7 +13,7 @@ pub fn save_cache(index: &ProjectIndex) -> Result<(), Box<dyn std::error::Error>
     Ok(())
 }
 
-pub fn load_cache(root: &Path) -> Result<ProjectIndex, Box<dyn std::error::Error>> {
+pub fn load_cache(root: &Path) -> Result<ProjectIndex, Box<dyn std::error::Error + Send + Sync>> {
     let cache_path = root.join(".zblade/cache/index.json");
     let json = fs::read_to_string(&cache_path)?;
     let mut index: ProjectIndex = serde_json::from_str(&json)?;

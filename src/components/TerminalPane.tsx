@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useState, useEffect, forwardRef, useImperativeHandle, useCallback } from "react";
-import { Terminal } from "./Terminal";
+import React, { useState, useEffect, forwardRef, useImperativeHandle, useCallback, Suspense } from "react";
+import { useTranslation } from 'react-i18next';
 import { Plus, X, Terminal as TerminalIcon } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
 import { BladeDispatcher } from "../services/blade";
+
+const Terminal = React.lazy(() => import("./Terminal").then((module) => ({ default: module.Terminal })));
 
 interface TerminalTab {
     id: string;
@@ -26,11 +27,16 @@ export interface TerminalPaneHandle {
     restoreTerminals: (terminals: PersistedTerminalTab[], activeId?: string) => void;
 }
 
-export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
+interface TerminalPaneProps {
+    workspaceRoot?: string | null;
+}
+
+export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(({ workspaceRoot = null }, ref) => {
+    const { t } = useTranslation();
     const [terminals, setTerminals] = useState<TerminalTab[]>([]);
     const [activeId, setActiveId] = useState<string>("");
 
-    const getTitleFromCwd = (path?: string, fallback = "Terminal") => {
+    const getTitleFromCwd = (path?: string, fallback = t('terminal.title')) => {
         if (!path) return fallback;
         const normalized = path.replace(/[\\/]+$/, "");
         if (!normalized) return fallback;
@@ -68,28 +74,16 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
 
     // Set initial terminal cwd/title to workspace root if available
     useEffect(() => {
-        let isMounted = true;
-        const initWorkspace = async () => {
-            try {
-                const workspaceRoot = await invoke<string | null>("get_current_workspace");
-                if (!isMounted || !workspaceRoot) return;
-                setTerminals(prev =>
-                    prev.map(term =>
-                        term.cwd
-                            ? { ...term, title: getTitleFromCwd(term.cwd, term.title) }
-                            : { ...term, cwd: workspaceRoot, title: getTitleFromCwd(workspaceRoot, term.title) }
-                    )
-                );
-            } catch {
-                // ignore
-            }
-        };
+        if (!workspaceRoot) return;
 
-        initWorkspace();
-        return () => {
-            isMounted = false;
-        };
-    }, []);
+        setTerminals(prev =>
+            prev.map(term =>
+                term.cwd
+                    ? { ...term, title: getTitleFromCwd(term.cwd, term.title) }
+                    : { ...term, cwd: workspaceRoot, title: getTitleFromCwd(workspaceRoot, term.title) }
+            )
+        );
+    }, [workspaceRoot]);
 
     // Listen for open-terminal events from other components (e.g., File Explorer)
     useEffect(() => {
@@ -104,7 +98,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
         }>('open-terminal', (event) => {
             const cwd = event.payload.cwd ?? event.payload.path;
             const id = event.payload.id ?? `term-${Date.now()}`;
-            const title = event.payload.title ?? getTitleFromCwd(cwd, 'Terminal');
+            const title = event.payload.title ?? getTitleFromCwd(cwd, t('terminal.title'));
             const focus = event.payload.focus ?? true;
 
             setTerminals(prev => {
@@ -161,16 +155,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
 
     const addTerminal = async () => {
         const newId = `term-${Date.now()}`;
-        let terminalCwd: string | undefined;
-        try {
-            const workspaceRoot = await invoke<string | null>("get_current_workspace");
-            terminalCwd = workspaceRoot || undefined;
-        } catch {
-            terminalCwd = undefined;
-        }
+        const terminalCwd = workspaceRoot || undefined;
         const newTab = {
             id: newId,
-            title: getTitleFromCwd(terminalCwd, "Terminal"),
+            title: getTitleFromCwd(terminalCwd, t('terminal.title')),
             cwd: terminalCwd,
         };
         setTerminals(prev => [...prev, newTab]);
@@ -210,7 +198,9 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
                             zIndex: term.id === activeId ? 10 : 0
                         }}
                     >
-                        <Terminal id={term.id} cwd={term.cwd} command={term.command} />
+                        <Suspense fallback={<div className="h-full w-full bg-(--term-bg)" />}>
+                            <Terminal id={term.id} cwd={term.cwd} command={term.command} />
+                        </Suspense>
                     </div>
                 ))}
             </div>
@@ -221,7 +211,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle>((_, ref) => {
                 onContextMenu={suppressContextMenu}
             >
                 <div className="p-2 text-xs font-semibold text-[var(--fg-tertiary)] uppercase tracking-wider flex items-center justify-between">
-                    <span>Terminals</span>
+                    <span>{t('terminal.terminals')}</span>
                     <button onClick={addTerminal} className="hover:text-[var(--fg-primary)] transition-colors">
                         <Plus className="w-4 h-4" />
                     </button>

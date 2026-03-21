@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { ChevronDown, ChevronRight, Copy, Check, ExternalLink, GitCommit } from 'lucide-react';
+import { formatUnknownBackendError } from '../utils/backendErrors';
 
 export interface GitLogEntry {
     hash: string;
@@ -186,6 +188,7 @@ interface CommitTooltipProps {
 }
 
 const CommitTooltip: React.FC<CommitTooltipProps> = ({ entry, remoteUrl, onCopy, copied }) => {
+    const { t } = useTranslation();
     const formattedDate = (() => {
         try {
             const d = new Date(entry.date);
@@ -229,9 +232,9 @@ const CommitTooltip: React.FC<CommitTooltipProps> = ({ entry, remoteUrl, onCopy,
             {/* Stats */}
             {entry.filesChanged > 0 && (
                 <div className="text-[var(--fg-secondary)] mb-2">
-                    {entry.filesChanged} file{entry.filesChanged !== 1 ? 's' : ''} changed
-                    {entry.insertions > 0 && <>, <span className="text-green-400">{entry.insertions} insertion{entry.insertions !== 1 ? 's' : ''}(+)</span></>}
-                    {entry.deletions > 0 && <>, <span className="text-red-400">{entry.deletions} deletion{entry.deletions !== 1 ? 's' : ''}(-)</span></>}
+                    {t('gitGraph.filesChanged', { count: entry.filesChanged })}
+                    {entry.insertions > 0 && <>, <span className="text-green-400">{t('gitGraph.insertions', { count: entry.insertions })}</span></>}
+                    {entry.deletions > 0 && <>, <span className="text-red-400">{t('gitGraph.deletions', { count: entry.deletions })}</span></>}
                 </div>
             )}
 
@@ -241,7 +244,7 @@ const CommitTooltip: React.FC<CommitTooltipProps> = ({ entry, remoteUrl, onCopy,
                 <button
                     className="font-mono text-[var(--accent-primary)] hover:underline cursor-pointer flex items-center gap-1"
                     onClick={(e) => { e.stopPropagation(); onCopy(entry.hash); }}
-                    title="Copy full commit hash"
+                    title={t('gitGraph.copyFullCommitHash')}
                 >
                     {entry.shortHash}
                     {copied ? (
@@ -261,7 +264,7 @@ const CommitTooltip: React.FC<CommitTooltipProps> = ({ entry, remoteUrl, onCopy,
                             onClick={(e) => e.stopPropagation()}
                         >
                             <ExternalLink className="w-3 h-3" />
-                            Open on GitHub
+                            {t('gitGraph.openOnGitHub')}
                         </a>
                     </>
                 )}
@@ -276,6 +279,7 @@ interface GitGraphProps {
 }
 
 export const GitGraph: React.FC<GitGraphProps> = ({ expanded, onToggle }) => {
+    const { t } = useTranslation();
     const [entries, setEntries] = useState<GitLogEntry[]>([]);
     const [remoteUrl, setRemoteUrl] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
@@ -299,7 +303,7 @@ export const GitGraph: React.FC<GitGraphProps> = ({ expanded, onToggle }) => {
             setEntries(log);
             setRemoteUrl(url);
         } catch (e) {
-            setError(String(e));
+            setError(`${t('gitGraph.loadFailed')}: ${formatUnknownBackendError(e)}`);
         } finally {
             setLoading(false);
         }
@@ -368,20 +372,20 @@ export const GitGraph: React.FC<GitGraphProps> = ({ expanded, onToggle }) => {
             >
                 <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-[var(--fg-secondary)] font-semibold">
                     {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                    Graph
+                    {t('gitGraph.title')}
                 </div>
             </button>
 
             {expanded && (
                 <div ref={containerRef} className="relative flex-1 min-h-0 overflow-y-auto">
                     {loading && (
-                        <div className="p-3 text-[10px] text-[var(--fg-tertiary)] italic">Loading commits...</div>
+                        <div className="p-3 text-[10px] text-[var(--fg-tertiary)] italic">{t('gitGraph.loadingCommits')}</div>
                     )}
                     {error && (
                         <div className="p-3 text-[10px] text-[var(--accent-error)]">{error}</div>
                     )}
                     {!loading && !error && entries.length === 0 && (
-                        <div className="p-3 text-[10px] text-[var(--fg-tertiary)] italic">No commits found</div>
+                        <div className="p-3 text-[10px] text-[var(--fg-tertiary)] italic">{t('gitGraph.noCommits')}</div>
                     )}
                     {!loading && entries.length > 0 && (
                         <div className="pb-2">

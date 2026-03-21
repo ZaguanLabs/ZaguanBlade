@@ -11,6 +11,7 @@ use crate::workspace_manager::WorkspaceManager;
 use crate::ws_connection_manager::WsConnectionManager;
 use dotenvy::dotenv;
 use notify::RecommendedWatcher;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc, Mutex, RwLock};
 
@@ -24,7 +25,7 @@ fn project_data_root(workspace_root: Option<&PathBuf>) -> PathBuf {
 pub struct AppState {
     pub chat_manager: Mutex<ChatManager>,
     pub conversation: Mutex<ConversationHistory>,
-    pub conversation_store: Mutex<conversation_store::ConversationStore>,
+    pub conversation_store: Mutex<Option<conversation_store::ConversationStore>>,
     pub workspace: Mutex<WorkspaceManager>,
     pub config: Mutex<ApiConfig>,
     pub workflow: Mutex<AiWorkflow>,
@@ -48,10 +49,10 @@ pub struct AppState {
     pub warmup_client: warmup::WarmupClient,                     // v2.1: Cache warmup
     pub user_id: Mutex<Option<String>>, // Authenticated user ID from WebSocket
     pub protocol_version_emitted: AtomicBool, // Track protocol version broadcast
+    pub startup_services_started: AtomicBool, // Delay heavy startup work until frontend is ready
     pub fs_watcher: Mutex<Option<RecommendedWatcher>>, // Workspace file watcher
-    pub history_service: RwLock<std::sync::Arc<crate::history::HistoryService>>, // File history service
-    pub language_service: RwLock<std::sync::Arc<crate::language_service::LanguageService>>, // v1.3: Unified Language Service
-    pub language_handler: RwLock<crate::language_service::LanguageHandler>, // v1.3: Language Intent Handler
+    pub history_service: RwLock<Option<std::sync::Arc<crate::history::HistoryService>>>, // File history service
+    pub language_service: RwLock<Option<std::sync::Arc<crate::language_service::LanguageService>>>, // v1.3: Unified Language Service
     pub uncommitted_changes: UncommittedChangeTracker, // Track AI changes pending accept/reject
     pub indexer_manager: Mutex<Option<crate::indexer::IndexerManager>>, // Project indexer
     pub feature_flags: FeatureFlags,                   // Headless migration feature flags
@@ -103,49 +104,6 @@ impl AppState {
             workspace_manager.set_workspace(std::path::PathBuf::from(path_str));
         }
 
-        // Ensure project-local .zblade exists and use it for project-scoped persistence.
-        if let Some(ws_root) = workspace_manager.workspace.as_ref() {
-            if let Err(e) = crate::project_settings::init_zblade_dir(ws_root) {
-                eprintln!("[INIT] Failed to initialize .zblade directory: {}", e);
-            }
-        }
-
-        let project_data_dir = project_data_root(workspace_manager.workspace.as_ref());
-
-        // Initialize conversation store
-        let storage_path = project_data_dir.join("artifacts").join("conversations");
-
-        let conversation_store = conversation_store::ConversationStore::new(storage_path.clone())
-            .unwrap_or_else(|e| {
-                eprintln!("Failed to initialize conversation store: {}", e);
-                // Fallback to temp directory
-                conversation_store::ConversationStore::new(
-                    std::env::temp_dir().join("zblade_conversations"),
-                )
-                .expect("Failed to create conversation store in temp directory")
-            });
-
-        // Initialize History Service
-        // Keep project history under <workspace>/.zblade/history
-        let history_service =
-            std::sync::Arc::new(crate::history::HistoryService::new(&project_data_dir));
-
-        // Discover git repository from workspace path
-        let git_dir = workspace_manager
-            .workspace
-            .as_ref()
-            .and_then(|ws_path| match gix::discover(ws_path) {
-                Ok(repo) => {
-                    let path = repo.path().to_path_buf();
-                    eprintln!("[GIT] Discovered repository at: {:?}", path);
-                    Some(path)
-                }
-                Err(e) => {
-                    eprintln!("[GIT] No repository found: {}", e);
-                    None
-                }
-            });
-
         // Get or create user_id
         let user_id = config::get_or_create_user_id(&config_path);
 
@@ -155,31 +113,6 @@ impl AppState {
             config.api_key.clone(),
             user_id.clone(),
         );
-
-        // Initialize Language Service
-        let db_path = project_data_dir.join("index").join("symbols.db");
-        if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent).ok();
-        }
-        let ls_root = workspace_manager
-            .workspace
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("."));
-
-        let symbol_store = std::sync::Arc::new(
-            crate::symbol_index::store::SymbolStore::new(&db_path)
-                .expect("Failed to create SymbolStore"),
-        );
-
-        let language_service = std::sync::Arc::new(
-            crate::language_service::LanguageService::new(ls_root, symbol_store)
-                .expect("Failed to initialize Language Service"),
-        );
-
-        // Initialize Language Handler
-
-        let language_handler =
-            crate::language_service::LanguageHandler::new(language_service.clone());
 
         // IndexerManager will be initialized asynchronously after AppState is created
         // This ensures GUI launches immediately without blocking on indexing
@@ -194,7 +127,7 @@ impl AppState {
         Self {
             chat_manager: Mutex::new(ChatManager::new(50)),
             conversation: Mutex::new(ConversationHistory::new()),
-            conversation_store: Mutex::new(conversation_store),
+            conversation_store: Mutex::new(None),
             workspace: Mutex::new(workspace_manager),
             config: Mutex::new(config),
             workflow: Mutex::new(AiWorkflow::new()),
@@ -216,9 +149,9 @@ impl AppState {
             warmup_client, // v2.1: Cache warmup
             fs_watcher: Mutex::new(None),
             protocol_version_emitted: AtomicBool::new(false),
-            history_service: RwLock::new(history_service),
-            language_service: RwLock::new(language_service),
-            language_handler: RwLock::new(language_handler),
+            startup_services_started: AtomicBool::new(false),
+            history_service: RwLock::new(None),
+            language_service: RwLock::new(None),
             uncommitted_changes: UncommittedChangeTracker::new(),
             indexer_manager: Mutex::new(indexer_manager),
             feature_flags: FeatureFlags::new(),
@@ -226,7 +159,131 @@ impl AppState {
             active_tab_id: Mutex::new(None),
             ws_connection,
             pending_error_feedback: Mutex::new(None),
-            git_dir: RwLock::new(git_dir),
+            git_dir: RwLock::new(None),
         }
+    }
+
+    fn workspace_root(&self) -> Option<PathBuf> {
+        self.workspace.lock().ok().and_then(|workspace| workspace.workspace.clone())
+    }
+
+    fn ensure_project_data_dir(&self) -> Result<PathBuf, String> {
+        let workspace_root = self.workspace_root();
+        if let Some(ws_root) = workspace_root.as_ref() {
+            crate::project_settings::init_zblade_dir(ws_root)?;
+        } else {
+            std::fs::create_dir_all(project_data_root(None)).map_err(|e| e.to_string())?;
+        }
+        Ok(project_data_root(workspace_root.as_ref()))
+    }
+
+    fn create_conversation_store(project_data_dir: &Path) -> Result<conversation_store::ConversationStore, String> {
+        let storage_path = project_data_dir.join("artifacts").join("conversations");
+        conversation_store::ConversationStore::new(storage_path).or_else(|e| {
+            eprintln!("Failed to initialize conversation store: {}", e);
+            conversation_store::ConversationStore::new(
+                std::env::temp_dir().join("zblade_conversations"),
+            )
+        })
+    }
+
+    pub fn with_conversation_store<T, F>(&self, f: F) -> Result<T, String>
+    where
+        F: FnOnce(&mut conversation_store::ConversationStore) -> Result<T, String>,
+    {
+        let mut guard = self
+            .conversation_store
+            .lock()
+            .map_err(|e| format!("Failed to lock conversation store: {}", e))?;
+        if guard.is_none() {
+            let project_data_dir = self.ensure_project_data_dir()?;
+            *guard = Some(Self::create_conversation_store(&project_data_dir)?);
+        }
+
+        let store = guard
+            .as_mut()
+            .ok_or_else(|| "Conversation store failed to initialize".to_string())?;
+        f(store)
+    }
+
+    pub fn history_service(&self) -> Result<Arc<crate::history::HistoryService>, String> {
+        if let Some(service) = self
+            .history_service
+            .read()
+            .map_err(|e| format!("Failed to lock history service: {}", e))?
+            .clone()
+        {
+            return Ok(service);
+        }
+
+        let project_data_dir = self.ensure_project_data_dir()?;
+        let service = Arc::new(crate::history::HistoryService::new(&project_data_dir));
+
+        let mut guard = self
+            .history_service
+            .write()
+            .map_err(|e| format!("Failed to write history service: {}", e))?;
+        Ok(guard.get_or_insert_with(|| service).clone())
+    }
+
+    pub fn language_service(
+        &self,
+    ) -> Result<Arc<crate::language_service::LanguageService>, String> {
+        if let Some(service) = self
+            .language_service
+            .read()
+            .map_err(|e| format!("Failed to lock language service: {}", e))?
+            .clone()
+        {
+            return Ok(service);
+        }
+
+        let project_data_dir = self.ensure_project_data_dir()?;
+        let db_path = project_data_dir.join("index").join("symbols.db");
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+
+        let workspace_root = self.workspace_root().unwrap_or_else(|| PathBuf::from("."));
+        let symbol_store = Arc::new(
+            crate::symbol_index::store::SymbolStore::new(&db_path)
+                .map_err(|e| format!("Failed to create SymbolStore: {}", e))?,
+        );
+        let service = Arc::new(
+            crate::language_service::LanguageService::new(workspace_root, symbol_store)
+                .map_err(|e| format!("Failed to initialize LanguageService: {}", e))?,
+        );
+
+        let mut guard = self
+            .language_service
+            .write()
+            .map_err(|e| format!("Failed to write language service: {}", e))?;
+        Ok(guard.get_or_insert_with(|| service).clone())
+    }
+
+    pub fn language_handler(&self) -> Result<crate::language_service::LanguageHandler, String> {
+        Ok(crate::language_service::LanguageHandler::new(
+            self.language_service()?,
+        ))
+    }
+
+    pub fn reset_project_services(&self) -> Result<(), String> {
+        *self
+            .conversation_store
+            .lock()
+            .map_err(|e| format!("Failed to lock conversation store: {}", e))? = None;
+        *self
+            .history_service
+            .write()
+            .map_err(|e| format!("Failed to write history service: {}", e))? = None;
+        *self
+            .language_service
+            .write()
+            .map_err(|e| format!("Failed to write language service: {}", e))? = None;
+        *self
+            .indexer_manager
+            .lock()
+            .map_err(|e| format!("Failed to lock indexer manager: {}", e))? = None;
+        Ok(())
     }
 }

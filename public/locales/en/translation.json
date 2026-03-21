@@ -56,6 +56,7 @@
     "title": "Editor",
     "noFileOpen": "No File",
     "openFile": "Open File",
+    "loadFailed": "Failed to load file",
     "saveFile": "Save File",
     "closeFile": "Close File",
     "unsavedChanges": "Unsaved Changes",
@@ -153,6 +154,12 @@
       "ollama": "Ollama",
       "localServer": "Local Server"
     },
+    "composer": {
+      "planningReadonly": "Planning mode is read-only",
+      "planningNoEdits": "No edits or commands should run",
+      "enterToSend": "Enter to send",
+      "shiftEnterNewline": "Shift+Enter for newline"
+    },
     "tabs": {
       "chat": "Chat",
       "history": "History"
@@ -167,10 +174,20 @@
       "title": "Attachments",
       "attachmentAlt": "Attachment",
       "removeImage": "Remove image"
+    },
+    "system": {
+      "requestFailed": "Request failed",
+      "contextLimitReachedTitle": "Context Limit Reached",
+      "contextLimitRecoverable": "The AI is attempting to recover automatically. You can also try:\n- Starting a new conversation\n- Asking the AI to summarize the conversation",
+      "contextLimitRestart": "Please start a new conversation to continue.",
+      "responseTooLargeTitle": "Response Too Large",
+      "recoveryHintLabel": "Recovery hint"
     }
   },
   "fileTree": {
     "title": "Explorer",
+    "refresh": "Refresh explorer",
+    "noWorkspace": "No workspace open",
     "newFile": "New File",
     "newFolder": "New Folder",
     "rename": "Rename",
@@ -198,6 +215,7 @@
   },
   "terminal": {
     "title": "Terminal",
+    "terminals": "Terminals",
     "newTerminal": "New Terminal",
     "closeTerminal": "Close Terminal",
     "clearTerminal": "Clear Terminal",
@@ -253,7 +271,18 @@
     "rejectHunk": "Reject this change",
     "remove": "Remove",
     "add": "Add",
-    "context": "Context"
+    "context": "Context",
+    "commandQueued": "Command queued",
+    "commandApproval": "Command approval",
+    "waitingForExecution": "Waiting for execution to start",
+    "skippingCommand": "Skipping command",
+    "reviewBeforeExecution": "Review before execution",
+    "pendingAction": "Pending action",
+    "run": "Run",
+    "skip": "Skip",
+    "waiting": "Waiting",
+    "skipping": "Skipping",
+    "runCommandDescription": "Run command: {{command}}"
   },
   "settings": {
     "title": "Settings",
@@ -304,6 +333,12 @@
       "description": "Configure global experience settings for the app.",
       "themeTitle": "Theme",
       "themeDescription": "Choose which built-in visual theme Zaguán Blade should use.",
+      "languageTitle": "Language",
+      "languageDescription": "Choose the language used across the app interface.",
+      "interfaceLanguage": "Interface language",
+      "languageOptionEnglish": "English interface text",
+      "languageOptionSpanish": "Spanish interface text (Spain)",
+      "languageSaveHint": "Language changes are applied when you save your settings.",
       "availableThemes": "Available themes",
       "selectTheme": "Select theme",
       "availableThemesLabel": "Available themes",
@@ -484,7 +519,61 @@
   },
   "toolCall": {
     "stopCommand": "Stop command",
-    "copyCommand": "Copy command"
+    "copyCommand": "Copy command",
+    "showDetails": "Show details",
+    "hideDetails": "Hide details",
+    "undoChanges": "Undo changes",
+    "undo": "Undo",
+    "status": {
+      "pending": "Pending",
+      "executing": "Executing",
+      "complete": "Complete",
+      "failed": "Failed",
+      "skipped": "Skipped"
+    },
+    "details": {
+      "path": "Path",
+      "query": "Query",
+      "error": "Error",
+      "result": "Result"
+    },
+    "tools": {
+      "applyPatch": "Applying Code Changes",
+      "applyPatchMany": "Applying {{count}} Code Changes",
+      "editFile": "Editing File",
+      "readFile": "Reading File",
+      "writeFile": "Writing File",
+      "listFiles": "Listing Files",
+      "grepSearch": "Searching Code",
+      "runCommand": "Running Command",
+      "createFile": "Creating File",
+      "deleteFile": "Deleting File",
+      "listDirectory": "Listing Directory",
+      "getWorkspaceStructure": "Analyzing Workspace",
+      "codebaseSearch": "Searching Codebase",
+      "getEditorState": "Getting Editor State",
+      "readFileRange": "Reading File Range",
+      "findFiles": "Finding Files",
+      "findFilesGlob": "Finding Files (Glob)",
+      "glob": "Glob Search",
+      "findByName": "Find Files by Name",
+      "viewFileOutline": "Viewing File Outline",
+      "searchWeb": "Searching Web",
+      "readUrlContent": "Reading URL",
+      "browserSubagent": "Browser Agent",
+      "commandStatus": "Checking Command",
+      "sendCommandInput": "Sending Input",
+      "readTerminal": "Reading Terminal",
+      "listDir": "Listing Directory",
+      "viewFile": "Viewing File",
+      "viewCodeItem": "Viewing Code Item",
+      "generateImage": "Generating Image",
+      "multiReplaceFileContent": "Multi-Edit File",
+      "replaceFileContent": "Replacing Content",
+      "writeToFile": "Writing to File",
+      "listResources": "Listing Resources",
+      "readResource": "Reading Resource"
+    }
   },
   "search": {
     "title": "Search",
@@ -503,6 +592,7 @@
   },
   "git": {
     "title": "Source Control",
+    "sourceControlTitle": "Source Control",
     "changes": "Changes",
     "stagedChanges": "Staged Changes",
     "commit": "Commit",
@@ -524,15 +614,35 @@
     "history": "History",
     "noChanges": "No changes",
     "noRepository": "No repository found",
-    "generateCommitMessage": "Generate commit message with AI"
+    "notRepository": "Not a Git repository.",
+    "branchLabel": "Branch:",
+    "detachedHead": "detached",
+    "detachedHeadWarning": "HEAD is detached. Commits may be lost if you switch branches.",
+    "resolveConflictsBeforeCommit": "Resolve merge conflicts before committing.",
+    "commitMessageRequired": "Commit message is required.",
+    "generateCommitMessage": "Generate commit message with AI",
+    "generate": "Generate",
+    "pushed": "Pushed!",
+    "pushing": "Pushing",
+    "unstagedCommitHint": "Unstaged changes will be staged on commit",
+    "workingTreeClean": "✓ Working tree clean",
+    "stagedSection": "Staged",
+    "unstageAll": "Unstage All",
+    "stageAll": "Stage All"
   },
   "errors": {
     "fileNotFound": "File not found: {path}",
     "permissionDenied": "Permission denied: {path}",
+    "permissionDeniedGeneric": "Permission denied.",
     "networkError": "Network error: {message}",
     "unknownError": "An unknown error occurred",
     "invalidInput": "Invalid input: {message}",
+    "noWorkspaceOpen": "No workspace is open.",
     "operationFailed": "Operation failed: {message}",
+    "conflict": "Conflict: {reason}",
+    "pathOutsideWorkspace": "Path is outside the current workspace.",
+    "modelNotFound": "Model not found: {model}",
+    "versionMismatch": "Protocol version mismatch. Expected {expected}, received {received}.",
     "timeout": "Operation timed out",
     "cancelled": "Operation cancelled",
     "notImplemented": "Feature not yet implemented",
@@ -652,14 +762,24 @@
   "pdf": {
     "loading": "Loading PDF...",
     "loadFailed": "Failed to load PDF",
+    "renderFailed": "Failed to render PDF page",
     "previousPage": "Previous page",
     "nextPage": "Next page",
     "zoomOut": "Zoom out",
     "zoomIn": "Zoom in",
     "fitToWidth": "Fit to width"
   },
+  "chatMessage": {
+    "reasoning": "Reasoning",
+    "planCompleted": "Plan completed ({{completed}}/{{total}} tasks)",
+    "openPath": "Open {{path}}",
+    "you": "You",
+    "assistant": "Assistant",
+    "live": "Live"
+  },
   "gitGraph": {
     "title": "Graph",
+    "loadFailed": "Failed to load Git graph",
     "loadingCommits": "Loading commits...",
     "noCommits": "No commits found",
     "copyFullCommitHash": "Copy full commit hash",
@@ -670,6 +790,36 @@
     "insertions_other": "{{count}} insertions(+)",
     "deletions": "{{count}} deletion(-)",
     "deletions_other": "{{count}} deletions(-)"
+  },
+  "graphInspector": {
+    "incomingCalls": "Incoming Calls",
+    "outgoingCalls": "Outgoing Calls",
+    "focus": "Focus",
+    "noCallsFound": "No calls found."
+  },
+  "progress": {
+    "planningNextStep": "Planning Next Step"
+  },
+  "historyTab": {
+    "title": "Conversation History",
+    "subtitle": "Resume previous sessions and revisit older agent runs.",
+    "loading": "Loading conversations...",
+    "loadFailed": "Failed to load conversations",
+    "emptyTitle": "No Conversations Yet",
+    "emptyDescription": "Start a new conversation to see it here",
+    "unknown": "Unknown",
+    "justNow": "Just now",
+    "minutesAgo": "{{count}}m ago",
+    "hoursAgo": "{{count}}h ago",
+    "daysAgo": "{{count}}d ago",
+    "yesterday": "Yesterday",
+    "bucketToday": "Today",
+    "bucketYesterday": "Yesterday",
+    "bucketPrevious7Days": "Previous 7 days",
+    "bucketOlder": "Older",
+    "noPreview": "No preview available",
+    "messageCount": "{{count}} msgs",
+    "conversationFallback": "Conversation {{timestamp}}"
   },
   "fileHistory": {
     "title": "File History",
@@ -694,6 +844,12 @@
     "serverFasterResponses": "Faster responses",
     "serverEncrypted": "Encrypted on server"
   },
+  "taskPanel": {
+    "allTasksCompleted": "All tasks completed",
+    "completedSummary": "{{completed}}/{{total}} completed",
+    "itemsCount_one": "{{count}} item",
+    "itemsCount_other": "{{count}} items"
+  },
   "workspace": {
     "title": "Workspace",
     "openWorkspace": "Open Workspace",
@@ -705,11 +861,14 @@
     "untrustedWorkspace": "This workspace is not trusted",
     "workspaceSettings": "Workspace Settings"
   },
+  "titleBar": {
+    "openFolder": "Open Folder..."
+  },
   "language": {
     "title": "Language",
     "selectLanguage": "Select Language",
     "english": "English",
-    "spanish": "Español",
+    "spanish": "Español (España)",
     "french": "Français",
     "german": "Deutsch",
     "italian": "Italiano",

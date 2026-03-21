@@ -14,21 +14,17 @@ pub struct ProjectManifest {
 }
 
 /// Get or create the project manifest for a workspace
-pub fn get_or_create_project_id(
-    workspace_root: &Path,
-) -> Result<String, Box<dyn std::error::Error>> {
+pub fn get_existing_project_id(workspace_root: &Path) -> Option<String> {
     let zblade_dir = workspace_root.join(".zblade");
     let manifest_path = zblade_dir.join("project.json");
 
-    // Try to read existing manifest
     if manifest_path.exists() {
         match fs::read_to_string(&manifest_path) {
             Ok(content) => {
                 if let Ok(manifest) = serde_json::from_str::<ProjectManifest>(&content) {
-                    // Validate project ID format
                     if is_valid_project_id(&manifest.project_id) {
                         eprintln!("Found existing project: {}", manifest.project_id);
-                        return Ok(manifest.project_id);
+                        return Some(manifest.project_id);
                     } else {
                         eprintln!("Invalid project ID in manifest, regenerating");
                     }
@@ -39,6 +35,20 @@ pub fn get_or_create_project_id(
             }
         }
     }
+
+    None
+}
+
+/// Get or create the project manifest for a workspace
+pub fn get_or_create_project_id(
+    workspace_root: &Path,
+) -> Result<String, Box<dyn std::error::Error>> {
+    if let Some(project_id) = get_existing_project_id(workspace_root) {
+        return Ok(project_id);
+    }
+
+    let zblade_dir = workspace_root.join(".zblade");
+    let manifest_path = zblade_dir.join("project.json");
 
     // Create new project
     let project_id = generate_project_id();
@@ -136,6 +146,15 @@ mod tests {
         let manifest: ProjectManifest = serde_json::from_str(&manifest_content).unwrap();
         assert_eq!(manifest.project_id, id1);
         assert_eq!(manifest.version, "1.0.0");
+    }
+
+    #[test]
+    fn test_get_existing_project_id_without_manifest() {
+        let temp_dir = TempDir::new().unwrap();
+        let workspace = temp_dir.path();
+
+        assert_eq!(get_existing_project_id(workspace), None);
+        assert!(!workspace.join(".zblade").exists());
     }
 
     #[test]

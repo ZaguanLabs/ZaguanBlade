@@ -5,6 +5,7 @@ import { BladeDispatcher } from '../services/blade';
 import type { ConversationSummary, BladeEventEnvelope } from '../types/blade';
 import type { ChatMessage } from '../types/chat';
 import { ensureMessagesHaveBlocks } from '../utils/messageBlocks';
+import { formatUnknownBackendError } from '../utils/backendErrors';
 
 export function useHistory() {
     const [conversations, setConversations] = useState<ConversationSummary[]>([]);
@@ -107,7 +108,7 @@ export function useHistory() {
 
         } catch (e) {
             console.error('[useHistory] Failed to fetch conversation history:', e);
-            setError(e instanceof Error ? e.message : String(e));
+            setError(formatUnknownBackendError(e));
             setLoading(false);
         }
     }, []);
@@ -158,7 +159,7 @@ export function useHistory() {
                 return ensureMessagesHaveBlocks(chatMessages);
             } catch (e) {
                 console.error('Failed local load:', e);
-                setError(String(e));
+                setError(formatUnknownBackendError(e));
                 setLoading(false);
                 throw e;
             }
@@ -209,7 +210,7 @@ export function useHistory() {
                         });
                     } catch (e) {
                         console.error('Failed to load conversation:', e);
-                        setError(e instanceof Error ? e.message : String(e));
+                        setError(formatUnknownBackendError(e));
                         setLoading(false);
                         unlisten();
                         reject(e);

@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef, useMemo } from 'react';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { listen } from '@tauri-apps/api/event';
+import { useOptionalStartupBootstrap } from './StartupBootstrapContext';
 import { EditorFacade, initEditorFacade, isBackendAuthoritative } from '../services/editorFacade';
 import type { BladeEventEnvelope, EditorEvent } from '../types/blade';
 
@@ -28,6 +29,7 @@ const EditorStateContext = createContext<EditorState | undefined>(undefined);
 const EditorActionsContext = createContext<EditorActionsType | undefined>(undefined);
 
 export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+    const bootstrapContext = useOptionalStartupBootstrap();
     const [editorState, setEditorState] = useState<EditorState>({
         activeFile: null,
         openFiles: [],
@@ -43,8 +45,8 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     // Initialize EditorFacade on mount
     useEffect(() => {
-        initEditorFacade().catch(console.error);
-    }, []);
+        initEditorFacade(bootstrapContext?.bootstrap?.feature_flags ?? null).catch(console.error);
+    }, [bootstrapContext?.bootstrap?.feature_flags]);
 
     // Listen for backend EditorEvent updates when backend authority is enabled
     useEffect(() => {

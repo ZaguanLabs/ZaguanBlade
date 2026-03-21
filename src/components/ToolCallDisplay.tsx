@@ -99,15 +99,15 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     const getStatusText = () => {
         switch (status) {
             case 'executing':
-                return 'Executing';
+                return t('toolCall.status.executing');
             case 'complete':
-                return 'Complete';
+                return t('toolCall.status.complete');
             case 'error':
-                return 'Failed';
+                return t('toolCall.status.failed');
             case 'skipped':
-                return 'Skipped';
+                return t('toolCall.status.skipped');
             default:
-                return 'Pending';
+                return t('toolCall.status.pending');
         }
     };
 
@@ -120,47 +120,52 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
         if (name === 'apply_patch' && args) {
             const patches = args.patches as Array<unknown> | undefined;
             if (patches && patches.length > 1) {
-                return `Applying ${patches.length} Code Changes`;
+                return t('toolCall.tools.applyPatchMany', {
+                    count: patches.length,
+                    defaultValue: `Applying ${patches.length} Code Changes`,
+                });
             }
         }
 
-        const nameMap: Record<string, string> = {
-            'apply_patch': 'Applying Code Changes',
-            'edit_file': 'Editing File',
-            'read_file': 'Reading File',
-            'write_file': 'Writing File',
-            'list_files': 'Listing Files',
-            'grep_search': 'Searching Code',
-            'run_command': 'Running Command',
-            'create_file': 'Creating File',
-            'delete_file': 'Deleting File',
-            'list_directory': 'Listing Directory',
-            'get_workspace_structure': 'Analyzing Workspace',
-            'codebase_search': 'Searching Codebase',
-            'get_editor_state': 'Getting Editor State',
-            'read_file_range': 'Reading File Range',
-            'find_files': 'Finding Files',
-            'find_files_glob': 'Finding Files (Glob)',
-            'glob': 'Glob Search',
-            'find_by_name': 'Find Files by Name',
-            'view_file_outline': 'Viewing File Outline',
-            'search_web': 'Searching Web',
-            'read_url_content': 'Reading URL',
-            'browser_subagent': 'Browser Agent',
-            'command_status': 'Checking Command',
-            'send_command_input': 'Sending Input',
-            'read_terminal': 'Reading Terminal',
-            'list_dir': 'Listing Directory',
-            'view_file': 'Viewing File',
-            'view_code_item': 'Viewing Code Item',
-            'generate_image': 'Generating Image',
-            'multi_replace_file_content': 'Multi-Edit File',
-            'replace_file_content': 'Replacing Content',
-            'write_to_file': 'Writing to File',
-            'list_resources': 'Listing Resources',
-            'read_resource': 'Reading Resource'
+        const nameMap: Record<string, { key: string; fallback: string }> = {
+            'apply_patch': { key: 'toolCall.tools.applyPatch', fallback: 'Applying Code Changes' },
+            'edit_file': { key: 'toolCall.tools.editFile', fallback: 'Editing File' },
+            'read_file': { key: 'toolCall.tools.readFile', fallback: 'Reading File' },
+            'write_file': { key: 'toolCall.tools.writeFile', fallback: 'Writing File' },
+            'list_files': { key: 'toolCall.tools.listFiles', fallback: 'Listing Files' },
+            'grep_search': { key: 'toolCall.tools.grepSearch', fallback: 'Searching Code' },
+            'run_command': { key: 'toolCall.tools.runCommand', fallback: 'Running Command' },
+            'create_file': { key: 'toolCall.tools.createFile', fallback: 'Creating File' },
+            'delete_file': { key: 'toolCall.tools.deleteFile', fallback: 'Deleting File' },
+            'list_directory': { key: 'toolCall.tools.listDirectory', fallback: 'Listing Directory' },
+            'get_workspace_structure': { key: 'toolCall.tools.getWorkspaceStructure', fallback: 'Analyzing Workspace' },
+            'codebase_search': { key: 'toolCall.tools.codebaseSearch', fallback: 'Searching Codebase' },
+            'get_editor_state': { key: 'toolCall.tools.getEditorState', fallback: 'Getting Editor State' },
+            'read_file_range': { key: 'toolCall.tools.readFileRange', fallback: 'Reading File Range' },
+            'find_files': { key: 'toolCall.tools.findFiles', fallback: 'Finding Files' },
+            'find_files_glob': { key: 'toolCall.tools.findFilesGlob', fallback: 'Finding Files (Glob)' },
+            'glob': { key: 'toolCall.tools.glob', fallback: 'Glob Search' },
+            'find_by_name': { key: 'toolCall.tools.findByName', fallback: 'Find Files by Name' },
+            'view_file_outline': { key: 'toolCall.tools.viewFileOutline', fallback: 'Viewing File Outline' },
+            'search_web': { key: 'toolCall.tools.searchWeb', fallback: 'Searching Web' },
+            'read_url_content': { key: 'toolCall.tools.readUrlContent', fallback: 'Reading URL' },
+            'browser_subagent': { key: 'toolCall.tools.browserSubagent', fallback: 'Browser Agent' },
+            'command_status': { key: 'toolCall.tools.commandStatus', fallback: 'Checking Command' },
+            'send_command_input': { key: 'toolCall.tools.sendCommandInput', fallback: 'Sending Input' },
+            'read_terminal': { key: 'toolCall.tools.readTerminal', fallback: 'Reading Terminal' },
+            'list_dir': { key: 'toolCall.tools.listDir', fallback: 'Listing Directory' },
+            'view_file': { key: 'toolCall.tools.viewFile', fallback: 'Viewing File' },
+            'view_code_item': { key: 'toolCall.tools.viewCodeItem', fallback: 'Viewing Code Item' },
+            'generate_image': { key: 'toolCall.tools.generateImage', fallback: 'Generating Image' },
+            'multi_replace_file_content': { key: 'toolCall.tools.multiReplaceFileContent', fallback: 'Multi-Edit File' },
+            'replace_file_content': { key: 'toolCall.tools.replaceFileContent', fallback: 'Replacing Content' },
+            'write_to_file': { key: 'toolCall.tools.writeToFile', fallback: 'Writing to File' },
+            'list_resources': { key: 'toolCall.tools.listResources', fallback: 'Listing Resources' },
+            'read_resource': { key: 'toolCall.tools.readResource', fallback: 'Reading Resource' }
         };
-        return nameMap[name] || name;
+        const mapped = nameMap[name];
+        if (!mapped) return name;
+        return t(mapped.key, { defaultValue: mapped.fallback });
     };
 
     // Parse arguments to display them nicely
@@ -215,9 +220,9 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
             ? pathText.split(/[/\\]/).pop() || pathText
             : pathText;
     const detailItems = [
-        pathText ? { label: 'Path', value: pathText } : null,
-        searchQuery ? { label: 'Query', value: searchQuery } : null,
-        result ? { label: status === 'error' ? 'Error' : 'Result', value: result } : null,
+        pathText ? { label: t('toolCall.details.path'), value: pathText } : null,
+        searchQuery ? { label: t('toolCall.details.query'), value: searchQuery } : null,
+        result ? { label: status === 'error' ? t('toolCall.details.error') : t('toolCall.details.result'), value: result } : null,
     ].filter((item): item is { label: string; value: string } => !!item);
 
     // Compact inline display for most tools, expanded for run_command
@@ -279,7 +284,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                                     <button
                                         onClick={() => setIsExpanded(!isExpanded)}
                                         className="rounded p-0.5 text-(--fg-tertiary) transition-colors hover:text-(--fg-primary)"
-                                        title={isExpanded ? 'Hide details' : 'Show details'}
+                                        title={isExpanded ? t('toolCall.hideDetails') : t('toolCall.showDetails')}
                                     >
                                         {isExpanded ? (
                                             <ChevronDown className="w-3 h-3" />
@@ -306,10 +311,10 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                                         onUndo();
                                     }}
                                     className="flex items-center gap-1 rounded px-1 py-0.5 text-[9px] text-(--fg-tertiary) transition-colors hover:text-(--accent-error)"
-                                    title="Undo changes"
+                                    title={t('toolCall.undoChanges')}
                                 >
                                     <RotateCcw className="w-2.5 h-2.5" />
-                                    Undo
+                                    {t('toolCall.undo')}
                                 </button>
                             )}
                         </div>

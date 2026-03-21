@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { formatUnknownBackendError } from '../utils/backendErrors';
 
 export interface GitStatusSummary {
     isRepo: boolean;
@@ -38,11 +39,16 @@ export interface CommitPreflightResult {
     hasConflicts: boolean;
     stagedCount: number;
     errorMessage: string | null;
+    errorKey?: string | null;
 }
 
 const DEFAULT_DEBOUNCE_MS = 700;
 
-export const useGitStatus = () => {
+interface UseGitStatusOptions {
+    includeFiles?: boolean;
+}
+
+export const useGitStatus = ({ includeFiles = false }: UseGitStatusOptions = {}) => {
     const [status, setStatus] = useState<GitStatusSummary | null>(null);
     const [files, setFiles] = useState<GitFileStatus[]>([]);
     const [error, setError] = useState<string | null>(null);
@@ -51,35 +57,58 @@ export const useGitStatus = () => {
     const debounceRef = useRef<number | null>(null);
     const refreshInFlightRef = useRef(false);
 
-    const refresh = useCallback(async () => {
+    const refreshSummary = useCallback(async () => {
         if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
         if (refreshInFlightRef.current) return;
         refreshInFlightRef.current = true;
 
         try {
-            const snapshot = await invoke<GitStatusSnapshot>('git_status');
-            setStatus(snapshot.summary);
-            setFiles(snapshot.files);
+            const summary = await invoke<GitStatusSummary>('git_status_summary');
+            setStatus(summary);
             setError(null);
-            setFilesError(null);
         } catch (err) {
-            const message = String(err);
-            setError(message);
-            setFilesError(message);
+            setError(formatUnknownBackendError(err));
         } finally {
             refreshInFlightRef.current = false;
             setLastRefreshedAt(Date.now());
         }
     }, []);
 
+    const refreshFiles = useCallback(async () => {
+        if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
+
+        try {
+            const nextFiles = await invoke<GitFileStatus[]>('git_status_files');
+            setFiles(nextFiles);
+            setFilesError(null);
+        } catch (err) {
+            setFilesError(formatUnknownBackendError(err));
+        } finally {
+            setLastRefreshedAt(Date.now());
+        }
+    }, []);
+
+    const refresh = useCallback(async () => {
+        await refreshSummary();
+
+        if (includeFiles) {
+            await refreshFiles();
+        }
+    }, [includeFiles, refreshFiles, refreshSummary]);
+
     const scheduleRefresh = useCallback(() => {
         if (debounceRef.current) {
             window.clearTimeout(debounceRef.current);
         }
         debounceRef.current = window.setTimeout(() => {
-            refresh();
+            if (includeFiles) {
+                void refresh();
+                return;
+            }
+
+            void refreshSummary();
         }, DEFAULT_DEBOUNCE_MS);
-    }, [refresh]);
+    }, [includeFiles, refresh, refreshSummary]);
 
     const stageFile = useCallback(async (path: string) => {
         await invoke('git_stage_file', { path });
@@ -130,7 +159,11 @@ export const useGitStatus = () => {
     }, []);
 
     useEffect(() => {
-        refresh();
+        void refreshSummary();
+
+        if (includeFiles) {
+            void refreshFiles();
+        }
 
         const unlistenPromise = listen('file-changes-detected', () => {
             scheduleRefresh();
@@ -159,7 +192,7 @@ export const useGitStatus = () => {
                 window.clearTimeout(debounceRef.current);
             }
         };
-    }, [refresh, scheduleRefresh]);
+    }, [includeFiles, refreshFiles, refreshSummary, scheduleRefresh]);
 
     return {
         status,

@@ -24,8 +24,12 @@ pub struct ApiConfig {
     pub openai_compat_enabled: bool,
     #[serde(default = "default_openai_compat_url")]
     pub openai_compat_url: String,
+    #[serde(default)]
     pub theme: String,
+    #[serde(default)]
     pub markdown_view: String,
+    #[serde(default)]
+    pub language: String,
 }
 
 #[derive(Default, Serialize, Deserialize, Clone)]
@@ -40,6 +44,8 @@ pub struct RemoteAiConfig {
     pub theme: String,
     #[serde(default)]
     pub markdown_view: String,
+    #[serde(default)]
+    pub language: String,
 }
 
 #[derive(Default, Serialize, Deserialize, Clone)]
@@ -66,6 +72,7 @@ impl ApiConfig {
             user_id: self.user_id.clone(),
             theme: self.theme.clone(),
             markdown_view: self.markdown_view.clone(),
+            language: self.language.clone(),
         }
     }
 
@@ -86,6 +93,7 @@ impl ApiConfig {
         self.user_id = remote.user_id.clone();
         self.theme = remote.theme.clone();
         self.markdown_view = remote.markdown_view.clone();
+        self.language = remote.language.clone();
     }
 
     pub fn apply_local_ai_config(&mut self, local: &LocalAiConfig) {

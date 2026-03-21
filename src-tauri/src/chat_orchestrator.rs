@@ -84,7 +84,13 @@ fn infer_context_files_from_query(
     let mut files = Vec::new();
     let mut seen = HashSet::new();
 
-    let service = state.language_service.read().unwrap().clone();
+    let service = match state.language_service() {
+        Ok(service) => service,
+        Err(error) => {
+            eprintln!("[LANGUAGE] Failed to initialize language service for query context: {}", error);
+            return files;
+        }
+    };
 
     if let Ok(results) = service.search_symbols(query, limit.saturating_mul(4)) {
         for result in results {
@@ -550,11 +556,10 @@ pub async fn handle_send_message<R: Runtime>(
                     // Auto-save conversation before emitting done
                     {
                         let conversation = state.conversation.lock().unwrap();
-                        let mut store = state.conversation_store.lock().unwrap();
                         let mut stored = conversation.to_stored();
                         // Persist the current session ID to the stored metadata
                         stored.metadata.session_id = session_id.clone();
-                        if let Err(e) = store.save_conversation(&stored) {
+                        if let Err(e) = state.with_conversation_store(|store| store.save_conversation(&stored)) {
                             eprintln!("Failed to auto-save conversation: {}", e);
                         } else {
                             println!("Auto-saved conversation: {}", stored.metadata.id);
@@ -710,7 +715,19 @@ pub async fn handle_send_message<R: Runtime>(
                     },
                 );
             } else if let DrainResult::Error(e) = result {
-                window.emit("chat-error", e).unwrap_or_default();
+                window
+                    .emit(
+                        "chat-error",
+                        crate::events::ChatErrorPayload {
+                            code: "request_failed".to_string(),
+                            error: Some("Request failed".to_string()),
+                            message: Some(e.clone()),
+                            detail: Some(e),
+                            i18n_key: Some("chat.system.requestFailed".to_string()),
+                            i18n_params: None,
+                        },
+                    )
+                    .unwrap_or_default();
                 break;
             } else if let DrainResult::ToolCreated(msg, new_calls) = result {
                 let msg_id = msg.id.clone().unwrap_or_else(|| "unknown".to_string());
@@ -870,14 +887,21 @@ pub async fn handle_send_message<R: Runtime>(
                 );
                 let _ = window.emit(
                     "context-length-exceeded",
-                    serde_json::json!({
-                        "message": message,
-                        "token_count": token_count,
-                        "max_tokens": max_tokens,
-                        "excess": excess,
-                        "recoverable": recoverable,
-                        "recovery_hint": recovery_hint,
-                    }),
+                    crate::events::ContextLengthExceededPayload {
+                        message,
+                        token_count,
+                        max_tokens,
+                        excess,
+                        recoverable,
+                        recovery_hint,
+                        title_key: Some("chat.system.contextLimitReachedTitle".to_string()),
+                        recoverable_hint_key: Some(
+                            "chat.system.contextLimitRecoverable".to_string(),
+                        ),
+                        non_recoverable_hint_key: Some(
+                            "chat.system.contextLimitRestart".to_string(),
+                        ),
+                    },
                 );
             } else if let DrainResult::MessageTooLarge {
                 message,
@@ -889,8 +913,32 @@ pub async fn handle_send_message<R: Runtime>(
                     "[LIB] Message too large: {} (hint: {})",
                     message, recovery_hint
                 );
-                let error_text = format!("⚠️ Response too large: {} — {}", message, recovery_hint);
-                window.emit("chat-error", &error_text).unwrap_or_default();
+                window
+                    .emit(
+                        "chat-error",
+                        crate::events::ChatErrorPayload {
+                            code: "response_too_large".to_string(),
+                            error: Some("Response too large".to_string()),
+                            message: Some(message.clone()),
+                            detail: Some(recovery_hint.clone()),
+                            i18n_key: Some("chat.system.responseTooLargeTitle".to_string()),
+                            i18n_params: None,
+                        },
+                    )
+                    .unwrap_or_default();
+                window
+                    .emit(
+                        "message-too-large",
+                        crate::events::MessageTooLargePayload {
+                            message,
+                            recovery_hint: recovery_hint.clone(),
+                            title_key: Some("chat.system.responseTooLargeTitle".to_string()),
+                            recovery_hint_label_key: Some(
+                                "chat.system.recoveryHintLabel".to_string(),
+                            ),
+                        },
+                    )
+                    .unwrap_or_default();
                 // Store recovery hint so it gets prepended to the next user message
                 let state = app_handle.state::<AppState>();
                 *state.pending_error_feedback.lock().unwrap() = Some(recovery_hint);
@@ -1061,6 +1109,14 @@ pub async fn handle_send_message<R: Runtime>(
                                     id: cmd.call.id.clone(),
                                     command: cmd.command.clone(),
                                     description: format!("Run command: {}", cmd.command),
+                                    action_kind: crate::events::StructuredActionKind::Command,
+                                    description_key: Some(
+                                        "approval.runCommandDescription".to_string(),
+                                    ),
+                                    description_params: Some(std::collections::BTreeMap::from([(
+                                        "command".to_string(),
+                                        cmd.command.clone(),
+                                    )])),
                                     cwd: cmd.cwd.clone(),
                                     root_command,
                                     cwd_outside_workspace,
@@ -1075,6 +1131,9 @@ pub async fn handle_send_message<R: Runtime>(
                                     id: conf.call.id.clone(),
                                     command: conf.tool_name.clone(),
                                     description: conf.description.clone(),
+                                    action_kind: crate::events::StructuredActionKind::GenericTool,
+                                    description_key: None,
+                                    description_params: None,
                                     cwd: None,
                                     root_command: None,
                                     cwd_outside_workspace: None,

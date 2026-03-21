@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { UncommittedChange } from '../types/uncommitted';
@@ -7,9 +7,14 @@ interface UseUncommittedChangesOptions {
   onFileChanged?: (filePath: string) => void;
 }
 
+interface UncommittedChangesUpdatedDetail {
+  sourceId?: string;
+}
+
 export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
   const [changes, setChanges] = useState<UncommittedChange[]>([]);
   const [loading, setLoading] = useState(true);
+  const sourceIdRef = useRef(`uncommitted-${crypto.randomUUID()}`);
 
   const normalizePath = useCallback((value: string): string => {
     return value.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
@@ -32,27 +37,66 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
     }
   }, []);
 
+  const upsertChange = useCallback((nextChange: UncommittedChange | null) => {
+    setChanges(prev => {
+      if (!nextChange) {
+        return prev;
+      }
+
+      const nextPath = normalizePath(nextChange.file_path);
+      const filtered = prev.filter(change => normalizePath(change.file_path) !== nextPath);
+      return [...filtered, nextChange].sort((a, b) => a.timestamp - b.timestamp);
+    });
+  }, [normalizePath]);
+
+  const removeChanges = useCallback((predicate: (change: UncommittedChange) => boolean) => {
+    setChanges(prev => prev.filter(change => !predicate(change)));
+  }, []);
+
+  const notifyUpdated = useCallback(() => {
+    window.dispatchEvent(new CustomEvent<UncommittedChangesUpdatedDetail>('uncommitted-changes-updated', {
+      detail: { sourceId: sourceIdRef.current },
+    }));
+  }, []);
+
   useEffect(() => {
     refresh();
 
     const unlistenPromise = listen<{ change_id: string; file_path: string }>('change-applied', (event) => {
-      refresh();
-      if (options?.onFileChanged && event.payload?.file_path) {
-        options.onFileChanged(event.payload.file_path);
-      }
+      void (async () => {
+        try {
+          const nextChange = await invoke<UncommittedChange | null>('get_uncommitted_change_for_file', {
+            filePath: event.payload.file_path,
+          });
+          upsertChange(nextChange);
+        } catch (error) {
+          console.error('Failed to get uncommitted change for file:', error);
+          void refresh();
+        }
+
+        if (options?.onFileChanged && event.payload?.file_path) {
+          options.onFileChanged(event.payload.file_path);
+        }
+      })();
     });
 
     // Listen for cross-instance refresh events
-    const handleGlobalRefresh = () => refresh();
-    window.addEventListener('uncommitted-changes-updated', handleGlobalRefresh);
+    const handleGlobalRefresh = (event: Event) => {
+      const customEvent = event as CustomEvent<UncommittedChangesUpdatedDetail>;
+      if (customEvent.detail?.sourceId === sourceIdRef.current) {
+        return;
+      }
+      void refresh();
+    };
+    window.addEventListener('uncommitted-changes-updated', handleGlobalRefresh as EventListener);
 
     return () => {
       unlistenPromise
         .then(unlisten => unlisten())
         .catch(console.error);
-      window.removeEventListener('uncommitted-changes-updated', handleGlobalRefresh);
+      window.removeEventListener('uncommitted-changes-updated', handleGlobalRefresh as EventListener);
     };
-  }, [refresh, options?.onFileChanged]);
+  }, [refresh, options?.onFileChanged, upsertChange]);
 
   const getChangeForFile = useCallback((filePath: string): UncommittedChange | undefined => {
     const target = normalizePath(filePath);
@@ -86,77 +130,77 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
 
   const acceptChange = useCallback(async (id: string): Promise<boolean> => {
     try {
-      await invoke('accept_change', { id });
-      await refresh();
-      window.dispatchEvent(new CustomEvent('uncommitted-changes-updated'));
+      await invoke<UncommittedChange>('accept_change', { id });
+      removeChanges(change => change.id === id);
+      notifyUpdated();
       return true;
     } catch (error) {
       console.error('Failed to accept change:', error);
       return false;
     }
-  }, [refresh]);
+  }, [notifyUpdated, removeChanges]);
 
   const acceptFile = useCallback(async (filePath: string): Promise<boolean> => {
     try {
-      await invoke('accept_file_changes', { filePath });
-      await refresh();
-      window.dispatchEvent(new CustomEvent('uncommitted-changes-updated'));
+      const removed = await invoke<UncommittedChange>('accept_file_changes', { filePath });
+      const removedPath = normalizePath(removed.file_path);
+      removeChanges(change => normalizePath(change.file_path) === removedPath);
+      notifyUpdated();
       return true;
     } catch (error) {
       console.error('Failed to accept file changes:', error);
       return false;
     }
-  }, [refresh]);
+  }, [normalizePath, notifyUpdated, removeChanges]);
 
   const acceptAll = useCallback(async (): Promise<boolean> => {
     try {
-      await invoke('accept_all_changes');
-      await refresh();
-      // Emit event so other hook instances can refresh
-      window.dispatchEvent(new CustomEvent('uncommitted-changes-updated'));
+      await invoke<UncommittedChange[]>('accept_all_changes');
+      setChanges([]);
+      notifyUpdated();
       return true;
     } catch (error) {
       console.error('Failed to accept all changes:', error);
       return false;
     }
-  }, [refresh]);
+  }, [notifyUpdated]);
 
   const rejectChange = useCallback(async (id: string): Promise<boolean> => {
     try {
-      await invoke('reject_change', { id });
-      await refresh();
-      window.dispatchEvent(new CustomEvent('uncommitted-changes-updated'));
+      await invoke<UncommittedChange>('reject_change', { id });
+      removeChanges(change => change.id === id);
+      notifyUpdated();
       return true;
     } catch (error) {
       console.error('Failed to reject change:', error);
       return false;
     }
-  }, [refresh]);
+  }, [notifyUpdated, removeChanges]);
 
   const rejectFile = useCallback(async (filePath: string): Promise<boolean> => {
     try {
-      await invoke('reject_file_changes', { filePath });
-      await refresh();
-      window.dispatchEvent(new CustomEvent('uncommitted-changes-updated'));
+      const removed = await invoke<UncommittedChange>('reject_file_changes', { filePath });
+      const removedPath = normalizePath(removed.file_path);
+      removeChanges(change => normalizePath(change.file_path) === removedPath);
+      notifyUpdated();
       return true;
     } catch (error) {
       console.error('Failed to reject file changes:', error);
       return false;
     }
-  }, [refresh]);
+  }, [normalizePath, notifyUpdated, removeChanges]);
 
   const rejectAll = useCallback(async (): Promise<boolean> => {
     try {
-      await invoke('reject_all_changes');
-      await refresh();
-      // Emit event so other hook instances can refresh
-      window.dispatchEvent(new CustomEvent('uncommitted-changes-updated'));
+      await invoke<UncommittedChange[]>('reject_all_changes');
+      setChanges([]);
+      notifyUpdated();
       return true;
     } catch (error) {
       console.error('Failed to reject all changes:', error);
       return false;
     }
-  }, [refresh]);
+  }, [notifyUpdated]);
 
   return {
     changes,
