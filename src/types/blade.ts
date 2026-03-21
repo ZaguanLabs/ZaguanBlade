@@ -1,4 +1,4 @@
-// v1.1: Semantic versioning
+// v1.4: Semantic versioning
 import type { ChatMode } from './chat';
 
 export type Version = {
@@ -83,10 +83,7 @@ export type EditorIntent =
     | { type: "CloseTab"; payload: { tab_id: string } }
     | { type: "SetActiveTab"; payload: { tab_id: string | null } }
     | { type: "ReorderTabs"; payload: { tab_ids: string[] } }
-    | { type: "GetTabState"; payload: Record<string, never> }
-    // Legacy
-    | { type: "SaveFile"; payload: { path: string } }
-    | { type: "BufferUpdate"; payload: { path: string; content: string } };
+    | { type: "GetTabState"; payload: Record<string, never> };
 
 export type FileIntent =
     | { type: "Read"; payload: { path: string } }
@@ -104,15 +101,10 @@ export type FileEntry = {
 };
 
 export type WorkflowIntent =
-    // v1.1 variants
     | { type: "ApproveAction"; payload: { action_id: string } }
     | { type: "ApproveAll"; payload: { batch_id: string } }
     | { type: "RejectAction"; payload: { action_id: string } }
     | { type: "RejectAll"; payload: { batch_id: string } }
-    // Legacy v1.0 variants (for backward compatibility)
-    | { type: "ApproveChange"; payload: { change_id: string } }
-    | { type: "RejectChange"; payload: { change_id: string } }
-    | { type: "ApproveAllChanges"; payload: Record<string, never> }
     | { type: "ApproveTool"; payload: { approved: boolean } }
     | { type: "ApproveToolDecision"; payload: { decision: string } };
 
@@ -168,10 +160,7 @@ export type EditorEvent =
     | { type: "TabClosed"; payload: { tab_id: string } }
     | { type: "ActiveTabChanged"; payload: { tab_id: string | null } }
     | { type: "TabsReordered"; payload: { tab_ids: string[] } }
-    | { type: "TabStateSnapshot"; payload: { tabs: TabInfo[]; active_tab_id: string | null } }
-    // Legacy
-    | { type: "EditorState"; payload: { active_file: string | null } }
-    | { type: "ContentDelta"; payload: { file: string; patch: string } };
+    | { type: "TabStateSnapshot"; payload: { tabs: TabInfo[]; active_tab_id: string | null } };
 
 export type TabInfo = {
     id: string;
@@ -195,11 +184,8 @@ export type FileEvent =
 
 export type WorkflowEvent =
     | { type: "ApprovalRequested"; payload: { batch_id: string; items: string[] } }
-    // v1.1 variants
     | { type: "ActionCompleted"; payload: { action_id: string; success: boolean } }
-    | { type: "BatchCompleted"; payload: { batch_id: string; succeeded: number; failed: number } }
-    // Legacy v1.0 variant
-    | { type: "TaskCompleted"; payload: { task_id: string; success: boolean } };
+    | { type: "BatchCompleted"; payload: { batch_id: string; succeeded: number; failed: number } };
 
 export type TerminalEvent =
     | { type: "Spawned"; payload: { id: string; owner: TerminalOwner } } // v1.1: terminal creation event
@@ -267,7 +253,7 @@ export interface ChatMessage {
 }
 
 // ===================================
-// Language Domain (v1.3)
+// Language Domain (v1.4)
 // ===================================
 
 export type LanguageIntent =
@@ -275,9 +261,7 @@ export type LanguageIntent =
     | { type: "IndexWorkspace"; payload: Record<string, never> }
     | { type: "SearchSymbols"; payload: { query: string; file_path?: string | null; symbol_types?: string[] | null } }
     | { type: "GetSymbolAt"; payload: { file_path: string; line: number; character: number } }
-    | { type: "DidOpen"; payload: { file_path: string; content: string; language_id: string } }
-    | { type: "DidChange"; payload: { file_path: string; content: string; version: number } }
-    | { type: "DidClose"; payload: { file_path: string } }
+    | { type: "GetFullContext"; payload: { max_files?: number | null; preview_lines?: number | null } }
     | { type: "ZlpMessage"; payload: { data: any } };
 
 export type LanguageEvent =
@@ -285,6 +269,7 @@ export type LanguageEvent =
     | { type: "WorkspaceIndexed"; payload: { file_count: number; symbol_count: number; duration_ms: number } }
     | { type: "SymbolsFound"; payload: { intent_id: string; symbols: LanguageSymbol[] } }
     | { type: "SymbolAt"; payload: { intent_id: string; symbol: LanguageSymbol | null } }
+    | { type: "FullContextGenerated"; payload: { intent_id: string; file_path: string; file_count: number } }
     | { type: "ZlpResponse"; payload: { original_request_id: string; result: any } };
 
 export type LanguagePosition = {
@@ -305,9 +290,12 @@ export type LanguageLocation = {
 export type LanguageSymbol = {
     id: string;
     name: string;
+    qualified_name: string;
     symbol_type: string;
     file_path: string;
     range: LanguageRange;
+    byte_offset: number;
+    byte_length: number;
     parent_id: string | null;
     docstring: string | null;
     signature: string | null;

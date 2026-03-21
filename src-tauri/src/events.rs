@@ -10,9 +10,6 @@ use std::collections::BTreeMap;
 pub mod event_names {
     // === Chat & AI Workflow ===
 
-    /// AI chat message chunk received from zcoderd
-    pub const CHAT_UPDATE: &str = "chat-update";
-
     /// AI chat response completed
     pub const CHAT_DONE: &str = "chat-done";
 

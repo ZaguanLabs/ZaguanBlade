@@ -110,6 +110,7 @@ impl LanguageHandler {
                     .map(|r| LanguageSymbol {
                         id: r.symbol.id,
                         name: r.symbol.name,
+                        qualified_name: r.symbol.qualified_name,
                         symbol_type: r.symbol.symbol_type.to_string(),
                         file_path: r.symbol.file_path,
                         range: LanguageRange {
@@ -122,8 +123,10 @@ impl LanguageHandler {
                                 character: r.symbol.range.end.character,
                             },
                         },
-                        parent_id: None,
-                        docstring: None,
+                        byte_offset: r.symbol.byte_offset,
+                        byte_length: r.symbol.byte_length,
+                        parent_id: r.symbol.parent_id,
+                        docstring: r.symbol.docstring,
                         signature: r.symbol.signature,
                     })
                     .collect();
@@ -150,6 +153,7 @@ impl LanguageHandler {
                 let symbol_data = symbol.map(|s| LanguageSymbol {
                     id: s.id,
                     name: s.name,
+                    qualified_name: s.qualified_name,
                     symbol_type: s.symbol_type.to_string(),
                     file_path: s.file_path,
                     range: LanguageRange {
@@ -162,8 +166,10 @@ impl LanguageHandler {
                             character: s.range.end.character,
                         },
                     },
-                    parent_id: None,
-                    docstring: None,
+                    byte_offset: s.byte_offset,
+                    byte_length: s.byte_length,
+                    parent_id: s.parent_id,
+                    docstring: s.docstring,
                     signature: s.signature,
                 });
 

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // ==============================================================================
-// 0. Version (v1.3) - Added Language domain for ZLP (tree-sitter based)
+// 0. Version (v1.4) - Added Language domain for ZLP (tree-sitter based)
 // ==============================================================================
 
 /// Semantic version for protocol compatibility checking
@@ -16,7 +16,7 @@ pub struct Version {
 impl Version {
     pub const CURRENT: Version = Version {
         major: 1,
-        minor: 3,
+        minor: 4,
         patch: 0,
     };
 
@@ -159,10 +159,6 @@ pub enum EditorIntent {
     ReorderTabs { tab_ids: Vec<String> },
     /// Request tab state snapshot
     GetTabState {},
-    /// Legacy: save file
-    SaveFile { path: String },
-    /// Legacy: virtual buffer update
-    BufferUpdate { path: String, content: String },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -191,10 +187,6 @@ pub enum WorkflowIntent {
     ApproveAll { batch_id: String },
     RejectAction { action_id: String },
     RejectAll { batch_id: String },
-    // Legacy support
-    ApproveChange { change_id: String },
-    RejectChange { change_id: String },
-    ApproveAllChanges,
     ApproveTool { approved: bool },
     ApproveToolDecision { decision: String },
 }
@@ -387,10 +379,6 @@ pub enum EditorEvent {
         tabs: Vec<crate::core_state::TabInfo>,
         active_tab_id: Option<String>,
     },
-    /// Legacy: minimal state
-    EditorState { active_file: Option<String> },
-    /// Legacy: content delta
-    ContentDelta { file: String, patch: String },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -436,11 +424,6 @@ pub enum WorkflowEvent {
         batch_id: String,
         succeeded: usize,
         failed: usize,
-    },
-    // Legacy support
-    TaskCompleted {
-        task_id: Uuid,
-        success: bool,
     },
 }
 
@@ -572,9 +555,12 @@ pub enum LanguageEvent {
 pub struct LanguageSymbol {
     pub id: String,
     pub name: String,
+    pub qualified_name: String,
     pub symbol_type: String,
     pub file_path: String,
     pub range: LanguageRange,
+    pub byte_offset: usize,
+    pub byte_length: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

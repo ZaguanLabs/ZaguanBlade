@@ -5,6 +5,33 @@ use crate::commands::{chat, files, tools};
 use std::sync::atomic::Ordering;
 use tauri::{Emitter, State};
 
+fn current_timestamp_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn emit_blade_event(window: &tauri::Window, causality_id: Option<String>, event: blade_protocol::BladeEvent) {
+    let _ = window.emit(
+        "blade-event",
+        blade_protocol::BladeEventEnvelope {
+            id: uuid::Uuid::new_v4(),
+            timestamp: current_timestamp_ms(),
+            causality_id,
+            event,
+        },
+    );
+}
+
+fn emit_system_event(window: &tauri::Window, intent_id: uuid::Uuid, event: SystemEvent) {
+    emit_blade_event(
+        window,
+        Some(intent_id.to_string()),
+        blade_protocol::BladeEvent::System(event),
+    );
+}
+
 #[tauri::command]
 pub async fn dispatch(
     envelope: blade_protocol::BladeEnvelope<blade_protocol::BladeIntentEnvelope>,
@@ -19,24 +46,13 @@ pub async fn dispatch(
             expected: Version::CURRENT,
             received: envelope.version,
         };
-        use blade_protocol::BladeEventEnvelope;
 
         let system_event = SystemEvent::IntentFailed {
             intent_id: envelope.message.id,
             error: error.clone(),
         };
 
-        let event_envelope = BladeEventEnvelope {
-            id: uuid::Uuid::new_v4(),
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            causality_id: Some(envelope.message.id.to_string()),
-            event: blade_protocol::BladeEvent::System(system_event),
-        };
-
-        let _ = window.emit("blade-event", event_envelope);
+        emit_system_event(&window, envelope.message.id, system_event);
         return Err(error);
     }
 
@@ -55,7 +71,7 @@ pub async fn dispatch(
             // Return cached result
             match cached_result {
                 crate::idempotency::IdempotencyResult::Success => {
-                    let _ = window.emit("sys-event", SystemEvent::ProcessCompleted { intent_id });
+                    emit_system_event(&window, intent_id, SystemEvent::ProcessCompleted { intent_id });
                     return Ok(());
                 }
                 crate::idempotency::IdempotencyResult::Failed { error } => {
@@ -63,8 +79,9 @@ pub async fn dispatch(
                         trace_id: cached_intent_id.to_string(),
                         message: error,
                     };
-                    let _ = window.emit(
-                        "sys-event",
+                    emit_system_event(
+                        &window,
+                        intent_id,
                         SystemEvent::IntentFailed {
                             intent_id,
                             error: blade_error.clone(),
@@ -97,7 +114,7 @@ pub async fn dispatch(
     }
 
     // 4. Ack (Process Started)
-    let _ = window.emit("sys-event", SystemEvent::ProcessStarted { intent_id });
+    emit_system_event(&window, intent_id, SystemEvent::ProcessStarted { intent_id });
 
     // 3. Route Intent
     match intent {
@@ -167,8 +184,9 @@ pub async fn dispatch(
                         }
                     })?;
                     conversation.clear();
-                    let _ = window.emit(
-                        "chat-update",
+                    emit_blade_event(
+                        &window,
+                        Some(intent_id.to_string()),
                         blade_protocol::BladeEvent::Chat(blade_protocol::ChatEvent::ChatState {
                             messages: Vec::new(),
                         }),
@@ -197,8 +215,9 @@ pub async fn dispatch(
             blade_protocol::FileIntent::Read { path } => {
                 match files::read_file_content_logic(path.clone(), &*state) {
                     Ok(content) => {
-                        let _ = window.emit(
-                            "sys-event",
+                        emit_blade_event(
+                            &window,
+                            Some(intent_id.to_string()),
                             blade_protocol::BladeEvent::File(blade_protocol::FileEvent::Content {
                                 path: path,
                                 data: content,
@@ -214,8 +233,9 @@ pub async fn dispatch(
             blade_protocol::FileIntent::Write { path, content } => {
                 match files::write_file_content_logic(path.clone(), content, &*state) {
                     Ok(_) => {
-                        let _ = window.emit(
-                            "sys-event",
+                        emit_blade_event(
+                            &window,
+                            Some(intent_id.to_string()),
                             blade_protocol::BladeEvent::File(blade_protocol::FileEvent::Written {
                                 path: path,
                             }),
@@ -241,8 +261,9 @@ pub async fn dispatch(
                             })
                             .collect();
 
-                        let _ = window.emit(
-                            "sys-event",
+                        emit_blade_event(
+                            &window,
+                            Some(intent_id.to_string()),
                             blade_protocol::BladeEvent::File(blade_protocol::FileEvent::Listing {
                                 path: path,
                                 entries: protocol_entries,
@@ -280,8 +301,9 @@ pub async fn dispatch(
 
                 match result {
                     Ok(_) => {
-                        let _ = window.emit(
-                            "sys-event",
+                        emit_blade_event(
+                            &window,
+                            Some(intent_id.to_string()),
                             blade_protocol::BladeEvent::File(blade_protocol::FileEvent::Created {
                                 path: path.clone(),
                                 is_dir,
@@ -312,8 +334,9 @@ pub async fn dispatch(
 
                 match result {
                     Ok(_) => {
-                        let _ = window.emit(
-                            "sys-event",
+                        emit_blade_event(
+                            &window,
+                            Some(intent_id.to_string()),
                             blade_protocol::BladeEvent::File(blade_protocol::FileEvent::Deleted {
                                 path: path.clone(),
                             }),
@@ -343,8 +366,9 @@ pub async fn dispatch(
 
                 match std::fs::rename(&resolved_old, &resolved_new) {
                     Ok(_) => {
-                        let _ = window.emit(
-                            "sys-event",
+                        emit_blade_event(
+                            &window,
+                            Some(intent_id.to_string()),
                             blade_protocol::BladeEvent::File(blade_protocol::FileEvent::Renamed {
                                 old_path: old_path.clone(),
                                 new_path: new_path.clone(),
@@ -508,14 +532,6 @@ pub async fn dispatch(
                             event: blade_protocol::BladeEvent::Editor(snapshot),
                         },
                     );
-                    Ok(())
-                }
-                blade_protocol::EditorIntent::SaveFile { path } => {
-                    println!("[Editor] SaveFile: {} (delegating to File.Write)", path);
-                    Ok(())
-                }
-                blade_protocol::EditorIntent::BufferUpdate { path, content: _ } => {
-                    println!("[Editor] BufferUpdate: {} (legacy, no-op)", path);
                     Ok(())
                 }
                 // Tab management (headless)
@@ -735,24 +751,6 @@ pub async fn dispatch(
                 Ok(())
             }
             blade_protocol::WorkflowIntent::RejectAll { batch_id: _ } => Ok(()),
-            blade_protocol::WorkflowIntent::ApproveChange { change_id } => {
-                println!(
-                    "[BladeProtocol] Deprecated intent: ApproveChange({})",
-                    change_id
-                );
-                Ok(())
-            }
-            blade_protocol::WorkflowIntent::RejectChange { change_id } => {
-                println!(
-                    "[BladeProtocol] Deprecated intent: RejectChange({})",
-                    change_id
-                );
-                Ok(())
-            }
-            blade_protocol::WorkflowIntent::ApproveAllChanges => {
-                println!("[BladeProtocol] Deprecated intent: ApproveAllChanges");
-                Ok(())
-            }
             blade_protocol::WorkflowIntent::ApproveTool { approved } => {
                 tools::approve_tool(approved, window.clone(), state.clone());
                 Ok(())
@@ -1102,8 +1100,9 @@ pub async fn dispatch(
                                     details,
                                 } => {
                                     eprintln!("[ZLP] Error: {} - {} ({})", code, message, details);
-                                    let _ = window_clone.emit(
-                                        "sys-event",
+                                    emit_system_event(
+                                        &window_clone,
+                                        intent_id_clone,
                                         blade_protocol::SystemEvent::IntentFailed {
                                             intent_id: intent_id_clone,
                                             error: blade_protocol::BladeError::Internal {
@@ -1120,8 +1119,9 @@ pub async fn dispatch(
                             }
                         }
                         // Emit completion
-                        let _ = window_clone.emit(
-                            "sys-event",
+                        emit_system_event(
+                            &window_clone,
+                            intent_id_clone,
                             SystemEvent::ProcessCompleted {
                                 intent_id: intent_id_clone,
                             },

@@ -5,7 +5,6 @@
 
 use serde::{Deserialize, Serialize};
 use tree_sitter::{Node, Tree};
-use uuid::Uuid;
 
 use super::parser::Language;
 
@@ -126,31 +125,43 @@ pub struct Symbol {
     pub id: String,
     /// Symbol name (e.g., function name, class name)
     pub name: String,
+    /// Qualified symbol name
+    pub qualified_name: String,
     /// Type of symbol
     pub symbol_type: SymbolType,
     /// File path where symbol is defined
     pub file_path: String,
     /// Range in source code
     pub range: Range,
+    /// Byte offset in the containing file
+    pub byte_offset: usize,
+    /// Byte length in the containing file
+    pub byte_length: usize,
     /// Parent symbol ID (for methods inside classes, etc.)
     pub parent_id: Option<String>,
     /// Documentation string if present
     pub docstring: Option<String>,
     /// Type signature (for functions: parameters and return type)
     pub signature: Option<String>,
+    /// Content hash for the symbol span
+    pub content_hash: String,
 }
 
 impl Symbol {
     pub fn new(name: String, symbol_type: SymbolType, file_path: String, range: Range) -> Self {
         Self {
-            id: Uuid::new_v4().to_string(),
+            id: String::new(),
             name,
+            qualified_name: String::new(),
             symbol_type,
             file_path,
             range,
+            byte_offset: 0,
+            byte_length: 0,
             parent_id: None,
             docstring: None,
             signature: None,
+            content_hash: String::new(),
         }
     }
 
@@ -175,6 +186,12 @@ pub struct SymbolExtractor {
     file_path: String,
 }
 
+#[derive(Clone)]
+struct ParentSymbolContext {
+    id: String,
+    qualified_name: String,
+}
+
 impl SymbolExtractor {
     pub fn new(file_path: String) -> Self {
         Self { file_path }
@@ -192,13 +209,13 @@ impl SymbolExtractor {
         node: Node,
         source: &str,
         language: Language,
-        parent_id: Option<&str>,
+        parent_context: Option<ParentSymbolContext>,
         symbols: &mut Vec<Symbol>,
     ) {
         // Extract symbol from this node if applicable
         if let Some(mut symbol) = self.node_to_symbol(&node, source, language) {
-            if let Some(pid) = parent_id {
-                symbol.parent_id = Some(pid.to_string());
+            if let Some(parent) = parent_context.as_ref() {
+                symbol.parent_id = Some(parent.id.clone());
             }
 
             // Try to extract docstring
@@ -211,20 +228,43 @@ impl SymbolExtractor {
                 symbol.signature = Some(sig);
             }
 
+            symbol.byte_offset = node.start_byte();
+            symbol.byte_length = node.end_byte().saturating_sub(node.start_byte());
+            symbol.content_hash = node
+                .utf8_text(source.as_bytes())
+                .ok()
+                .map(compute_content_hash)
+                .unwrap_or_default();
+            symbol.qualified_name = match parent_context.as_ref() {
+                Some(parent) => format!("{}.{}", parent.qualified_name, symbol.name),
+                None => symbol.name.clone(),
+            };
+            symbol.id = stable_symbol_id(&self.file_path, &symbol.qualified_name, symbol.symbol_type);
+
             let symbol_id = symbol.id.clone();
+            let symbol_qualified_name = symbol.qualified_name.clone();
             symbols.push(symbol);
 
             // Process children with this symbol as parent
             for i in 0..node.child_count() {
                 if let Some(child) = node.child(i as u32) {
-                    self.extract_from_node(child, source, language, Some(&symbol_id), symbols);
+                    self.extract_from_node(
+                        child,
+                        source,
+                        language,
+                        Some(ParentSymbolContext {
+                            id: symbol_id.clone(),
+                            qualified_name: symbol_qualified_name.clone(),
+                        }),
+                        symbols,
+                    );
                 }
             }
         } else {
             // No symbol at this node, process children with same parent
             for i in 0..node.child_count() {
                 if let Some(child) = node.child(i as u32) {
-                    self.extract_from_node(child, source, language, parent_id, symbols);
+                    self.extract_from_node(child, source, language, parent_context.clone(), symbols);
                 }
             }
         }
@@ -552,6 +592,19 @@ pub fn extract_symbols(
 ) -> Vec<Symbol> {
     let extractor = SymbolExtractor::new(file_path.to_string());
     extractor.extract(tree, source, language)
+}
+
+fn stable_symbol_id(file_path: &str, qualified_name: &str, symbol_type: SymbolType) -> String {
+    format!("{}::{}#{}", file_path, qualified_name, symbol_type)
+}
+
+fn compute_content_hash(content: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    content.hash(&mut hasher);
+    format!("{:x}", hasher.finish())
 }
 
 #[cfg(test)]

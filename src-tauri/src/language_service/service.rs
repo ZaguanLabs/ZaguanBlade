@@ -275,6 +275,10 @@ impl LanguageService {
             .get_symbol_at(file_path, line, character)?)
     }
 
+    pub fn get_symbol(&self, id: &str) -> Result<Option<Symbol>, LanguageError> {
+        Ok(self.symbol_store.get_symbol(id)?)
+    }
+
     /// Get all symbols in a file
     pub fn get_file_symbols(&self, file_path: &str) -> Result<Vec<Symbol>, LanguageError> {
         Ok(self.symbol_store.get_symbols_in_file(file_path)?)
