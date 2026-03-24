@@ -9,6 +9,7 @@ const MarkdownEditor = React.lazy(() =>
 import type { CodeEditorHandle } from './CodeEditor';
 import { useEditorActions } from '../contexts/EditorContext';
 import { BladeDispatcher } from '../services/blade';
+import { EditorFacade } from '../services/editorFacade';
 import { BladeEventEnvelope, FileEvent } from '../types/blade';
 import { ArrowRight, Server, Cloud } from 'lucide-react';
 import zbladeLogoUrl from '../assets/zblade-in-app-logo.png';
@@ -171,6 +172,10 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     const editorRef = useRef<CodeEditorHandle>(null);
     const pendingNavigation = useRef<{ path: string, line: number, col: number } | null>(null);
     const baseContentRef = useRef(savedContent ?? '');
+    const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const documentVersionRef = useRef(0);
+    const awaitingInitialSyncRef = useRef(false);
+    const syncedDocumentPathRef = useRef<string | null>(null);
 
     const pathsMatch = (a: string, b: string): boolean => {
         if (a === b) return true;
@@ -188,6 +193,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         if (!activeFile) {
             setContent('');
             baseContentRef.current = '';
+            awaitingInitialSyncRef.current = false;
             return;
         }
 
@@ -196,14 +202,35 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             if (savedContent != null) {
                 baseContentRef.current = savedContent;
             }
+            awaitingInitialSyncRef.current = false;
             return;
         }
 
         if (savedContent != null) {
             setContent(savedContent);
             baseContentRef.current = savedContent;
+            awaitingInitialSyncRef.current = false;
+            return;
         }
+
+        awaitingInitialSyncRef.current = true;
     }, [activeFile, draftContent, isDirty, savedContent]);
+
+    useEffect(() => {
+        documentVersionRef.current = 0;
+
+        return () => {
+            if (syncTimerRef.current) {
+                clearTimeout(syncTimerRef.current);
+                syncTimerRef.current = null;
+            }
+
+            if (activeFile && syncedDocumentPathRef.current === activeFile) {
+                void EditorFacade.closeDocument(activeFile);
+                syncedDocumentPathRef.current = null;
+            }
+        };
+    }, [activeFile]);
 
     useEffect(() => {
         if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
@@ -246,6 +273,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     const fileEvent = bladeEvent.payload as FileEvent;
                     if (fileEvent.type === 'Content' && pathsMatch(fileEvent.payload.path, activeFile)) {
                         console.debug('[EDITOR] Received content for:', activeFile);
+                        awaitingInitialSyncRef.current = false;
                         setContent(fileEvent.payload.data);
                         baseContentRef.current = fileEvent.payload.data;
                         onContentStateChange?.({
@@ -315,6 +343,39 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         }
         loadFile();
     }, [activeFile, draftContent, isDirty, reloadTrigger]);
+
+    useEffect(() => {
+        if (!activeFile || activeFile.endsWith('.pdf')) {
+            return;
+        }
+
+        if (awaitingInitialSyncRef.current) {
+            return;
+        }
+
+        const immediateContent = isDirty && draftContent != null ? draftContent : savedContent;
+        if (documentVersionRef.current === 0 && immediateContent != null && content !== immediateContent) {
+            return;
+        }
+
+        if (syncTimerRef.current) {
+            clearTimeout(syncTimerRef.current);
+        }
+
+        syncTimerRef.current = setTimeout(() => {
+            documentVersionRef.current += 1;
+            syncedDocumentPathRef.current = activeFile;
+            void EditorFacade.syncDocument(activeFile, content, documentVersionRef.current);
+            syncTimerRef.current = null;
+        }, 180);
+
+        return () => {
+            if (syncTimerRef.current) {
+                clearTimeout(syncTimerRef.current);
+                syncTimerRef.current = null;
+            }
+        };
+    }, [activeFile, content, draftContent, isDirty, savedContent]);
 
     // Handle pending navigation after content load
     useEffect(() => {

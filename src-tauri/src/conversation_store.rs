@@ -17,6 +17,12 @@ pub struct ConversationMetadata {
     pub message_count: usize,
     #[serde(default)]
     pub session_id: Option<String>,
+    #[serde(default)]
+    pub planning_mode: Option<bool>,
+    #[serde(default)]
+    pub runtime_mode: Option<String>,
+    #[serde(default)]
+    pub mode_source: Option<String>,
 }
 
 /// A complete conversation with metadata and messages
@@ -174,6 +180,9 @@ impl ConversationStore {
             model_id,
             message_count: 0,
             session_id: None,
+            planning_mode: None,
+            runtime_mode: None,
+            mode_source: None,
         };
 
         self.index.conversations.push(metadata.clone());

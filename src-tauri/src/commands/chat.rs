@@ -76,6 +76,9 @@ pub fn load_conversation(id: String, state: State<'_, AppState>) -> Result<(), S
             mgr.session_id = None;
             eprintln!("[CHAT] No session ID in loaded conversation");
         }
+        mgr.planning_mode = stored.metadata.planning_mode;
+        mgr.runtime_mode = stored.metadata.runtime_mode.clone();
+        mgr.mode_source = stored.metadata.mode_source.clone();
     }
 
     Ok(())
@@ -102,6 +105,9 @@ pub fn new_conversation(model_id: String, state: State<'_, AppState>) -> Result<
     {
         let mut mgr = state.chat_manager.lock().unwrap();
         mgr.session_id = None;
+        mgr.planning_mode = None;
+        mgr.runtime_mode = None;
+        mgr.mode_source = None;
     }
 
     // Create new conversation

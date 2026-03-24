@@ -75,6 +75,8 @@ export type EditorIntent =
     | { type: "OpenFile"; payload: { path: string } }
     | { type: "CloseFile"; payload: { path: string } }
     | { type: "SetActiveFile"; payload: { path: string | null } }
+    | { type: "SyncDocument"; payload: { path: string; content: string; version: number } }
+    | { type: "CloseDocument"; payload: { path: string } }
     | { type: "UpdateCursor"; payload: { line: number; column: number } }
     | { type: "UpdateSelection"; payload: { start: number; end: number } }
     | { type: "GetState"; payload: Record<string, never> }
@@ -214,6 +216,18 @@ export type HistoryMessage = {
         };
     }>;
     tool_call_id?: string;
+    reasoning?: string;
+    content_before_tools?: string;
+    content_after_tools?: string;
+    command_executions?: Array<{
+        id: string;
+        command: string;
+        cwd?: string;
+        output: string;
+        exit_code: number;
+        duration?: number;
+        timestamp: number;
+    }>;
     created_at: string;
 };
 

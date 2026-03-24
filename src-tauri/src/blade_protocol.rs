@@ -131,6 +131,12 @@ pub enum EditorIntent {
     CloseFile { path: String },
     /// Set the active file (must already be in open files, or None to clear)
     SetActiveFile { path: Option<String> },
+    SyncDocument {
+        path: String,
+        content: String,
+        version: u32,
+    },
+    CloseDocument { path: String },
     /// Update cursor position (for AI context)
     UpdateCursor { line: u32, column: u32 },
     /// Update selection (for AI context)

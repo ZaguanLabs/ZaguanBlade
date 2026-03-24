@@ -92,7 +92,15 @@ fn infer_context_files_from_query(
         }
     };
 
-    if let Ok(results) = service.search_symbols(query, limit.saturating_mul(4)) {
+    let active_file = state.active_file.lock().unwrap().clone();
+    let open_files = state.open_files.lock().unwrap().clone();
+
+    if let Ok(results) = service.search_symbols_contextual(
+        query,
+        limit.saturating_mul(4),
+        active_file.as_deref(),
+        &open_files,
+    ) {
         for result in results {
             let path = result.symbol.file_path;
             if seen.insert(path.clone()) {
@@ -103,15 +111,19 @@ fn infer_context_files_from_query(
             }
         }
     }
-
     let tokens: Vec<&str> = query
         .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
         .filter(|token| token.len() >= 4)
         .take(8)
         .collect();
-
+    
     for token in tokens {
-        if let Ok(results) = service.search_symbols(token, 4) {
+        if let Ok(results) = service.search_symbols_contextual(
+            token,
+            4,
+            active_file.as_deref(),
+            &open_files,
+        ) {
             for result in results {
                 let path = result.symbol.file_path;
                 if seen.insert(path.clone()) {

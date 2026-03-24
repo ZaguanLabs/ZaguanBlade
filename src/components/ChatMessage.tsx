@@ -255,6 +255,14 @@ const ReferencedPathsDisplay: React.FC<{
 type ActivityGroupItem =
     DerivedActivityGroupItem;
 
+function getToolActivityTargetKey(toolCallId: string): string {
+    return `tool:${toolCallId}`;
+}
+
+function getApprovalActivityTargetKey(actionId: string): string {
+    return `approval:${actionId}`;
+}
+
 const ActivityGroupDisplay: React.FC<{
     items: ActivityGroupItem[];
     pendingActions?: import('../types/events').StructuredAction[] | null;
@@ -265,7 +273,8 @@ const ActivityGroupDisplay: React.FC<{
     onUndoTool?: (toolCallId: string) => void;
     onStopCommand?: (callId: string) => void;
     onOpenFile?: (path: string) => void;
-}> = ({ items, pendingActions, onApproveCommand, onSkipCommand, onApproveSingleCommand, onSkipSingleCommand, onUndoTool, onStopCommand, onOpenFile }) => {
+    registerActivityTarget?: (targetKey: string, element: HTMLDivElement | null) => void;
+}> = ({ items, pendingActions, onApproveCommand, onSkipCommand, onApproveSingleCommand, onSkipSingleCommand, onUndoTool, onStopCommand, onOpenFile, registerActivityTarget }) => {
     return (
         <div className="mb-2 space-y-1.5">
             {items.map((item) => {
@@ -274,34 +283,42 @@ const ActivityGroupDisplay: React.FC<{
                     const matchingPendingAction = pendingActions?.find((action) => action.id === toolCall.id);
                     if (toolCall.function.name === 'run_command' && matchingPendingAction && onApproveCommand && onSkipCommand) {
                         return (
-                            <CommandApprovalCard
+                            <div
                                 key={item.id}
-                                actions={[matchingPendingAction]}
-                                onRun={onApproveCommand}
-                                onSkip={onSkipCommand}
-                                onRunSingle={onApproveSingleCommand}
-                                onSkipSingle={onSkipSingleCommand}
-                            />
+                                ref={(element) => registerActivityTarget?.(getApprovalActivityTargetKey(matchingPendingAction.id), element)}
+                            >
+                                <CommandApprovalCard
+                                    actions={[matchingPendingAction]}
+                                    onRun={onApproveCommand}
+                                    onSkip={onSkipCommand}
+                                    onRunSingle={onApproveSingleCommand}
+                                    onSkipSingle={onSkipSingleCommand}
+                                />
+                            </div>
                         );
                     }
                     return (
-                        <ToolCallDisplay
+                        <div
                             key={item.id}
-                            toolCall={toolCall}
-                            status={toolCall.status || 'executing'}
-                            result={toolCall.result}
-                            onStopCommand={
-                                toolCall.function.name === 'run_command' && onStopCommand
-                                    ? (() => onStopCommand(toolCall.id))
-                                    : undefined
-                            }
-                            onUndo={
-                                onUndoTool && REVERTIBLE_TOOLS.has(toolCall.function.name)
-                                    ? (() => onUndoTool(toolCall.id))
-                                    : undefined
-                            }
-                            onOpenFile={onOpenFile}
-                        />
+                            ref={(element) => registerActivityTarget?.(getToolActivityTargetKey(toolCall.id), element)}
+                        >
+                            <ToolCallDisplay
+                                toolCall={toolCall}
+                                status={toolCall.status || 'executing'}
+                                result={toolCall.result}
+                                onStopCommand={
+                                    toolCall.function.name === 'run_command' && onStopCommand
+                                        ? (() => onStopCommand(toolCall.id))
+                                        : undefined
+                                }
+                                onUndo={
+                                    onUndoTool && REVERTIBLE_TOOLS.has(toolCall.function.name)
+                                        ? (() => onUndoTool(toolCall.id))
+                                        : undefined
+                                }
+                                onOpenFile={onOpenFile}
+                            />
+                        </div>
                     );
                 }
 
@@ -332,6 +349,7 @@ interface ChatMessageProps {
     onUndoTool?: (toolCallId: string) => void;
     onStopCommand?: (callId: string) => void;
     onOpenFile?: (path: string) => void;
+    registerActivityTarget?: (targetKey: string, element: HTMLDivElement | null) => void;
 }
 
 const ChatMessageComponent: React.FC<ChatMessageProps> = ({
@@ -346,6 +364,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     onUndoTool,
     onStopCommand,
     onOpenFile,
+    registerActivityTarget,
 }) => {
     const { t } = useTranslation();
     const isUser = message.role === 'User';
@@ -665,6 +684,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                             onUndoTool={onUndoTool}
                                             onStopCommand={onStopCommand}
                                             onOpenFile={onOpenFile}
+                                            registerActivityTarget={registerActivityTarget}
                                         />
                                     );
                                 }
@@ -785,35 +805,43 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                                 const matchingPendingAction = pendingActions?.find((action) => action.id === call.id);
                                                 if (call.function.name === 'run_command' && matchingPendingAction && onApproveCommand && onSkipCommand) {
                                                     return (
-                                                        <CommandApprovalCard
+                                                        <div
                                                             key={`${call.id}-${idx}`}
-                                                            actions={[matchingPendingAction]}
-                                                            onRun={onApproveCommand}
-                                                            onSkip={onSkipCommand}
-                                                            onRunSingle={onApproveSingleCommand}
-                                                            onSkipSingle={onSkipSingleCommand}
-                                                        />
+                                                            ref={(element) => registerActivityTarget?.(getApprovalActivityTargetKey(matchingPendingAction.id), element)}
+                                                        >
+                                                            <CommandApprovalCard
+                                                                actions={[matchingPendingAction]}
+                                                                onRun={onApproveCommand}
+                                                                onSkip={onSkipCommand}
+                                                                onRunSingle={onApproveSingleCommand}
+                                                                onSkipSingle={onSkipSingleCommand}
+                                                            />
+                                                        </div>
                                                     );
                                                 }
 
                                                 return (
-                                                    <ToolCallDisplay
+                                                    <div
                                                         key={`${call.id}-${idx}`}
-                                                        toolCall={call}
-                                                        status={call.status || 'executing'}
-                                                        result={call.result}
-                                                        onStopCommand={
-                                                            call.function.name === 'run_command' && onStopCommand
-                                                                ? (() => onStopCommand(call.id))
-                                                                : undefined
-                                                        }
-                                                        onUndo={
-                                                            onUndoTool && REVERTIBLE_TOOLS.has(call.function.name)
-                                                                ? (() => onUndoTool(call.id))
-                                                                : undefined
-                                                        }
-                                                        onOpenFile={onOpenFile}
-                                                    />
+                                                        ref={(element) => registerActivityTarget?.(getToolActivityTargetKey(call.id), element)}
+                                                    >
+                                                        <ToolCallDisplay
+                                                            toolCall={call}
+                                                            status={call.status || 'executing'}
+                                                            result={call.result}
+                                                            onStopCommand={
+                                                                call.function.name === 'run_command' && onStopCommand
+                                                                    ? (() => onStopCommand(call.id))
+                                                                    : undefined
+                                                            }
+                                                            onUndo={
+                                                                onUndoTool && REVERTIBLE_TOOLS.has(call.function.name)
+                                                                    ? (() => onUndoTool(call.id))
+                                                                    : undefined
+                                                            }
+                                                            onOpenFile={onOpenFile}
+                                                        />
+                                                    </div>
                                                 );
                                             })}
                                     </div>

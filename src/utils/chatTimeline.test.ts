@@ -4,7 +4,7 @@ import { normalizeSplitBlocks } from '../hooks/useChatV2';
 import type { ChatMessage, CommandExecution, ToolCall } from '../types/chat';
 import type { StructuredAction } from '../types/events';
 import { deriveChatRows, deriveMessageRenderSegments } from './chatTimeline';
-import { insertToolCallBlockPreservingOrder, upsertSplitTextBlocks } from './messageBlocks';
+import { ensureMessagesHaveBlocks, insertToolCallBlockPreservingOrder, moveExistingContentAfterTools, upsertSplitTextBlocks } from './messageBlocks';
 
 function makeToolCall(overrides: Partial<ToolCall> & Pick<ToolCall, 'id'>): ToolCall {
     return {
@@ -195,6 +195,39 @@ test('upsertSplitTextBlocks reorders late tool insertion so trailing text stays 
     assert.deepEqual(
         nextBlocks.map((block) => block.type === 'text' ? `${block.type}:${block.content}` : `${block.type}:${block.id}`),
         ['text:Before', 'tool_call:tool-1', 'text:After']
+    );
+});
+
+test('moveExistingContentAfterTools moves streamed assistant text below a late tool call', () => {
+    const blocks = [
+        { type: 'text' as const, content: 'Final answer', id: 'text-1' },
+        { type: 'tool_call' as const, id: 'tool-1' },
+    ];
+
+    const reordered = moveExistingContentAfterTools(blocks, 'Final answer');
+
+    assert.equal(reordered.contentBeforeTools, '');
+    assert.equal(reordered.contentAfterTools, 'Final answer');
+    assert.deepEqual(
+        reordered.blocks.map((block) => block.type === 'text' ? `${block.type}:${block.content}` : `${block.type}:${block.id}`),
+        ['tool_call:tool-1', 'text:Final answer']
+    );
+});
+
+test('ensureMessagesHaveBlocks preserves explicit split ordering for reloaded assistant history', () => {
+    const restored = ensureMessagesHaveBlocks([
+        makeAssistantMessage({
+            id: 'assistant-history',
+            content: 'Final answer',
+            content_before_tools: '',
+            content_after_tools: 'Final answer',
+            tool_calls: [makeToolCall({ id: 'tool-1', status: 'complete' })],
+        }),
+    ]);
+
+    assert.deepEqual(
+        restored[0]?.blocks?.map((block) => block.type === 'text' ? `${block.type}:${block.content}` : `${block.type}:${block.id}`),
+        ['tool_call:tool-1', 'text:Final answer']
     );
 });
 

@@ -378,8 +378,9 @@ impl ToolResult {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_patch_to_string, execute_tool, grep_search, parse_grep_timeout_ms,
-        GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS, GREP_TIMEOUT_MIN_MS,
+        apply_multi_patch_to_string, apply_patch_to_string, execute_tool, grep_search, PatchHunk,
+        parse_grep_timeout_ms, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS,
+        GREP_TIMEOUT_MIN_MS,
     };
     use std::collections::HashMap;
     use std::fs;
@@ -397,6 +398,26 @@ mod tests {
         let content = "A\nTARGET\nB\n";
         let updated = apply_patch_to_string(content, "TARGET", "REPLACED").unwrap();
         assert_eq!(updated, "A\nREPLACED\nB\n");
+    }
+
+    #[test]
+    fn apply_patch_rejects_whitespace_only_fuzzy_match() {
+        let content = "    TARGET   \nB\n";
+        let err = apply_patch_to_string(content, "TARGET\n", "TARGET\nEXTRA\n").unwrap_err();
+        assert!(err.contains("Exact match required"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn apply_multi_patch_rejects_whitespace_only_fuzzy_validation() {
+        let content = "    TARGET   \nB\n";
+        let patches = vec![PatchHunk {
+            old_text: "TARGET\n".to_string(),
+            new_text: "TARGET\nEXTRA\n".to_string(),
+            start_line: None,
+            end_line: None,
+        }];
+        let err = apply_multi_patch_to_string(content, &patches).unwrap_err();
+        assert!(err.contains("old_text not found in file"), "unexpected error: {err}");
     }
 
     #[test]
@@ -675,11 +696,12 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
         "get_editor_state" => get_editor_state(editor_state),
         "symbol_search" => symbol_search_tool(workspace_root, &args, app_handle),
         "symbol_resolve" => symbol_resolve_tool(workspace_root, &args, app_handle),
+        "symbol_graph" => symbol_graph_tool(workspace_root, &args, app_handle),
         "symbol_outline" => symbol_outline_tool(workspace_root, &args, app_handle),
         "read_file_range" => read_file_range(workspace_root, &args),
         "apply_edit" | "apply_patch" => apply_edit_tool(workspace_root, &args),
         "get_workspace_structure" => get_workspace_structure(workspace_root, &args),
-        "get_project_index_overview" => get_project_index_overview(workspace_root, &args),
+        "get_project_index_overview" => get_project_index_overview(workspace_root, &args, app_handle),
         "get_project_index_chunk" => get_project_index_chunk(workspace_root, &args),
         "read_many_files" => read_many_files(workspace_root, &args),
         "batch" => batch(workspace_root, &args, editor_state),
@@ -1467,9 +1489,10 @@ fn codebase_investigator(
     ToolResult::ok(serde_json::to_string_pretty(&report_with_metrics).unwrap_or_default())
 }
 
-fn get_project_index_overview(
+fn get_project_index_overview<R: tauri::Runtime>(
     workspace_root: &Path,
     args: &HashMap<String, serde_json::Value>,
+    app_handle: Option<&tauri::AppHandle<R>>,
 ) -> ToolResult {
     let root = match resolve_index_root(workspace_root, args) {
         Ok(root) => root,
@@ -1483,6 +1506,37 @@ fn get_project_index_overview(
         PROJECT_INDEX_OVERVIEW_MAX_CHARS,
     );
     let offset = parse_bounded_usize_arg(args, "offset", 0, usize::MAX);
+
+    if let Ok(service) = language_service_from_app_handle(app_handle) {
+        let scope_root = if root == workspace_root {
+            None
+        } else {
+            Some(root.as_path())
+        };
+        match service.build_semantic_project_overview(scope_root, 8, 6) {
+            Ok(Some(content)) => {
+                let (window, end, total_chars, has_more) = slice_by_char_window(&content, offset, max_chars);
+                let returned_chars = window.chars().count();
+                let result = serde_json::json!({
+                    "tool": "get_project_index_overview",
+                    "workspace_root": root.display().to_string(),
+                    "index_path": serde_json::Value::Null,
+                    "total_chars": total_chars,
+                    "offset": offset,
+                    "end": end,
+                    "returned_chars": returned_chars,
+                    "max_chars": max_chars,
+                    "has_more": has_more,
+                    "next_offset": if has_more { Some(end) } else { None },
+                    "content": window,
+                    "source": "semantic_index",
+                });
+                return ToolResult::ok(serde_json::to_string_pretty(&result).unwrap_or_default());
+            }
+            Ok(None) => {}
+            Err(_) => {}
+        }
+    }
 
     build_project_index_window_result("get_project_index_overview", &root, offset, max_chars)
 }
@@ -2024,6 +2078,49 @@ fn symbol_to_json(symbol: &crate::tree_sitter::Symbol) -> serde_json::Value {
     })
 }
 
+fn symbol_reference_to_json(reference: &crate::symbol_index::SymbolReference) -> serde_json::Value {
+    serde_json::json!({
+        "source_symbol": symbol_to_json(&reference.source_symbol),
+        "relationship_type": reference.relationship_type.to_string(),
+        "target_name": reference.target_name,
+        "target_symbol_id": reference.target_symbol_id,
+        "target_symbol": reference.target_symbol.as_ref().map(symbol_to_json),
+        "line": reference.line,
+    })
+}
+
+fn resolve_symbol_from_graph_args(
+    workspace_root: &Path,
+    service: &crate::language_service::LanguageService,
+    args: &HashMap<String, serde_json::Value>,
+) -> Result<Option<crate::tree_sitter::Symbol>, String> {
+    if let Some(symbol_id) = get_str_arg(args, &["symbol_id", "id"]) {
+        return service.get_symbol(&symbol_id).map_err(|err| err.to_string());
+    }
+
+    let Some(file_path) = get_str_arg(args, &["path", "file", "file_path"]) else {
+        return Err("symbol_graph requires 'symbol_id' or 'path'".to_string());
+    };
+    let file_path = symbol_path_arg(workspace_root, &file_path)?;
+    let qualified_name = get_str_arg(args, &["qualified_name"]);
+    let name = get_str_arg(args, &["name"]);
+    if qualified_name.is_none() && name.is_none() {
+        return Err("symbol_graph requires 'name' or 'qualified_name' when resolving by path".to_string());
+    }
+
+    let symbols = service.get_file_symbols(&file_path).map_err(|err| err.to_string())?;
+    Ok(symbols.into_iter().find(|symbol| {
+        qualified_name
+            .as_ref()
+            .map(|value| &symbol.qualified_name == value)
+            .unwrap_or(false)
+            || name
+                .as_ref()
+                .map(|value| &symbol.name == value)
+                .unwrap_or(false)
+    }))
+}
+
 fn outline_nodes_for_parent(
     by_parent: &HashMap<Option<String>, Vec<crate::tree_sitter::Symbol>>,
     parent_id: Option<&str>,
@@ -2209,6 +2306,116 @@ fn symbol_outline_tool<R: tauri::Runtime>(
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
 }
 
+fn symbol_graph_tool<R: tauri::Runtime>(
+    workspace_root: &Path,
+    args: &HashMap<String, serde_json::Value>,
+    app_handle: Option<&tauri::AppHandle<R>>,
+) -> ToolResult {
+    let service = match language_service_from_app_handle(app_handle) {
+        Ok(service) => service,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    let relationship_type = match get_str_arg(args, &["relationship_type", "edge_kind", "kind"]) {
+        Some(raw) => match raw.parse::<crate::tree_sitter::SymbolRelationshipType>() {
+            Ok(kind) => kind,
+            Err(err) => return ToolResult::err(err),
+        },
+        None => crate::tree_sitter::SymbolRelationshipType::Call,
+    };
+    let limit = parse_bounded_usize_arg(args, "limit", 20, 100);
+
+    let started = Instant::now();
+    let resolved = match resolve_symbol_from_graph_args(workspace_root, service.as_ref(), args) {
+        Ok(symbol) => symbol,
+        Err(err) => return ToolResult::err(err),
+    };
+    let Some(symbol) = resolved else {
+        let payload = serde_json::json!({
+            "symbol": serde_json::Value::Null,
+            "graph": serde_json::Value::Null,
+            "impact_summary": {
+                "incoming_count": 0,
+                "outgoing_count": 0,
+                "hot_files": [],
+                "warning": "symbol not found"
+            },
+            "_meta": {
+                "tool": "symbol_graph",
+                "timing_ms": started.elapsed().as_millis(),
+                "resolved": false,
+                "relationship_type": relationship_type.to_string(),
+                "source": "language_service"
+            }
+        });
+        return ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default());
+    };
+
+    let graph = match service.get_symbol_graph(&symbol, relationship_type, limit) {
+        Ok(graph) => graph,
+        Err(err) => return ToolResult::err(err.to_string()),
+    };
+
+    let mut file_counts: HashMap<String, usize> = HashMap::new();
+    for reference in graph.incoming.iter().chain(graph.outgoing.iter()) {
+        *file_counts
+            .entry(reference.source_symbol.file_path.clone())
+            .or_insert(0) += 1;
+        if let Some(target_symbol) = reference.target_symbol.as_ref() {
+            *file_counts.entry(target_symbol.file_path.clone()).or_insert(0) += 1;
+        }
+    }
+    let mut hot_files = file_counts.into_iter().collect::<Vec<_>>();
+    hot_files.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    let warning = match relationship_type {
+        crate::tree_sitter::SymbolRelationshipType::Call if !graph.incoming.is_empty() => {
+            format!("changing this symbol may affect {} caller(s)", graph.incoming.len())
+        }
+        crate::tree_sitter::SymbolRelationshipType::Export if !graph.incoming.is_empty() => {
+            format!("changing this export may affect {} importer/re-export site(s)", graph.incoming.len())
+        }
+        crate::tree_sitter::SymbolRelationshipType::Contains if !graph.outgoing.is_empty() => {
+            format!("this symbol contains {} nested symbol(s)", graph.outgoing.len())
+        }
+        _ => format!(
+            "graph has {} incoming and {} outgoing {} edge(s)",
+            graph.incoming.len(),
+            graph.outgoing.len(),
+            relationship_type
+        ),
+    };
+
+    let payload = serde_json::json!({
+        "symbol": symbol_to_json(&graph.symbol),
+        "graph": {
+            "relationship_type": relationship_type.to_string(),
+            "incoming": graph.incoming.iter().map(symbol_reference_to_json).collect::<Vec<_>>(),
+            "outgoing": graph.outgoing.iter().map(symbol_reference_to_json).collect::<Vec<_>>(),
+        },
+        "impact_summary": {
+            "incoming_count": graph.incoming.len(),
+            "outgoing_count": graph.outgoing.len(),
+            "hot_files": hot_files.into_iter().take(10).map(|(file_path, edge_count)| {
+                serde_json::json!({
+                    "file_path": file_path,
+                    "edge_count": edge_count,
+                })
+            }).collect::<Vec<_>>(),
+            "warning": warning,
+        },
+        "_meta": {
+            "tool": "symbol_graph",
+            "timing_ms": started.elapsed().as_millis(),
+            "resolved": true,
+            "relationship_type": relationship_type.to_string(),
+            "source": "language_service"
+        }
+    });
+
+    ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
+}
+
 fn get_editor_state(editor_state: Option<&EditorState>) -> ToolResult {
     let Some(state) = editor_state else {
         return ToolResult::err("editor state not available");
@@ -2329,10 +2536,6 @@ pub fn apply_patch_to_string(
     old_text: &str,
     new_text: &str,
 ) -> Result<String, String> {
-    // Strategy 1: Exact Match
-    // Guard against repeated boilerplate blocks (e.g. changelog sections). If old_text
-    // appears multiple times, replacing the first match silently can corrupt unrelated
-    // sections and produce misleading diffs.
     if !old_text.is_empty() {
         let mut exact_matches = content.match_indices(old_text);
         if let Some((pos, _)) = exact_matches.next() {
@@ -2350,7 +2553,6 @@ pub fn apply_patch_to_string(
             return Ok(out);
         }
     } else if let Some(pos) = content.find(old_text) {
-        // Preserve legacy behavior for explicit empty old_text usage.
         let mut out = String::with_capacity(content.len() - old_text.len() + new_text.len());
         out.push_str(&content[..pos]);
         out.push_str(new_text);
@@ -2358,116 +2560,10 @@ pub fn apply_patch_to_string(
         return Ok(out);
     }
 
-    // Strategy 2: Line-by-Line Fuzzy Match (ignoring whitespace differences)
-    let content_lines: Vec<&str> = content.lines().collect();
-    let old_lines: Vec<&str> = old_text.lines().collect();
-
-    // Normalize lines for comparison (trim whitespace)
-    let norm_content_lines: Vec<String> =
-        content_lines.iter().map(|l| l.trim().to_string()).collect();
-    let norm_old_lines: Vec<String> = old_lines.iter().map(|l| l.trim().to_string()).collect();
-
-    // If old_text is empty or just whitespace, we can't fuzzy match safely
-    if norm_old_lines.is_empty() || (norm_old_lines.len() == 1 && norm_old_lines[0].is_empty()) {
-        return Err("old_text not found (exact match failed, fuzzy match skipped for empty/whitespace input)".to_string());
-    }
-
-    // Find all potential matches
-    let mut matches = Vec::new();
-    if content_lines.len() >= old_lines.len() {
-        for i in 0..=(content_lines.len() - old_lines.len()) {
-            if norm_content_lines[i..i + old_lines.len()] == norm_old_lines[..] {
-                matches.push(i);
-            }
-        }
-    }
-
-    if matches.len() == 1 {
-        let start_line_idx = matches[0];
-        let end_line_idx = start_line_idx + old_lines.len();
-
-        // Detect indentation from the first matched line in the original file
-        let original_indent = content_lines[start_line_idx]
-            .chars()
-            .take_while(|c| c.is_whitespace())
-            .collect::<String>();
-
-        // Check if the first line of new_text needs indentation
-        // If new_text has less indentation than original, we might need to fix it
-        let new_lines: Vec<&str> = new_text.lines().collect();
-        let new_text_indent = if !new_lines.is_empty() {
-            new_lines[0]
-                .chars()
-                .take_while(|c| c.is_whitespace())
-                .collect::<String>()
-        } else {
-            String::new()
-        };
-
-        let should_fix_indent = !original_indent.is_empty()
-            && new_text_indent.len() < original_indent.len()
-            && !new_text.trim().is_empty();
-
-        // Reconstruct the file content
-        // 1. Everything before the match
-        let mut out = String::new();
-        for i in 0..start_line_idx {
-            out.push_str(content_lines[i]);
-            out.push('\n');
-        }
-
-        // 2. The NEW text (replacing the matched block) with optional indentation fix
-        if should_fix_indent {
-            for (i, line) in new_lines.iter().enumerate() {
-                if !line.trim().is_empty() {
-                    out.push_str(&original_indent);
-                }
-                out.push_str(line);
-                if i < new_lines.len() - 1 {
-                    out.push('\n');
-                }
-            }
-            if new_text.ends_with('\n') {
-                out.push('\n');
-            }
-        } else {
-            out.push_str(new_text);
-        }
-
-        // 3. Everything after the match
-        if end_line_idx < content_lines.len() {
-            // Ensure newline before appending rest if new_text didn't end with one
-            if !out.ends_with('\n') && !new_text.is_empty() {
-                out.push('\n');
-            }
-
-            for i in end_line_idx..content_lines.len() {
-                out.push_str(content_lines[i]);
-                if i < content_lines.len() - 1 {
-                    out.push('\n');
-                }
-            }
-
-            // Preserve trailing newline from original if it existed
-            if content.ends_with('\n') && !out.ends_with('\n') {
-                out.push('\n');
-            }
-        } else if content.ends_with('\n') && !out.ends_with('\n') {
-            out.push('\n');
-        }
-
-        Ok(out)
-    } else if matches.len() > 1 {
-        Err(format!(
-            "Ambiguous match: found {} occurrences of old_text (ignoring whitespace). Please provide more unique context.",
-            matches.len()
-        ))
-    } else {
-        Err(format!(
-            "old_text not found in file (searched {} chars). Exact match failed. Fuzzy match failed.",
-            old_text.len()
-        ))
-    }
+    Err(format!(
+        "old_text not found in file (searched {} chars). Exact match required; whitespace-normalized fuzzy matching is disabled for safety.",
+        old_text.len()
+    ))
 }
 
 /// Represents a single patch hunk for multi-patch operations
@@ -2499,64 +2595,31 @@ fn apply_multi_patch_to_string(content: &str, patches: &[PatchHunk]) -> Result<S
         return Err("No patches provided".to_string());
     }
 
-    // Phase 1: Validate ALL patches before applying any
-    // This ensures atomicity - we either apply all or none
     let mut validation_errors = Vec::new();
 
     for (idx, patch) in patches.iter().enumerate() {
-        // Count occurrences of old_text
         let count = content.matches(&patch.old_text).count();
 
         if count == 0 {
-            // Try fuzzy match to give better error message
-            let norm_old: Vec<String> = patch
-                .old_text
-                .lines()
-                .map(|l| l.trim().to_string())
-                .collect();
-            let content_lines: Vec<&str> = content.lines().collect();
-            let norm_content: Vec<String> =
-                content_lines.iter().map(|l| l.trim().to_string()).collect();
-
-            let mut fuzzy_count = 0;
-            if !norm_old.is_empty() && content_lines.len() >= norm_old.len() {
-                for i in 0..=(content_lines.len() - norm_old.len()) {
-                    if norm_content[i..i + norm_old.len()] == norm_old[..] {
-                        fuzzy_count += 1;
-                    }
-                }
-            }
-
-            if fuzzy_count == 1 {
-                // Will succeed with fuzzy matching - continue
-            } else if fuzzy_count > 1 {
-                validation_errors.push(format!(
-                    "Patch {}: old_text matches {} times (fuzzy). Add start_line hint or more context.",
-                    idx + 1, fuzzy_count
-                ));
-            } else {
-                validation_errors.push(format!("Patch {}: old_text not found in file", idx + 1));
-            }
+            validation_errors.push(format!("Patch {}: old_text not found in file", idx + 1));
         } else if count > 1 {
-            // TODO: Use start_line/end_line hints to disambiguate
             validation_errors.push(format!(
                 "Patch {}: old_text matches {} times. Add start_line hint or more context.",
                 idx + 1,
                 count
             ));
         }
-        // count == 1 is perfect, no error
     }
 
     if !validation_errors.is_empty() {
         return Err(format!(
-            "Multi-patch validation failed (no changes made):\n{}",
-            validation_errors.join("\n")
+            "Multi-patch validation failed (no changes made):
+{}",
+            validation_errors.join("
+")
         ));
     }
 
-    // Phase 2: Apply patches sequentially
-    // Since we validated all patches, we apply them in order
     let mut working = content.to_string();
 
     for (idx, patch) in patches.iter().enumerate() {
@@ -2565,7 +2628,6 @@ fn apply_multi_patch_to_string(content: &str, patches: &[PatchHunk]) -> Result<S
                 working = new_content;
             }
             Err(e) => {
-                // This shouldn't happen since we validated, but handle gracefully
                 return Err(format!(
                     "Patch {} failed unexpectedly after validation: {}",
                     idx + 1,

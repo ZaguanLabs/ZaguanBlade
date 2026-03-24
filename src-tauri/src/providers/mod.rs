@@ -28,6 +28,9 @@ pub enum ProviderEvent {
     Session {
         session_id: String,
         model: String,
+        planning_mode: Option<bool>,
+        runtime_mode: Option<String>,
+        mode_source: Option<String>,
     },
     Chunk(String),
     ReasoningChunk(String),
@@ -62,7 +65,19 @@ pub enum ProviderEvent {
 impl From<ChatEvent> for ProviderEvent {
     fn from(value: ChatEvent) -> Self {
         match value {
-            ChatEvent::Session { session_id, model } => Self::Session { session_id, model },
+            ChatEvent::Session {
+                session_id,
+                model,
+                planning_mode,
+                runtime_mode,
+                mode_source,
+            } => Self::Session {
+                session_id,
+                model,
+                planning_mode,
+                runtime_mode,
+                mode_source,
+            },
             ChatEvent::Chunk(text) => Self::Chunk(text),
             ChatEvent::ReasoningChunk(text) => Self::ReasoningChunk(text),
             ChatEvent::Research {
@@ -115,8 +130,20 @@ impl From<ChatEvent> for ProviderEvent {
 impl From<ProviderEvent> for ChatEvent {
     fn from(value: ProviderEvent) -> Self {
         match value {
-            ProviderEvent::Session { session_id, model } => {
-                ChatEvent::Session { session_id, model }
+            ProviderEvent::Session {
+                session_id,
+                model,
+                planning_mode,
+                runtime_mode,
+                mode_source,
+            } => {
+                ChatEvent::Session {
+                    session_id,
+                    model,
+                    planning_mode,
+                    runtime_mode,
+                    mode_source,
+                }
             }
             ProviderEvent::Chunk(text) => ChatEvent::Chunk(text),
             ProviderEvent::ReasoningChunk(text) => ChatEvent::ReasoningChunk(text),

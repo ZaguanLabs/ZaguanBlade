@@ -3,6 +3,8 @@
 //! Extracts semantic symbols (functions, classes, methods, etc.) from
 //! tree-sitter AST trees for indexing and context assembly.
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 use tree_sitter::{Node, Tree};
 
@@ -53,6 +55,37 @@ impl std::fmt::Display for SymbolType {
             SymbolType::Impl => "impl",
         };
         write!(f, "{}", s)
+    }
+}
+
+fn extract_import_relationships(
+    file_path: &str,
+    symbols: &[Symbol],
+    relationships: &mut Vec<SymbolRelationship>,
+    seen: &mut HashSet<(String, String, SymbolRelationshipType, u32)>,
+) {
+    for symbol in symbols {
+        if symbol.symbol_type != SymbolType::Import || symbol.name.is_empty() {
+            continue;
+        }
+
+        let key = (
+            symbol.id.clone(),
+            symbol.name.clone(),
+            SymbolRelationshipType::Import,
+            symbol.range.start.line,
+        );
+
+        if seen.insert(key) {
+            relationships.push(SymbolRelationship {
+                source_symbol_id: symbol.id.clone(),
+                source_file_path: file_path.to_string(),
+                target_name: symbol.name.clone(),
+                target_symbol_id: None,
+                relationship_type: SymbolRelationshipType::Import,
+                line: symbol.range.start.line,
+            });
+        }
     }
 }
 
@@ -181,6 +214,57 @@ impl Symbol {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SymbolRelationshipType {
+    Call,
+    Import,
+    Export,
+    Extends,
+    Implements,
+    Contains,
+}
+
+impl std::fmt::Display for SymbolRelationshipType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            SymbolRelationshipType::Call => "call",
+            SymbolRelationshipType::Import => "import",
+            SymbolRelationshipType::Export => "export",
+            SymbolRelationshipType::Extends => "extends",
+            SymbolRelationshipType::Implements => "implements",
+            SymbolRelationshipType::Contains => "contains",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+impl std::str::FromStr for SymbolRelationshipType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "call" => Ok(SymbolRelationshipType::Call),
+            "import" => Ok(SymbolRelationshipType::Import),
+            "export" => Ok(SymbolRelationshipType::Export),
+            "extends" => Ok(SymbolRelationshipType::Extends),
+            "implements" => Ok(SymbolRelationshipType::Implements),
+            "contains" => Ok(SymbolRelationshipType::Contains),
+            _ => Err(format!("Unknown relationship type: {}", s)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolRelationship {
+    pub source_symbol_id: String,
+    pub source_file_path: String,
+    pub target_name: String,
+    pub target_symbol_id: Option<String>,
+    pub relationship_type: SymbolRelationshipType,
+    pub line: u32,
+}
+
 /// Symbol extractor for extracting symbols from AST trees
 pub struct SymbolExtractor {
     file_path: String,
@@ -284,6 +368,16 @@ impl SymbolExtractor {
         let range = Range::from_node(node);
 
         match kind {
+            "import_statement" => {
+                let text = node.utf8_text(source.as_bytes()).ok()?;
+                let name = self.extract_quoted_text(text)?;
+                Some(Symbol::new(
+                    name,
+                    SymbolType::Import,
+                    self.file_path.clone(),
+                    range,
+                ))
+            }
             "function_declaration" | "function" => {
                 let name = self.get_child_text(node, "name", source)?;
                 Some(Symbol::new(
@@ -395,6 +489,26 @@ impl SymbolExtractor {
         let range = Range::from_node(node);
 
         match kind {
+            "import_statement" => {
+                let text = node.utf8_text(source.as_bytes()).ok()?;
+                let name = self.extract_python_import_target(text)?;
+                Some(Symbol::new(
+                    name,
+                    SymbolType::Import,
+                    self.file_path.clone(),
+                    range,
+                ))
+            }
+            "import_from_statement" => {
+                let text = node.utf8_text(source.as_bytes()).ok()?;
+                let name = self.extract_python_from_import_target(text)?;
+                Some(Symbol::new(
+                    name,
+                    SymbolType::Import,
+                    self.file_path.clone(),
+                    range,
+                ))
+            }
             "function_definition" => {
                 let name = self.get_child_text(node, "name", source)?;
                 // Check if it's a method (inside a class)
@@ -432,6 +546,16 @@ impl SymbolExtractor {
         let range = Range::from_node(node);
 
         match kind {
+            "use_declaration" => {
+                let text = node.utf8_text(source.as_bytes()).ok()?;
+                let name = self.extract_rust_use_target(text)?;
+                Some(Symbol::new(
+                    name,
+                    SymbolType::Import,
+                    self.file_path.clone(),
+                    range,
+                ))
+            }
             "function_item" => {
                 let name = self.get_child_text(node, "name", source)?;
                 Some(Symbol::new(
@@ -519,6 +643,50 @@ impl SymbolExtractor {
             .map(|s| s.to_string())
     }
 
+    fn extract_quoted_text(&self, text: &str) -> Option<String> {
+        let start = text.find(['"', '\''])?;
+        let quote = text[start..].chars().next()?;
+        let rest = &text[start + quote.len_utf8()..];
+        let end = rest.find(quote)?;
+        Some(rest[..end].to_string())
+    }
+
+    fn extract_python_import_target(&self, text: &str) -> Option<String> {
+        let trimmed = text.trim();
+        let imports = trimmed.strip_prefix("import ")?.trim();
+        imports
+            .split(',')
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    }
+
+    fn extract_python_from_import_target(&self, text: &str) -> Option<String> {
+        let trimmed = text.trim();
+        let after_from = trimmed.strip_prefix("from ")?;
+        let end = after_from.find(" import")?;
+        let target = after_from[..end].trim();
+        if target.is_empty() {
+            None
+        } else {
+            Some(target.to_string())
+        }
+    }
+
+    fn extract_rust_use_target(&self, text: &str) -> Option<String> {
+        let trimmed = text.trim();
+        let target = trimmed
+            .strip_prefix("use ")?
+            .trim_end_matches(';')
+            .trim();
+        if target.is_empty() {
+            None
+        } else {
+            Some(target.to_string())
+        }
+    }
+
     fn extract_docstring(&self, node: &Node, source: &str, _language: Language) -> Option<String> {
         // Look for comment node immediately before this node
         if let Some(prev) = node.prev_sibling() {
@@ -594,6 +762,517 @@ pub fn extract_symbols(
     extractor.extract(tree, source, language)
 }
 
+pub fn extract_symbol_relationships(
+    tree: &Tree,
+    source: &str,
+    language: Language,
+    file_path: &str,
+    symbols: &[Symbol],
+) -> Vec<SymbolRelationship> {
+    let mut relationships = Vec::new();
+    let mut seen = HashSet::new();
+    extract_relationships_from_node(
+        tree.root_node(),
+        source,
+        language,
+        file_path,
+        symbols,
+        &mut relationships,
+        &mut seen,
+    );
+    extract_import_relationships(file_path, symbols, &mut relationships, &mut seen);
+    extract_structural_relationships_from_node(
+        tree.root_node(),
+        source,
+        language,
+        file_path,
+        symbols,
+        &mut relationships,
+        &mut seen,
+    );
+    relationships
+}
+
+fn extract_structural_relationships_from_node(
+    node: Node,
+    source: &str,
+    language: Language,
+    file_path: &str,
+    symbols: &[Symbol],
+    relationships: &mut Vec<SymbolRelationship>,
+    seen: &mut HashSet<(String, String, SymbolRelationshipType, u32)>,
+) {
+    match language {
+        Language::TypeScript | Language::Tsx | Language::JavaScript | Language::Jsx => {
+            extract_typescript_structural_relationships(node, source, file_path, symbols, relationships, seen)
+        }
+        Language::Python => {
+            extract_python_structural_relationships(node, source, file_path, symbols, relationships, seen)
+        }
+        Language::Rust => {
+            extract_rust_structural_relationships(node, source, file_path, symbols, relationships, seen)
+        }
+    }
+
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i as u32) {
+            extract_structural_relationships_from_node(
+                child,
+                source,
+                language,
+                file_path,
+                symbols,
+                relationships,
+                seen,
+            );
+        }
+    }
+}
+
+fn extract_typescript_structural_relationships(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    symbols: &[Symbol],
+    relationships: &mut Vec<SymbolRelationship>,
+    seen: &mut HashSet<(String, String, SymbolRelationshipType, u32)>,
+) {
+    let kind = node.kind();
+    if kind != "class_declaration" && kind != "class" && kind != "interface_declaration" {
+        return;
+    }
+
+    let Some(source_symbol) = find_enclosing_symbol(symbols, &Range::from_node(&node)) else {
+        return;
+    };
+    let Ok(text) = node.utf8_text(source.as_bytes()) else {
+        return;
+    };
+    let header = text.split('{').next().unwrap_or(text);
+    let line = node.start_position().row as u32;
+
+    if kind == "class_declaration" || kind == "class" {
+        if let Some(tail) = extract_text_after_keyword(header, "extends") {
+            let base_segment = tail.split(" implements ").next().unwrap_or(tail).trim();
+            if let Some(target_name) = normalize_reference_name(base_segment) {
+                push_relationship(
+                    relationships,
+                    seen,
+                    source_symbol,
+                    file_path,
+                    target_name,
+                    SymbolRelationshipType::Extends,
+                    line,
+                );
+            }
+        }
+
+        if let Some(tail) = extract_text_after_keyword(header, "implements") {
+            for target_name in split_reference_list(tail) {
+                push_relationship(
+                    relationships,
+                    seen,
+                    source_symbol,
+                    file_path,
+                    target_name,
+                    SymbolRelationshipType::Implements,
+                    line,
+                );
+            }
+        }
+    }
+
+    if kind == "interface_declaration" {
+        if let Some(tail) = extract_text_after_keyword(header, "extends") {
+            for target_name in split_reference_list(tail) {
+                push_relationship(
+                    relationships,
+                    seen,
+                    source_symbol,
+                    file_path,
+                    target_name,
+                    SymbolRelationshipType::Extends,
+                    line,
+                );
+            }
+        }
+    }
+}
+
+fn extract_python_structural_relationships(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    symbols: &[Symbol],
+    relationships: &mut Vec<SymbolRelationship>,
+    seen: &mut HashSet<(String, String, SymbolRelationshipType, u32)>,
+) {
+    if node.kind() != "class_definition" {
+        return;
+    }
+
+    let Some(source_symbol) = find_enclosing_symbol(symbols, &Range::from_node(&node)) else {
+        return;
+    };
+    let Ok(text) = node.utf8_text(source.as_bytes()) else {
+        return;
+    };
+    let header = text.lines().next().unwrap_or(text).trim();
+    let Some(start_idx) = header.find('(') else {
+        return;
+    };
+    let Some(end_idx) = header[start_idx + 1..].find(')') else {
+        return;
+    };
+    let bases = &header[start_idx + 1..start_idx + 1 + end_idx];
+    let line = node.start_position().row as u32;
+
+    for target_name in split_reference_list(bases) {
+        push_relationship(
+            relationships,
+            seen,
+            source_symbol,
+            file_path,
+            target_name,
+            SymbolRelationshipType::Extends,
+            line,
+        );
+    }
+}
+
+fn extract_rust_structural_relationships(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    symbols: &[Symbol],
+    relationships: &mut Vec<SymbolRelationship>,
+    seen: &mut HashSet<(String, String, SymbolRelationshipType, u32)>,
+) {
+    if node.kind() != "impl_item" {
+        return;
+    }
+
+    let Ok(text) = node.utf8_text(source.as_bytes()) else {
+        return;
+    };
+    let header = text.split('{').next().unwrap_or(text).trim();
+    let Some(after_impl) = header.strip_prefix("impl") else {
+        return;
+    };
+    let after_impl = strip_leading_generic_block(after_impl.trim());
+    let Some((trait_part, type_part)) = after_impl.split_once(" for ") else {
+        return;
+    };
+    let Some(type_name) = normalize_reference_name(type_part) else {
+        return;
+    };
+    let Some(trait_name) = normalize_reference_name(trait_part) else {
+        return;
+    };
+    let Some(source_symbol) = find_symbol_by_name(symbols, &type_name) else {
+        return;
+    };
+
+    push_relationship(
+        relationships,
+        seen,
+        source_symbol,
+        file_path,
+        trait_name,
+        SymbolRelationshipType::Implements,
+        node.start_position().row as u32,
+    );
+}
+
+fn push_relationship(
+    relationships: &mut Vec<SymbolRelationship>,
+    seen: &mut HashSet<(String, String, SymbolRelationshipType, u32)>,
+    source_symbol: &Symbol,
+    file_path: &str,
+    target_name: String,
+    relationship_type: SymbolRelationshipType,
+    line: u32,
+) {
+    if target_name.is_empty() {
+        return;
+    }
+
+    let key = (
+        source_symbol.id.clone(),
+        target_name.clone(),
+        relationship_type,
+        line,
+    );
+
+    if seen.insert(key) {
+        relationships.push(SymbolRelationship {
+            source_symbol_id: source_symbol.id.clone(),
+            source_file_path: file_path.to_string(),
+            target_name,
+            target_symbol_id: None,
+            relationship_type,
+            line,
+        });
+    }
+}
+
+fn extract_text_after_keyword<'a>(text: &'a str, keyword: &str) -> Option<&'a str> {
+    let needle = format!(" {} ", keyword);
+    let idx = text.find(&needle)?;
+    Some(text[idx + needle.len()..].trim())
+}
+
+fn split_reference_list(segment: &str) -> Vec<String> {
+    let mut items = Vec::new();
+    let mut current = String::new();
+    let mut angle_depth = 0u32;
+    let mut paren_depth = 0u32;
+    let mut bracket_depth = 0u32;
+
+    for ch in segment.chars() {
+        match ch {
+            '<' => {
+                angle_depth = angle_depth.saturating_add(1);
+                current.push(ch);
+            }
+            '>' => {
+                angle_depth = angle_depth.saturating_sub(1);
+                current.push(ch);
+            }
+            '(' => {
+                paren_depth = paren_depth.saturating_add(1);
+                current.push(ch);
+            }
+            ')' => {
+                paren_depth = paren_depth.saturating_sub(1);
+                current.push(ch);
+            }
+            '[' => {
+                bracket_depth = bracket_depth.saturating_add(1);
+                current.push(ch);
+            }
+            ']' => {
+                bracket_depth = bracket_depth.saturating_sub(1);
+                current.push(ch);
+            }
+            ',' if angle_depth == 0 && paren_depth == 0 && bracket_depth == 0 => {
+                if let Some(value) = normalize_reference_name(&current) {
+                    items.push(value);
+                }
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if let Some(value) = normalize_reference_name(&current) {
+        items.push(value);
+    }
+
+    items
+}
+
+fn normalize_reference_name(raw: &str) -> Option<String> {
+    let mut value = raw.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    if let Some(prefix) = value.strip_prefix("dyn ") {
+        value = prefix.trim();
+    }
+    if let Some(prefix) = value.strip_prefix('&') {
+        value = prefix.trim();
+    }
+    if let Some(prefix) = value.strip_prefix("mut ") {
+        value = prefix.trim();
+    }
+
+    value = value
+        .trim_end_matches('{')
+        .trim_end_matches(':')
+        .trim_end_matches(';')
+        .trim();
+
+    let value = value.split('<').next().unwrap_or(value).trim();
+    let value = value.split('(').next().unwrap_or(value).trim();
+    let value = value.split_whitespace().next().unwrap_or(value).trim();
+    let value = value.rsplit("::").next().unwrap_or(value).trim();
+    let value = value.rsplit('.').next().unwrap_or(value).trim();
+
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn strip_leading_generic_block(text: &str) -> &str {
+    let trimmed = text.trim();
+    if !trimmed.starts_with('<') {
+        return trimmed;
+    }
+
+    let mut depth = 0u32;
+    for (idx, ch) in trimmed.char_indices() {
+        match ch {
+            '<' => depth = depth.saturating_add(1),
+            '>' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return trimmed[idx + ch.len_utf8()..].trim();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    trimmed
+}
+
+fn find_symbol_by_name<'a>(symbols: &'a [Symbol], name: &str) -> Option<&'a Symbol> {
+    symbols
+        .iter()
+        .find(|symbol| symbol.name == name && symbol.symbol_type != SymbolType::Import)
+}
+
+fn extract_relationships_from_node(
+    node: Node,
+    source: &str,
+    language: Language,
+    file_path: &str,
+    symbols: &[Symbol],
+    relationships: &mut Vec<SymbolRelationship>,
+    seen: &mut HashSet<(String, String, SymbolRelationshipType, u32)>,
+) {
+    if let Some(target_name) = extract_relationship_target_name(&node, source, language) {
+        if let Some(source_symbol) = find_enclosing_symbol(symbols, &Range::from_node(&node)) {
+            let key = (
+                source_symbol.id.clone(),
+                target_name.clone(),
+                SymbolRelationshipType::Call,
+                node.start_position().row as u32,
+            );
+
+            if seen.insert(key) {
+                relationships.push(SymbolRelationship {
+                    source_symbol_id: source_symbol.id.clone(),
+                    source_file_path: file_path.to_string(),
+                    target_name,
+                    target_symbol_id: None,
+                    relationship_type: SymbolRelationshipType::Call,
+                    line: node.start_position().row as u32,
+                });
+            }
+        }
+    }
+
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i as u32) {
+            extract_relationships_from_node(
+                child,
+                source,
+                language,
+                file_path,
+                symbols,
+                relationships,
+                seen,
+            );
+        }
+    }
+}
+
+fn extract_relationship_target_name(node: &Node, source: &str, language: Language) -> Option<String> {
+    match language {
+        Language::TypeScript | Language::Tsx | Language::JavaScript | Language::Jsx => {
+            if node.kind() != "call_expression" {
+                return None;
+            }
+            let callee = node.child_by_field_name("function")?;
+            extract_callable_name(&callee, source)
+        }
+        Language::Python => {
+            if node.kind() != "call" {
+                return None;
+            }
+            let callee = node.child_by_field_name("function")?;
+            extract_callable_name(&callee, source)
+        }
+        Language::Rust => {
+            if node.kind() != "call_expression" {
+                return None;
+            }
+            let callee = node.child_by_field_name("function")?;
+            extract_callable_name(&callee, source)
+        }
+    }
+}
+
+fn extract_callable_name(node: &Node, source: &str) -> Option<String> {
+    match node.kind() {
+        "identifier" | "property_identifier" | "field_identifier" | "type_identifier" => {
+            node.utf8_text(source.as_bytes()).ok().map(|s| s.to_string())
+        }
+        "member_expression" | "member_access_expression" | "field_expression" => {
+            if let Some(child) = node
+                .child_by_field_name("property")
+                .or_else(|| node.child_by_field_name("field"))
+                .or_else(|| last_named_child(node))
+            {
+                extract_callable_name(&child, source)
+            } else {
+                None
+            }
+        }
+        "attribute" => {
+            if let Some(child) = node
+                .child_by_field_name("attribute")
+                .or_else(|| last_named_child(node))
+            {
+                extract_callable_name(&child, source)
+            } else {
+                None
+            }
+        }
+        "scoped_identifier" | "qualified_identifier" => {
+            last_named_child(node).and_then(|child| extract_callable_name(&child, source))
+        }
+        _ => None,
+    }
+}
+
+fn last_named_child<'tree>(node: &Node<'tree>) -> Option<Node<'tree>> {
+    let count = node.named_child_count();
+    if count == 0 {
+        None
+    } else {
+        node.named_child((count - 1) as u32)
+    }
+}
+
+fn find_enclosing_symbol<'a>(symbols: &'a [Symbol], range: &Range) -> Option<&'a Symbol> {
+    symbols
+        .iter()
+        .filter(|symbol| symbol_contains_range(symbol, range))
+        .min_by_key(|symbol| {
+            let line_span = symbol.range.end.line.saturating_sub(symbol.range.start.line);
+            let char_span = symbol
+                .range
+                .end
+                .character
+                .saturating_sub(symbol.range.start.character);
+            (line_span, char_span)
+        })
+}
+
+fn symbol_contains_range(symbol: &Symbol, range: &Range) -> bool {
+    starts_before_or_at(symbol.range.start, range.start) && starts_before_or_at(range.end, symbol.range.end)
+}
+
+fn starts_before_or_at(left: Position, right: Position) -> bool {
+    left.line < right.line || (left.line == right.line && left.character <= right.character)
+}
+
 fn stable_symbol_id(file_path: &str, qualified_name: &str, symbol_type: SymbolType) -> String {
     format!("{}::{}#{}", file_path, qualified_name, symbol_type)
 }
@@ -647,6 +1326,135 @@ class UserService {
         assert!(symbols
             .iter()
             .any(|s| s.name == "getUser" && s.symbol_type == SymbolType::Method));
+    }
+
+    #[test]
+    fn test_extract_typescript_import() {
+        let mut parser = TreeSitterParser::new().unwrap();
+        let code = "import { helper } from './utils';\nfunction main() { helper(); }";
+        let tree = parser.parse(code, Language::TypeScript).unwrap();
+        let symbols = extract_symbols(&tree, code, Language::TypeScript, "main.ts");
+
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "./utils" && s.symbol_type == SymbolType::Import));
+    }
+
+    #[test]
+    fn test_extract_typescript_call_relationships() {
+        let mut parser = TreeSitterParser::new().unwrap();
+        let code = r#"
+function helperName(): string {
+    return "helper";
+}
+
+function greetUser(): string {
+    return helperName();
+}
+"#;
+        let tree = parser.parse(code, Language::TypeScript).unwrap();
+        let symbols = extract_symbols(&tree, code, Language::TypeScript, "main.ts");
+        let relationships = extract_symbol_relationships(&tree, code, Language::TypeScript, "main.ts", &symbols);
+
+        assert!(relationships.iter().any(|relationship| {
+            relationship.target_name == "helperName"
+                && relationship.relationship_type == SymbolRelationshipType::Call
+        }));
+    }
+
+    #[test]
+    fn test_extract_typescript_import_relationships() {
+        let mut parser = TreeSitterParser::new().unwrap();
+        let code = r#"
+import { helper } from "./utils";
+
+function run(): string {
+    return helper();
+}
+"#;
+        let tree = parser.parse(code, Language::TypeScript).unwrap();
+        let symbols = extract_symbols(&tree, code, Language::TypeScript, "main.ts");
+        let relationships = extract_symbol_relationships(&tree, code, Language::TypeScript, "main.ts", &symbols);
+
+        assert!(relationships.iter().any(|relationship| {
+            relationship.target_name == "./utils"
+                && relationship.relationship_type == SymbolRelationshipType::Import
+        }));
+    }
+
+    #[test]
+    fn test_extract_typescript_structural_relationships() {
+        let mut parser = TreeSitterParser::new().unwrap();
+        let code = r#"
+interface Service extends BaseService, Auditable {}
+
+class UserService extends CoreService implements Service, Disposable {
+    run() {}
+}
+"#;
+        let tree = parser.parse(code, Language::TypeScript).unwrap();
+        let symbols = extract_symbols(&tree, code, Language::TypeScript, "service.ts");
+        let relationships = extract_symbol_relationships(&tree, code, Language::TypeScript, "service.ts", &symbols);
+
+        assert!(relationships.iter().any(|relationship| {
+            relationship.source_symbol_id == "service.ts::Service#interface"
+                && relationship.target_name == "BaseService"
+                && relationship.relationship_type == SymbolRelationshipType::Extends
+        }));
+        assert!(relationships.iter().any(|relationship| {
+            relationship.source_symbol_id == "service.ts::UserService#class"
+                && relationship.target_name == "CoreService"
+                && relationship.relationship_type == SymbolRelationshipType::Extends
+        }));
+        assert!(relationships.iter().any(|relationship| {
+            relationship.source_symbol_id == "service.ts::UserService#class"
+                && relationship.target_name == "Service"
+                && relationship.relationship_type == SymbolRelationshipType::Implements
+        }));
+    }
+
+    #[test]
+    fn test_extract_python_class_extends_relationships() {
+        let mut parser = TreeSitterParser::new().unwrap();
+        let code = r#"
+class Service(BaseService, Auditable):
+    pass
+"#;
+        let tree = parser.parse(code, Language::Python).unwrap();
+        let symbols = extract_symbols(&tree, code, Language::Python, "service.py");
+        let relationships = extract_symbol_relationships(&tree, code, Language::Python, "service.py", &symbols);
+
+        assert!(relationships.iter().any(|relationship| {
+            relationship.source_symbol_id == "service.py::Service#class"
+                && relationship.target_name == "BaseService"
+                && relationship.relationship_type == SymbolRelationshipType::Extends
+        }));
+        assert!(relationships.iter().any(|relationship| {
+            relationship.source_symbol_id == "service.py::Service#class"
+                && relationship.target_name == "Auditable"
+                && relationship.relationship_type == SymbolRelationshipType::Extends
+        }));
+    }
+
+    #[test]
+    fn test_extract_rust_impl_relationships() {
+        let mut parser = TreeSitterParser::new().unwrap();
+        let code = r#"
+trait Renderable {}
+
+struct Button;
+
+impl Renderable for Button {}
+"#;
+        let tree = parser.parse(code, Language::Rust).unwrap();
+        let symbols = extract_symbols(&tree, code, Language::Rust, "lib.rs");
+        let relationships = extract_symbol_relationships(&tree, code, Language::Rust, "lib.rs", &symbols);
+
+        assert!(relationships.iter().any(|relationship| {
+            relationship.source_symbol_id == "lib.rs::Button#struct"
+                && relationship.target_name == "Renderable"
+                && relationship.relationship_type == SymbolRelationshipType::Implements
+        }));
     }
 
     #[test]

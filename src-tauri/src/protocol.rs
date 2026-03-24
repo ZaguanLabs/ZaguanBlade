@@ -85,6 +85,9 @@ pub enum ChatEvent {
     Session {
         session_id: String,
         model: String,
+        planning_mode: Option<bool>,
+        runtime_mode: Option<String>,
+        mode_source: Option<String>,
     },
     Chunk(String),
     ReasoningChunk(String),

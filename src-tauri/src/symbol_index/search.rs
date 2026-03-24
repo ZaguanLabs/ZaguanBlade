@@ -3,6 +3,8 @@
 //! Provides structured queries and result types for searching
 //! the symbol index.
 
+use std::collections::HashSet;
+
 use super::store::{SymbolStore, SymbolStoreError};
 use crate::tree_sitter::{Symbol, SymbolType};
 use serde::{Deserialize, Serialize};
@@ -20,6 +22,9 @@ pub struct SearchQuery {
     pub limit: Option<usize>,
     /// Include symbols from subdirectories
     pub recursive: bool,
+    pub active_file: Option<String>,
+    pub preferred_files: Vec<String>,
+    pub preferred_directories: Vec<String>,
 }
 
 impl SearchQuery {
@@ -68,6 +73,21 @@ impl SearchQuery {
     /// Add type filter
     pub fn with_types(mut self, types: Vec<SymbolType>) -> Self {
         self.symbol_types = Some(types);
+        self
+    }
+
+    pub fn with_active_file(mut self, file_path: &str) -> Self {
+        self.active_file = Some(file_path.to_string());
+        self
+    }
+
+    pub fn with_preferred_files(mut self, file_paths: Vec<String>) -> Self {
+        self.preferred_files = file_paths;
+        self
+    }
+
+    pub fn with_preferred_directories(mut self, directories: Vec<String>) -> Self {
+        self.preferred_directories = directories;
         self
     }
 }
@@ -147,6 +167,8 @@ pub fn execute_search(
             }
         }
 
+        apply_contextual_boosts(&mut results, query);
+
         // Sort by score and limit
         results.sort_by(|a, b| {
             b.score
@@ -170,6 +192,81 @@ pub fn execute_search(
     }
 
     Ok(vec![])
+}
+
+fn apply_contextual_boosts(results: &mut [SearchResult], query: &SearchQuery) {
+    if query.active_file.is_none()
+        && query.preferred_files.is_empty()
+        && query.preferred_directories.is_empty()
+    {
+        return;
+    }
+
+    let active_directory = query.active_file.as_deref().and_then(parent_directory);
+
+    for result in results.iter_mut() {
+        if query
+            .active_file
+            .as_ref()
+            .is_some_and(|active| active == &result.symbol.file_path)
+        {
+            result.score += 0.35;
+        } else if query
+            .preferred_files
+            .iter()
+            .any(|path| path == &result.symbol.file_path)
+        {
+            result.score += 0.15;
+        }
+
+        if active_directory
+            .is_some_and(|dir| same_directory(dir, &result.symbol.file_path))
+        {
+            result.score += 0.12;
+        } else if query
+            .preferred_directories
+            .iter()
+            .any(|dir| same_directory(dir, &result.symbol.file_path))
+        {
+            result.score += 0.07;
+        }
+
+        if result.symbol.qualified_name.eq_ignore_ascii_case(result.symbol.name.as_str()) {
+            result.score += 0.02;
+        }
+    }
+}
+
+pub fn collect_preferred_directories(
+    active_file: Option<&str>,
+    preferred_files: &[String],
+) -> Vec<String> {
+    let mut directories = Vec::new();
+    let mut seen = HashSet::new();
+
+    if let Some(dir) = active_file.and_then(parent_directory) {
+        if seen.insert(dir.to_string()) {
+            directories.push(dir.to_string());
+        }
+    }
+
+    for path in preferred_files {
+        if let Some(dir) = parent_directory(path) {
+            if seen.insert(dir.to_string()) {
+                directories.push(dir.to_string());
+            }
+        }
+    }
+
+    directories
+}
+
+fn parent_directory(path: &str) -> Option<&str> {
+    path.rsplit_once('/').map(|(dir, _)| dir)
+}
+
+fn same_directory(directory: &str, file_path: &str) -> bool {
+    parent_directory(file_path).is_some_and(|candidate| candidate == directory)
 }
 
 /// Filter symbols by type

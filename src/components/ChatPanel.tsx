@@ -14,6 +14,7 @@ import { ProgressIndicator } from './ProgressIndicator';
 import { GlobalChangeActions } from './editor/GlobalChangeActions';
 import { TaskPanel } from './TaskPanel';
 import { QueuePanel } from './QueuePanel';
+import { AgentRunStatusBar } from './AgentRunStatusBar';
 import type { UncommittedChange } from '../types/uncommitted';
 import { deriveChatRows, estimateChatRowHeight, findFirstUnvirtualizedChatRowIndex } from '../utils/chatTimeline';
 
@@ -165,6 +166,13 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     const [showScrollToBottom, setShowScrollToBottom] = useState(false);
     const showScrollToBottomRef = useRef(false);
     const canUseAi = models.length > 0;
+    const rowElementsRef = useRef(new Map<string, HTMLDivElement>());
+    const activityElementsRef = useRef(new Map<string, HTMLDivElement>());
+    const jumpHighlightTimersRef = useRef(new WeakMap<HTMLElement, number>());
+    const [pendingRowJumpKey, setPendingRowJumpKey] = useState<string | null>(null);
+    const [pendingActivityJumpKey, setPendingActivityJumpKey] = useState<string | null>(null);
+    const taskPanelRef = useRef<HTMLDivElement>(null);
+    const queuePanelRef = useRef<HTMLDivElement>(null);
     const [scrollMetrics, setScrollMetrics] = useState({
         scrollTop: 0,
         viewportHeight: 0,
@@ -285,6 +293,43 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         () => virtualizedRows.slice(visibleVirtualRange.startIndex, visibleVirtualRange.endIndex),
         [virtualizedRows, visibleVirtualRange.endIndex, visibleVirtualRange.startIndex]
     );
+    const rowIndexByKey = useMemo(() => {
+        const indexMap = new Map<string, number>();
+        chatRows.forEach((row, index) => {
+            indexMap.set(row.key, index);
+        });
+        return indexMap;
+    }, [chatRows]);
+    const approvalTargetKey = useMemo(
+        () => pendingActions?.[0]?.id ? `approval:${pendingActions[0].id}` : null,
+        [pendingActions],
+    );
+    const approvalRowKey = useMemo(
+        () => chatRows.find((row) => (row.pendingActions?.length ?? 0) > 0)?.key ?? null,
+        [chatRows],
+    );
+    const activeStepTargetKey = useMemo(
+        () => toolActivity?.toolCallId ? `tool:${toolActivity.toolCallId}` : null,
+        [toolActivity?.toolCallId],
+    );
+    const activeStepRowKey = useMemo(() => {
+        if (toolActivity?.toolCallId) {
+            const matchingRow = [...chatRows].reverse().find((row) =>
+                row.message.tool_calls?.some((toolCall) => toolCall.id === toolActivity.toolCallId),
+            );
+            if (matchingRow) {
+                return matchingRow.key;
+            }
+        }
+
+        const activeRow = chatRows.find((row) => row.isActive);
+        if (activeRow) {
+            return activeRow.key;
+        }
+
+        const lastAssistantRow = [...chatRows].reverse().find((row) => row.message.role === 'Assistant');
+        return lastAssistantRow?.key ?? null;
+    }, [chatRows, toolActivity?.toolCallId]);
     const streamingSignature = useMemo(() => {
         if (!lastMessage) return '';
         return [
@@ -380,6 +425,119 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
             setShowScrollToBottom(nextShowScrollToBottom);
         }
     }, [messageCount]);
+
+    const registerRowElement = useCallback((rowKey: string, element: HTMLDivElement | null) => {
+        if (element) {
+            rowElementsRef.current.set(rowKey, element);
+            return;
+        }
+        rowElementsRef.current.delete(rowKey);
+    }, []);
+
+    const registerActivityTarget = useCallback((targetKey: string, element: HTMLDivElement | null) => {
+        if (element) {
+            activityElementsRef.current.set(targetKey, element);
+            return;
+        }
+        activityElementsRef.current.delete(targetKey);
+    }, []);
+
+    const flashJumpTarget = useCallback((element: HTMLElement | null) => {
+        if (!element) {
+            return;
+        }
+
+        const activeTimer = jumpHighlightTimersRef.current.get(element);
+        if (activeTimer) {
+            window.clearTimeout(activeTimer);
+        }
+
+        element.style.transition = 'box-shadow 180ms ease, background-color 180ms ease';
+        element.style.boxShadow = '0 0 0 1px color-mix(in srgb, var(--accent-primary) 42%, transparent)';
+        element.style.backgroundColor = 'color-mix(in srgb, var(--accent-primary) 8%, transparent)';
+
+        const timerId = window.setTimeout(() => {
+            element.style.boxShadow = '';
+            element.style.backgroundColor = '';
+            element.style.transition = '';
+            jumpHighlightTimersRef.current.delete(element);
+        }, 1400);
+
+        jumpHighlightTimersRef.current.set(element, timerId);
+    }, []);
+
+    const scrollToActivityTarget = useCallback((targetKey: string | null) => {
+        if (!targetKey) {
+            return false;
+        }
+        const targetElement = activityElementsRef.current.get(targetKey);
+        if (!targetElement) {
+            return false;
+        }
+        targetElement.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        flashJumpTarget(targetElement);
+        return true;
+    }, [flashJumpTarget]);
+
+    const scrollToRow = useCallback((rowKey: string, activityTargetKey?: string | null) => {
+        const container = scrollContainerRef.current;
+        if (!container) return;
+
+        const rowIndex = rowIndexByKey.get(rowKey);
+        if (rowIndex === undefined) return;
+
+        if (rowIndex < firstUnvirtualizedRowIndex) {
+            const targetTop = Math.max(0, (virtualizedRowOffsets[rowIndex] ?? 0) - 120);
+            container.scrollTo({ top: targetTop, behavior: 'smooth' });
+            requestAnimationFrame(() => {
+                if (scrollToActivityTarget(activityTargetKey ?? null)) {
+                    return;
+                }
+                const rowElement = rowElementsRef.current.get(rowKey);
+                rowElement?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                flashJumpTarget(rowElement ?? null);
+            });
+            return;
+        }
+
+        if (scrollToActivityTarget(activityTargetKey ?? null)) {
+            return;
+        }
+        const rowElement = rowElementsRef.current.get(rowKey);
+        rowElement?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        flashJumpTarget(rowElement ?? null);
+    }, [firstUnvirtualizedRowIndex, flashJumpTarget, rowIndexByKey, scrollToActivityTarget, virtualizedRowOffsets]);
+
+    const jumpToRow = useCallback((rowKey: string | null, activityTargetKey?: string | null) => {
+        if (!rowKey) return;
+        if (activeTab !== 'chat') {
+            setPendingRowJumpKey(rowKey);
+            setPendingActivityJumpKey(activityTargetKey ?? null);
+            setActiveTab('chat');
+            return;
+        }
+        scrollToRow(rowKey, activityTargetKey);
+    }, [activeTab, scrollToRow]);
+
+    useEffect(() => {
+        if (activeTab !== 'chat' || !pendingRowJumpKey) {
+            return;
+        }
+        const rafId = requestAnimationFrame(() => {
+            scrollToRow(pendingRowJumpKey, pendingActivityJumpKey);
+            setPendingRowJumpKey(null);
+            setPendingActivityJumpKey(null);
+        });
+        return () => cancelAnimationFrame(rafId);
+    }, [activeTab, pendingActivityJumpKey, pendingRowJumpKey, scrollToRow]);
+
+    const jumpToTaskPanel = useCallback(() => {
+        taskPanelRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }, []);
+
+    const jumpToQueue = useCallback(() => {
+        queuePanelRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }, []);
 
     const handleNewConversation = () => {
         onNewConversation();
@@ -497,20 +655,22 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                         )}
 
                         {visibleVirtualRows.map((row) => (
-                            <ChatMessage
-                                key={row.key}
-                                message={row.message}
-                                pendingActions={row.pendingActions}
-                                onApproveCommand={row.pendingActions ? handleApproveCommand : undefined}
-                                onSkipCommand={row.pendingActions ? handleSkipCommand : undefined}
-                                onApproveSingleCommand={row.pendingActions ? handleApproveSingleCommand : undefined}
-                                onSkipSingleCommand={row.pendingActions ? handleSkipSingleCommand : undefined}
-                                isContinued={row.isContinued}
-                                isActive={row.isActive}
-                                onUndoTool={onUndoTool}
-                                onStopCommand={handleStopCommand}
-                                onOpenFile={onOpenFile}
-                            />
+                            <div key={row.key} ref={(element) => registerRowElement(row.key, element)} data-chat-row-key={row.key}>
+                                <ChatMessage
+                                    message={row.message}
+                                    pendingActions={row.pendingActions}
+                                    onApproveCommand={row.pendingActions ? handleApproveCommand : undefined}
+                                    onSkipCommand={row.pendingActions ? handleSkipCommand : undefined}
+                                    onApproveSingleCommand={row.pendingActions ? handleApproveSingleCommand : undefined}
+                                    onSkipSingleCommand={row.pendingActions ? handleSkipSingleCommand : undefined}
+                                    isContinued={row.isContinued}
+                                    isActive={row.isActive}
+                                    onUndoTool={onUndoTool}
+                                    onStopCommand={handleStopCommand}
+                                    onOpenFile={onOpenFile}
+                                    registerActivityTarget={registerActivityTarget}
+                                />
+                            </div>
                         ))}
 
                         {visibleVirtualRange.bottomSpacerHeight > 0 && (
@@ -518,20 +678,22 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                         )}
 
                         {tailRows.map((row) => (
-                            <ChatMessage
-                                key={row.key}
-                                message={row.message}
-                                pendingActions={row.pendingActions}
-                                onApproveCommand={row.pendingActions ? handleApproveCommand : undefined}
-                                onSkipCommand={row.pendingActions ? handleSkipCommand : undefined}
-                                onApproveSingleCommand={row.pendingActions ? handleApproveSingleCommand : undefined}
-                                onSkipSingleCommand={row.pendingActions ? handleSkipSingleCommand : undefined}
-                                isContinued={row.isContinued}
-                                isActive={row.isActive}
-                                onUndoTool={onUndoTool}
-                                onStopCommand={handleStopCommand}
-                                onOpenFile={onOpenFile}
-                            />
+                            <div key={row.key} ref={(element) => registerRowElement(row.key, element)} data-chat-row-key={row.key}>
+                                <ChatMessage
+                                    message={row.message}
+                                    pendingActions={row.pendingActions}
+                                    onApproveCommand={row.pendingActions ? handleApproveCommand : undefined}
+                                    onSkipCommand={row.pendingActions ? handleSkipCommand : undefined}
+                                    onApproveSingleCommand={row.pendingActions ? handleApproveSingleCommand : undefined}
+                                    onSkipSingleCommand={row.pendingActions ? handleSkipSingleCommand : undefined}
+                                    isContinued={row.isContinued}
+                                    isActive={row.isActive}
+                                    onUndoTool={onUndoTool}
+                                    onStopCommand={handleStopCommand}
+                                    onOpenFile={onOpenFile}
+                                    registerActivityTarget={registerActivityTarget}
+                                />
+                            </div>
                         ))}
 
                         {shouldShowPendingResponseIndicator && <PendingResponseIndicator />}
@@ -573,16 +735,33 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
             />
 
             {/* Task Panel - persistent TODO above Command Center */}
-            <TaskPanel
-                todos={activeTodos}
-                isCollapsed={taskPanelCollapsed}
-                onToggleCollapse={() => setTaskPanelCollapsed(prev => !prev)}
-            />
+            <div ref={taskPanelRef}>
+                <TaskPanel
+                    todos={activeTodos}
+                    isCollapsed={taskPanelCollapsed}
+                    onToggleCollapse={() => setTaskPanelCollapsed(prev => !prev)}
+                />
+            </div>
 
-            <QueuePanel
-                requests={queuedRequests}
-                onEditRequest={handleEditQueuedRequest}
-                onDeleteRequest={deleteQueuedRequest}
+            <div ref={queuePanelRef}>
+                <QueuePanel
+                    requests={queuedRequests}
+                    onEditRequest={handleEditQueuedRequest}
+                    onDeleteRequest={deleteQueuedRequest}
+                />
+            </div>
+
+            <AgentRunStatusBar
+                loading={loading}
+                pendingActions={pendingActions}
+                toolActivity={toolActivity}
+                activeTodos={activeTodos}
+                queuedRequests={queuedRequests}
+                onStop={stopGeneration}
+                onJumpToApproval={() => jumpToRow(approvalRowKey, approvalTargetKey)}
+                onJumpToActiveStep={() => jumpToRow(activeStepRowKey, activeStepTargetKey)}
+                onJumpToTaskPanel={jumpToTaskPanel}
+                onJumpToQueue={jumpToQueue}
             />
 
             {chatMode === 'planning' && latestPlanText && (

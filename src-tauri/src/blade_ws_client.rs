@@ -59,6 +59,9 @@ pub enum BladeWsEvent {
     Session {
         session_id: String,
         model_id: String,
+        planning_mode: Option<bool>,
+        runtime_mode: Option<String>,
+        mode_source: Option<String>,
     },
     TextChunk {
         content: String,
@@ -686,11 +689,25 @@ impl BladeWsClient {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
+                let planning_mode = msg.payload.get("planning_mode").and_then(|v| v.as_bool());
+                let runtime_mode = msg
+                    .payload
+                    .get("runtime_mode")
+                    .and_then(|v| v.as_str())
+                    .map(|v| v.to_string());
+                let mode_source = msg
+                    .payload
+                    .get("mode_source")
+                    .and_then(|v| v.as_str())
+                    .map(|v| v.to_string());
 
                 // eprintln!("[BLADE WS] Session created: {}", session_id);
                 let _ = tx.send(BladeWsEvent::Session {
                     session_id,
                     model_id,
+                    planning_mode,
+                    runtime_mode,
+                    mode_source,
                 });
             }
             "text_chunk" => {

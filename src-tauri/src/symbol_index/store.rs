@@ -7,11 +7,28 @@ use rusqlite::{params, Connection};
 use std::path::Path;
 use std::sync::Mutex;
 
-use crate::tree_sitter::{Symbol, SymbolType};
+use crate::tree_sitter::{Symbol, SymbolRelationship, SymbolRelationshipType, SymbolType};
 
 /// SQLite-backed symbol store
 pub struct SymbolStore {
     conn: Mutex<Connection>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SymbolReference {
+    pub source_symbol: Symbol,
+    pub relationship_type: SymbolRelationshipType,
+    pub target_name: String,
+    pub target_symbol_id: Option<String>,
+    pub target_symbol: Option<Symbol>,
+    pub line: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct IndexedFileRecord {
+    pub file_path: String,
+    pub indexed_at: i64,
+    pub symbol_count: usize,
 }
 
 impl SymbolStore {
@@ -99,6 +116,16 @@ impl SymbolStore {
                 indexed_at INTEGER NOT NULL,
                 symbol_count INTEGER NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS symbol_relationships (
+                source_symbol_id TEXT NOT NULL,
+                source_file_path TEXT NOT NULL,
+                target_name TEXT NOT NULL,
+                target_symbol_id TEXT,
+                relationship_type TEXT NOT NULL,
+                line INTEGER NOT NULL,
+                PRIMARY KEY (source_symbol_id, target_name, relationship_type, line)
+            );
             "#,
         )?;
 
@@ -106,6 +133,7 @@ impl SymbolStore {
         ensure_column(&conn, "symbols", "byte_offset", "INTEGER NOT NULL DEFAULT 0")?;
         ensure_column(&conn, "symbols", "byte_length", "INTEGER NOT NULL DEFAULT 0")?;
         ensure_column(&conn, "symbols", "content_hash", "TEXT NOT NULL DEFAULT ''")?;
+        ensure_column(&conn, "symbol_relationships", "target_symbol_id", "TEXT")?;
 
         conn.execute_batch(
             r#"
@@ -116,6 +144,10 @@ impl SymbolStore {
             CREATE INDEX IF NOT EXISTS idx_symbols_type ON symbols(symbol_type);
             CREATE INDEX IF NOT EXISTS idx_symbols_parent ON symbols(parent_id);
             CREATE INDEX IF NOT EXISTS idx_symbols_indexed ON symbols(indexed_at);
+            CREATE INDEX IF NOT EXISTS idx_symbol_relationships_source ON symbol_relationships(source_symbol_id);
+            CREATE INDEX IF NOT EXISTS idx_symbol_relationships_file ON symbol_relationships(source_file_path);
+            CREATE INDEX IF NOT EXISTS idx_symbol_relationships_target ON symbol_relationships(target_name);
+            CREATE INDEX IF NOT EXISTS idx_symbol_relationships_target_symbol_id ON symbol_relationships(target_symbol_id);
             "#,
         )?;
 
@@ -167,6 +199,219 @@ impl SymbolStore {
 
         tx.commit()?;
         Ok(symbols.len())
+    }
+
+    pub fn replace_relationships_for_file(
+        &self,
+        file_path: &str,
+        relationships: &[SymbolRelationship],
+    ) -> Result<usize, SymbolStoreError> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+
+        tx.execute(
+            "DELETE FROM symbol_relationships WHERE source_file_path = ?1",
+            params![file_path],
+        )?;
+
+        for relationship in relationships {
+            tx.execute(
+                r#"
+                INSERT OR REPLACE INTO symbol_relationships
+                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                "#,
+                params![
+                    &relationship.source_symbol_id,
+                    &relationship.source_file_path,
+                    &relationship.target_name,
+                    relationship.target_symbol_id.as_deref(),
+                    relationship.relationship_type.to_string(),
+                    relationship.line,
+                ],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(relationships.len())
+    }
+
+    pub fn get_relationship_targets(
+        &self,
+        source_symbol_id: &str,
+        relationship_type: SymbolRelationshipType,
+        limit: usize,
+    ) -> Result<Vec<String>, SymbolStoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT target_name
+            FROM symbol_relationships
+            WHERE source_symbol_id = ?1 AND relationship_type = ?2
+            ORDER BY line, target_name
+            LIMIT ?3
+            "#,
+        )?;
+
+        let targets = stmt
+            .query_map(
+                params![source_symbol_id, relationship_type.to_string(), limit as i64],
+                |row| row.get::<_, String>(0),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(targets)
+    }
+
+    pub fn get_file_relationship_targets(
+        &self,
+        source_file_path: &str,
+        relationship_type: SymbolRelationshipType,
+        limit: usize,
+    ) -> Result<Vec<String>, SymbolStoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT DISTINCT target_name
+            FROM symbol_relationships
+            WHERE source_file_path = ?1 AND relationship_type = ?2
+            ORDER BY target_name
+            LIMIT ?3
+            "#,
+        )?;
+
+        let targets = stmt
+            .query_map(
+                params![source_file_path, relationship_type.to_string(), limit as i64],
+                |row| row.get::<_, String>(0),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(targets)
+    }
+
+    pub fn find_references_to_target(
+        &self,
+        target_name: &str,
+        relationship_type: SymbolRelationshipType,
+        limit: usize,
+    ) -> Result<Vec<SymbolReference>, SymbolStoreError> {
+        let rows = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn.prepare(
+                r#"
+                SELECT s.id, s.name, s.qualified_name, s.symbol_type, s.file_path, s.start_line, s.start_char,
+                       s.end_line, s.end_char, s.byte_offset, s.byte_length, s.parent_id, s.docstring, s.signature,
+                       s.content_hash, r.relationship_type, r.target_name, r.target_symbol_id, r.line
+                FROM symbol_relationships r
+                JOIN symbols s ON s.id = r.source_symbol_id
+                WHERE r.target_name = ?1 AND r.relationship_type = ?2
+                ORDER BY s.file_path, r.line, s.start_line, s.start_char
+                LIMIT ?3
+                "#,
+            )?;
+
+            let rows = stmt.query_map(
+                params![target_name, relationship_type.to_string(), limit as i64],
+                |row| {
+                    Ok((
+                        row_to_symbol(row)?,
+                        row.get::<_, String>(15)?,
+                        row.get::<_, String>(16)?,
+                        row.get::<_, Option<String>>(17)?,
+                        row.get::<_, i64>(18)? as u32,
+                    ))
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+
+            rows
+        };
+
+        self.hydrate_symbol_references(rows)
+    }
+
+    pub fn find_references_to_symbol_id(
+        &self,
+        target_symbol_id: &str,
+        relationship_type: SymbolRelationshipType,
+        limit: usize,
+    ) -> Result<Vec<SymbolReference>, SymbolStoreError> {
+        let rows = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn.prepare(
+                r#"
+                SELECT s.id, s.name, s.qualified_name, s.symbol_type, s.file_path, s.start_line, s.start_char,
+                       s.end_line, s.end_char, s.byte_offset, s.byte_length, s.parent_id, s.docstring, s.signature,
+                       s.content_hash, r.relationship_type, r.target_name, r.target_symbol_id, r.line
+                FROM symbol_relationships r
+                JOIN symbols s ON s.id = r.source_symbol_id
+                WHERE r.target_symbol_id = ?1 AND r.relationship_type = ?2
+                ORDER BY s.file_path, r.line, s.start_line, s.start_char
+                LIMIT ?3
+                "#,
+            )?;
+
+            let rows = stmt.query_map(
+                params![target_symbol_id, relationship_type.to_string(), limit as i64],
+                |row| {
+                    Ok((
+                        row_to_symbol(row)?,
+                        row.get::<_, String>(15)?,
+                        row.get::<_, String>(16)?,
+                        row.get::<_, Option<String>>(17)?,
+                        row.get::<_, i64>(18)? as u32,
+                    ))
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+
+            rows
+        };
+
+        self.hydrate_symbol_references(rows)
+    }
+
+    pub fn get_relationship_edges_from_source(
+        &self,
+        source_symbol_id: &str,
+        relationship_type: SymbolRelationshipType,
+        limit: usize,
+    ) -> Result<Vec<SymbolReference>, SymbolStoreError> {
+        let Some(source_symbol) = self.get_symbol(source_symbol_id)? else {
+            return Ok(Vec::new());
+        };
+
+        let rows = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn.prepare(
+                r#"
+                SELECT relationship_type, target_name, target_symbol_id, line
+                FROM symbol_relationships
+                WHERE source_symbol_id = ?1 AND relationship_type = ?2
+                ORDER BY line, target_name
+                LIMIT ?3
+                "#,
+            )?;
+
+            let rows = stmt.query_map(
+                params![source_symbol_id, relationship_type.to_string(), limit as i64],
+                |row| {
+                    Ok((
+                        source_symbol.clone(),
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, i64>(3)? as u32,
+                    ))
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+
+            rows
+        };
+
+        self.hydrate_symbol_references(rows)
     }
 
     /// Get a symbol by ID
@@ -333,8 +578,22 @@ impl SymbolStore {
     /// Delete all symbols for a file
     pub fn delete_file_symbols(&self, file_path: &str) -> Result<usize, SymbolStoreError> {
         let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM symbol_relationships WHERE source_file_path = ?1",
+            params![file_path],
+        )?;
         let count = conn.execute(
             "DELETE FROM symbols WHERE file_path = ?1",
+            params![file_path],
+        )?;
+        Ok(count)
+    }
+
+    /// Delete indexing metadata for a file
+    pub fn delete_indexed_file(&self, file_path: &str) -> Result<usize, SymbolStoreError> {
+        let conn = self.conn.lock().unwrap();
+        let count = conn.execute(
+            "DELETE FROM indexed_files WHERE file_path = ?1",
             params![file_path],
         )?;
         Ok(count)
@@ -343,6 +602,7 @@ impl SymbolStore {
     /// Delete all symbols
     pub fn clear(&self) -> Result<(), SymbolStoreError> {
         let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM symbol_relationships", [])?;
         conn.execute("DELETE FROM symbols", [])?;
         conn.execute("DELETE FROM indexed_files", [])?;
         Ok(())
@@ -355,11 +615,34 @@ impl SymbolStore {
         Ok(count as usize)
     }
 
+    pub fn list_indexed_files(&self, limit: usize) -> Result<Vec<IndexedFileRecord>, SymbolStoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT file_path, indexed_at, symbol_count
+            FROM indexed_files
+            ORDER BY symbol_count DESC, file_path ASC
+            LIMIT ?1
+            "#,
+        )?;
+
+        let records = stmt
+            .query_map(params![limit as i64], |row| {
+                Ok(IndexedFileRecord {
+                    file_path: row.get::<_, String>(0)?,
+                    indexed_at: row.get::<_, i64>(1)?,
+                    symbol_count: row.get::<_, i64>(2)? as usize,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(records)
+    }
+
     /// Get count of indexed files
     pub fn file_count(&self) -> Result<usize, SymbolStoreError> {
         let conn = self.conn.lock().unwrap();
-        let count: i64 =
-            conn.query_row("SELECT COUNT(DISTINCT file_path) FROM symbols", [], |row| {
+        let count: i64 = conn.query_row("SELECT COUNT(DISTINCT file_path) FROM symbols", [], |row| {
                 row.get(0)
             })?;
         Ok(count as usize)
@@ -407,6 +690,36 @@ impl SymbolStore {
             Some(stored_hash) => Ok(stored_hash != file_hash),
             None => Ok(true), // Not indexed yet
         }
+    }
+
+    fn hydrate_symbol_references(
+        &self,
+        rows: Vec<(Symbol, String, String, Option<String>, u32)>,
+    ) -> Result<Vec<SymbolReference>, SymbolStoreError> {
+        let mut references = Vec::with_capacity(rows.len());
+
+        for (source_symbol, relationship_type, target_name, target_symbol_id, line) in rows {
+            let relationship_type = relationship_type
+                .parse::<SymbolRelationshipType>()
+                .map_err(|error| {
+                    SymbolStoreError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+                })?;
+            let target_symbol = match target_symbol_id.as_deref() {
+                Some(id) => self.get_symbol(id)?,
+                None => None,
+            };
+
+            references.push(SymbolReference {
+                source_symbol,
+                relationship_type,
+                target_name,
+                target_symbol_id,
+                target_symbol,
+                line,
+            });
+        }
+
+        Ok(references)
     }
 }
 
@@ -520,6 +833,17 @@ mod tests {
         }
     }
 
+    fn create_test_relationship(source_symbol_id: &str, file_path: &str, target_name: &str) -> SymbolRelationship {
+        SymbolRelationship {
+            source_symbol_id: source_symbol_id.to_string(),
+            source_file_path: file_path.to_string(),
+            target_name: target_name.to_string(),
+            target_symbol_id: None,
+            relationship_type: SymbolRelationshipType::Call,
+            line: 3,
+        }
+    }
+
     #[test]
     fn test_create_store() {
         let store = SymbolStore::in_memory().unwrap();
@@ -575,6 +899,157 @@ mod tests {
 
         store.delete_file_symbols("test.ts").unwrap();
         assert_eq!(store.count().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_replace_and_get_relationship_targets() {
+        let store = SymbolStore::in_memory().unwrap();
+        let symbol = create_test_symbol("caller", "test.ts");
+        store.upsert_symbols(&[symbol.clone()]).unwrap();
+
+        store
+            .replace_relationships_for_file(
+                "test.ts",
+                &[
+                    create_test_relationship(&symbol.id, "test.ts", "helperOne"),
+                    create_test_relationship(&symbol.id, "test.ts", "helperTwo"),
+                ],
+            )
+            .unwrap();
+
+        let targets = store
+            .get_relationship_targets(&symbol.id, SymbolRelationshipType::Call, 10)
+            .unwrap();
+
+        assert_eq!(targets.len(), 2);
+        assert!(targets.iter().any(|target| target == "helperOne"));
+        assert!(targets.iter().any(|target| target == "helperTwo"));
+    }
+
+    #[test]
+    fn test_find_references_to_target() {
+        let store = SymbolStore::in_memory().unwrap();
+        let caller = create_test_symbol("caller", "main.ts");
+        let helper = create_test_symbol("helper", "utils.ts");
+        store
+            .upsert_symbols(&[caller.clone(), helper])
+            .unwrap();
+
+        store
+            .replace_relationships_for_file(
+                "main.ts",
+                &[create_test_relationship(&caller.id, "main.ts", "helper")],
+            )
+            .unwrap();
+
+        let references = store
+            .find_references_to_target("helper", SymbolRelationshipType::Call, 10)
+            .unwrap();
+
+        assert_eq!(references.len(), 1);
+        assert_eq!(references[0].source_symbol.id, caller.id);
+        assert_eq!(references[0].target_name, "helper");
+        assert!(references[0].target_symbol_id.is_none());
+        assert!(references[0].target_symbol.is_none());
+        assert_eq!(references[0].relationship_type, SymbolRelationshipType::Call);
+    }
+
+    #[test]
+    fn test_find_references_to_symbol_id_and_get_outgoing_edges() {
+        let store = SymbolStore::in_memory().unwrap();
+        let caller = create_test_symbol("caller", "main.ts");
+        let helper = create_test_symbol("helper", "utils.ts");
+        store
+            .upsert_symbols(&[caller.clone(), helper.clone()])
+            .unwrap();
+
+        store
+            .replace_relationships_for_file(
+                "main.ts",
+                &[SymbolRelationship {
+                    source_symbol_id: caller.id.clone(),
+                    source_file_path: "main.ts".to_string(),
+                    target_name: helper.name.clone(),
+                    target_symbol_id: Some(helper.id.clone()),
+                    relationship_type: SymbolRelationshipType::Call,
+                    line: 3,
+                }],
+            )
+            .unwrap();
+
+        let incoming = store
+            .find_references_to_symbol_id(&helper.id, SymbolRelationshipType::Call, 10)
+            .unwrap();
+        assert_eq!(incoming.len(), 1);
+        assert_eq!(incoming[0].source_symbol.id, caller.id);
+        assert_eq!(incoming[0].target_symbol_id.as_deref(), Some(helper.id.as_str()));
+        assert_eq!(incoming[0].target_symbol.as_ref().map(|symbol| symbol.id.as_str()), Some(helper.id.as_str()));
+
+        let outgoing = store
+            .get_relationship_edges_from_source(&caller.id, SymbolRelationshipType::Call, 10)
+            .unwrap();
+        assert_eq!(outgoing.len(), 1);
+        assert_eq!(outgoing[0].source_symbol.id, caller.id);
+        assert_eq!(outgoing[0].target_symbol_id.as_deref(), Some(helper.id.as_str()));
+        assert_eq!(outgoing[0].target_symbol.as_ref().map(|symbol| symbol.id.as_str()), Some(helper.id.as_str()));
+    }
+
+    #[test]
+    fn test_delete_file_symbols_removes_relationships() {
+        let store = SymbolStore::in_memory().unwrap();
+        let symbol = create_test_symbol("caller", "test.ts");
+        store.upsert_symbols(&[symbol.clone()]).unwrap();
+        store
+            .replace_relationships_for_file(
+                "test.ts",
+                &[create_test_relationship(&symbol.id, "test.ts", "helperOne")],
+            )
+            .unwrap();
+
+        store.delete_file_symbols("test.ts").unwrap();
+
+        let targets = store
+            .get_relationship_targets(&symbol.id, SymbolRelationshipType::Call, 10)
+            .unwrap();
+        assert!(targets.is_empty());
+    }
+
+    #[test]
+    fn test_get_file_relationship_targets() {
+        let store = SymbolStore::in_memory().unwrap();
+        let symbol = create_test_symbol("caller", "test.ts");
+        store.upsert_symbols(&[symbol.clone()]).unwrap();
+        store
+            .replace_relationships_for_file(
+                "test.ts",
+                &[
+                    SymbolRelationship {
+                        source_symbol_id: format!("{}::import1#import", symbol.file_path),
+                        source_file_path: "test.ts".to_string(),
+                        target_name: "./utils".to_string(),
+                        target_symbol_id: None,
+                        relationship_type: SymbolRelationshipType::Import,
+                        line: 1,
+                    },
+                    SymbolRelationship {
+                        source_symbol_id: format!("{}::import2#import", symbol.file_path),
+                        source_file_path: "test.ts".to_string(),
+                        target_name: "./helpers".to_string(),
+                        target_symbol_id: None,
+                        relationship_type: SymbolRelationshipType::Import,
+                        line: 2,
+                    },
+                ],
+            )
+            .unwrap();
+
+        let targets = store
+            .get_file_relationship_targets("test.ts", SymbolRelationshipType::Import, 10)
+            .unwrap();
+
+        assert_eq!(targets.len(), 2);
+        assert!(targets.iter().any(|target| target == "./utils"));
+        assert!(targets.iter().any(|target| target == "./helpers"));
     }
 
     #[test]

@@ -12,4 +12,4 @@ pub mod search;
 pub mod store;
 
 pub use search::{SearchQuery, SearchResult};
-pub use store::{SymbolStore, SymbolStoreError};
+pub use store::{SymbolReference, SymbolStore, SymbolStoreError};

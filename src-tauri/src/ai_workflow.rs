@@ -801,7 +801,7 @@ impl AiWorkflow {
                     context: ctx,
                 });
             } else {
-                let res = crate::tool_execution::execute_tool_with_context(
+                let res = crate::tool_execution::execute_tool_with_default_timeout(
                     context,
                     &call.function.name,
                     &call.function.arguments,
@@ -825,7 +825,7 @@ impl AiWorkflow {
             let mut handles = Vec::new();
             for task in pending_read_tasks {
                 handles.push(std::thread::spawn(move || {
-                    let res = crate::tool_execution::execute_tool_with_context(
+                    let res = crate::tool_execution::execute_tool_with_default_timeout(
                         &task.context,
                         &task.call.function.name,
                         &task.call.function.arguments,

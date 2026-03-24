@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { listen, emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { BladeDispatcher } from '../services/blade';
@@ -10,7 +10,7 @@ import { useEditorState } from '../contexts/EditorContext';
 import { MessageBuffer } from '../utils/eventBuffer';
 import type { BladeEventEnvelope } from '../types/blade';
 import { getOrCreateIdempotencyKey, IDEMPOTENT_OPERATIONS } from '../utils/idempotency';
-import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertToolCallBlockPreservingOrder } from '../utils/messageBlocks';
+import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertToolCallBlockPreservingOrder, moveExistingContentAfterTools } from '../utils/messageBlocks';
 import { buildContextLengthSystemMessage, buildMessageTooLargeSystemMessage, formatChatErrorPayload } from '../utils/localizedEvents';
 import type { ChatErrorPayload, ContextLengthExceededPayload, MessageTooLargePayload } from '../types/events';
 import { formatUnknownBackendError } from '../utils/backendErrors';
@@ -1012,14 +1012,22 @@ export function useChatLegacy() {
                                 const newBlocks = tool_call
                                     ? insertToolCallBlockPreservingOrder(liveBlocks, tool_call_id)
                                     : [...liveBlocks];
-                                blocksRef.current.set(message_id, newBlocks);
+                                const accumulatedContent = accumulatedContentRef.current.id === message_id
+                                    ? accumulatedContentRef.current.content
+                                    : '';
+                                const normalizedBlocks = accumulatedContent.trim().length > 0
+                                    ? moveExistingContentAfterTools(newBlocks, accumulatedContent)
+                                    : { blocks: newBlocks, contentBeforeTools: undefined, contentAfterTools: undefined };
+                                blocksRef.current.set(message_id, normalizedBlocks.blocks);
 
                                 const newMsg: ChatMessage = {
                                     id: message_id,
                                     role: 'Assistant',
-                                    content: '',
+                                    content: accumulatedContent,
+                                    content_before_tools: normalizedBlocks.contentBeforeTools,
+                                    content_after_tools: normalizedBlocks.contentAfterTools,
                                     tool_calls: tool_call ? [{ ...tool_call, status: status as any, result }] : [],
-                                    blocks: newBlocks
+                                    blocks: normalizedBlocks.blocks
                                 };
                                 return insertAssistantMessageAfterLastUser(prev, newMsg);
                             }
@@ -1042,21 +1050,31 @@ export function useChatLegacy() {
                                     } else {
                                         // Add new tool call
                                         if (tool_call) {
-                                            const contentBefore = msg.content_before_tools !== undefined
-                                                ? msg.content_before_tools
-                                                : (accumulatedContentRef.current.id === message_id
-                                                    ? accumulatedContentRef.current.content
-                                                    : msg.content);
+                                            const accumulatedContent = accumulatedContentRef.current.id === message_id
+                                                ? accumulatedContentRef.current.content
+                                                : msg.content;
+                                            const isFirstToolInsertion = existingTools.length === 0
+                                                && msg.content_before_tools === undefined
+                                                && msg.content_after_tools === undefined
+                                                && accumulatedContent.trim().length > 0;
                                             
                                             // Check if block already exists (idempotency safety)
                                             newBlocks = insertToolCallBlockPreservingOrder(newBlocks, tool_call_id);
+                                            const normalizedBlocks = isFirstToolInsertion
+                                                ? moveExistingContentAfterTools(newBlocks, accumulatedContent)
+                                                : {
+                                                    blocks: newBlocks,
+                                                    contentBeforeTools: msg.content_before_tools,
+                                                    contentAfterTools: msg.content_after_tools,
+                                                };
 
-                                            blocksRef.current.set(message_id, newBlocks);
+                                            blocksRef.current.set(message_id, normalizedBlocks.blocks);
                                             return {
                                                 ...msg,
-                                                content_before_tools: contentBefore,
+                                                content_before_tools: normalizedBlocks.contentBeforeTools,
+                                                content_after_tools: normalizedBlocks.contentAfterTools,
                                                 tool_calls: [...existingTools, tool_call],
-                                                blocks: newBlocks
+                                                blocks: normalizedBlocks.blocks
                                             };
                                         } else {
                                             console.warn('[v1.1 Chat] Received ToolUpdate for unknown tool but no tool_call data provided:', tool_call_id);

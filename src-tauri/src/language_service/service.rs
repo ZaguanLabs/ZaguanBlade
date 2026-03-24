@@ -3,14 +3,23 @@
 //! Combines tree-sitter parsing and symbol indexing
 //! into a single coherent API for ZLP.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
 use crate::gitignore_filter::GitignoreFilter;
 use crate::project_settings;
-use crate::symbol_index::{SearchQuery, SearchResult, SymbolStore};
-use crate::tree_sitter::{extract_symbols, Language, Symbol, SymbolType, TreeSitterParser};
+use crate::symbol_index::{SearchQuery, SearchResult, SymbolReference, SymbolStore};
+use crate::tree_sitter::{
+    extract_symbol_relationships,
+    extract_symbols,
+    Language,
+    Symbol,
+    SymbolRelationship,
+    SymbolRelationshipType,
+    SymbolType,
+    TreeSitterParser,
+};
 
 /// Unified language service
 pub struct LanguageService {
@@ -54,6 +63,449 @@ impl std::fmt::Display for LanguageError {
             LanguageError::NotSupported(msg) => write!(f, "Not supported: {}", msg),
         }
     }
+}
+
+fn symbol_line_text(content: &str, byte_offset: usize) -> &str {
+    let safe_offset = byte_offset.min(content.len());
+    let before = &content[..safe_offset];
+    let line_start = before.rfind('\n').map(|idx| idx + 1).unwrap_or(0);
+    let line_end = content[safe_offset..]
+        .find('\n')
+        .map(|idx| safe_offset + idx)
+        .unwrap_or(content.len());
+    &content[line_start..line_end]
+}
+
+fn typescript_named_export_clauses(content: &str) -> Vec<(String, String, Option<String>, u32)> {
+    let mut clauses = Vec::new();
+    let mut search_from = 0usize;
+
+    while let Some(relative_start) = content[search_from..].find("export {") {
+        let start = search_from + relative_start;
+        let clause_start = start + "export {".len();
+        let Some(relative_end) = content[clause_start..].find('}') else {
+            break;
+        };
+        let clause_end = clause_start + relative_end;
+        let clause = &content[clause_start..clause_end];
+        let trailing = &content[clause_end + 1..];
+        let module_target = trailing
+            .split_once(" from ")
+            .and_then(|(_, rest)| extract_quoted_literal(rest));
+        let line = content[..start].bytes().filter(|byte| *byte == b'\n').count() as u32;
+
+        for specifier in clause.split(',') {
+            let specifier = specifier.trim();
+            if specifier.is_empty() {
+                continue;
+            }
+
+            let mut parts = specifier.splitn(2, " as ").map(str::trim);
+            let local_name = parts.next().filter(|value| !value.is_empty());
+            let exported_name = parts
+                .next()
+                .filter(|value| !value.is_empty())
+                .or(local_name);
+
+            if let (Some(local_name), Some(exported_name)) = (local_name, exported_name) {
+                clauses.push((
+                    local_name.to_string(),
+                    exported_name.to_string(),
+                    module_target.clone(),
+                    line,
+                ));
+            }
+        }
+
+        search_from = clause_end + 1;
+    }
+
+    clauses
+}
+
+fn typescript_export_star_targets(content: &str) -> Vec<(String, u32)> {
+    let mut exports = Vec::new();
+
+    for (line_index, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix("export * from ") else {
+            continue;
+        };
+        if let Some(module_target) = extract_quoted_literal(rest) {
+            exports.push((module_target, line_index as u32));
+        }
+    }
+
+    exports
+}
+
+fn rust_pub_use_plain_module_reexports(content: &str) -> Vec<(String, String, u32)> {
+    let mut exports = Vec::new();
+
+    for (line_index, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix("pub use ") else {
+            continue;
+        };
+        let rest = rest.trim_end_matches(';').trim();
+        if rest.is_empty() || rest.contains(" as ") || rest.contains("::{") || rest.ends_with("::*") {
+            continue;
+        }
+
+        let Some((_, exported_name)) = rest.rsplit_once("::") else {
+            continue;
+        };
+        let exported_name = exported_name.trim();
+        if exported_name.is_empty() {
+            continue;
+        }
+
+        exports.push((rest.to_string(), exported_name.to_string(), line_index as u32));
+    }
+
+    exports
+}
+
+fn rust_grouped_pub_use_module_reexports(content: &str) -> Vec<(String, String, u32)> {
+    let mut exports = Vec::new();
+
+    for (line_index, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix("pub use ") else {
+            continue;
+        };
+        let rest = rest.trim_end_matches(';').trim();
+        let Some((module_prefix, grouped)) = rest.split_once("::{") else {
+            continue;
+        };
+        let Some(group_end) = grouped.find('}') else {
+            continue;
+        };
+        let module_prefix = module_prefix.trim();
+        if module_prefix.is_empty() {
+            continue;
+        }
+
+        for entry in grouped[..group_end].split(',') {
+            let entry = entry.trim();
+            if entry.is_empty() {
+                continue;
+            }
+
+            let Some(alias_name) = entry.strip_prefix("self as ").map(str::trim) else {
+                continue;
+            };
+            if alias_name.is_empty() {
+                continue;
+            }
+
+            exports.push((module_prefix.to_string(), alias_name.to_string(), line_index as u32));
+        }
+    }
+
+    exports
+}
+
+fn rust_pub_use_module_reexports(content: &str) -> Vec<(String, String, u32)> {
+    let mut exports = Vec::new();
+
+    for (line_index, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix("pub use ") else {
+            continue;
+        };
+        let rest = rest.trim_end_matches(';').trim();
+        if rest.is_empty() || rest.contains("::{") || rest.ends_with("::*") {
+            continue;
+        }
+
+        let Some((target_path, alias_name)) = rest.split_once(" as ") else {
+            continue;
+        };
+        let target_path = target_path.trim();
+        let alias_name = alias_name.trim();
+        if target_path.is_empty() || alias_name.is_empty() {
+            continue;
+        }
+
+        exports.push((target_path.to_string(), alias_name.to_string(), line_index as u32));
+    }
+
+    exports
+}
+
+fn typescript_namespace_export_clauses(content: &str) -> Vec<(String, String, u32)> {
+    let mut clauses = Vec::new();
+
+    for (line_index, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix("export * as ") else {
+            continue;
+        };
+        let Some((exported_name, module_part)) = rest.split_once(" from ") else {
+            continue;
+        };
+        let exported_name = exported_name.trim();
+        if exported_name.is_empty() {
+            continue;
+        }
+        let Some(module_target) = extract_quoted_literal(module_part) else {
+            continue;
+        };
+        clauses.push((exported_name.to_string(), module_target, line_index as u32));
+    }
+
+    clauses
+}
+
+fn python_from_import_clauses(content: &str) -> Vec<(String, String, String, u32)> {
+    let mut imports = Vec::new();
+
+    for (line_index, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        let Some(after_from) = trimmed.strip_prefix("from ") else {
+            continue;
+        };
+        let Some((module_target, imported_part)) = after_from.split_once(" import ") else {
+            continue;
+        };
+        let module_target = module_target.trim();
+        if module_target.is_empty() {
+            continue;
+        }
+
+        for entry in imported_part.split(',') {
+            let entry = entry.trim();
+            if entry.is_empty() || entry == "*" {
+                continue;
+            }
+
+            let mut parts = entry.splitn(2, " as ").map(str::trim);
+            let local_name = parts.next().filter(|value| !value.is_empty());
+            let exported_name = parts
+                .next()
+                .filter(|value| !value.is_empty())
+                .or(local_name);
+
+            if let (Some(local_name), Some(exported_name)) = (local_name, exported_name) {
+                imports.push((
+                    module_target.to_string(),
+                    local_name.to_string(),
+                    exported_name.to_string(),
+                    line_index as u32,
+                ));
+            }
+        }
+    }
+
+    imports
+}
+
+fn python_import_module_clauses(content: &str) -> Vec<(String, String, u32)> {
+    let mut imports = Vec::new();
+
+    for (line_index, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        let Some(after_import) = trimmed.strip_prefix("import ") else {
+            continue;
+        };
+
+        for entry in after_import.split(',') {
+            let entry = entry.trim();
+            if entry.is_empty() {
+                continue;
+            }
+
+            let mut parts = entry.splitn(2, " as ").map(str::trim);
+            let module_target = parts.next().filter(|value| !value.is_empty());
+            let alias_name = parts.next().filter(|value| !value.is_empty());
+            let Some(module_target) = module_target else {
+                continue;
+            };
+
+            let (resolution_target, exported_name) = if let Some(alias_name) = alias_name {
+                (module_target, alias_name)
+            } else if let Some((package_name, _)) = module_target.split_once('.') {
+                (package_name, package_name)
+            } else {
+                (module_target, module_target)
+            };
+
+            imports.push((
+                resolution_target.to_string(),
+                exported_name.to_string(),
+                line_index as u32,
+            ));
+        }
+    }
+
+    imports
+}
+
+fn python_from_import_star_targets(content: &str) -> Vec<(String, u32)> {
+    let mut imports = Vec::new();
+
+    for (line_index, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        let Some(after_from) = trimmed.strip_prefix("from ") else {
+            continue;
+        };
+        let Some((module_target, imported_part)) = after_from.split_once(" import ") else {
+            continue;
+        };
+        if imported_part.trim() != "*" {
+            continue;
+        }
+        let module_target = module_target.trim();
+        if module_target.is_empty() {
+            continue;
+        }
+        imports.push((module_target.to_string(), line_index as u32));
+    }
+
+    imports
+}
+
+fn python_is_exported_name(content: &str, name: &str) -> bool {
+    python_dunder_all_names(content)
+        .map(|exported| exported.contains(name))
+        .unwrap_or_else(|| !name.starts_with('_'))
+}
+
+fn python_join_module_target(module_target: &str, local_name: &str) -> String {
+    if module_target.is_empty() {
+        return local_name.to_string();
+    }
+
+    if module_target.ends_with('.') {
+        return format!("{module_target}{local_name}");
+    }
+
+    format!("{module_target}.{local_name}")
+}
+
+fn extract_quoted_literal(text: &str) -> Option<String> {
+    let quote_start = text.find(['\'', '"'])?;
+    let quote = text[quote_start..].chars().next()?;
+    let rest = &text[quote_start + quote.len_utf8()..];
+    let quote_end = rest.find(quote)?;
+    Some(rest[..quote_end].to_string())
+}
+
+fn rust_pub_use_reexports(content: &str) -> Vec<(String, String, String, u32)> {
+    let mut exports = Vec::new();
+
+    for (line_index, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix("pub use ") else {
+            continue;
+        };
+        let rest = rest.trim_end_matches(';').trim();
+        if rest.is_empty() {
+            continue;
+        }
+
+        if let Some((module_prefix, grouped)) = rest.split_once("::{") {
+            let Some(group_end) = grouped.find('}') else {
+                continue;
+            };
+            let module_prefix = module_prefix.trim();
+            for entry in grouped[..group_end].split(',') {
+                let entry = entry.trim();
+                if entry.is_empty() {
+                    continue;
+                }
+                let mut parts = entry.splitn(2, " as ").map(str::trim);
+                let symbol_name = parts.next().filter(|value| !value.is_empty());
+                let exported_name = parts
+                    .next()
+                    .filter(|value| !value.is_empty())
+                    .or(symbol_name);
+                if let (Some(symbol_name), Some(exported_name)) = (symbol_name, exported_name) {
+                    exports.push((
+                        module_prefix.to_string(),
+                        symbol_name.to_string(),
+                        exported_name.to_string(),
+                        line_index as u32,
+                    ));
+                }
+            }
+            continue;
+        }
+
+        let mut parts = rest.splitn(2, " as ").map(str::trim);
+        let target_path = parts.next().filter(|value| !value.is_empty());
+        let alias_name = parts.next().filter(|value| !value.is_empty());
+        let Some(target_path) = target_path else {
+            continue;
+        };
+        let Some((module_path, symbol_name)) = target_path.rsplit_once("::") else {
+            continue;
+        };
+        if symbol_name == "*" {
+            continue;
+        }
+
+        exports.push((
+            module_path.to_string(),
+            symbol_name.to_string(),
+            alias_name.unwrap_or(symbol_name).to_string(),
+            line_index as u32,
+        ));
+    }
+
+    exports
+}
+
+fn rust_pub_use_glob_reexports(content: &str) -> Vec<(String, u32)> {
+    let mut exports = Vec::new();
+
+    for (line_index, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix("pub use ") else {
+            continue;
+        };
+        let rest = rest.trim_end_matches(';').trim();
+        let Some(module_path) = rest.strip_suffix("::*") else {
+            continue;
+        };
+        exports.push((module_path.trim().to_string(), line_index as u32));
+    }
+
+    exports
+}
+
+fn python_dunder_all_names(content: &str) -> Option<HashSet<String>> {
+    let marker = "__all__";
+    let start = content.find(marker)?;
+    let rest = &content[start + marker.len()..];
+    let equals = rest.find('=')?;
+    let assigned = rest[equals + 1..].trim_start();
+    let (open, close) = if assigned.starts_with('[') {
+        ('[', ']')
+    } else if assigned.starts_with('(') {
+        ('(', ')')
+    } else {
+        return None;
+    };
+
+    let inner_start = assigned.find(open)? + 1;
+    let inner = &assigned[inner_start..];
+    let inner_end = inner.find(close)?;
+    let values = &inner[..inner_end];
+    let mut exported = HashSet::new();
+
+    for entry in values.split(',') {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        if let Some(value) = extract_quoted_literal(entry) {
+            exported.insert(value);
+        }
+    }
+
+    Some(exported)
 }
 
 impl std::error::Error for LanguageError {}
@@ -100,7 +552,8 @@ impl LanguageService {
         // Check if reindexing is needed
         if !self.symbol_store.needs_reindex(file_path, &hash)? {
             // Return cached symbols from database
-            return Ok(self.symbol_store.get_symbols_in_file(file_path)?);
+            let symbols = self.get_file_symbols_raw(file_path)?;
+            return Ok(self.filter_visible_symbols(file_path, symbols));
         }
 
         // Detect language and parse
@@ -116,11 +569,19 @@ impl LanguageService {
         };
 
         // Extract symbols
-        let symbols = extract_symbols(&tree, &content, language, file_path);
+        let extracted_symbols = extract_symbols(&tree, &content, language, file_path);
+        let mut relationships =
+            extract_symbol_relationships(&tree, &content, language, file_path, &extracted_symbols);
+        let symbols = self.with_file_root_symbol(file_path, &content, extracted_symbols);
+        self.canonicalize_import_relationships(file_path, &mut relationships);
+        self.append_module_export_relationships(file_path, &content, language, &symbols, &mut relationships);
 
         // Delete old symbols and insert new ones
         self.symbol_store.delete_file_symbols(file_path)?;
         self.symbol_store.upsert_symbols(&symbols)?;
+        self.resolve_relationship_targets(file_path, &symbols, &mut relationships)?;
+        self.symbol_store
+            .replace_relationships_for_file(file_path, &relationships)?;
         self.symbol_store
             .mark_file_indexed(file_path, &hash, symbols.len())?;
 
@@ -136,7 +597,7 @@ impl LanguageService {
             );
         }
 
-        Ok(symbols)
+        Ok(self.filter_visible_symbols(file_path, symbols))
     }
 
     /// Index an entire directory recursively
@@ -237,6 +698,34 @@ impl LanguageService {
         let search_query = SearchQuery::text(query).with_limit(limit);
         let results =
             crate::symbol_index::search::execute_search(&self.symbol_store, &search_query)?;
+        Ok(self.filter_visible_search_results(results))
+    }
+
+    pub fn search_symbols_contextual(
+        &self,
+        query: &str,
+        limit: usize,
+        active_file: Option<&str>,
+        preferred_files: &[String],
+    ) -> Result<Vec<SearchResult>, LanguageError> {
+        let mut search_query = SearchQuery::text(query).with_limit(limit);
+        let preferred_directories =
+            crate::symbol_index::search::collect_preferred_directories(active_file, preferred_files);
+
+        if let Some(path) = active_file {
+            search_query = search_query.with_active_file(path);
+        }
+
+        if !preferred_files.is_empty() {
+            search_query = search_query.with_preferred_files(preferred_files.to_vec());
+        }
+
+        if !preferred_directories.is_empty() {
+            search_query = search_query.with_preferred_directories(preferred_directories);
+        }
+
+        let results =
+            crate::symbol_index::search::execute_search(&self.symbol_store, &search_query)?;
         Ok(results)
     }
 
@@ -248,6 +737,10 @@ impl LanguageService {
         symbol_types: Option<Vec<SymbolType>>,
         limit: usize,
     ) -> Result<Vec<SearchResult>, LanguageError> {
+        if let Some(path) = file_path {
+            self.ensure_file_fresh(path)?;
+        }
+
         let mut search_query = SearchQuery::text(query).with_limit(limit);
 
         if let Some(path) = file_path {
@@ -270,18 +763,98 @@ impl LanguageService {
         line: u32,
         character: u32,
     ) -> Result<Option<Symbol>, LanguageError> {
-        Ok(self
+        self.ensure_file_fresh(file_path)?;
+        let symbol = self
             .symbol_store
-            .get_symbol_at(file_path, line, character)?)
+            .get_symbol_at(file_path, line, character)?
+            .and_then(|symbol| self.normalize_visible_symbol(file_path, symbol));
+        Ok(symbol)
     }
 
     pub fn get_symbol(&self, id: &str) -> Result<Option<Symbol>, LanguageError> {
         Ok(self.symbol_store.get_symbol(id)?)
     }
 
+    pub fn get_file_module_symbol(&self, file_path: &str) -> Result<Option<Symbol>, LanguageError> {
+        self.ensure_file_fresh(file_path)?;
+        Ok(self
+            .symbol_store
+            .get_symbol(&Self::synthetic_file_root_id(file_path))?)
+    }
+
+    pub fn get_relationship_targets(
+        &self,
+        source_symbol_id: &str,
+        relationship_type: SymbolRelationshipType,
+        limit: usize,
+    ) -> Result<Vec<String>, LanguageError> {
+        Ok(self
+            .symbol_store
+            .get_relationship_targets(source_symbol_id, relationship_type, limit)?)
+    }
+
+    pub fn get_file_relationship_targets(
+        &self,
+        source_file_path: &str,
+        relationship_type: SymbolRelationshipType,
+        limit: usize,
+    ) -> Result<Vec<String>, LanguageError> {
+        Ok(self
+            .symbol_store
+            .get_file_relationship_targets(source_file_path, relationship_type, limit)?)
+    }
+
+    pub fn find_references_to_symbol(
+        &self,
+        symbol: &Symbol,
+        limit: usize,
+    ) -> Result<Vec<SymbolReference>, LanguageError> {
+        let expanded_limit = limit.saturating_mul(8).max(limit);
+        let mut references = self.find_relationship_references_to_symbol(
+            symbol,
+            SymbolRelationshipType::Call,
+            limit,
+        )?;
+        let mut seen = references
+            .iter()
+            .map(|reference| {
+                (
+                    reference.source_symbol.id.clone(),
+                    reference.relationship_type,
+                    reference.line,
+                )
+            })
+            .collect::<HashSet<_>>();
+
+        if references.len() < limit {
+            for reference in self.symbol_store.find_references_to_target(
+                &symbol.file_path,
+                SymbolRelationshipType::Import,
+                expanded_limit,
+            )? {
+                let key = (
+                    reference.source_symbol.id.clone(),
+                    reference.relationship_type,
+                    reference.line,
+                );
+
+                if seen.insert(key) {
+                    references.push(reference);
+                    if references.len() >= limit {
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok(references)
+    }
+
     /// Get all symbols in a file
     pub fn get_file_symbols(&self, file_path: &str) -> Result<Vec<Symbol>, LanguageError> {
-        Ok(self.symbol_store.get_symbols_in_file(file_path)?)
+        self.ensure_file_fresh(file_path)?;
+        let symbols = self.get_file_symbols_raw(file_path)?;
+        Ok(self.filter_visible_symbols(file_path, symbols))
     }
 
     // =========================================================================
@@ -320,6 +893,19 @@ impl LanguageService {
         Ok(())
     }
 
+    /// Remove a file from the symbol index and cache
+    pub fn remove_file(&self, file_path: &str) -> Result<(), LanguageError> {
+        {
+            let mut cache = self.file_cache.write().unwrap();
+            cache.remove(file_path);
+        }
+
+        self.symbol_store.delete_file_symbols(file_path)?;
+        self.symbol_store.delete_indexed_file(file_path)?;
+
+        Ok(())
+    }
+
     // =========================================================================
     // Helper Methods
     // =========================================================================
@@ -329,6 +915,367 @@ impl LanguageService {
             PathBuf::from(file_path)
         } else {
             self.workspace_root.join(file_path)
+        }
+    }
+
+    fn canonicalize_import_relationships(
+        &self,
+        file_path: &str,
+        relationships: &mut [SymbolRelationship],
+    ) {
+        for relationship in relationships.iter_mut() {
+            if relationship.relationship_type != SymbolRelationshipType::Import {
+                continue;
+            }
+
+            if let Some(resolved) = self.resolve_import_target(file_path, &relationship.target_name) {
+                relationship.target_name = resolved;
+            }
+        }
+    }
+
+    fn resolve_import_target(&self, file_path: &str, import_target: &str) -> Option<String> {
+        if import_target.is_empty() {
+            return None;
+        }
+
+        let direct = self.resolve_path(import_target);
+        if direct.exists() {
+            return Some(self.path_to_workspace_relative(&direct));
+        }
+
+        let base_file = self.resolve_path(file_path);
+        let parent = base_file.parent()?;
+
+        if import_target.starts_with('.') {
+            let normalized = parent.join(import_target);
+            return self.find_existing_import_candidate(&normalized);
+        }
+
+        if import_target.contains("::") {
+            let crate_relative = import_target
+                .trim_start_matches("crate::")
+                .trim_start_matches("self::")
+                .trim_start_matches("super::")
+                .replace("::", "/");
+            return self.find_existing_import_candidate(&self.resolve_path(&crate_relative));
+        }
+
+        if import_target.contains('.') {
+            let dotted = import_target.replace('.', "/");
+            return self.find_existing_import_candidate(&self.resolve_path(&dotted));
+        }
+
+        None
+    }
+
+    fn find_existing_import_candidate(&self, base_path: &Path) -> Option<String> {
+        let mut candidates: Vec<PathBuf> = Vec::new();
+
+        if base_path.extension().is_some() {
+            candidates.push(base_path.to_path_buf());
+        } else {
+            for extension in ["ts", "tsx", "js", "jsx", "py", "rs"] {
+                candidates.push(base_path.with_extension(extension));
+            }
+
+            for index_name in ["index.ts", "index.tsx", "index.js", "index.jsx", "mod.rs", "__init__.py"] {
+                candidates.push(base_path.join(index_name));
+            }
+        }
+
+        candidates.into_iter().find_map(|candidate| {
+            candidate
+                .exists()
+                .then(|| self.path_to_workspace_relative(&candidate))
+        })
+    }
+
+    fn path_to_workspace_relative(&self, path: &Path) -> String {
+        match path.strip_prefix(&self.workspace_root) {
+            Ok(relative) => relative.to_string_lossy().replace('\\', "/"),
+            Err(_) => path.to_string_lossy().replace('\\', "/"),
+        }
+    }
+
+    fn ensure_file_fresh(&self, file_path: &str) -> Result<(), LanguageError> {
+        let resolved = self.resolve_path(file_path);
+        if !resolved.exists() {
+            self.remove_file(file_path)?;
+            return Ok(());
+        }
+
+        if resolved.is_file() && Language::from_path(file_path).is_some() {
+            let _ = self.index_file(file_path)?;
+        }
+
+        Ok(())
+    }
+
+    fn ensure_scope_index_fresh(&self, scope_root: Option<&Path>, probe_limit: usize) -> Result<(), LanguageError> {
+        let indexed_files = self.symbol_store.list_indexed_files(probe_limit.max(32))?;
+        let scope_has_any = match scope_root {
+            Some(scope_root) => indexed_files
+                .iter()
+                .any(|record| self.resolve_path(&record.file_path).starts_with(scope_root)),
+            None => !indexed_files.is_empty(),
+        };
+
+        if scope_has_any {
+            return Ok(());
+        }
+
+        match scope_root {
+            Some(scope_root) => {
+                let relative = match scope_root.strip_prefix(&self.workspace_root) {
+                    Ok(path) => path.to_string_lossy().replace('\\', "/"),
+                    Err(_) => String::new(),
+                };
+                let _ = self.index_directory(&relative)?;
+            }
+            None => {
+                let _ = self.index_directory("")?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn refresh_stale_indexed_files(
+        &self,
+        records: &[crate::symbol_index::store::IndexedFileRecord],
+    ) -> Result<(), LanguageError> {
+        for record in records {
+            let resolved = self.resolve_path(&record.file_path);
+            if !resolved.exists() {
+                self.remove_file(&record.file_path)?;
+                continue;
+            }
+            if !resolved.is_file() || Language::from_path(&record.file_path).is_none() {
+                continue;
+            }
+
+            let modified_after_index = resolved
+                .metadata()
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_secs() as i64 > record.indexed_at)
+                .unwrap_or(false);
+
+            if modified_after_index {
+                let _ = self.index_file(&record.file_path)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn reference_matches_symbol(
+        &self,
+        reference: &SymbolReference,
+        symbol: &Symbol,
+    ) -> Result<bool, LanguageError> {
+        match reference.relationship_type {
+            SymbolRelationshipType::Import => Ok(reference.target_name == symbol.file_path),
+            SymbolRelationshipType::Call
+            | SymbolRelationshipType::Export
+            | SymbolRelationshipType::Extends
+            | SymbolRelationshipType::Implements => {
+                if reference.target_symbol_id.as_deref() == Some(symbol.id.as_str()) {
+                    return Ok(true);
+                }
+
+                let resolved = self.resolve_reference_symbols_in_neighborhood(
+                    &reference.target_name,
+                    &reference.source_symbol.file_path,
+                )?;
+                Ok(resolved.iter().any(|candidate| candidate.id == symbol.id))
+            }
+            SymbolRelationshipType::Contains => {
+                Ok(reference.target_symbol_id.as_deref() == Some(symbol.id.as_str()))
+            }
+        }
+    }
+
+    fn resolve_reference_symbols_in_neighborhood(
+        &self,
+        reference_name: &str,
+        file_path: &str,
+    ) -> Result<Vec<Symbol>, LanguageError> {
+        let mut resolved = Vec::new();
+        let mut seen = HashSet::new();
+        let file_symbols = self.get_file_symbols(file_path)?;
+
+        self.collect_matching_symbols(&file_symbols, reference_name, &mut resolved, &mut seen);
+
+        for imported_file in self.get_file_relationship_targets(file_path, SymbolRelationshipType::Import, 24)? {
+            let imported_symbols = self.get_file_symbols(&imported_file)?;
+            self.collect_matching_symbols(&imported_symbols, reference_name, &mut resolved, &mut seen);
+        }
+
+        Ok(resolved)
+    }
+
+    fn find_relationship_references_to_symbol(
+        &self,
+        symbol: &Symbol,
+        relationship_type: SymbolRelationshipType,
+        limit: usize,
+    ) -> Result<Vec<SymbolReference>, LanguageError> {
+        let mut references = Vec::new();
+        let mut seen = HashSet::new();
+        let expanded_limit = limit.saturating_mul(8).max(limit);
+
+        for reference in self
+            .symbol_store
+            .find_references_to_symbol_id(&symbol.id, relationship_type, expanded_limit)?
+        {
+            let key = (
+                reference.source_symbol.id.clone(),
+                reference.relationship_type,
+                reference.line,
+            );
+
+            if seen.insert(key) {
+                references.push(reference);
+                if references.len() >= limit {
+                    return Ok(references);
+                }
+            }
+        }
+
+        for reference in self
+            .symbol_store
+            .find_references_to_target(&symbol.name, relationship_type, expanded_limit)?
+        {
+            if !self.reference_matches_symbol(&reference, symbol)? {
+                continue;
+            }
+
+            let key = (
+                reference.source_symbol.id.clone(),
+                reference.relationship_type,
+                reference.line,
+            );
+
+            if seen.insert(key) {
+                references.push(reference);
+                if references.len() >= limit {
+                    return Ok(references);
+                }
+            }
+        }
+
+        Ok(references)
+    }
+
+    fn resolve_relationship_targets(
+        &self,
+        file_path: &str,
+        file_symbols: &[Symbol],
+        relationships: &mut [SymbolRelationship],
+    ) -> Result<(), LanguageError> {
+        let imported_files = relationships
+            .iter()
+            .filter(|relationship| relationship.relationship_type == SymbolRelationshipType::Import)
+            .map(|relationship| relationship.target_name.clone())
+            .collect::<Vec<_>>();
+
+        for relationship in relationships.iter_mut() {
+            if relationship.relationship_type == SymbolRelationshipType::Import {
+                continue;
+            }
+
+            if relationship.target_symbol_id.is_some() {
+                continue;
+            }
+
+            relationship.target_symbol_id = self.resolve_relationship_symbol_id(
+                &relationship.target_name,
+                file_path,
+                file_symbols,
+                &imported_files,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn resolve_relationship_symbol_id(
+        &self,
+        reference_name: &str,
+        file_path: &str,
+        file_symbols: &[Symbol],
+        imported_files: &[String],
+    ) -> Result<Option<String>, LanguageError> {
+        let mut same_file = Vec::new();
+        let mut seen = HashSet::new();
+        self.collect_matching_symbols(file_symbols, reference_name, &mut same_file, &mut seen);
+
+        if same_file.len() == 1 {
+            return Ok(Some(same_file[0].id.clone()));
+        }
+        if same_file.len() > 1 {
+            return Ok(None);
+        }
+
+        let mut imported_matches = Vec::new();
+        let mut imported_seen = HashSet::new();
+        for imported_file in imported_files {
+            let imported_symbols = self.get_file_symbols(imported_file)?;
+            self.collect_matching_symbols(
+                &imported_symbols,
+                reference_name,
+                &mut imported_matches,
+                &mut imported_seen,
+            );
+        }
+
+        if imported_matches.len() == 1 {
+            return Ok(Some(imported_matches[0].id.clone()));
+        }
+        if imported_matches.len() > 1 {
+            return Ok(None);
+        }
+
+        let preferred_files = imported_files.to_vec();
+        let contextual =
+            self.search_symbols_contextual(reference_name, 8, Some(file_path), &preferred_files)?;
+        let exact = contextual
+            .into_iter()
+            .filter(|result| {
+                result.symbol.name == reference_name
+                    && result.symbol.symbol_type != SymbolType::Import
+            })
+            .map(|result| result.symbol)
+            .collect::<Vec<_>>();
+
+        if exact.len() == 1 {
+            Ok(Some(exact[0].id.clone()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn collect_matching_symbols(
+        &self,
+        symbols: &[Symbol],
+        reference_name: &str,
+        resolved: &mut Vec<Symbol>,
+        seen: &mut HashSet<String>,
+    ) {
+        for symbol in symbols {
+            if symbol.name != reference_name
+                || symbol.symbol_type == SymbolType::Import
+                || Self::is_synthetic_file_root_symbol(symbol)
+            {
+                continue;
+            }
+
+            if seen.insert(symbol.id.clone()) {
+                resolved.push(symbol.clone());
+            }
         }
     }
 
@@ -344,7 +1291,7 @@ impl LanguageService {
             let cache = self.file_cache.read().unwrap();
             if let Some(cached) = cache.get(file_path) {
                 if cached.hash == hash {
-                    return Ok(cached.symbols.clone());
+                    return Ok(self.filter_visible_symbols(file_path, cached.symbols.clone()));
                 }
             }
         }
@@ -362,11 +1309,19 @@ impl LanguageService {
         };
 
         // Extract symbols
-        let symbols = extract_symbols(&tree, content, language, file_path);
+        let extracted_symbols = extract_symbols(&tree, content, language, file_path);
+        let mut relationships =
+            extract_symbol_relationships(&tree, content, language, file_path, &extracted_symbols);
+        let symbols = self.with_file_root_symbol(file_path, content, extracted_symbols);
+        self.canonicalize_import_relationships(file_path, &mut relationships);
+        self.append_module_export_relationships(file_path, content, language, &symbols, &mut relationships);
 
         // Delete old symbols and insert new ones
         self.symbol_store.delete_file_symbols(file_path)?;
         self.symbol_store.upsert_symbols(&symbols)?;
+        self.resolve_relationship_targets(file_path, &symbols, &mut relationships)?;
+        self.symbol_store
+            .replace_relationships_for_file(file_path, &relationships)?;
         self.symbol_store
             .mark_file_indexed(file_path, &hash, symbols.len())?;
 
@@ -394,6 +1349,818 @@ impl LanguageService {
             duration_ms: 0,
         })
     }
+
+    pub fn build_semantic_project_overview(
+        &self,
+        scope_root: Option<&Path>,
+        max_modules: usize,
+        max_symbols_per_module: usize,
+    ) -> Result<Option<String>, LanguageError> {
+        let scope_root = scope_root.and_then(|path| std::fs::canonicalize(path).ok());
+        self.ensure_scope_index_fresh(scope_root.as_deref(), max_modules.saturating_mul(8).max(64))?;
+        let stats = self.stats()?;
+        let mut indexed_files = self.symbol_store.list_indexed_files(max_modules.saturating_mul(8).max(64))?;
+
+        if let Some(scope_root) = scope_root.as_ref() {
+            indexed_files.retain(|record| self.resolve_path(&record.file_path).starts_with(scope_root));
+        }
+
+        self.refresh_stale_indexed_files(&indexed_files)?;
+
+        indexed_files = self.symbol_store.list_indexed_files(max_modules.saturating_mul(8).max(64))?;
+        if let Some(scope_root) = scope_root.as_ref() {
+            indexed_files.retain(|record| self.resolve_path(&record.file_path).starts_with(scope_root));
+        }
+
+        if indexed_files.is_empty() {
+            return Ok(None);
+        }
+
+        #[derive(Debug, Clone)]
+        struct ModuleSummary {
+            file_path: String,
+            symbol_count: usize,
+            import_count: usize,
+            export_count: usize,
+            key_symbols: Vec<String>,
+            score: usize,
+        }
+
+        let mut subsystem_counts: BTreeMap<String, usize> = BTreeMap::new();
+        let mut subsystem_examples: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut important_modules = Vec::<ModuleSummary>::new();
+        let mut entrypoints = Vec::<String>::new();
+        let mut notable_tests = Vec::<String>::new();
+        let mut notable_configs = Vec::<String>::new();
+
+        for record in indexed_files {
+            let subsystem = subsystem_name_for_path(&record.file_path);
+            *subsystem_counts.entry(subsystem.clone()).or_insert(0) += 1;
+            push_unique_limited(
+                subsystem_examples.entry(subsystem).or_default(),
+                record.file_path.clone(),
+                3,
+            );
+
+            let symbols = self.get_file_symbols(&record.file_path).unwrap_or_default();
+            let key_symbols = summarize_key_symbols(&symbols, max_symbols_per_module);
+            let import_count = self
+                .get_file_relationship_targets(&record.file_path, SymbolRelationshipType::Import, 64)
+                .map(|targets| targets.len())
+                .unwrap_or(0);
+            let export_count = match self.get_file_module_symbol(&record.file_path)? {
+                Some(module_symbol) => self
+                    .symbol_store
+                    .get_relationship_edges_from_source(&module_symbol.id, SymbolRelationshipType::Export, 64)
+                    .map(|references| references.len())
+                    .unwrap_or(0),
+                None => 0,
+            };
+            let score = record.symbol_count + (import_count * 2) + (export_count * 3) + key_symbols.len();
+
+            if is_probable_entrypoint(&record.file_path, &symbols, export_count) {
+                push_unique_limited(&mut entrypoints, record.file_path.clone(), 12);
+            }
+            if is_test_path(&record.file_path) {
+                push_unique_limited(&mut notable_tests, record.file_path.clone(), 12);
+            }
+            if is_config_path(&record.file_path) {
+                push_unique_limited(&mut notable_configs, record.file_path.clone(), 12);
+            }
+
+            important_modules.push(ModuleSummary {
+                file_path: record.file_path,
+                symbol_count: record.symbol_count,
+                import_count,
+                export_count,
+                key_symbols,
+                score,
+            });
+        }
+
+        important_modules.sort_by(|a, b| {
+            b.score
+                .cmp(&a.score)
+                .then_with(|| b.export_count.cmp(&a.export_count))
+                .then_with(|| b.import_count.cmp(&a.import_count))
+                .then_with(|| a.file_path.cmp(&b.file_path))
+        });
+        let important_modules = important_modules.into_iter().take(max_modules).collect::<Vec<_>>();
+
+        let project_name = scope_root
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .or_else(|| self.workspace_root.file_name())
+            .and_then(|name| name.to_str())
+            .unwrap_or("project");
+
+        let mut output = String::new();
+        output.push_str(&format!("# Semantic Project Overview: {}\n\n", project_name));
+        output.push_str("## Index Summary\n\n");
+        output.push_str(&format!("- Indexed files: {}\n", stats.files_indexed));
+        output.push_str(&format!("- Indexed symbols: {}\n", stats.symbols_extracted));
+        if let Some(scope_root) = scope_root.as_ref() {
+            output.push_str(&format!("- Scope root: {}\n", self.path_to_workspace_relative(scope_root)));
+        }
+        output.push('\n');
+
+        output.push_str("## Major Directories\n\n");
+        let mut subsystems = subsystem_counts.into_iter().collect::<Vec<_>>();
+        subsystems.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        for (name, count) in subsystems.into_iter().take(10) {
+            let examples = subsystem_examples.remove(&name).unwrap_or_default();
+            if examples.is_empty() {
+                output.push_str(&format!("- {} ({} files)\n", name, count));
+            } else {
+                output.push_str(&format!(
+                    "- {} ({} files): {}\n",
+                    name,
+                    count,
+                    examples.join(", ")
+                ));
+            }
+        }
+        output.push('\n');
+
+        output.push_str("## Top Entrypoints\n\n");
+        if entrypoints.is_empty() {
+            output.push_str("- (none inferred from indexed files)\n");
+        } else {
+            for entry in entrypoints.iter().take(12) {
+                output.push_str(&format!("- {}\n", entry));
+            }
+        }
+        output.push('\n');
+
+        output.push_str("## Important Modules\n\n");
+        for module in &important_modules {
+            output.push_str(&format!("### {}\n\n", module.file_path));
+            output.push_str(&format!("- Symbols: {}\n", module.symbol_count));
+            output.push_str(&format!("- Imports: {}\n", module.import_count));
+            output.push_str(&format!("- Exports: {}\n", module.export_count));
+            if module.key_symbols.is_empty() {
+                output.push_str("- Key symbols: (none indexed)\n\n");
+            } else {
+                output.push_str(&format!("- Key symbols: {}\n\n", module.key_symbols.join(", ")));
+            }
+        }
+
+        output.push_str("## Notable Tests\n\n");
+        if notable_tests.is_empty() {
+            output.push_str("- (none surfaced)\n");
+        } else {
+            for path in notable_tests.iter().take(10) {
+                output.push_str(&format!("- {}\n", path));
+            }
+        }
+        output.push('\n');
+
+        output.push_str("## Notable Configs\n\n");
+        if notable_configs.is_empty() {
+            output.push_str("- (none surfaced)\n");
+        } else {
+            for path in notable_configs.iter().take(10) {
+                output.push_str(&format!("- {}\n", path));
+            }
+        }
+        output.push('\n');
+
+        Ok(Some(output))
+    }
+
+    pub fn get_symbol_graph(
+        &self,
+        symbol: &Symbol,
+        relationship_type: SymbolRelationshipType,
+        limit: usize,
+    ) -> Result<SymbolGraph, LanguageError> {
+        let incoming = match relationship_type {
+            SymbolRelationshipType::Call => self.find_references_to_symbol(symbol, limit)?,
+            SymbolRelationshipType::Import => self
+                .symbol_store
+                .find_references_to_target(&symbol.file_path, SymbolRelationshipType::Import, limit)?,
+            SymbolRelationshipType::Export
+            | SymbolRelationshipType::Extends
+            | SymbolRelationshipType::Implements => {
+                self.find_relationship_references_to_symbol(symbol, relationship_type, limit)?
+            }
+            SymbolRelationshipType::Contains => self.get_containment_incoming(symbol)?,
+        };
+        let outgoing = match relationship_type {
+            SymbolRelationshipType::Contains => self.get_containment_outgoing(symbol, limit)?,
+            _ => self
+                .symbol_store
+                .get_relationship_edges_from_source(&symbol.id, relationship_type, limit)?,
+        };
+
+        Ok(SymbolGraph {
+            symbol: symbol.clone(),
+            incoming,
+            outgoing,
+        })
+    }
+
+    fn get_containment_incoming(
+        &self,
+        symbol: &Symbol,
+    ) -> Result<Vec<SymbolReference>, LanguageError> {
+        let Some(parent_id) = symbol.parent_id.as_deref() else {
+            return Ok(Vec::new());
+        };
+
+        let Some(parent_symbol) = self.symbol_store.get_symbol(parent_id)? else {
+            return Ok(Vec::new());
+        };
+
+        Ok(vec![SymbolReference {
+            source_symbol: parent_symbol,
+            relationship_type: SymbolRelationshipType::Contains,
+            target_name: symbol.name.clone(),
+            target_symbol_id: Some(symbol.id.clone()),
+            target_symbol: Some(symbol.clone()),
+            line: symbol.range.start.line,
+        }])
+    }
+
+    fn get_containment_outgoing(
+        &self,
+        symbol: &Symbol,
+        limit: usize,
+    ) -> Result<Vec<SymbolReference>, LanguageError> {
+        let children = self
+            .get_file_symbols_raw(&symbol.file_path)?
+            .into_iter()
+            .filter(|candidate| candidate.parent_id.as_deref() == Some(symbol.id.as_str()))
+            .take(limit)
+            .collect::<Vec<_>>();
+
+        Ok(children
+            .into_iter()
+            .map(|child| SymbolReference {
+                source_symbol: symbol.clone(),
+                relationship_type: SymbolRelationshipType::Contains,
+                target_name: child.name.clone(),
+                target_symbol_id: Some(child.id.clone()),
+                target_symbol: Some(child.clone()),
+                line: child.range.start.line,
+            })
+            .collect())
+    }
+
+    fn get_file_symbols_raw(&self, file_path: &str) -> Result<Vec<Symbol>, LanguageError> {
+        Ok(self.symbol_store.get_symbols_in_file(file_path)?)
+    }
+
+    fn resolve_exported_symbol_from_module(
+        &self,
+        file_path: &str,
+        export_name: &str,
+    ) -> Result<Option<Symbol>, LanguageError> {
+        let Some(module_symbol) = self.get_file_module_symbol(file_path)? else {
+            return Ok(None);
+        };
+
+        let references = self
+            .symbol_store
+            .get_relationship_edges_from_source(&module_symbol.id, SymbolRelationshipType::Export, 256)?;
+
+        Ok(references
+            .into_iter()
+            .find(|reference| reference.target_name == export_name)
+            .and_then(|reference| reference.target_symbol))
+    }
+
+    fn get_module_export_references(
+        &self,
+        file_path: &str,
+    ) -> Result<Vec<SymbolReference>, LanguageError> {
+        let Some(module_symbol) = self.get_file_module_symbol(file_path)? else {
+            return Ok(Vec::new());
+        };
+
+        Ok(self
+            .symbol_store
+            .get_relationship_edges_from_source(&module_symbol.id, SymbolRelationshipType::Export, 256)?)
+    }
+
+    fn resolve_python_module_target(&self, file_path: &str, module_target: &str) -> Option<String> {
+        let base_file = self.resolve_path(file_path);
+        let parent = base_file.parent()?;
+
+        if module_target.starts_with('.') {
+            let depth = module_target.chars().take_while(|character| *character == '.').count();
+            let remainder = module_target[depth..].trim();
+            let mut anchor = parent.to_path_buf();
+            for _ in 1..depth {
+                anchor = anchor.parent()?.to_path_buf();
+            }
+
+            if remainder.is_empty() {
+                return self.find_existing_import_candidate(&anchor);
+            }
+
+            let normalized = remainder.replace('.', "/");
+            return self.find_existing_import_candidate(&anchor.join(&normalized))
+                .or_else(|| self.find_existing_import_candidate(&self.resolve_path(&normalized)));
+        }
+
+        if let Some(resolved) = self.resolve_import_target(file_path, module_target) {
+            let resolved_path = self.resolve_path(&resolved);
+            if resolved_path.is_dir() {
+                return self.find_existing_import_candidate(&resolved_path);
+            }
+            return Some(resolved);
+        }
+
+        let normalized = module_target.replace('.', "/");
+
+        self.find_existing_import_candidate(&parent.join(&normalized))
+            .or_else(|| self.find_existing_import_candidate(&self.resolve_path(&normalized)))
+    }
+
+    fn append_module_export_relationships(
+        &self,
+        file_path: &str,
+        content: &str,
+        language: Language,
+        symbols: &[Symbol],
+        relationships: &mut Vec<SymbolRelationship>,
+    ) {
+        let root_id = Self::synthetic_file_root_id(file_path);
+        let Some(root_symbol) = symbols.iter().find(|symbol| symbol.id == root_id) else {
+            return;
+        };
+        let mut seen = HashSet::new();
+
+        for symbol in symbols {
+            if symbol.parent_id.as_deref() != Some(root_id.as_str()) {
+                continue;
+            }
+            if symbol.symbol_type == SymbolType::Import || Self::is_synthetic_file_root_symbol(symbol) {
+                continue;
+            }
+            let Some(exported_name) = Self::direct_export_name(content, language, symbol) else {
+                continue;
+            };
+
+            let key = (exported_name.clone(), symbol.id.clone());
+            if !seen.insert(key) {
+                continue;
+            }
+
+            relationships.push(SymbolRelationship {
+                source_symbol_id: root_symbol.id.clone(),
+                source_file_path: file_path.to_string(),
+                target_name: exported_name,
+                target_symbol_id: Some(symbol.id.clone()),
+                relationship_type: SymbolRelationshipType::Export,
+                line: symbol.range.start.line,
+            });
+        }
+
+        if matches!(language, Language::TypeScript | Language::Tsx | Language::JavaScript | Language::Jsx) {
+            for (local_name, exported_name, module_target, line) in typescript_named_export_clauses(content) {
+                let matching_symbol = if let Some(module_target) = module_target {
+                    let Some(resolved_file) = self.resolve_import_target(file_path, &module_target) else {
+                        continue;
+                    };
+                    self.resolve_exported_symbol_from_module(&resolved_file, &local_name)
+                        .ok()
+                        .flatten()
+                        .or_else(|| {
+                            let imported_symbols = self.get_file_symbols_raw(&resolved_file).ok()?;
+                            imported_symbols.into_iter().find(|symbol| {
+                                symbol.name == local_name
+                                    && symbol.symbol_type != SymbolType::Import
+                                    && !Self::is_synthetic_file_root_symbol(symbol)
+                            })
+                        })
+                } else {
+                    symbols.iter().find(|symbol| {
+                        symbol.parent_id.as_deref() == Some(root_id.as_str())
+                            && symbol.name == local_name
+                            && symbol.symbol_type != SymbolType::Import
+                            && !Self::is_synthetic_file_root_symbol(symbol)
+                    }).cloned()
+                };
+                let Some(target_symbol) = matching_symbol else {
+                    continue;
+                };
+
+                let key = (exported_name.clone(), target_symbol.id.clone());
+                if !seen.insert(key) {
+                    continue;
+                }
+
+                relationships.push(SymbolRelationship {
+                    source_symbol_id: root_symbol.id.clone(),
+                    source_file_path: file_path.to_string(),
+                    target_name: exported_name,
+                    target_symbol_id: Some(target_symbol.id.clone()),
+                    relationship_type: SymbolRelationshipType::Export,
+                    line,
+                });
+            }
+
+            for (exported_name, module_target, line) in typescript_namespace_export_clauses(content) {
+                let Some(resolved_file) = self.resolve_import_target(file_path, &module_target) else {
+                    continue;
+                };
+                let Some(target_symbol) = self.get_file_module_symbol(&resolved_file).ok().flatten() else {
+                    continue;
+                };
+
+                let key = (exported_name.clone(), target_symbol.id.clone());
+                if !seen.insert(key) {
+                    continue;
+                }
+
+                relationships.push(SymbolRelationship {
+                    source_symbol_id: root_symbol.id.clone(),
+                    source_file_path: file_path.to_string(),
+                    target_name: exported_name,
+                    target_symbol_id: Some(target_symbol.id.clone()),
+                    relationship_type: SymbolRelationshipType::Export,
+                    line,
+                });
+            }
+
+            for (module_target, line) in typescript_export_star_targets(content) {
+                let Some(resolved_file) = self.resolve_import_target(file_path, &module_target) else {
+                    continue;
+                };
+                let references = match self.get_module_export_references(&resolved_file) {
+                    Ok(references) => references,
+                    Err(_) => continue,
+                };
+
+                for reference in references {
+                    if reference.target_name == "default" {
+                        continue;
+                    }
+                    let Some(target_symbol) = reference.target_symbol else {
+                        continue;
+                    };
+
+                    let key = (reference.target_name.clone(), target_symbol.id.clone());
+                    if !seen.insert(key) {
+                        continue;
+                    }
+
+                    relationships.push(SymbolRelationship {
+                        source_symbol_id: root_symbol.id.clone(),
+                        source_file_path: file_path.to_string(),
+                        target_name: reference.target_name,
+                        target_symbol_id: Some(target_symbol.id.clone()),
+                        relationship_type: SymbolRelationshipType::Export,
+                        line,
+                    });
+                }
+            }
+        }
+
+        if matches!(language, Language::Rust) {
+            for (module_path, exported_name, line) in rust_pub_use_plain_module_reexports(content) {
+                let Some(resolved_file) = self.resolve_import_target(file_path, &module_path) else {
+                    continue;
+                };
+                let Some(target_symbol) = self.get_file_module_symbol(&resolved_file).ok().flatten() else {
+                    continue;
+                };
+
+                let key = (exported_name.clone(), target_symbol.id.clone());
+                if !seen.insert(key) {
+                    continue;
+                }
+
+                relationships.push(SymbolRelationship {
+                    source_symbol_id: root_symbol.id.clone(),
+                    source_file_path: file_path.to_string(),
+                    target_name: exported_name,
+                    target_symbol_id: Some(target_symbol.id.clone()),
+                    relationship_type: SymbolRelationshipType::Export,
+                    line,
+                });
+            }
+
+            for (module_path, exported_name, line) in rust_grouped_pub_use_module_reexports(content) {
+                let Some(resolved_file) = self.resolve_import_target(file_path, &module_path) else {
+                    continue;
+                };
+                let Some(target_symbol) = self.get_file_module_symbol(&resolved_file).ok().flatten() else {
+                    continue;
+                };
+
+                let key = (exported_name.clone(), target_symbol.id.clone());
+                if !seen.insert(key) {
+                    continue;
+                }
+
+                relationships.push(SymbolRelationship {
+                    source_symbol_id: root_symbol.id.clone(),
+                    source_file_path: file_path.to_string(),
+                    target_name: exported_name,
+                    target_symbol_id: Some(target_symbol.id.clone()),
+                    relationship_type: SymbolRelationshipType::Export,
+                    line,
+                });
+            }
+
+            for (module_path, exported_name, line) in rust_pub_use_module_reexports(content) {
+                let Some(resolved_file) = self.resolve_import_target(file_path, &module_path) else {
+                    continue;
+                };
+                let Some(target_symbol) = self.get_file_module_symbol(&resolved_file).ok().flatten() else {
+                    continue;
+                };
+
+                let key = (exported_name.clone(), target_symbol.id.clone());
+                if !seen.insert(key) {
+                    continue;
+                }
+
+                relationships.push(SymbolRelationship {
+                    source_symbol_id: root_symbol.id.clone(),
+                    source_file_path: file_path.to_string(),
+                    target_name: exported_name,
+                    target_symbol_id: Some(target_symbol.id.clone()),
+                    relationship_type: SymbolRelationshipType::Export,
+                    line,
+                });
+            }
+
+            for (module_path, symbol_name, exported_name, line) in rust_pub_use_reexports(content) {
+                let Some(resolved_file) = self.resolve_import_target(file_path, &module_path) else {
+                    continue;
+                };
+                let imported_symbols = match self.get_file_symbols_raw(&resolved_file) {
+                    Ok(symbols) => symbols,
+                    Err(_) => continue,
+                };
+                let matching_symbol = imported_symbols.into_iter().find(|symbol| {
+                    symbol.name == symbol_name
+                        && symbol.symbol_type != SymbolType::Import
+                        && !Self::is_synthetic_file_root_symbol(symbol)
+                });
+                let Some(target_symbol) = matching_symbol else {
+                    continue;
+                };
+
+                let key = (exported_name.clone(), target_symbol.id.clone());
+                if !seen.insert(key) {
+                    continue;
+                }
+
+                relationships.push(SymbolRelationship {
+                    source_symbol_id: root_symbol.id.clone(),
+                    source_file_path: file_path.to_string(),
+                    target_name: exported_name,
+                    target_symbol_id: Some(target_symbol.id.clone()),
+                    relationship_type: SymbolRelationshipType::Export,
+                    line,
+                });
+            }
+
+            for (module_path, line) in rust_pub_use_glob_reexports(content) {
+                let Some(resolved_file) = self.resolve_import_target(file_path, &module_path) else {
+                    continue;
+                };
+                let references = match self.get_module_export_references(&resolved_file) {
+                    Ok(references) => references,
+                    Err(_) => continue,
+                };
+
+                for reference in references {
+                    let Some(target_symbol) = reference.target_symbol else {
+                        continue;
+                    };
+
+                    let key = (reference.target_name.clone(), target_symbol.id.clone());
+                    if !seen.insert(key) {
+                        continue;
+                    }
+
+                    relationships.push(SymbolRelationship {
+                        source_symbol_id: root_symbol.id.clone(),
+                        source_file_path: file_path.to_string(),
+                        target_name: reference.target_name,
+                        target_symbol_id: Some(target_symbol.id.clone()),
+                        relationship_type: SymbolRelationshipType::Export,
+                        line,
+                    });
+                }
+            }
+        }
+
+        if matches!(language, Language::Python) {
+            for (module_target, exported_name, line) in python_import_module_clauses(content) {
+                if !python_is_exported_name(content, &exported_name) {
+                    continue;
+                }
+                let Some(resolved_file) = self.resolve_python_module_target(file_path, &module_target) else {
+                    continue;
+                };
+                let Some(target_symbol) = self.get_file_module_symbol(&resolved_file).ok().flatten() else {
+                    continue;
+                };
+
+                let key = (exported_name.clone(), target_symbol.id.clone());
+                if !seen.insert(key) {
+                    continue;
+                }
+
+                relationships.push(SymbolRelationship {
+                    source_symbol_id: root_symbol.id.clone(),
+                    source_file_path: file_path.to_string(),
+                    target_name: exported_name,
+                    target_symbol_id: Some(target_symbol.id.clone()),
+                    relationship_type: SymbolRelationshipType::Export,
+                    line,
+                });
+            }
+
+            for (module_target, local_name, exported_name, line) in python_from_import_clauses(content) {
+                if !python_is_exported_name(content, &exported_name) {
+                    continue;
+                }
+                let Some(resolved_file) = self.resolve_python_module_target(file_path, &module_target) else {
+                    continue;
+                };
+                let matching_symbol = self
+                    .resolve_exported_symbol_from_module(&resolved_file, &local_name)
+                    .ok()
+                    .flatten()
+                    .or_else(|| {
+                        let submodule_target = python_join_module_target(&module_target, &local_name);
+                        let submodule_file = self.resolve_python_module_target(file_path, &submodule_target)?;
+                        self.get_file_module_symbol(&submodule_file).ok().flatten()
+                    })
+                    .or_else(|| {
+                        let imported_symbols = self.get_file_symbols_raw(&resolved_file).ok()?;
+                        imported_symbols.into_iter().find(|symbol| {
+                            symbol.name == local_name
+                                && symbol.symbol_type != SymbolType::Import
+                                && !Self::is_synthetic_file_root_symbol(symbol)
+                        })
+                    });
+                let Some(target_symbol) = matching_symbol else {
+                    continue;
+                };
+
+                let key = (exported_name.clone(), target_symbol.id.clone());
+                if !seen.insert(key) {
+                    continue;
+                }
+
+                relationships.push(SymbolRelationship {
+                    source_symbol_id: root_symbol.id.clone(),
+                    source_file_path: file_path.to_string(),
+                    target_name: exported_name,
+                    target_symbol_id: Some(target_symbol.id.clone()),
+                    relationship_type: SymbolRelationshipType::Export,
+                    line,
+                });
+            }
+
+            for (module_target, line) in python_from_import_star_targets(content) {
+                let Some(resolved_file) = self.resolve_python_module_target(file_path, &module_target) else {
+                    continue;
+                };
+                let references = match self.get_module_export_references(&resolved_file) {
+                    Ok(references) => references,
+                    Err(_) => continue,
+                };
+
+                for reference in references {
+                    if !python_is_exported_name(content, &reference.target_name) {
+                        continue;
+                    }
+                    let Some(target_symbol) = reference.target_symbol else {
+                        continue;
+                    };
+
+                    let key = (reference.target_name.clone(), target_symbol.id.clone());
+                    if !seen.insert(key) {
+                        continue;
+                    }
+
+                    relationships.push(SymbolRelationship {
+                        source_symbol_id: root_symbol.id.clone(),
+                        source_file_path: file_path.to_string(),
+                        target_name: reference.target_name,
+                        target_symbol_id: Some(target_symbol.id.clone()),
+                        relationship_type: SymbolRelationshipType::Export,
+                        line,
+                    });
+                }
+            }
+        }
+    }
+
+    fn filter_visible_search_results(&self, results: Vec<SearchResult>) -> Vec<SearchResult> {
+        results
+            .into_iter()
+            .filter_map(|mut result| {
+                let file_path = result.symbol.file_path.clone();
+                result.symbol = self.normalize_visible_symbol(&file_path, result.symbol)?;
+                Some(result)
+            })
+            .collect()
+    }
+
+    fn filter_visible_symbols(&self, file_path: &str, symbols: Vec<Symbol>) -> Vec<Symbol> {
+        symbols
+            .into_iter()
+            .filter_map(|symbol| self.normalize_visible_symbol(file_path, symbol))
+            .collect()
+    }
+
+    fn normalize_visible_symbol(&self, file_path: &str, mut symbol: Symbol) -> Option<Symbol> {
+        let root_id = Self::synthetic_file_root_id(file_path);
+        if symbol.id == root_id && Self::is_synthetic_file_root_symbol(&symbol) {
+            return None;
+        }
+
+        if symbol.parent_id.as_deref() == Some(root_id.as_str()) {
+            symbol.parent_id = None;
+        }
+
+        Some(symbol)
+    }
+
+    fn with_file_root_symbol(&self, file_path: &str, content: &str, mut symbols: Vec<Symbol>) -> Vec<Symbol> {
+        let root = Self::synthetic_file_root_symbol(file_path, content);
+        let root_id = root.id.clone();
+
+        for symbol in symbols.iter_mut() {
+            if symbol.parent_id.is_none() {
+                symbol.parent_id = Some(root_id.clone());
+            }
+        }
+
+        symbols.push(root);
+        symbols.sort_by_key(|symbol| (symbol.range.start.line, symbol.range.start.character, symbol.byte_offset));
+        symbols
+    }
+
+    fn synthetic_file_root_symbol(file_path: &str, content: &str) -> Symbol {
+        let file_name = Path::new(file_path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(file_path)
+            .to_string();
+        let (end_line, end_character) = file_end_position(content);
+
+        Symbol {
+            id: Self::synthetic_file_root_id(file_path),
+            name: file_name,
+            qualified_name: "__file__".to_string(),
+            symbol_type: SymbolType::Module,
+            file_path: file_path.to_string(),
+            range: crate::tree_sitter::Range {
+                start: crate::tree_sitter::Position::new(0, 0),
+                end: crate::tree_sitter::Position::new(end_line, end_character),
+            },
+            byte_offset: 0,
+            byte_length: content.len(),
+            parent_id: None,
+            docstring: None,
+            signature: None,
+            content_hash: compute_hash(content),
+        }
+    }
+
+    fn synthetic_file_root_id(file_path: &str) -> String {
+        format!("{}::__file__#{}", file_path, SymbolType::Module)
+    }
+
+    fn is_synthetic_file_root_symbol(symbol: &Symbol) -> bool {
+        symbol.symbol_type == SymbolType::Module && symbol.qualified_name == "__file__"
+    }
+
+    fn direct_export_name(content: &str, language: Language, symbol: &Symbol) -> Option<String> {
+        let line = symbol_line_text(content, symbol.byte_offset).trim_start();
+        match language {
+            Language::TypeScript | Language::Tsx | Language::JavaScript | Language::Jsx => {
+                if line.starts_with("export default ") {
+                    Some("default".to_string())
+                } else if line.starts_with("export ") {
+                    Some(symbol.name.clone())
+                } else {
+                    None
+                }
+            }
+            Language::Rust => line.starts_with("pub ").then(|| symbol.name.clone()),
+            Language::Python => python_is_exported_name(content, &symbol.name).then(|| symbol.name.clone()),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SymbolGraph {
+    pub symbol: Symbol,
+    pub incoming: Vec<SymbolReference>,
+    pub outgoing: Vec<SymbolReference>,
 }
 
 /// Statistics about indexing operations
@@ -413,6 +2180,142 @@ fn compute_hash(content: &str) -> String {
     let mut hasher = DefaultHasher::new();
     content.hash(&mut hasher);
     format!("{:x}", hasher.finish())
+}
+
+fn push_unique_limited(items: &mut Vec<String>, value: String, limit: usize) {
+    if items.len() >= limit || items.iter().any(|existing| existing == &value) {
+        return;
+    }
+    items.push(value);
+}
+
+fn subsystem_name_for_path(file_path: &str) -> String {
+    let trimmed = file_path.trim_matches('/');
+    if trimmed.is_empty() {
+        return "(root)".to_string();
+    }
+    trimmed.split('/').next().unwrap_or("(root)").to_string()
+}
+
+fn summarize_key_symbols(symbols: &[Symbol], limit: usize) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+
+    for symbol in symbols {
+        if symbol.parent_id.is_some() {
+            continue;
+        }
+        match symbol.symbol_type {
+            SymbolType::Import | SymbolType::Module | SymbolType::Namespace => continue,
+            _ => {}
+        }
+
+        let label = format!("{} ({})", symbol.name, symbol.symbol_type);
+        if seen.insert(label.clone()) {
+            out.push(label);
+        }
+        if out.len() >= limit {
+            break;
+        }
+    }
+
+    out
+}
+
+fn is_probable_entrypoint(file_path: &str, symbols: &[Symbol], export_count: usize) -> bool {
+    let lower = file_path.to_lowercase();
+    if [
+        "main.rs",
+        "main.ts",
+        "main.tsx",
+        "main.js",
+        "main.jsx",
+        "app.rs",
+        "app.ts",
+        "app.tsx",
+        "app.js",
+        "server.ts",
+        "server.js",
+        "index.ts",
+        "index.tsx",
+        "index.js",
+        "index.jsx",
+        "lib.rs",
+        "mod.rs",
+        "__init__.py",
+        "cli.rs",
+    ]
+    .iter()
+    .any(|suffix| lower.ends_with(suffix))
+    {
+        return true;
+    }
+
+    export_count > 0
+        && symbols.iter().any(|symbol| {
+            symbol.parent_id.is_none()
+                && matches!(
+                    symbol.symbol_type,
+                    SymbolType::Function
+                        | SymbolType::Class
+                        | SymbolType::Struct
+                        | SymbolType::Interface
+                        | SymbolType::Trait
+                )
+        })
+}
+
+fn is_test_path(file_path: &str) -> bool {
+    let lower = file_path.to_lowercase();
+    lower.contains("/test")
+        || lower.contains("/tests/")
+        || lower.ends_with("_test.rs")
+        || lower.ends_with("_test.py")
+        || lower.ends_with(".test.ts")
+        || lower.ends_with(".test.tsx")
+        || lower.ends_with(".test.js")
+        || lower.ends_with(".spec.ts")
+        || lower.ends_with(".spec.tsx")
+        || lower.ends_with(".spec.js")
+}
+
+fn is_config_path(file_path: &str) -> bool {
+    let lower = file_path.to_lowercase();
+    lower.ends_with("package.json")
+        || lower.ends_with("cargo.toml")
+        || lower.ends_with("tsconfig.json")
+        || lower.ends_with("pyproject.toml")
+        || lower.ends_with("requirements.txt")
+        || lower.ends_with("dockerfile")
+        || lower.ends_with("docker-compose.yml")
+        || lower.ends_with("docker-compose.yaml")
+        || lower.ends_with("vite.config.ts")
+        || lower.ends_with("vite.config.js")
+        || lower.ends_with("next.config.js")
+        || lower.ends_with("next.config.mjs")
+        || lower.ends_with("jest.config.js")
+        || lower.ends_with("jest.config.ts")
+        || lower.ends_with("pytest.ini")
+        || lower.ends_with(".env.example")
+}
+
+fn file_end_position(content: &str) -> (u32, u32) {
+    if content.is_empty() {
+        return (0, 0);
+    }
+
+    let mut last_line = 0u32;
+    let mut last_width = 0u32;
+    for (idx, line) in content.lines().enumerate() {
+        last_line = idx as u32;
+        last_width = line.chars().count() as u32;
+    }
+
+    if content.ends_with('\n') {
+        (last_line.saturating_add(1), 0)
+    } else {
+        (last_line, last_width)
+    }
 }
 
 #[cfg(test)]
@@ -487,6 +2390,1517 @@ mod tests {
 
         // Should find authenticate and authorize
         assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_index_file_persists_call_relationships() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("main.ts"),
+            r#"
+            function helperName(): string {
+                return "helper";
+            }
+
+            function greetUser(): string {
+                return helperName();
+            }
+        "#,
+        )
+        .unwrap();
+
+        let symbols = service.index_file("main.ts").unwrap();
+        let caller = symbols
+            .iter()
+            .find(|symbol| symbol.name == "greetUser")
+            .unwrap();
+
+        let targets = service
+            .get_relationship_targets(&caller.id, SymbolRelationshipType::Call, 10)
+            .unwrap();
+
+        assert!(targets.iter().any(|target| target == "helperName"));
+
+        let graph = service
+            .get_symbol_graph(caller, SymbolRelationshipType::Call, 10)
+            .unwrap();
+        assert_eq!(graph.outgoing.len(), 1);
+        assert_eq!(graph.outgoing[0].target_symbol_id.as_deref(), Some("main.ts::helperName#function"));
+    }
+
+    #[test]
+    fn test_index_file_persists_import_relationships() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(temp_dir.path().join("utils.ts"), "export function helper() { return 'ok'; }").unwrap();
+        fs::write(
+            temp_dir.path().join("main.ts"),
+            r#"
+            import { helper } from "./utils";
+
+            function run(): string {
+                return helper();
+            }
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("utils.ts").unwrap();
+        service.index_file("main.ts").unwrap();
+
+        let targets = service
+            .get_file_relationship_targets("main.ts", SymbolRelationshipType::Import, 10)
+            .unwrap();
+
+        assert!(targets.iter().any(|target| target == "utils.ts"));
+    }
+
+    #[test]
+    fn test_build_semantic_project_overview_surfaces_modules_and_tests() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+        fs::create_dir_all(temp_dir.path().join("tests")).unwrap();
+
+        fs::write(
+            temp_dir.path().join("src").join("main.ts"),
+            r#"
+            import { helper } from "./utils";
+
+            export function runApp(): string {
+                return helper();
+            }
+        "#,
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("src").join("utils.ts"),
+            r#"
+            export function helper(): string {
+                return "ok";
+            }
+        "#,
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("tests").join("main.test.ts"),
+            r#"
+            import { runApp } from "../src/main";
+
+            export function testRunApp(): string {
+                return runApp();
+            }
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("src/main.ts").unwrap();
+        service.index_file("src/utils.ts").unwrap();
+        service.index_file("tests/main.test.ts").unwrap();
+
+        let overview = service
+            .build_semantic_project_overview(None, 8, 4)
+            .unwrap()
+            .unwrap();
+
+        assert!(overview.contains("# Semantic Project Overview:"));
+        assert!(overview.contains("## Major Directories"));
+        assert!(overview.contains("src/main.ts"));
+        assert!(overview.contains("src/utils.ts"));
+        assert!(overview.contains("tests/main.test.ts"));
+        assert!(overview.contains("runApp (function)"));
+        assert!(overview.contains("helper (function)"));
+    }
+
+    #[test]
+    fn test_build_semantic_project_overview_bootstraps_unindexed_scope() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+        fs::write(
+            temp_dir.path().join("src").join("bootstrap.ts"),
+            r#"
+            export function bootstrapApp(): string {
+                return "ok";
+            }
+        "#,
+        )
+        .unwrap();
+
+        let overview = service
+            .build_semantic_project_overview(None, 8, 4)
+            .unwrap()
+            .unwrap();
+
+        assert!(overview.contains("src/bootstrap.ts"));
+        assert!(overview.contains("bootstrapApp (function)"));
+    }
+
+    #[test]
+    fn test_get_file_symbols_refreshes_after_disk_change() {
+        let (service, temp_dir) = create_test_service();
+
+        let file_path = temp_dir.path().join("fresh.ts");
+        fs::write(
+            &file_path,
+            r#"
+            export function firstName(): string {
+                return "first";
+            }
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("fresh.ts").unwrap();
+
+        fs::write(
+            &file_path,
+            r#"
+            export function updatedName(): string {
+                return "updated";
+            }
+        "#,
+        )
+        .unwrap();
+
+        let symbols = service.get_file_symbols("fresh.ts").unwrap();
+        assert!(symbols.iter().any(|symbol| symbol.name == "updatedName"));
+        assert!(!symbols.iter().any(|symbol| symbol.name == "firstName"));
+    }
+
+    #[test]
+    fn test_find_references_to_symbol_uses_neighborhood_resolution() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("utils.ts"),
+            r#"
+            export function helperName(): string {
+                return "imported";
+            }
+        "#,
+        )
+        .unwrap();
+
+        fs::write(
+            temp_dir.path().join("main.ts"),
+            r#"
+            import { helperName } from "./utils";
+
+            export function greetUser(): string {
+                return helperName();
+            }
+        "#,
+        )
+        .unwrap();
+
+        fs::write(
+            temp_dir.path().join("other.ts"),
+            r#"
+            function helperName(): string {
+                return "local";
+            }
+
+            export function unrelated(): string {
+                return helperName();
+            }
+        "#,
+        )
+        .unwrap();
+
+        let utils_symbols = service.index_file("utils.ts").unwrap();
+        service.index_file("main.ts").unwrap();
+        service.index_file("other.ts").unwrap();
+
+        let helper = utils_symbols
+            .iter()
+            .find(|symbol| symbol.name == "helperName")
+            .unwrap();
+
+        let references = service.find_references_to_symbol(helper, 10).unwrap();
+
+        assert_eq!(references.len(), 2);
+        assert!(references.iter().any(|reference| {
+            reference.source_symbol.name == "greetUser"
+                && reference.source_symbol.file_path == "main.ts"
+                && reference.relationship_type == SymbolRelationshipType::Call
+                && reference.target_symbol_id.as_deref() == Some(helper.id.as_str())
+        }));
+        assert!(references.iter().any(|reference| {
+            reference.source_symbol.symbol_type == SymbolType::Import
+                && reference.source_symbol.file_path == "main.ts"
+                && reference.relationship_type == SymbolRelationshipType::Import
+        }));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_returns_incoming_and_outgoing_calls() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("main.ts"),
+            r#"
+            function helperName(): string {
+                return "helper";
+            }
+
+            function greetUser(): string {
+                return helperName();
+            }
+
+            function greetAgain(): string {
+                return greetUser();
+            }
+        "#,
+        )
+        .unwrap();
+
+        let symbols = service.index_file("main.ts").unwrap();
+        let greet_user = symbols
+            .iter()
+            .find(|symbol| symbol.name == "greetUser")
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(greet_user, SymbolRelationshipType::Call, 10)
+            .unwrap();
+
+        assert!(graph.incoming.iter().any(|reference| reference.source_symbol.name == "greetAgain"));
+        assert!(graph.outgoing.iter().any(|reference| reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("helperName")));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_returns_structural_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("service.ts"),
+            r#"
+            interface BaseService {}
+            interface Service extends BaseService {}
+
+            class CoreService {}
+
+            class UserService extends CoreService implements Service {
+                run() {}
+            }
+        "#,
+        )
+        .unwrap();
+
+        let symbols = service.index_file("service.ts").unwrap();
+        let user_service = symbols
+            .iter()
+            .find(|symbol| symbol.name == "UserService")
+            .unwrap();
+        let service_interface = symbols
+            .iter()
+            .find(|symbol| symbol.name == "Service" && symbol.symbol_type == SymbolType::Interface)
+            .unwrap();
+
+        let extends_graph = service
+            .get_symbol_graph(user_service, SymbolRelationshipType::Extends, 10)
+            .unwrap();
+        assert!(extends_graph.outgoing.iter().any(|reference| {
+            reference.target_name == "CoreService"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("CoreService")
+        }));
+
+        let implements_graph = service
+            .get_symbol_graph(service_interface, SymbolRelationshipType::Implements, 10)
+            .unwrap();
+        assert!(implements_graph.incoming.iter().any(|reference| {
+            reference.source_symbol.name == "UserService"
+                && reference.target_symbol_id.as_deref() == Some(service_interface.id.as_str())
+        }));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_returns_containment_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("service.ts"),
+            r#"
+            class UserService {
+                getUser(id: string): string {
+                    return id;
+                }
+            }
+        "#,
+        )
+        .unwrap();
+
+        let symbols = service.index_file("service.ts").unwrap();
+        let user_service = symbols
+            .iter()
+            .find(|symbol| symbol.name == "UserService")
+            .unwrap();
+        let get_user = symbols
+            .iter()
+            .find(|symbol| symbol.name == "getUser")
+            .unwrap();
+
+        let parent_graph = service
+            .get_symbol_graph(user_service, SymbolRelationshipType::Contains, 10)
+            .unwrap();
+        assert!(parent_graph.outgoing.iter().any(|reference| {
+            reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("getUser")
+        }));
+
+        let child_graph = service
+            .get_symbol_graph(get_user, SymbolRelationshipType::Contains, 10)
+            .unwrap();
+        assert!(child_graph.incoming.iter().any(|reference| {
+            reference.source_symbol.name == "UserService"
+                && reference.target_symbol_id.as_deref() == Some(get_user.id.as_str())
+        }));
+    }
+
+    #[test]
+    fn test_get_file_symbols_hides_synthetic_file_root() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("service.ts"),
+            r#"
+            class UserService {
+                getUser(id: string): string {
+                    return id;
+                }
+            }
+        "#,
+        )
+        .unwrap();
+
+        let visible_symbols = service.index_file("service.ts").unwrap();
+        assert!(visible_symbols.iter().all(|symbol| symbol.qualified_name != "__file__"));
+        assert!(visible_symbols.iter().all(|symbol| symbol.parent_id.as_deref() != Some("service.ts::__file__#module")));
+
+        let stored_symbols = service.get_file_symbols_raw("service.ts").unwrap();
+        assert!(stored_symbols.iter().any(|symbol| symbol.qualified_name == "__file__"));
+    }
+
+    #[test]
+    fn test_search_symbols_hides_synthetic_file_root() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("service.ts"),
+            r#"
+            class UserService {
+                getUser(id: string): string {
+                    return id;
+                }
+            }
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("service.ts").unwrap();
+        let results = service.search_symbols("service", 10).unwrap();
+
+        assert!(results.iter().all(|result| result.symbol.qualified_name != "__file__"));
+        assert!(results.iter().any(|result| result.symbol.name == "UserService"));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_returns_module_export_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("service.ts"),
+            r#"
+            export class UserService {
+                getUser(id: string): string {
+                    return id;
+                }
+            }
+
+            class InternalService {}
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("service.ts").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("service.ts")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference.target_name == "UserService"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+        }));
+        assert!(!graph.outgoing.iter().any(|reference| reference.target_name == "InternalService"));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_returns_named_module_export_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("service.ts"),
+            r#"
+            class UserService {
+                getUser(id: string): string {
+                    return id;
+                }
+            }
+
+            class InternalService {}
+
+            export { UserService as Service };
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("service.ts").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("service.ts")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference.target_name == "Service"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+        }));
+        assert!(!graph.outgoing.iter().any(|reference| reference.target_name == "InternalService"));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_returns_named_reexport_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("base.ts"),
+            r#"
+            export class UserService {
+                getUser(id: string): string {
+                    return id;
+                }
+            }
+        "#,
+        )
+        .unwrap();
+
+        fs::write(
+            temp_dir.path().join("service.ts"),
+            r#"
+            export { UserService as Service } from "./base";
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("base.ts").unwrap();
+        service.index_file("service.ts").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("service.ts")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference.target_name == "Service"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.ts")
+                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+        }));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_propagates_typescript_export_star_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("base.ts"),
+            r#"
+            export default class HiddenService {}
+
+            export class UserService {}
+            export class AuditService {}
+        "#,
+        )
+        .unwrap();
+
+        fs::write(
+            temp_dir.path().join("service.ts"),
+            r#"
+            export * from "./base";
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("base.ts").unwrap();
+        service.index_file("service.ts").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("service.ts")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| reference.target_name == "UserService"));
+        assert!(graph.outgoing.iter().any(|reference| reference.target_name == "AuditService"));
+        assert!(!graph.outgoing.iter().any(|reference| reference.target_name == "default"));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_returns_typescript_namespace_reexport_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("base.ts"),
+            r#"
+            export class UserService {}
+        "#,
+        )
+        .unwrap();
+
+        fs::write(
+            temp_dir.path().join("service.ts"),
+            r#"
+            export * as api from "./base";
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("base.ts").unwrap();
+        service.index_file("service.ts").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("service.ts")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference.target_name == "api"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.ts")
+                && reference.target_symbol.as_ref().map(|symbol| symbol.qualified_name.as_str()) == Some("__file__")
+                && reference.target_symbol.as_ref().map(|symbol| symbol.symbol_type) == Some(SymbolType::Module)
+        }));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_returns_default_export_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("service.ts"),
+            r#"
+            export default class UserService {
+                getUser(id: string): string {
+                    return id;
+                }
+            }
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("service.ts").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("service.ts")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference.target_name == "default"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+        }));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_resolves_default_reexport_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("base.ts"),
+            r#"
+            export default class UserService {
+                getUser(id: string): string {
+                    return id;
+                }
+            }
+        "#,
+        )
+        .unwrap();
+
+        fs::write(
+            temp_dir.path().join("service.ts"),
+            r#"
+            export { default as Service } from "./base";
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("base.ts").unwrap();
+        service.index_file("service.ts").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("service.ts")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference.target_name == "Service"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.ts")
+                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+        }));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_returns_rust_pub_use_reexport_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("base.rs"),
+            r#"
+            pub struct UserService;
+        "#,
+        )
+        .unwrap();
+
+        fs::write(
+            temp_dir.path().join("lib.rs"),
+            r#"
+            pub use crate::base::UserService;
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("base.rs").unwrap();
+        service.index_file("lib.rs").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("lib.rs")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference.target_name == "UserService"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.rs")
+                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+        }));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_returns_rust_direct_module_export_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("base.rs"),
+            r#"
+            pub struct UserService;
+            struct InternalService;
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("base.rs").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("base.rs")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference.target_name == "UserService"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+        }));
+        assert!(!graph.outgoing.iter().any(|reference| reference.target_name == "InternalService"));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_preserves_rust_pub_use_alias_names() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("base.rs"),
+            r#"
+            pub struct UserService;
+        "#,
+        )
+        .unwrap();
+
+        fs::write(
+            temp_dir.path().join("lib.rs"),
+            r#"
+            pub use crate::base::UserService as Service;
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("base.rs").unwrap();
+        service.index_file("lib.rs").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("lib.rs")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference.target_name == "Service"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+        }));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_returns_rust_module_alias_reexport_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("base.rs"),
+            r#"
+            pub struct UserService;
+        "#,
+        )
+        .unwrap();
+
+        fs::write(
+            temp_dir.path().join("lib.rs"),
+            r#"
+            pub use crate::base as api;
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("base.rs").unwrap();
+        service.index_file("lib.rs").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("lib.rs")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference.target_name == "api"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.rs")
+                && reference.target_symbol.as_ref().map(|symbol| symbol.qualified_name.as_str()) == Some("__file__")
+                && reference.target_symbol.as_ref().map(|symbol| symbol.symbol_type) == Some(SymbolType::Module)
+        }));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_returns_rust_plain_module_reexport_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("base.rs"),
+            r#"
+            pub struct UserService;
+        "#,
+        )
+        .unwrap();
+
+        fs::write(
+            temp_dir.path().join("lib.rs"),
+            r#"
+            pub use crate::base;
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("base.rs").unwrap();
+        service.index_file("lib.rs").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("lib.rs")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference.target_name == "base"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.rs")
+                && reference.target_symbol.as_ref().map(|symbol| symbol.qualified_name.as_str()) == Some("__file__")
+                && reference.target_symbol.as_ref().map(|symbol| symbol.symbol_type) == Some(SymbolType::Module)
+        }));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_returns_grouped_rust_module_alias_reexport_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("base.rs"),
+            r#"
+            pub struct UserService;
+        "#,
+        )
+        .unwrap();
+
+        fs::write(
+            temp_dir.path().join("lib.rs"),
+            r#"
+            pub use crate::base::{self as api, UserService};
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("base.rs").unwrap();
+        service.index_file("lib.rs").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("lib.rs")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference.target_name == "api"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.rs")
+                && reference.target_symbol.as_ref().map(|symbol| symbol.qualified_name.as_str()) == Some("__file__")
+                && reference.target_symbol.as_ref().map(|symbol| symbol.symbol_type) == Some(SymbolType::Module)
+        }));
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference.target_name == "UserService"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+        }));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_returns_rust_grouped_pub_use_reexport_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("base.rs"),
+            r#"
+            pub struct UserService;
+            pub struct AuditService;
+        "#,
+        )
+        .unwrap();
+
+        fs::write(
+            temp_dir.path().join("lib.rs"),
+            r#"
+            pub use crate::base::{UserService, AuditService};
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("base.rs").unwrap();
+        service.index_file("lib.rs").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("lib.rs")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference.target_name == "UserService"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.rs")
+        }));
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference.target_name == "AuditService"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.rs")
+        }));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_propagates_rust_glob_pub_use_reexport_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("base.rs"),
+            r#"
+            pub struct UserService;
+            pub struct AuditService;
+        "#,
+        )
+        .unwrap();
+
+        fs::write(
+            temp_dir.path().join("lib.rs"),
+            r#"
+            pub use crate::base::*;
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("base.rs").unwrap();
+        service.index_file("lib.rs").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("lib.rs")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| reference.target_name == "UserService"));
+        assert!(graph.outgoing.iter().any(|reference| reference.target_name == "AuditService"));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_returns_python_dunder_all_exports() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("service.py"),
+            r#"
+__all__ = ["UserService"]
+
+class UserService:
+    pass
+
+class _InternalService:
+    pass
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("service.py").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("service.py")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference.target_name == "UserService"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+        }));
+        assert!(!graph.outgoing.iter().any(|reference| reference.target_name == "_InternalService"));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_returns_python_imported_reexport_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("base.py"),
+            r#"
+class UserService:
+    pass
+
+class _InternalService:
+    pass
+        "#,
+        )
+        .unwrap();
+
+        fs::write(
+            temp_dir.path().join("service.py"),
+            r#"
+from base import UserService
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("base.py").unwrap();
+        service.index_file("service.py").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("service.py")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference.target_name == "UserService"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.py")
+                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+        }));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_returns_python_relative_imported_reexport_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::create_dir_all(temp_dir.path().join("pkg")).unwrap();
+        fs::write(temp_dir.path().join("pkg").join("__init__.py"), "").unwrap();
+        fs::write(
+            temp_dir.path().join("pkg").join("base.py"),
+            r#"
+class UserService:
+    pass
+        "#,
+        )
+        .unwrap();
+
+        fs::write(
+            temp_dir.path().join("pkg").join("service.py"),
+            r#"
+from .base import UserService
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("pkg/base.py").unwrap();
+        service.index_file("pkg/service.py").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("pkg/service.py")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference.target_name == "UserService"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("pkg/base.py")
+                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+        }));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_returns_python_relative_submodule_reexport_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::create_dir_all(temp_dir.path().join("pkg")).unwrap();
+        fs::write(temp_dir.path().join("pkg").join("__init__.py"), "").unwrap();
+        fs::write(
+            temp_dir.path().join("pkg").join("base.py"),
+            r#"
+class UserService:
+    pass
+        "#,
+        )
+        .unwrap();
+
+        fs::write(
+            temp_dir.path().join("pkg").join("service.py"),
+            r#"
+from . import base
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("pkg/base.py").unwrap();
+        service.index_file("pkg/service.py").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("pkg/service.py")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference.target_name == "base"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("pkg/base.py")
+                && reference.target_symbol.as_ref().map(|symbol| symbol.qualified_name.as_str()) == Some("__file__")
+                && reference.target_symbol.as_ref().map(|symbol| symbol.symbol_type) == Some(SymbolType::Module)
+        }));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_returns_python_relative_submodule_alias_reexport_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::create_dir_all(temp_dir.path().join("pkg")).unwrap();
+        fs::write(temp_dir.path().join("pkg").join("__init__.py"), "").unwrap();
+        fs::write(
+            temp_dir.path().join("pkg").join("base.py"),
+            r#"
+class UserService:
+    pass
+        "#,
+        )
+        .unwrap();
+
+        fs::write(
+            temp_dir.path().join("pkg").join("service.py"),
+            r#"
+__all__ = ["api"]
+
+from . import base as api
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("pkg/base.py").unwrap();
+        service.index_file("pkg/service.py").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("pkg/service.py")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference.target_name == "api"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("pkg/base.py")
+                && reference.target_symbol.as_ref().map(|symbol| symbol.qualified_name.as_str()) == Some("__file__")
+                && reference.target_symbol.as_ref().map(|symbol| symbol.symbol_type) == Some(SymbolType::Module)
+        }));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_returns_python_imported_alias_reexport_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("base.py"),
+            r#"
+class UserService:
+    pass
+        "#,
+        )
+        .unwrap();
+
+        fs::write(
+            temp_dir.path().join("service.py"),
+            r#"
+__all__ = ["Service"]
+
+from base import UserService as Service
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("base.py").unwrap();
+        service.index_file("service.py").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("service.py")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference.target_name == "Service"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.py")
+                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+        }));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_propagates_python_import_star_reexport_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("base.py"),
+            r#"
+class UserService:
+    pass
+
+class AuditService:
+    pass
+
+class _InternalService:
+    pass
+        "#,
+        )
+        .unwrap();
+
+        fs::write(
+            temp_dir.path().join("service.py"),
+            r#"
+from base import *
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("base.py").unwrap();
+        service.index_file("service.py").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("service.py")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| reference.target_name == "UserService"));
+        assert!(graph.outgoing.iter().any(|reference| reference.target_name == "AuditService"));
+        assert!(!graph.outgoing.iter().any(|reference| reference.target_name == "_InternalService"));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_propagates_python_relative_import_star_reexport_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::create_dir_all(temp_dir.path().join("pkg")).unwrap();
+        fs::write(temp_dir.path().join("pkg").join("__init__.py"), "").unwrap();
+        fs::write(
+            temp_dir.path().join("pkg").join("base.py"),
+            r#"
+class UserService:
+    pass
+
+class AuditService:
+    pass
+        "#,
+        )
+        .unwrap();
+
+        fs::write(
+            temp_dir.path().join("pkg").join("service.py"),
+            r#"
+from .base import *
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("pkg/base.py").unwrap();
+        service.index_file("pkg/service.py").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("pkg/service.py")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| reference.target_name == "UserService"));
+        assert!(graph.outgoing.iter().any(|reference| reference.target_name == "AuditService"));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_filters_python_import_star_reexports_with_dunder_all() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("base.py"),
+            r#"
+class UserService:
+    pass
+
+class AuditService:
+    pass
+        "#,
+        )
+        .unwrap();
+
+        fs::write(
+            temp_dir.path().join("service.py"),
+            r#"
+__all__ = ["AuditService"]
+
+from base import *
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("base.py").unwrap();
+        service.index_file("service.py").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("service.py")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| reference.target_name == "AuditService"));
+        assert!(!graph.outgoing.iter().any(|reference| reference.target_name == "UserService"));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_returns_python_import_module_reexport_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("base.py"),
+            r#"
+class UserService:
+    pass
+        "#,
+        )
+        .unwrap();
+
+        fs::write(
+            temp_dir.path().join("service.py"),
+            r#"
+import base
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("base.py").unwrap();
+        service.index_file("service.py").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("service.py")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference.target_name == "base"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.py")
+                && reference.target_symbol.as_ref().map(|symbol| symbol.qualified_name.as_str()) == Some("__file__")
+                && reference.target_symbol.as_ref().map(|symbol| symbol.symbol_type) == Some(SymbolType::Module)
+        }));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_returns_python_dotted_import_package_reexport_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::create_dir_all(temp_dir.path().join("pkg")).unwrap();
+        fs::write(temp_dir.path().join("pkg").join("__init__.py"), "").unwrap();
+        fs::write(
+            temp_dir.path().join("pkg").join("base.py"),
+            r#"
+class UserService:
+    pass
+        "#,
+        )
+        .unwrap();
+
+        fs::write(
+            temp_dir.path().join("service.py"),
+            r#"
+import pkg.base
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("pkg/__init__.py").unwrap();
+        service.index_file("pkg/base.py").unwrap();
+        service.index_file("service.py").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("service.py")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference.target_name == "pkg"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("pkg/__init__.py")
+                && reference.target_symbol.as_ref().map(|symbol| symbol.qualified_name.as_str()) == Some("__file__")
+                && reference.target_symbol.as_ref().map(|symbol| symbol.symbol_type) == Some(SymbolType::Module)
+        }));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_returns_python_import_module_alias_reexport_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("base.py"),
+            r#"
+class UserService:
+    pass
+        "#,
+        )
+        .unwrap();
+
+        fs::write(
+            temp_dir.path().join("service.py"),
+            r#"
+__all__ = ["api"]
+
+import base as api
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("base.py").unwrap();
+        service.index_file("service.py").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("service.py")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference.target_name == "api"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.py")
+                && reference.target_symbol.as_ref().map(|symbol| symbol.qualified_name.as_str()) == Some("__file__")
+                && reference.target_symbol.as_ref().map(|symbol| symbol.symbol_type) == Some(SymbolType::Module)
+        }));
+    }
+
+    #[test]
+    fn test_get_symbol_graph_returns_python_public_top_level_exports() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("service.py"),
+            r#"
+class UserService:
+    pass
+
+class _InternalService:
+    pass
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("service.py").unwrap();
+        let module_symbol = service
+            .get_file_module_symbol("service.py")
+            .unwrap()
+            .unwrap();
+
+        let graph = service
+            .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference.target_name == "UserService"
+                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+        }));
+        assert!(!graph.outgoing.iter().any(|reference| reference.target_name == "_InternalService"));
     }
 
     #[test]
