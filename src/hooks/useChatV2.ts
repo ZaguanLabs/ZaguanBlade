@@ -153,6 +153,18 @@ function hasInterleavedContentBetweenActivities(blocks: MessageBlock[]): boolean
     return false;
 }
 
+function hasReasoningContext(message: ChatMessage | undefined, blocks: MessageBlock[]): boolean {
+    if (blocks.some((block) => block.type === 'reasoning')) {
+        return true;
+    }
+
+    if (message?.reasoning && !isWhitespaceOnly(message.reasoning)) {
+        return true;
+    }
+
+    return (message?.blocks || []).some((block) => block.type === 'reasoning');
+}
+
 function inferContentBeforeTools(message: ChatMessage | undefined, blocks: MessageBlock[], fullContent: string): string | undefined {
     if (message?.content_before_tools !== undefined) {
         if (message.content_before_tools.length > 0) {
@@ -168,7 +180,14 @@ function inferContentBeforeTools(message: ChatMessage | undefined, blocks: Messa
         const hasInFlightActivity = (message.tool_calls || []).some((toolCall) => {
             return toolCall.status === undefined || toolCall.status === 'pending' || toolCall.status === 'executing';
         });
-        if (!textAfterLastActivity && hasOnlyActivityOrWhitespaceBlocks && hasInFlightActivity && !isWhitespaceOnly(fullContent)) {
+        const hasPriorReasoningContext = hasReasoningContext(message, blocks);
+        if (
+            !textAfterLastActivity
+            && hasOnlyActivityOrWhitespaceBlocks
+            && hasInFlightActivity
+            && !hasPriorReasoningContext
+            && !isWhitespaceOnly(fullContent)
+        ) {
             return fullContent;
         }
 

@@ -1,12 +1,12 @@
 'use client';
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { emit } from '@tauri-apps/api/event';
 import { getVersion } from '@tauri-apps/api/app';
 import { X, Database, Cloud, Shield, Zap, HardDrive, Server, ChevronRight, ChevronDown, Info, Loader2, Code, Key, CheckCircle2, Palette, Check } from 'lucide-react';
 import type { BackendSettings, LocalAiConfig, RemoteAiConfig } from '../types/settings';
-import i18n, { normalizeAppLanguage, type AppLanguage } from '../i18n';
+import i18n, { normalizeAppLanguage, supportedAppLanguages, languageI18nKey, type AppLanguage } from '../i18n';
 import zbladeLogoUrl from '../assets/zblade-in-app-logo.png';
 import { availableThemes, normalizeThemeId } from '../themes';
 import { formatUnknownBackendError } from '../utils/backendErrors';
@@ -557,195 +557,47 @@ function getThemeI18nLabel(t: ReturnType<typeof useTranslation>['t'], theme: { i
     return t(`settings.configurationSection.themes.${theme.id}.label`, theme.label);
 }
 
-function getThemeI18nDescription(t: ReturnType<typeof useTranslation>['t'], theme: { id: string; description: string }) {
-    return t(`settings.configurationSection.themes.${theme.id}.description`, theme.description);
-}
-
-const ThemeSelect: React.FC<{
+const ThemeGrid: React.FC<{
     value: string;
     onChange: (themeId: string) => void;
 }> = ({ value, onChange }) => {
     const { t } = useTranslation();
-    const [isOpen, setIsOpen] = useState(false);
-    const containerRef = useRef<HTMLDivElement>(null);
-    const buttonRef = useRef<HTMLButtonElement>(null);
-    const menuRef = useRef<HTMLDivElement>(null);
-    const selectedTheme = availableThemes.find((theme) => theme.id === normalizeThemeId(value)) ?? availableThemes[0];
-
-    useEffect(() => {
-        if (!isOpen) return;
-
-        const handlePointerDown = (event: MouseEvent) => {
-            if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-                setIsOpen(false);
-            }
-        };
-
-        const handleKeyDown = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') {
-                setIsOpen(false);
-                buttonRef.current?.focus();
-            }
-        };
-
-        document.addEventListener('mousedown', handlePointerDown);
-        document.addEventListener('keydown', handleKeyDown);
-
-        return () => {
-            document.removeEventListener('mousedown', handlePointerDown);
-            document.removeEventListener('keydown', handleKeyDown);
-        };
-    }, [isOpen]);
-
-    useEffect(() => {
-        if (!isOpen) return;
-        const selectedItem = menuRef.current?.querySelector<HTMLButtonElement>(`[data-theme-id="${selectedTheme.id}"]`);
-        selectedItem?.focus();
-    }, [isOpen, selectedTheme.id]);
-
-    const handleToggle = () => {
-        setIsOpen((prev) => !prev);
-    };
-
-    const handleSelect = (themeId: string) => {
-        onChange(themeId);
-        setIsOpen(false);
-        buttonRef.current?.focus();
-    };
-
-    const handleTriggerKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
-        if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            setIsOpen(true);
-        }
-    };
-
-    const handleItemKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
-        if (event.key === 'ArrowDown') {
-            event.preventDefault();
-            const nextIndex = (index + 1) % availableThemes.length;
-            menuRef.current?.querySelector<HTMLButtonElement>(`[data-theme-id="${availableThemes[nextIndex].id}"]`)?.focus();
-            return;
-        }
-
-        if (event.key === 'ArrowUp') {
-            event.preventDefault();
-            const nextIndex = (index - 1 + availableThemes.length) % availableThemes.length;
-            menuRef.current?.querySelector<HTMLButtonElement>(`[data-theme-id="${availableThemes[nextIndex].id}"]`)?.focus();
-            return;
-        }
-
-        if (event.key === 'Home') {
-            event.preventDefault();
-            menuRef.current?.querySelector<HTMLButtonElement>(`[data-theme-id="${availableThemes[0].id}"]`)?.focus();
-            return;
-        }
-
-        if (event.key === 'End') {
-            event.preventDefault();
-            menuRef.current?.querySelector<HTMLButtonElement>(`[data-theme-id="${availableThemes[availableThemes.length - 1].id}"]`)?.focus();
-            return;
-        }
-
-        if (event.key === 'Escape') {
-            event.preventDefault();
-            setIsOpen(false);
-            buttonRef.current?.focus();
-        }
-    };
+    const selected = normalizeThemeId(value);
 
     return (
-        <div className="relative" ref={containerRef}>
-            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-                <div className="flex items-center gap-1.5">
-                    <span className="h-2.5 w-2.5 rounded-full border border-(--border-default)" style={{ backgroundColor: 'var(--accent-primary)' }} />
-                    <span className="h-2.5 w-2.5 rounded-full border border-(--border-default)" style={{ backgroundColor: 'var(--bg-surface)' }} />
-                    <span className="h-2.5 w-2.5 rounded-full border border-(--border-default)" style={{ backgroundColor: 'var(--fg-primary)' }} />
-                </div>
-            </div>
-
-            <button
-                ref={buttonRef}
-                type="button"
-                aria-haspopup="listbox"
-                aria-expanded={isOpen}
-                aria-label={t('settings.configurationSection.selectTheme')}
-                onClick={handleToggle}
-                onKeyDown={handleTriggerKeyDown}
-                className={`
-                    w-full rounded-[calc(var(--panel-radius)+2px)] border py-2 pr-10 pl-14 text-left text-sm font-medium transition-[border-color,background-color,box-shadow,transform] duration-200 focus:outline-none
-                    ${isOpen
-                        ? 'border-(--accent-primary) bg-[color-mix(in_srgb,var(--accent-primary)_14%,var(--bg-surface))] text-(--fg-primary) shadow-[0_0_0_1px_var(--accent-primary),0_14px_34px_color-mix(in_srgb,var(--accent-primary)_18%,transparent)]'
-                        : 'border-(--border-default) bg-(--bg-surface) text-(--fg-primary) shadow-(--shadow-sm) hover:bg-(--bg-surface-hover) focus:border-(--accent-primary) focus:shadow-[0_0_0_1px_var(--accent-primary),var(--shadow-md)]'
-                    }
-                `}
-            >
-                <span className="block truncate">{getThemeI18nLabel(t, selectedTheme)}</span>
-            </button>
-
-            <div className={`pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 transition-colors duration-200 ${isOpen ? 'text-(--accent-primary)' : 'text-(--fg-secondary)'}`}>
-                <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
-            </div>
-
-            {isOpen && (
-                <div
-                    ref={menuRef}
-                    role="listbox"
-                    aria-label={t('settings.configurationSection.availableThemesLabel')}
-                    className="absolute left-0 right-0 top-[calc(100%+0.375rem)] z-50 overflow-hidden rounded-[calc(var(--panel-radius)+6px)] border border-(--accent-primary) bg-[color-mix(in_srgb,var(--bg-panel)_88%,var(--bg-surface))] p-1.5 shadow-[0_0_0_1px_color-mix(in_srgb,var(--accent-primary)_28%,transparent),0_18px_40px_color-mix(in_srgb,var(--accent-primary)_18%,transparent)] backdrop-blur-[18px]"
-                >
-                    <div className="max-h-64 space-y-0.5 overflow-y-auto pr-0.5">
-                        {availableThemes.map((theme, index) => {
-                            const isSelected = theme.id === selectedTheme.id;
-
-                            return (
-                                <button
-                                    key={theme.id}
-                                    type="button"
-                                    role="option"
-                                    aria-selected={isSelected}
-                                    data-theme-id={theme.id}
-                                    title={getThemeI18nDescription(t, theme)}
-                                    onClick={() => handleSelect(theme.id)}
-                                    onKeyDown={(event) => handleItemKeyDown(event, index)}
-                                    className={`group w-full rounded-[calc(var(--panel-radius)+1px)] border px-2 py-1.5 text-left transition-[border-color,background-color,box-shadow,transform] duration-200 focus:outline-none ${
-                                        isSelected
-                                            ? 'border-(--accent-primary) bg-[color-mix(in_srgb,var(--accent-primary)_16%,var(--bg-surface))] shadow-[0_0_0_1px_color-mix(in_srgb,var(--accent-primary)_28%,transparent)]'
-                                            : 'border-transparent bg-(--bg-surface) hover:border-(--border-default) hover:bg-(--bg-surface-hover) focus:border-(--accent-primary) focus:bg-(--bg-surface-hover)'
-                                    }`}
-                                >
-                                    <div className="flex items-center gap-2">
-                                        <div className="flex min-w-0 flex-1 items-center gap-2">
-                                            <span className="truncate text-[12px] font-semibold text-(--fg-primary)">{getThemeI18nLabel(t, theme)}</span>
-                                            <div className="ml-1 flex shrink-0 items-center gap-1">
-                                                <div className="h-3.5 w-7 rounded-[999px] border border-(--border-subtle)" style={{ backgroundColor: theme.tokens['--bg-app'] }} />
-                                                <div className="h-3.5 w-7 rounded-[999px] border border-(--border-subtle)" style={{ backgroundColor: theme.tokens['--bg-panel'] }} />
-                                                <div className="h-3.5 w-7 rounded-[999px] border border-(--border-subtle)" style={{ backgroundColor: theme.tokens['--bg-surface'] }} />
-                                                <div className="h-3.5 w-7 rounded-[999px] border border-(--border-subtle)" style={{ backgroundColor: theme.tokens['--accent-primary'] }} />
-                                            </div>
-                                        </div>
-                                        <div className={`flex h-4 w-4 shrink-0 items-center justify-center ${
-                                            isSelected
-                                                ? 'text-(--accent-primary)'
-                                                : 'text-transparent group-hover:text-(--fg-tertiary)'
-                                        }`}>
-                                            <Check className="h-3.5 w-3.5 transition-opacity duration-150" />
-                                        </div>
-                                    </div>
-                                </button>
-                            );
-                        })}
-                    </div>
-                </div>
-            )}
+        <div className="grid grid-cols-2 gap-2">
+            {availableThemes.map((theme) => {
+                const isSelected = theme.id === selected;
+                return (
+                    <button
+                        key={theme.id}
+                        type="button"
+                        onClick={() => onChange(theme.id)}
+                        className={`rounded-[calc(var(--panel-radius)+2px)] border p-3 text-left transition-[border-color,background-color,box-shadow] duration-200 focus:outline-none ${
+                            isSelected
+                                ? 'border-(--accent-primary) bg-[color-mix(in_srgb,var(--accent-primary)_10%,var(--bg-surface))] shadow-[0_0_0_1px_color-mix(in_srgb,var(--accent-primary)_24%,transparent)]'
+                                : 'border-(--border-default) bg-(--bg-surface) hover:border-(--border-focus) hover:bg-(--bg-surface-hover)'
+                        }`}
+                    >
+                        <div className="flex items-center justify-between gap-2 mb-2">
+                            <span className="text-[12px] font-semibold text-(--fg-primary) truncate">{getThemeI18nLabel(t, theme)}</span>
+                            {isSelected && <Check className="h-3.5 w-3.5 shrink-0 text-(--accent-primary)" />}
+                        </div>
+                        <div className="flex gap-1">
+                            <div className="h-3 flex-1 rounded-sm border border-(--border-subtle)" style={{ backgroundColor: theme.tokens['--bg-app'] }} />
+                            <div className="h-3 flex-1 rounded-sm border border-(--border-subtle)" style={{ backgroundColor: theme.tokens['--bg-panel'] }} />
+                            <div className="h-3 flex-1 rounded-sm border border-(--border-subtle)" style={{ backgroundColor: theme.tokens['--bg-surface'] }} />
+                            <div className="h-3 w-6 shrink-0 rounded-sm border border-(--border-subtle)" style={{ backgroundColor: theme.tokens['--accent-primary'] }} />
+                        </div>
+                    </button>
+                );
+            })}
         </div>
     );
 };
 
 const ConfigurationSettings: React.FC<ConfigurationSettingsProps> = ({ settings, onChange }) => {
     const { t } = useTranslation();
-    const selectedTheme = availableThemes.find((theme) => theme.id === normalizeThemeId(settings.theme)) ?? availableThemes[0];
-    const languageOptions: AppLanguage[] = ['en', 'es'];
 
     return (
         <div className="space-y-6">
@@ -764,39 +616,14 @@ const ConfigurationSettings: React.FC<ConfigurationSettingsProps> = ({ settings,
                     </div>
                 </div>
 
-                <div className="space-y-2.5">
-                    <label className="text-xs font-medium uppercase tracking-[0.16em] text-(--fg-secondary) block">
-                        {t('settings.configurationSection.availableThemes')}
-                    </label>
+                <ThemeGrid
+                    value={normalizeThemeId(settings.theme)}
+                    onChange={(theme) => onChange({ theme: normalizeThemeId(theme) })}
+                />
 
-                    <ThemeSelect
-                        value={normalizeThemeId(settings.theme)}
-                        onChange={(theme) => onChange({ theme: normalizeThemeId(theme) })}
-                    />
-                </div>
-
-                <div className="rounded-[calc(var(--panel-radius)+2px)] border border-(--border-subtle) bg-(--bg-surface) p-4 shadow-(--shadow-sm) space-y-3">
-                    <div className="flex items-start justify-between gap-4">
-                        <div className="space-y-1">
-                            <div className="text-sm font-semibold text-(--fg-primary)">{getThemeI18nLabel(t, selectedTheme)}</div>
-                            <div className="text-xs leading-relaxed text-(--fg-secondary)">{getThemeI18nDescription(t, selectedTheme)}</div>
-                        </div>
-                        <div className="shrink-0 rounded-full border border-(--border-default) px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] text-(--accent-primary) bg-[color-mix(in_srgb,var(--accent-primary)_10%,transparent)]">
-                            {t('settings.configurationSection.live')}
-                        </div>
-                    </div>
-
-                    <div className="grid grid-cols-4 gap-2">
-                        <div className="h-12 rounded-[calc(var(--panel-radius)-4px)] border border-(--border-subtle) shadow-(--shadow-sm)" style={{ backgroundColor: 'var(--bg-app)' }} />
-                        <div className="h-12 rounded-[calc(var(--panel-radius)-4px)] border border-(--border-subtle) shadow-(--shadow-sm)" style={{ backgroundColor: 'var(--bg-panel)' }} />
-                        <div className="h-12 rounded-[calc(var(--panel-radius)-4px)] border border-(--border-subtle) shadow-(--shadow-sm)" style={{ backgroundColor: 'var(--bg-surface)' }} />
-                        <div className="h-12 rounded-[calc(var(--panel-radius)-4px)] border border-(--border-subtle) shadow-(--shadow-sm)" style={{ backgroundColor: 'var(--accent-primary)' }} />
-                    </div>
-
-                    <div className="flex items-center gap-2 text-[11px] text-(--fg-tertiary)">
-                        <span className="h-2 w-2 rounded-full bg-(--accent-primary)" />
-                        <span>{t('settings.configurationSection.themeScopeHelp')}</span>
-                    </div>
+                <div className="flex items-center gap-2 text-[11px] text-(--fg-tertiary)">
+                    <span className="h-2 w-2 rounded-full bg-(--accent-primary)" />
+                    <span>{t('settings.configurationSection.themeScopeHelp')}</span>
                 </div>
             </div>
 
@@ -813,42 +640,19 @@ const ConfigurationSettings: React.FC<ConfigurationSettingsProps> = ({ settings,
                         {t('settings.configurationSection.interfaceLanguage')}
                     </label>
 
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                        {languageOptions.map((language) => {
-                            const isSelected = settings.language === language;
-                            return (
-                                <button
-                                    key={language}
-                                    type="button"
-                                    onClick={() => onChange({ language })}
-                                    className={`group rounded-[calc(var(--panel-radius)+2px)] border p-4 text-left transition-[border-color,background-color,box-shadow] duration-200 ${
-                                        isSelected
-                                            ? 'border-(--accent-primary) bg-[color-mix(in_srgb,var(--accent-primary)_12%,var(--bg-surface))] shadow-[0_0_0_1px_color-mix(in_srgb,var(--accent-primary)_24%,transparent)]'
-                                            : 'border-(--border-default) bg-(--bg-surface) hover:border-(--border-focus) hover:bg-(--bg-surface-hover)'
-                                    }`}
-                                >
-                                    <div className="flex items-start justify-between gap-3">
-                                        <div className="space-y-1">
-                                            <div className="text-sm font-semibold text-(--fg-primary)">
-                                                {language === 'en' ? t('language.english') : t('language.spanish')}
-                                            </div>
-                                            <div className="text-xs text-(--fg-secondary)">
-                                                {language === 'en'
-                                                    ? t('settings.configurationSection.languageOptionEnglish')
-                                                    : t('settings.configurationSection.languageOptionSpanish')}
-                                            </div>
-                                        </div>
-                                        <div className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${
-                                            isSelected
-                                                ? 'border-(--accent-primary) bg-[color-mix(in_srgb,var(--accent-primary)_18%,transparent)] text-(--accent-primary)'
-                                                : 'border-(--border-default) text-transparent group-hover:text-(--fg-tertiary)'
-                                        }`}>
-                                            <Check className="h-3.5 w-3.5" />
-                                        </div>
-                                    </div>
-                                </button>
-                            );
-                        })}
+                    <div className="relative">
+                        <select
+                            value={settings.language}
+                            onChange={(e) => onChange({ language: e.target.value as AppLanguage })}
+                            className="w-full appearance-none rounded-[calc(var(--panel-radius)+2px)] border border-(--border-default) bg-(--bg-surface) px-3 py-2 pr-9 text-sm text-(--fg-primary) transition-[border-color,background-color] duration-200 focus:border-(--accent-primary) focus:outline-none hover:bg-(--bg-surface-hover) cursor-pointer"
+                        >
+                            {supportedAppLanguages.map((lang) => (
+                                <option key={lang} value={lang}>{t(languageI18nKey[lang])}</option>
+                            ))}
+                        </select>
+                        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 text-(--fg-secondary)">
+                            <ChevronDown className="h-4 w-4" />
+                        </div>
                     </div>
                 </div>
 

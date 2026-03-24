@@ -255,3 +255,32 @@ test('normalizeSplitBlocks keeps GPT-style final text after reasoning and tool b
         ['reasoning:Thinking through the edit', 'tool_call:tool-1', 'text:Final answer']
     );
 });
+
+test('normalizeSplitBlocks keeps trailing text after tools when live blocks temporarily omit earlier reasoning', () => {
+    const message = makeAssistantMessage({
+        id: 'assistant-gpt-live',
+        content: 'Updated the changelog entry',
+        content_before_tools: '',
+        tool_calls: [makeToolCall({ id: 'tool-1', status: 'executing' })],
+        reasoning: 'Checking the project and then running the build',
+        blocks: [
+            { type: 'reasoning', content: 'Checking the project and then running the build', id: 'reasoning-1' },
+            { type: 'tool_call', id: 'tool-1' },
+        ],
+    });
+    const liveBlocks = [
+        { type: 'tool_call' as const, id: 'tool-1' },
+        { type: 'command_execution' as const, id: 'tool-1' },
+    ];
+
+    const normalized = normalizeSplitBlocks(message, liveBlocks, 'Updated the changelog entry');
+
+    assert.equal(normalized.contentBeforeTools, '');
+    assert.equal(normalized.contentAfterTools, 'Updated the changelog entry');
+    assert.deepEqual(
+        normalized.blocks.map((block) => block.type === 'text'
+            ? `${block.type}:${block.content}`
+            : `${block.type}:${block.id}`),
+        ['tool_call:tool-1', 'command_execution:tool-1', 'text:Updated the changelog entry']
+    );
+});

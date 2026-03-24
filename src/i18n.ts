@@ -6,6 +6,11 @@ import HttpBackend from 'i18next-http-backend';
 export const supportedAppLanguages = ['en', 'es'] as const;
 export type AppLanguage = (typeof supportedAppLanguages)[number];
 
+export const languageI18nKey: Record<AppLanguage, string> = {
+    en: 'language.english',
+    es: 'language.spanish',
+};
+
 export function normalizeAppLanguage(language?: string | null): AppLanguage {
   const normalized = language?.trim().toLowerCase();
   if (!normalized) {

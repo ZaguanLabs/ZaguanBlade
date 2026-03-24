@@ -731,15 +731,6 @@ fn complete_command_immediately<R: Runtime>(
     let skipped = result.skipped;
     batch.file_results.push((cmd.call.clone(), result));
     let _ = app_handle.emit(
-        events::event_names::TOOL_EXECUTION_COMPLETED,
-        events::ToolExecutionCompletedPayload {
-            tool_name: "run_command".to_string(),
-            tool_call_id: cmd.call.id.clone(),
-            success,
-            skipped,
-        },
-    );
-    let _ = app_handle.emit(
         events::event_names::COMMAND_EXECUTED,
         events::CommandExecutedPayload {
             command: cmd.command.clone(),
@@ -748,6 +739,15 @@ fn complete_command_immediately<R: Runtime>(
             exit_code,
             duration: None,
             call_id: cmd.call.id.clone(),
+        },
+    );
+    let _ = app_handle.emit(
+        events::event_names::TOOL_EXECUTION_COMPLETED,
+        events::ToolExecutionCompletedPayload {
+            tool_name: "run_command".to_string(),
+            tool_call_id: cmd.call.id.clone(),
+            success,
+            skipped,
         },
     );
     if refresh_explorer {

@@ -23,10 +23,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
-fn should_preserve_parallel_responses_outputs(model_id: &str) -> bool {
-    model_id.to_ascii_lowercase().contains("gpt-5.4")
-}
-
 fn is_semantically_empty_message(msg: &ChatMessage) -> bool {
     let has_text = !msg.content.trim().is_empty();
     let has_reasoning = msg
@@ -629,8 +625,6 @@ impl ChatManager {
                     // Track the first output_index we see to filter parallel streams
                     // (OpenAI Responses API can emit multiple output items simultaneously)
                     let mut accepted_output_index: Option<i64> = None;
-                    let preserve_parallel_outputs =
-                        should_preserve_parallel_responses_outputs(&model_id);
                     while let Some(event) = ws_rx.recv().await {
                         match event {
                             crate::blade_ws_client::BladeWsEvent::Connected { .. } => {
@@ -681,15 +675,13 @@ impl ChatManager {
                                 output_index,
                                 phase,
                             } => {
-                                if !preserve_parallel_outputs {
-                                    if let Some(idx) = output_index {
-                                        match accepted_output_index {
-                                            None => accepted_output_index = Some(idx),
-                                            Some(accepted) if idx != accepted => {
-                                                continue;
-                                            }
-                                            _ => {}
+                                if let Some(idx) = output_index {
+                                    match accepted_output_index {
+                                        None => accepted_output_index = Some(idx),
+                                        Some(accepted) if idx != accepted => {
+                                            continue;
                                         }
+                                        _ => {}
                                     }
                                 }
                                 if phase.as_deref() == Some("commentary") {
@@ -711,15 +703,13 @@ impl ChatManager {
                                 output_index,
                                 phase: _,
                             } => {
-                                if !preserve_parallel_outputs {
-                                    if let Some(idx) = output_index {
-                                        match accepted_output_index {
-                                            None => accepted_output_index = Some(idx),
-                                            Some(accepted) if idx != accepted => {
-                                                continue;
-                                            }
-                                            _ => {}
+                                if let Some(idx) = output_index {
+                                    match accepted_output_index {
+                                        None => accepted_output_index = Some(idx),
+                                        Some(accepted) if idx != accepted => {
+                                            continue;
                                         }
+                                        _ => {}
                                     }
                                 }
                                 last_reasoning_chunk = Some(text.clone());
