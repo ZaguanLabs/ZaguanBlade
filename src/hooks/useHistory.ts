@@ -2,10 +2,41 @@ import { useState, useCallback, useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { BladeDispatcher } from '../services/blade';
-import type { ConversationSummary, BladeEventEnvelope } from '../types/blade';
+import type { ConversationSummary, BladeEventEnvelope, HistoryMessage } from '../types/blade';
 import type { ChatMessage } from '../types/chat';
 import { ensureMessagesHaveBlocks } from '../utils/messageBlocks';
 import { formatUnknownBackendError } from '../utils/backendErrors';
+
+function mapHistoryRole(role: string): ChatMessage['role'] {
+    if (role === 'User' || role === 'user') return 'User';
+    if (role === 'Assistant' || role === 'assistant') return 'Assistant';
+    if (role === 'Tool' || role === 'tool') return 'Tool';
+    return 'System';
+}
+
+function mapHistoryMessage(msg: HistoryMessage | any): ChatMessage {
+    const commandExecutions = (msg.commandExecutions || msg.command_executions)?.map((execution: any) => ({
+        id: execution.id,
+        command: execution.command,
+        cwd: execution.cwd,
+        output: execution.output,
+        exitCode: execution.exitCode ?? execution.exit_code ?? 0,
+        duration: execution.duration,
+        timestamp: execution.timestamp,
+    }));
+
+    return {
+        id: crypto.randomUUID(),
+        role: mapHistoryRole(msg.role),
+        content: msg.content,
+        reasoning: msg.reasoning,
+        tool_call_id: msg.tool_call_id,
+        tool_calls: msg.tool_calls,
+        content_before_tools: msg.content_before_tools,
+        content_after_tools: msg.content_after_tools,
+        commandExecutions,
+    };
+}
 
 export function useHistory() {
     const [conversations, setConversations] = useState<ConversationSummary[]>([]);
@@ -145,15 +176,7 @@ export function useHistory() {
                 await invoke('load_conversation', { id: sessionId });
                 const messages = await invoke<any[]>('get_conversation');
 
-                // Map to ChatMessage
-                const chatMessages: ChatMessage[] = messages.map(msg => ({
-                    id: crypto.randomUUID(), // Local messages might not have UUIDs stored in message struct if not migrated
-                    role: msg.role === 'User' ? 'User' : msg.role === 'Assistant' ? 'Assistant' : msg.role === 'Tool' ? 'Tool' : 'System', // Rust types might be different
-                    content: msg.content,
-                    reasoning: msg.reasoning,
-                    tool_call_id: msg.tool_call_id,
-                    tool_calls: msg.tool_calls // Ensure this field exists or is mapped
-                }));
+                const chatMessages: ChatMessage[] = messages.map(mapHistoryMessage);
 
                 setLoading(false);
                 return ensureMessagesHaveBlocks(chatMessages);
@@ -179,19 +202,12 @@ export function useHistory() {
                             if (historyEvent.type === 'ConversationLoaded' &&
                                 historyEvent.payload.session_id === sessionId) {
 
-                                // Convert history messages to ChatMessage format
                                 const messages: ChatMessage[] = historyEvent.payload.messages.map(msg => ({
-                                    id: crypto.randomUUID(),
-                                    role: msg.role === 'user' ? 'User' :
-                                        msg.role === 'assistant' ? 'Assistant' :
-                                            msg.role === 'tool' ? 'Tool' : 'System',
-                                    content: msg.content,
-                                    // Mark all tool calls as complete since they're historical
+                                    ...mapHistoryMessage(msg),
                                     tool_calls: msg.tool_calls?.map(tc => ({
                                         ...tc,
                                         status: 'complete' as const
                                     })),
-                                    tool_call_id: msg.tool_call_id
                                 }));
 
                                 unlisten();

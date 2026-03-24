@@ -22,6 +22,9 @@ impl ConversationHistory {
                 model_id: "claude-sonnet".to_string(), // Default
                 message_count: 0,
                 session_id: None,
+                planning_mode: None,
+                runtime_mode: None,
+                mode_source: None,
             },
         }
     }

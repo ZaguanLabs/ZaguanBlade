@@ -1,5 +1,6 @@
 use crate::app_state::AppState;
 use notify::{event::ModifyKind, EventKind, RecursiveMode, Watcher};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager, Runtime};
@@ -10,6 +11,44 @@ pub struct FileChangeEvent {
     pub paths: Vec<String>,
 }
 
+fn reindex_changed_paths(state: &AppState, workspace_root: &Path, event: &notify::Event) {
+    let service = match state.language_service() {
+        Ok(service) => service,
+        Err(error) => {
+            eprintln!("[WATCHER] Failed to initialize language service for reindex: {}", error);
+            return;
+        }
+    };
+
+    for path in &event.paths {
+        let Ok(relative_path) = path.strip_prefix(workspace_root) else {
+            continue;
+        };
+
+        let Some(relative_str) = relative_path.to_str().map(|value| value.replace('\\', "/")) else {
+            continue;
+        };
+
+        if crate::tree_sitter::Language::from_path(&relative_str).is_none() {
+            continue;
+        }
+
+        let is_delete = matches!(event.kind, EventKind::Remove(_));
+        if is_delete || !path.exists() {
+            if let Err(error) = service.remove_file(&relative_str) {
+                eprintln!("[WATCHER] Failed to remove {} from symbol index: {}", relative_str, error);
+            }
+            continue;
+        }
+
+        if path.is_file() {
+            if let Err(error) = service.index_file(&relative_str) {
+                eprintln!("[WATCHER] Failed to reindex {}: {}", relative_str, error);
+            }
+        }
+    }
+}
+
 pub fn restart_fs_watcher<R: Runtime>(app_handle: &tauri::AppHandle<R>) {
     let app_handle = app_handle.clone();
 
@@ -17,8 +56,10 @@ pub fn restart_fs_watcher<R: Runtime>(app_handle: &tauri::AppHandle<R>) {
         let state = app_handle.state::<AppState>();
         let workspace_root = { state.workspace.lock().unwrap().workspace.clone() };
 
-        let mut watcher_guard = state.fs_watcher.lock().unwrap();
-        *watcher_guard = None;
+        {
+            let mut watcher_guard = state.fs_watcher.lock().unwrap();
+            *watcher_guard = None;
+        }
 
         if let Some(root) = workspace_root {
             // Check if root exists before trying to watch
@@ -31,6 +72,7 @@ pub fn restart_fs_watcher<R: Runtime>(app_handle: &tauri::AppHandle<R>) {
             }
 
             let app_handle_clone = app_handle.clone();
+            let callback_root = root.clone();
             let last_emit = Arc::new(Mutex::new(Instant::now() - Duration::from_secs(1)));
             let last_emit_ref = last_emit.clone();
 
@@ -72,6 +114,9 @@ pub fn restart_fs_watcher<R: Runtime>(app_handle: &tauri::AppHandle<R>) {
                                 paths: paths.clone(),
                             };
 
+                            let state = app_handle_clone.state::<AppState>();
+                            reindex_changed_paths(&state, &callback_root, &event);
+
                             let _ =
                                 app_handle_clone.emit("file-changes-detected", file_change_event);
                             let _ = app_handle_clone
@@ -93,6 +138,7 @@ pub fn restart_fs_watcher<R: Runtime>(app_handle: &tauri::AppHandle<R>) {
                 return;
             }
 
+            let mut watcher_guard = state.fs_watcher.lock().unwrap();
             *watcher_guard = Some(watcher);
             eprintln!("[WATCHER] Watching workspace: {}", root.display());
         }

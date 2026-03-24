@@ -123,6 +123,22 @@ export const EditorFacade = {
         });
     },
 
+    async syncDocument(path: string, content: string, version: number): Promise<void> {
+        BladeDispatcher.editor({
+            type: 'SyncDocument',
+            payload: { path, content, version }
+        }).catch(() => {
+        });
+    },
+
+    async closeDocument(path: string): Promise<void> {
+        BladeDispatcher.editor({
+            type: 'CloseDocument',
+            payload: { path }
+        }).catch(() => {
+        });
+    },
+
     /**
      * Update cursor position. Always syncs to backend for AI context,
      * regardless of authority mode.

@@ -231,6 +231,9 @@ pub struct ChatManager {
     pub reasoning_parser: ReasoningParser, // v1.2: Multi-format reasoning extraction
     pub agentic_loop: AgenticLoop,
     pub session_id: Option<String>,
+    pub planning_mode: Option<bool>,
+    pub runtime_mode: Option<String>,
+    pub mode_source: Option<String>,
     abort_handle: Option<tokio::task::AbortHandle>,
     pub accumulated_tool_calls: Vec<ToolCall>,
     pub updated_assistant_message: Option<ChatMessage>,
@@ -269,6 +272,9 @@ impl ChatManager {
             reasoning_parser: ReasoningParser::new(),
             agentic_loop: AgenticLoop::new(max_turns),
             session_id: None,
+            planning_mode: None,
+            runtime_mode: None,
+            mode_source: None,
             abort_handle: None,
             accumulated_tool_calls: Vec::new(),
             updated_assistant_message: None,
@@ -597,9 +603,6 @@ impl ChatManager {
         let tx = ProviderEventSender::new(tx, self.event_notify.clone());
         self.provider_event_tx = Some(tx.clone());
 
-        // Create a channel to send session_id back to main thread
-        let (session_tx, session_rx) = std::sync::mpsc::channel();
-
         let user_images = conversation
             .get_messages()
             .iter()
@@ -656,6 +659,9 @@ impl ChatManager {
                             crate::blade_ws_client::BladeWsEvent::Session {
                                 session_id,
                                 model_id,
+                                planning_mode,
+                                runtime_mode,
+                                mode_source,
                             } => {
                                 // eprintln!(
                                 //     "[CHAT MGR] Session event: session_id={}, model={}",
@@ -665,8 +671,10 @@ impl ChatManager {
                                 let _ = tx.send(ChatEvent::Session {
                                     session_id: session_id.clone(),
                                     model: model_id,
+                                    planning_mode,
+                                    runtime_mode,
+                                    mode_source,
                                 });
-                                let _ = session_tx.send(session_id);
                             }
                             crate::blade_ws_client::BladeWsEvent::TextChunk {
                                 content: text,
@@ -959,16 +967,6 @@ impl ChatManager {
             // Don't close the connection here - it will be reused for tool results
             // Connection will be closed when a new message starts or conversation ends
         });
-
-        // Try to receive session_id (non-blocking)
-        if let Ok(new_session_id) = session_rx.try_recv() {
-            // eprintln!("[CHAT MGR] Captured session_id: {}", new_session_id);
-            self.session_id = Some(new_session_id);
-        }
-
-        // Update session_id if we got one
-        // Note: This is a limitation - we can't update it from the thread
-        // Will need to handle this differently in production
 
         // Push placeholder for assistant response
         conversation.push(ChatMessage::new(ChatRole::Assistant, String::new()));
@@ -2239,11 +2237,24 @@ impl ChatManager {
                     }
                 }
 
-                ProviderEvent::Session { session_id, model } => {
+                ProviderEvent::Session {
+                    session_id,
+                    model,
+                    planning_mode,
+                    runtime_mode,
+                    mode_source,
+                } => {
                     flush_batch!();
                     // eprintln!("[CHAT MGR] Storing session_id: {}", session_id);
-                    self.session_id = Some(session_id);
-                    let _ = model;
+                    self.session_id = Some(session_id.clone());
+                    self.planning_mode = planning_mode;
+                    self.runtime_mode = runtime_mode.clone();
+                    self.mode_source = mode_source.clone();
+                    conversation.metadata.session_id = Some(session_id);
+                    conversation.metadata.model_id = model;
+                    conversation.metadata.planning_mode = planning_mode;
+                    conversation.metadata.runtime_mode = runtime_mode;
+                    conversation.metadata.mode_source = mode_source;
                 }
                 ProviderEvent::Research {
                     content,

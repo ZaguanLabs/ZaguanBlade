@@ -5,7 +5,7 @@ import { BladeDispatcher } from '../services/blade';
 import { EditorFacade } from '../services/editorFacade';
 import { useEditorState } from '../contexts/EditorContext';
 import { MessageBuffer } from '../utils/eventBuffer';
-import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertToolCallBlockPreservingOrder, upsertSplitTextBlocks } from '../utils/messageBlocks';
+import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertToolCallBlockPreservingOrder, moveExistingContentAfterTools, upsertSplitTextBlocks } from '../utils/messageBlocks';
 import { EventNames, type ChatErrorPayload, type ContextLengthExceededPayload, type MessageTooLargePayload, type RequestConfirmationPayload, type StructuredAction, type ToolExecutionCompletedPayload, type TodoItem } from '../types/events';
 import type { BladeEventEnvelope, ChatMention } from '../types/blade';
 import type { ChatImage, ChatMessage, ChatMode, ComposerMention, CommandExecution, ImageAttachment, MessageBlock, ModelInfo, QueuedRequest, StreamingState, ToolActivityState, ToolCall } from '../types/chat';
@@ -1425,12 +1425,17 @@ export function useChatV2() {
                             const nextBlocks = incomingToolCall
                                 ? insertToolCallBlockPreservingOrder(liveBlocks, toolCallId)
                                 : [...liveBlocks];
-                            const normalizedBlocks = normalizeSplitBlocks(undefined, nextBlocks, accumulatedContentRef.current.id === messageId ? accumulatedContentRef.current.content : '');
+                            const accumulatedContent = accumulatedContentRef.current.id === messageId
+                                ? accumulatedContentRef.current.content
+                                : '';
+                            const normalizedBlocks = accumulatedContent && !isWhitespaceOnly(accumulatedContent)
+                                ? moveExistingContentAfterTools(nextBlocks, accumulatedContent)
+                                : normalizeSplitBlocks(undefined, nextBlocks, accumulatedContent);
                             blocksRef.current.set(messageId, normalizedBlocks.blocks);
                             return insertAssistantMessageAfterLastUser(messages, {
                                 id: messageId,
                                 role: 'Assistant',
-                                content: '',
+                                content: accumulatedContent,
                                 content_before_tools: normalizedBlocks.contentBeforeTools,
                                 content_after_tools: normalizedBlocks.contentAfterTools,
                                 tool_calls: incomingToolCall ? [{ ...(incomingToolCall as ToolCall), status, result: result ?? undefined }] : [],
@@ -1480,14 +1485,22 @@ export function useChatV2() {
                             const accumulatedContent = accumulatedContentRef.current.id === messageId
                                 ? accumulatedContentRef.current.content
                                 : message.content;
-                            const contentBeforeTools = message.content_before_tools !== undefined
-                                ? message.content_before_tools
-                                : accumulatedContent;
-                            const normalizedBlocks = normalizeSplitBlocks(
-                                { ...message, content_before_tools: contentBeforeTools },
-                                orderedBlocks,
-                                accumulatedContent,
-                            );
+                            const isFirstToolInsertion = existingTools.length === 0
+                                && message.content_before_tools === undefined
+                                && message.content_after_tools === undefined
+                                && !isWhitespaceOnly(accumulatedContent);
+                            const normalizedBlocks = isFirstToolInsertion
+                                ? moveExistingContentAfterTools(orderedBlocks, accumulatedContent)
+                                : normalizeSplitBlocks(
+                                    {
+                                        ...message,
+                                        content_before_tools: message.content_before_tools !== undefined
+                                            ? message.content_before_tools
+                                            : accumulatedContent,
+                                    },
+                                    orderedBlocks,
+                                    accumulatedContent,
+                                );
                             blocksRef.current.set(messageId, normalizedBlocks.blocks);
 
                             return {

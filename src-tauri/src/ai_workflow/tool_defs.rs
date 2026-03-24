@@ -96,6 +96,49 @@ pub fn get_tool_definitions() -> Vec<Value> {
         }),
         serde_json::json!({
             "type": "function",
+            "name": "symbol_references",
+            "function": {
+                "name": "symbol_references",
+                "description": "Find semantic usages/references to one symbol using the local code-intelligence index",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "symbol_id": { "type": "string", "description": "Stable symbol ID" },
+                        "path": { "type": "string", "description": "Optional file path when resolving by name" },
+                        "qualified_name": { "type": "string", "description": "Optional exact qualified name" },
+                        "name": { "type": "string", "description": "Optional simple symbol name" },
+                        "limit": { "type": "integer", "description": "Optional max references" }
+                    },
+                    "required": [],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "name": "symbol_graph",
+            "function": {
+                "name": "symbol_graph",
+                "description": "Return incoming and outgoing graph edges for one symbol using the local code-intelligence index, including call, import, export, extends, implements, and contains relationships",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "symbol_id": { "type": "string", "description": "Stable symbol ID" },
+                        "path": { "type": "string", "description": "Optional file path when resolving by name" },
+                        "qualified_name": { "type": "string", "description": "Optional exact qualified name" },
+                        "name": { "type": "string", "description": "Optional simple symbol name" },
+                        "relationship_type": { "type": "string", "description": "Optional edge kind: call, import, export, extends, implements, or contains" },
+                        "limit": { "type": "integer", "description": "Optional max incoming/outgoing edges" }
+                    },
+                    "required": [],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
             "name": "read_file_range",
             "function": {
                 "name": "read_file_range",

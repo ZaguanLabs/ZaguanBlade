@@ -58,6 +58,17 @@ export function upsertSplitTextBlocks(
     ];
 }
 
+export function moveExistingContentAfterTools(
+    blocks: MessageBlock[],
+    content: string,
+): { blocks: MessageBlock[]; contentBeforeTools: string; contentAfterTools: string } {
+    return {
+        blocks: upsertSplitTextBlocks(blocks, '', content),
+        contentBeforeTools: '',
+        contentAfterTools: content,
+    };
+}
+
 export function insertAssistantMessageAfterLastUser(messages: ChatMessage[], message: ChatMessage): ChatMessage[] {
     const lastUserIndex = messages.map((item) => item.role).lastIndexOf('User');
     if (lastUserIndex === -1) {

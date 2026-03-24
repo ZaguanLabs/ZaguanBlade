@@ -479,6 +479,54 @@ pub async fn dispatch(
                     }
                     Ok(())
                 }
+                blade_protocol::EditorIntent::SyncDocument {
+                    path,
+                    content,
+                    version,
+                } => {
+                    match state.language_service() {
+                        Ok(service) => {
+                            let result = if version <= 1 {
+                                service.did_open(&path, &content)
+                            } else {
+                                service.did_change(&path, version as i32, &content)
+                            };
+
+                            if let Err(error) = result {
+                                eprintln!(
+                                    "[Editor] Live document sync skipped for {}: {}",
+                                    path, error
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "[Editor] Failed to initialize language service for {}: {}",
+                                path, error
+                            );
+                        }
+                    }
+                    Ok(())
+                }
+                blade_protocol::EditorIntent::CloseDocument { path } => {
+                    match state.language_service() {
+                        Ok(service) => {
+                            if let Err(error) = service.did_close(&path) {
+                                eprintln!(
+                                    "[Editor] Failed to close live document {}: {}",
+                                    path, error
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "[Editor] Failed to initialize language service for close {}: {}",
+                                path, error
+                            );
+                        }
+                    }
+                    Ok(())
+                }
                 blade_protocol::EditorIntent::UpdateCursor { line, column } => {
                     // Always update backend state for AI context (regardless of authority mode)
                     {

@@ -439,14 +439,14 @@ const diffDecorationsPlugin = EditorView.decorations.compute(
 export const diffTheme = EditorView.baseTheme({
     // Added line
     ".cm-diff-added-line": {
-        backgroundColor: "var(--editor-diff-added-bg, rgba(99, 102, 241, 0.12))",
-        borderLeft: "3px solid var(--editor-diff-added-border, #6366f1)",
-        boxShadow: "inset 0 1px 0 var(--editor-diff-added-edge, rgba(255, 255, 255, 0.06)), inset 0 -1px 0 var(--editor-diff-added-edge, rgba(255, 255, 255, 0.06))",
+        backgroundColor: "var(--editor-diff-added-bg, rgba(34, 197, 94, 0.18))",
+        borderLeft: "3px solid var(--editor-diff-added-border, #22c55e)",
+        boxShadow: "inset 0 1px 0 var(--editor-diff-added-edge, rgba(134, 239, 172, 0.12)), inset 0 -1px 0 var(--editor-diff-added-edge, rgba(134, 239, 172, 0.12)), inset 0 0 0 1px color-mix(in srgb, var(--editor-diff-added-border, #22c55e) 26%, transparent)",
     },
 
     // Character-level highlight within added lines
     ".cm-diff-char-added": {
-        backgroundColor: "var(--editor-diff-added-char-bg, rgba(99, 102, 241, 0.32))",
+        backgroundColor: "var(--editor-diff-added-char-bg, rgba(34, 197, 94, 0.32))",
         borderRadius: "2px",
     },
 
@@ -454,14 +454,15 @@ export const diffTheme = EditorView.baseTheme({
     ".cm-diff-removed-widget": {
         display: "flex",
         alignItems: "center",
-        backgroundColor: "var(--editor-diff-removed-bg, rgba(248, 81, 73, 0.08))",
-        borderLeft: "3px solid var(--editor-diff-removed-border, rgba(248, 81, 73, 0.7))",
+        backgroundColor: "var(--editor-diff-removed-bg, rgba(248, 81, 73, 0.14))",
+        borderLeft: "3px solid var(--editor-diff-removed-border, rgba(248, 81, 73, 0.72))",
         fontFamily: "inherit",
         fontSize: "inherit",
         lineHeight: "inherit",
         minHeight: "1.4em",
         padding: "0",
-        color: "var(--editor-diff-removed-fg, rgba(212, 212, 216, 0.72))",
+        color: "var(--editor-diff-removed-fg, rgba(228, 228, 231, 0.78))",
+        boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--editor-diff-removed-border, rgba(248, 81, 73, 0.72)) 24%, transparent)",
         userSelect: "none",
     },
 
@@ -471,7 +472,7 @@ export const diffTheme = EditorView.baseTheme({
         width: "3.5em",
         textAlign: "right",
         paddingRight: "8px",
-        color: "var(--editor-diff-removed-gutter-fg, rgba(248, 81, 73, 0.62))",
+        color: "var(--editor-diff-removed-gutter-fg, rgba(252, 165, 165, 0.76))",
         fontSize: "0.85em",
         flexShrink: "0",
         userSelect: "none",
@@ -482,7 +483,7 @@ export const diffTheme = EditorView.baseTheme({
         display: "inline-block",
         width: "1.5em",
         textAlign: "center",
-        color: "var(--editor-diff-removed-sign-fg, rgba(248, 81, 73, 0.82))",
+        color: "var(--editor-diff-removed-sign-fg, rgba(248, 113, 113, 0.9))",
         flexShrink: "0",
         userSelect: "none",
     },
@@ -491,7 +492,7 @@ export const diffTheme = EditorView.baseTheme({
     ".cm-diff-removed-code": {
         flex: "1",
         textDecoration: "line-through",
-        textDecorationColor: "var(--editor-diff-removed-strike, rgba(248, 81, 73, 0.72))",
+        textDecorationColor: "var(--editor-diff-removed-strike, rgba(248, 113, 113, 0.82))",
         whiteSpace: "pre",
         overflow: "hidden",
         paddingRight: "8px",
@@ -499,10 +500,10 @@ export const diffTheme = EditorView.baseTheme({
 
     // Character-level highlight within removed lines
     ".cm-diff-char-removed": {
-        backgroundColor: "var(--editor-diff-removed-char-bg, rgba(248, 81, 73, 0.24))",
+        backgroundColor: "var(--editor-diff-removed-char-bg, rgba(248, 81, 73, 0.28))",
         borderRadius: "2px",
         textDecoration: "line-through",
-        textDecorationColor: "var(--editor-diff-removed-strike, rgba(248, 81, 73, 0.72))",
+        textDecorationColor: "var(--editor-diff-removed-strike, rgba(248, 113, 113, 0.82))",
     },
 
     // Gap widget (collapsed unchanged region)

@@ -756,7 +756,11 @@ fn complete_command_immediately<R: Runtime>(
 }
 
 // #[tauri::command]
-pub fn approve_tool<R: Runtime>(approved: bool, window: Window<R>, state: State<'_, AppState>) {
+pub fn approve_tool<R: Runtime>(
+    approved: bool,
+    window: Window<R>,
+    state: State<'_, AppState>,
+) {
     let app_handle = window.app_handle();
     // Legacy support for shell commands and generic tools
     {
