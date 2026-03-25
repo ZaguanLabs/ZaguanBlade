@@ -226,6 +226,7 @@ mod tests {
         assert!(indexer.is_supported("script.js"));
         assert!(indexer.is_supported("main.py"));
         assert!(indexer.is_supported("lib.rs"));
+        assert!(indexer.is_supported("main.go"));
         assert!(!indexer.is_supported("data.json"));
         assert!(!indexer.is_supported("readme.md"));
     }

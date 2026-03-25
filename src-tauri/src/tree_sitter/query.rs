@@ -93,6 +93,17 @@ impl QueryManager {
             },
         );
 
+        // Go queries
+        let go_lang: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();
+        queries.insert(
+            Language::Go,
+            LanguageQueries {
+                functions: Self::create_query(&go_lang, GO_FUNCTION_QUERY).ok(),
+                classes: Self::create_query(&go_lang, GO_TYPE_QUERY).ok(),
+                imports: Self::create_query(&go_lang, GO_IMPORT_QUERY).ok(),
+            },
+        );
+
         Ok(Self { queries })
     }
 
@@ -215,6 +226,25 @@ const RUST_USE_QUERY: &str = r#"
   argument: (identifier)? @ident) @use
 "#;
 
+// Go queries
+const GO_FUNCTION_QUERY: &str = r#"
+(function_declaration
+  name: (identifier) @name) @function
+
+(method_declaration
+  name: [(field_identifier) (identifier)] @name) @method
+"#;
+
+const GO_TYPE_QUERY: &str = r#"
+(type_spec
+  name: [(type_identifier) (identifier)] @name) @type
+"#;
+
+const GO_IMPORT_QUERY: &str = r#"
+(import_spec
+  path: (interpreted_string_literal) @source) @import
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,6 +260,7 @@ mod tests {
         assert!(manager.get_queries(Language::Jsx).is_some());
         assert!(manager.get_queries(Language::Python).is_some());
         assert!(manager.get_queries(Language::Rust).is_some());
+        assert!(manager.get_queries(Language::Go).is_some());
     }
 
     #[test]
@@ -244,6 +275,16 @@ mod tests {
     fn test_rust_queries() {
         let manager = QueryManager::new().unwrap();
         let queries = manager.get_queries(Language::Rust).unwrap();
+
+        assert!(queries.functions.is_some());
+        assert!(queries.classes.is_some());
+        assert!(queries.imports.is_some());
+    }
+
+    #[test]
+    fn test_go_queries() {
+        let manager = QueryManager::new().unwrap();
+        let queries = manager.get_queries(Language::Go).unwrap();
 
         assert!(queries.functions.is_some());
         assert!(queries.classes.is_some());

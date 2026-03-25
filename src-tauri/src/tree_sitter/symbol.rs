@@ -367,6 +367,7 @@ impl SymbolExtractor {
             Language::JavaScript | Language::Jsx => self.javascript_node_to_symbol(node, source),
             Language::Python => self.python_node_to_symbol(node, source),
             Language::Rust => self.rust_node_to_symbol(node, source),
+            Language::Go => self.go_node_to_symbol(node, source),
         }
     }
 
@@ -644,6 +645,75 @@ impl SymbolExtractor {
         }
     }
 
+    fn go_node_to_symbol(&self, node: &Node, source: &str) -> Option<Symbol> {
+        let kind = node.kind();
+        let range = Range::from_node(node);
+
+        match kind {
+            "import_spec" => {
+                let text = node.utf8_text(source.as_bytes()).ok()?;
+                let name = self.extract_quoted_text(text)?;
+                Some(Symbol::new(
+                    name,
+                    SymbolType::Import,
+                    self.file_path.clone(),
+                    range,
+                ))
+            }
+            "function_declaration" => {
+                let name = self.get_child_text(node, "name", source)?;
+                Some(Symbol::new(
+                    name,
+                    SymbolType::Function,
+                    self.file_path.clone(),
+                    range,
+                ))
+            }
+            "method_declaration" => {
+                let name = self.get_child_text(node, "name", source)?;
+                Some(Symbol::new(
+                    name,
+                    SymbolType::Method,
+                    self.file_path.clone(),
+                    range,
+                ))
+            }
+            "type_spec" => {
+                let name = self.get_child_text(node, "name", source)?;
+                let symbol_type = match node.child_by_field_name("type")?.kind() {
+                    "struct_type" => SymbolType::Struct,
+                    "interface_type" => SymbolType::Interface,
+                    _ => SymbolType::Type,
+                };
+                Some(Symbol::new(
+                    name,
+                    symbol_type,
+                    self.file_path.clone(),
+                    range,
+                ))
+            }
+            "const_spec" => {
+                let name = self.get_child_text(node, "name", source)?;
+                Some(Symbol::new(
+                    name,
+                    SymbolType::Constant,
+                    self.file_path.clone(),
+                    range,
+                ))
+            }
+            "var_spec" => {
+                let name = self.get_child_text(node, "name", source)?;
+                Some(Symbol::new(
+                    name,
+                    SymbolType::Variable,
+                    self.file_path.clone(),
+                    range,
+                ))
+            }
+            _ => None,
+        }
+    }
+
     fn get_child_text(&self, node: &Node, field_name: &str, source: &str) -> Option<String> {
         node.child_by_field_name(field_name)
             .and_then(|n| n.utf8_text(source.as_bytes()).ok())
@@ -750,6 +820,17 @@ impl SymbolExtractor {
                     return Some(format!("{}{}", params_text, return_type));
                 }
             }
+            Language::Go => {
+                if let Some(params) = node.child_by_field_name("parameters") {
+                    let params_text = params.utf8_text(source.as_bytes()).ok()?;
+                    let return_type = node
+                        .child_by_field_name("result")
+                        .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+                        .map(|s| format!(" {}", s))
+                        .unwrap_or_default();
+                    return Some(format!("{}{}", params_text, return_type));
+                }
+            }
         }
         None
     }
@@ -833,6 +914,7 @@ fn extract_structural_relationships_from_node(
             relationships,
             seen,
         ),
+        Language::Go => {}
     }
 
     for i in 0..node.child_count() {
@@ -1230,6 +1312,13 @@ fn extract_relationship_target_name(
             let callee = node.child_by_field_name("function")?;
             extract_callable_name(&callee, source)
         }
+        Language::Go => {
+            if node.kind() != "call_expression" {
+                return None;
+            }
+            let callee = node.child_by_field_name("function")?;
+            extract_callable_name(&callee, source)
+        }
     }
 }
 
@@ -1239,7 +1328,10 @@ fn extract_callable_name(node: &Node, source: &str) -> Option<String> {
             .utf8_text(source.as_bytes())
             .ok()
             .map(|s| s.to_string()),
-        "member_expression" | "member_access_expression" | "field_expression" => {
+        "member_expression"
+        | "member_access_expression"
+        | "field_expression"
+        | "selector_expression" => {
             if let Some(child) = node
                 .child_by_field_name("property")
                 .or_else(|| node.child_by_field_name("field"))
@@ -1529,5 +1621,87 @@ class Calculator:
         assert!(symbols
             .iter()
             .any(|s| s.name == "subtract" && s.symbol_type == SymbolType::Method));
+    }
+
+    #[test]
+    fn test_extract_go_symbols() {
+        let mut parser = TreeSitterParser::new().unwrap();
+        let code = r#"
+package main
+
+import "fmt"
+
+type Server struct{}
+type Store interface{ Save() }
+
+const Version = "v1"
+var ready = true
+
+func Run() {
+    fmt.Println("ok")
+}
+
+func (s *Server) Handle() error {
+    return nil
+}
+"#;
+        let tree = parser.parse(code, Language::Go).unwrap();
+        let symbols = extract_symbols(&tree, code, Language::Go, "main.go");
+
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "fmt" && s.symbol_type == SymbolType::Import));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "Server" && s.symbol_type == SymbolType::Struct));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "Store" && s.symbol_type == SymbolType::Interface));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "Version" && s.symbol_type == SymbolType::Constant));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "ready" && s.symbol_type == SymbolType::Variable));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "Run" && s.symbol_type == SymbolType::Function));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "Handle" && s.symbol_type == SymbolType::Method));
+    }
+
+    #[test]
+    fn test_extract_go_relationships() {
+        let mut parser = TreeSitterParser::new().unwrap();
+        let code = r#"
+package main
+
+import "fmt"
+
+func Run() {
+    fmt.Println("ok")
+    helper()
+}
+
+func helper() {}
+"#;
+        let tree = parser.parse(code, Language::Go).unwrap();
+        let symbols = extract_symbols(&tree, code, Language::Go, "main.go");
+        let relationships =
+            extract_symbol_relationships(&tree, code, Language::Go, "main.go", &symbols);
+
+        assert!(relationships.iter().any(|relationship| {
+            relationship.target_name == "fmt"
+                && relationship.relationship_type == SymbolRelationshipType::Import
+        }));
+        assert!(relationships.iter().any(|relationship| {
+            relationship.target_name == "Println"
+                && relationship.relationship_type == SymbolRelationshipType::Call
+        }));
+        assert!(relationships.iter().any(|relationship| {
+            relationship.target_name == "helper"
+                && relationship.relationship_type == SymbolRelationshipType::Call
+        }));
     }
 }

@@ -885,6 +885,10 @@ impl LanguageService {
 
     /// Notify that a document was opened
     pub fn did_open(&self, file_path: &str, content: &str) -> Result<(), LanguageError> {
+        if should_allow_non_indexed_live_sync(file_path) {
+            return Ok(());
+        }
+
         // Index the file
         let _ = self.index_file_content(file_path, content)?;
 
@@ -898,6 +902,10 @@ impl LanguageService {
         _version: i32,
         content: &str,
     ) -> Result<(), LanguageError> {
+        if should_allow_non_indexed_live_sync(file_path) {
+            return Ok(());
+        }
+
         // Re-index the file
         let _ = self.index_file_content(file_path, content)?;
 
@@ -998,7 +1006,7 @@ impl LanguageService {
         if base_path.extension().is_some() {
             candidates.push(base_path.to_path_buf());
         } else {
-            for extension in ["ts", "tsx", "js", "jsx", "py", "rs"] {
+            for extension in ["ts", "tsx", "js", "jsx", "py", "rs", "go"] {
                 candidates.push(base_path.with_extension(extension));
             }
 
@@ -1007,6 +1015,7 @@ impl LanguageService {
                 "index.tsx",
                 "index.js",
                 "index.jsx",
+                "main.go",
                 "mod.rs",
                 "__init__.py",
             ] {
@@ -2297,6 +2306,7 @@ impl LanguageService {
             Language::Python => {
                 python_is_exported_name(content, &symbol.name).then(|| symbol.name.clone())
             }
+            Language::Go => go_is_exported_name(&symbol.name).then(|| symbol.name.clone()),
         }
     }
 }
@@ -2375,12 +2385,15 @@ fn is_probable_entrypoint(file_path: &str, symbols: &[Symbol], export_count: usi
         "main.tsx",
         "main.js",
         "main.jsx",
+        "main.go",
         "app.rs",
         "app.ts",
         "app.tsx",
         "app.js",
+        "app.go",
         "server.ts",
         "server.js",
+        "server.go",
         "index.ts",
         "index.tsx",
         "index.js",
@@ -2389,6 +2402,7 @@ fn is_probable_entrypoint(file_path: &str, symbols: &[Symbol], export_count: usi
         "mod.rs",
         "__init__.py",
         "cli.rs",
+        "cli.go",
     ]
     .iter()
     .any(|suffix| lower.ends_with(suffix))
@@ -2442,6 +2456,25 @@ fn is_config_path(file_path: &str) -> bool {
         || lower.ends_with("jest.config.ts")
         || lower.ends_with("pytest.ini")
         || lower.ends_with(".env.example")
+}
+
+fn should_allow_non_indexed_live_sync(file_path: &str) -> bool {
+    if Language::from_path(file_path).is_some() {
+        return false;
+    }
+
+    let lower = file_path.to_lowercase();
+    lower.ends_with(".astro")
+        || lower.ends_with(".json")
+        || lower.ends_with(".jsonc")
+        || lower.ends_with(".json5")
+}
+
+fn go_is_exported_name(name: &str) -> bool {
+    name.chars()
+        .next()
+        .map(|ch| ch.is_uppercase())
+        .unwrap_or(false)
 }
 
 fn file_end_position(content: &str) -> (u32, u32) {
@@ -4313,5 +4346,85 @@ class _InternalService:
         let stats = service.stats().unwrap();
         assert_eq!(stats.files_indexed, 1);
         assert!(stats.symbols_extracted > 0);
+    }
+
+    #[test]
+    fn test_index_go_file_extracts_exported_symbols() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("main.go"),
+            r#"
+package main
+
+import "fmt"
+
+type Server struct{}
+
+func Run() {
+    fmt.Println("ok")
+}
+
+func helper() {}
+"#,
+        )
+        .unwrap();
+
+        let symbols = service.index_file("main.go").unwrap();
+
+        assert!(symbols
+            .iter()
+            .any(|symbol| symbol.name == "Server" && symbol.symbol_type == SymbolType::Struct));
+        assert!(symbols
+            .iter()
+            .any(|symbol| symbol.name == "Run" && symbol.symbol_type == SymbolType::Function));
+    }
+
+    #[test]
+    fn test_live_sync_allows_common_non_indexed_documents() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::create_dir_all(temp_dir.path().join("src/pages")).unwrap();
+        fs::write(
+            temp_dir.path().join("src/pages/changelog.astro"),
+            "<Layout><h1>Release notes</h1></Layout>",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("package.json"),
+            "{ \"name\": \"demo\" }",
+        )
+        .unwrap();
+
+        assert!(service
+            .did_open(
+                "src/pages/changelog.astro",
+                "<Layout><h1>Release notes</h1></Layout>",
+            )
+            .is_ok());
+        assert!(service
+            .did_change(
+                "package.json",
+                2,
+                "{ \"name\": \"demo\", \"private\": true }"
+            )
+            .is_ok());
+    }
+
+    #[test]
+    fn test_non_indexed_documents_still_do_not_enter_symbol_index() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("package.json"),
+            "{ \"name\": \"demo\" }",
+        )
+        .unwrap();
+
+        let error = service
+            .index_file("package.json")
+            .expect_err("json files should not be symbol-indexed yet");
+
+        assert!(matches!(error, LanguageError::NotSupported(_)));
     }
 }

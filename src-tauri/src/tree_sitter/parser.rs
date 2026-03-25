@@ -15,6 +15,7 @@ pub enum Language {
     Jsx,
     Python,
     Rust,
+    Go,
 }
 
 impl Language {
@@ -29,6 +30,7 @@ impl Language {
             "mjs" | "cjs" => Some(Language::JavaScript),
             "py" => Some(Language::Python),
             "rs" => Some(Language::Rust),
+            "go" => Some(Language::Go),
             _ => None,
         }
     }
@@ -42,6 +44,7 @@ impl Language {
             Language::Jsx => "JSX",
             Language::Python => "Python",
             Language::Rust => "Rust",
+            Language::Go => "Go",
         }
     }
 }
@@ -123,6 +126,13 @@ impl TreeSitterParser {
             .map_err(|e| TreeSitterError::LanguageInitFailed(e.to_string()))?;
         parsers.insert(Language::Rust, rs_parser);
 
+        // Initialize Go parser
+        let mut go_parser = Parser::new();
+        go_parser
+            .set_language(&tree_sitter_go::LANGUAGE.into())
+            .map_err(|e| TreeSitterError::LanguageInitFailed(e.to_string()))?;
+        parsers.insert(Language::Go, go_parser);
+
         Ok(Self { parsers })
     }
 
@@ -187,6 +197,7 @@ mod tests {
         assert_eq!(Language::from_path("component.jsx"), Some(Language::Jsx));
         assert_eq!(Language::from_path("main.py"), Some(Language::Python));
         assert_eq!(Language::from_path("lib.rs"), Some(Language::Rust));
+        assert_eq!(Language::from_path("main.go"), Some(Language::Go));
         assert_eq!(Language::from_path("data.json"), None);
     }
 
@@ -223,6 +234,15 @@ mod tests {
         let mut parser = TreeSitterParser::new().unwrap();
         let code = "fn greet(name: &str) -> String { format!(\"Hello, {}!\", name) }";
         let tree = parser.parse(code, Language::Rust).unwrap();
+
+        assert!(!tree.root_node().has_error());
+    }
+
+    #[test]
+    fn test_parse_go() {
+        let mut parser = TreeSitterParser::new().unwrap();
+        let code = "package main\n\nfunc greet(name string) string { return \"hi \" + name }";
+        let tree = parser.parse(code, Language::Go).unwrap();
 
         assert!(!tree.root_node().has_error());
     }
