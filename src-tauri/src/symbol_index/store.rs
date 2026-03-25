@@ -129,9 +129,24 @@ impl SymbolStore {
             "#,
         )?;
 
-        ensure_column(&conn, "symbols", "qualified_name", "TEXT NOT NULL DEFAULT ''")?;
-        ensure_column(&conn, "symbols", "byte_offset", "INTEGER NOT NULL DEFAULT 0")?;
-        ensure_column(&conn, "symbols", "byte_length", "INTEGER NOT NULL DEFAULT 0")?;
+        ensure_column(
+            &conn,
+            "symbols",
+            "qualified_name",
+            "TEXT NOT NULL DEFAULT ''",
+        )?;
+        ensure_column(
+            &conn,
+            "symbols",
+            "byte_offset",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        ensure_column(
+            &conn,
+            "symbols",
+            "byte_length",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
         ensure_column(&conn, "symbols", "content_hash", "TEXT NOT NULL DEFAULT ''")?;
         ensure_column(&conn, "symbol_relationships", "target_symbol_id", "TEXT")?;
 
@@ -255,7 +270,11 @@ impl SymbolStore {
 
         let targets = stmt
             .query_map(
-                params![source_symbol_id, relationship_type.to_string(), limit as i64],
+                params![
+                    source_symbol_id,
+                    relationship_type.to_string(),
+                    limit as i64
+                ],
                 |row| row.get::<_, String>(0),
             )?
             .collect::<Result<Vec<_>, _>>()?;
@@ -282,7 +301,11 @@ impl SymbolStore {
 
         let targets = stmt
             .query_map(
-                params![source_file_path, relationship_type.to_string(), limit as i64],
+                params![
+                    source_file_path,
+                    relationship_type.to_string(),
+                    limit as i64
+                ],
                 |row| row.get::<_, String>(0),
             )?
             .collect::<Result<Vec<_>, _>>()?;
@@ -311,19 +334,20 @@ impl SymbolStore {
                 "#,
             )?;
 
-            let rows = stmt.query_map(
-                params![target_name, relationship_type.to_string(), limit as i64],
-                |row| {
-                    Ok((
-                        row_to_symbol(row)?,
-                        row.get::<_, String>(15)?,
-                        row.get::<_, String>(16)?,
-                        row.get::<_, Option<String>>(17)?,
-                        row.get::<_, i64>(18)? as u32,
-                    ))
-                },
-            )?
-            .collect::<Result<Vec<_>, _>>()?;
+            let rows = stmt
+                .query_map(
+                    params![target_name, relationship_type.to_string(), limit as i64],
+                    |row| {
+                        Ok((
+                            row_to_symbol(row)?,
+                            row.get::<_, String>(15)?,
+                            row.get::<_, String>(16)?,
+                            row.get::<_, Option<String>>(17)?,
+                            row.get::<_, i64>(18)? as u32,
+                        ))
+                    },
+                )?
+                .collect::<Result<Vec<_>, _>>()?;
 
             rows
         };
@@ -352,19 +376,24 @@ impl SymbolStore {
                 "#,
             )?;
 
-            let rows = stmt.query_map(
-                params![target_symbol_id, relationship_type.to_string(), limit as i64],
-                |row| {
-                    Ok((
-                        row_to_symbol(row)?,
-                        row.get::<_, String>(15)?,
-                        row.get::<_, String>(16)?,
-                        row.get::<_, Option<String>>(17)?,
-                        row.get::<_, i64>(18)? as u32,
-                    ))
-                },
-            )?
-            .collect::<Result<Vec<_>, _>>()?;
+            let rows = stmt
+                .query_map(
+                    params![
+                        target_symbol_id,
+                        relationship_type.to_string(),
+                        limit as i64
+                    ],
+                    |row| {
+                        Ok((
+                            row_to_symbol(row)?,
+                            row.get::<_, String>(15)?,
+                            row.get::<_, String>(16)?,
+                            row.get::<_, Option<String>>(17)?,
+                            row.get::<_, i64>(18)? as u32,
+                        ))
+                    },
+                )?
+                .collect::<Result<Vec<_>, _>>()?;
 
             rows
         };
@@ -394,19 +423,24 @@ impl SymbolStore {
                 "#,
             )?;
 
-            let rows = stmt.query_map(
-                params![source_symbol_id, relationship_type.to_string(), limit as i64],
-                |row| {
-                    Ok((
-                        source_symbol.clone(),
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, i64>(3)? as u32,
-                    ))
-                },
-            )?
-            .collect::<Result<Vec<_>, _>>()?;
+            let rows = stmt
+                .query_map(
+                    params![
+                        source_symbol_id,
+                        relationship_type.to_string(),
+                        limit as i64
+                    ],
+                    |row| {
+                        Ok((
+                            source_symbol.clone(),
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, i64>(3)? as u32,
+                        ))
+                    },
+                )?
+                .collect::<Result<Vec<_>, _>>()?;
 
             rows
         };
@@ -510,9 +544,10 @@ impl SymbolStore {
         let like_pattern = format!("%{}%", pattern);
         let prefix_pattern = format!("{}%", pattern);
         let symbols = stmt
-            .query_map(params![like_pattern, pattern, prefix_pattern, limit as i64], |row| {
-                row_to_symbol(row)
-            })?
+            .query_map(
+                params![like_pattern, pattern, prefix_pattern, limit as i64],
+                |row| row_to_symbol(row),
+            )?
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(symbols)
@@ -615,7 +650,10 @@ impl SymbolStore {
         Ok(count as usize)
     }
 
-    pub fn list_indexed_files(&self, limit: usize) -> Result<Vec<IndexedFileRecord>, SymbolStoreError> {
+    pub fn list_indexed_files(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<IndexedFileRecord>, SymbolStoreError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             r#"
@@ -642,7 +680,8 @@ impl SymbolStore {
     /// Get count of indexed files
     pub fn file_count(&self) -> Result<usize, SymbolStoreError> {
         let conn = self.conn.lock().unwrap();
-        let count: i64 = conn.query_row("SELECT COUNT(DISTINCT file_path) FROM symbols", [], |row| {
+        let count: i64 =
+            conn.query_row("SELECT COUNT(DISTINCT file_path) FROM symbols", [], |row| {
                 row.get(0)
             })?;
         Ok(count as usize)
@@ -702,7 +741,10 @@ impl SymbolStore {
             let relationship_type = relationship_type
                 .parse::<SymbolRelationshipType>()
                 .map_err(|error| {
-                    SymbolStoreError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+                    SymbolStoreError::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        error,
+                    ))
                 })?;
             let target_symbol = match target_symbol_id.as_deref() {
                 Some(id) => self.get_symbol(id)?,
@@ -757,7 +799,12 @@ fn row_to_symbol(row: &rusqlite::Row) -> rusqlite::Result<Symbol> {
     })
 }
 
-fn ensure_column(conn: &Connection, table_name: &str, column_name: &str, definition: &str) -> Result<(), SymbolStoreError> {
+fn ensure_column(
+    conn: &Connection,
+    table_name: &str,
+    column_name: &str,
+    definition: &str,
+) -> Result<(), SymbolStoreError> {
     let pragma = format!("PRAGMA table_info({})", table_name);
     let mut stmt = conn.prepare(&pragma)?;
     let columns = stmt
@@ -765,7 +812,10 @@ fn ensure_column(conn: &Connection, table_name: &str, column_name: &str, definit
         .collect::<Result<Vec<_>, _>>()?;
 
     if !columns.iter().any(|existing| existing == column_name) {
-        let alter = format!("ALTER TABLE {} ADD COLUMN {} {}", table_name, column_name, definition);
+        let alter = format!(
+            "ALTER TABLE {} ADD COLUMN {} {}",
+            table_name, column_name, definition
+        );
         conn.execute(&alter, [])?;
     }
 
@@ -833,7 +883,11 @@ mod tests {
         }
     }
 
-    fn create_test_relationship(source_symbol_id: &str, file_path: &str, target_name: &str) -> SymbolRelationship {
+    fn create_test_relationship(
+        source_symbol_id: &str,
+        file_path: &str,
+        target_name: &str,
+    ) -> SymbolRelationship {
         SymbolRelationship {
             source_symbol_id: source_symbol_id.to_string(),
             source_file_path: file_path.to_string(),
@@ -931,9 +985,7 @@ mod tests {
         let store = SymbolStore::in_memory().unwrap();
         let caller = create_test_symbol("caller", "main.ts");
         let helper = create_test_symbol("helper", "utils.ts");
-        store
-            .upsert_symbols(&[caller.clone(), helper])
-            .unwrap();
+        store.upsert_symbols(&[caller.clone(), helper]).unwrap();
 
         store
             .replace_relationships_for_file(
@@ -951,7 +1003,10 @@ mod tests {
         assert_eq!(references[0].target_name, "helper");
         assert!(references[0].target_symbol_id.is_none());
         assert!(references[0].target_symbol.is_none());
-        assert_eq!(references[0].relationship_type, SymbolRelationshipType::Call);
+        assert_eq!(
+            references[0].relationship_type,
+            SymbolRelationshipType::Call
+        );
     }
 
     #[test]
@@ -982,16 +1037,34 @@ mod tests {
             .unwrap();
         assert_eq!(incoming.len(), 1);
         assert_eq!(incoming[0].source_symbol.id, caller.id);
-        assert_eq!(incoming[0].target_symbol_id.as_deref(), Some(helper.id.as_str()));
-        assert_eq!(incoming[0].target_symbol.as_ref().map(|symbol| symbol.id.as_str()), Some(helper.id.as_str()));
+        assert_eq!(
+            incoming[0].target_symbol_id.as_deref(),
+            Some(helper.id.as_str())
+        );
+        assert_eq!(
+            incoming[0]
+                .target_symbol
+                .as_ref()
+                .map(|symbol| symbol.id.as_str()),
+            Some(helper.id.as_str())
+        );
 
         let outgoing = store
             .get_relationship_edges_from_source(&caller.id, SymbolRelationshipType::Call, 10)
             .unwrap();
         assert_eq!(outgoing.len(), 1);
         assert_eq!(outgoing[0].source_symbol.id, caller.id);
-        assert_eq!(outgoing[0].target_symbol_id.as_deref(), Some(helper.id.as_str()));
-        assert_eq!(outgoing[0].target_symbol.as_ref().map(|symbol| symbol.id.as_str()), Some(helper.id.as_str()));
+        assert_eq!(
+            outgoing[0].target_symbol_id.as_deref(),
+            Some(helper.id.as_str())
+        );
+        assert_eq!(
+            outgoing[0]
+                .target_symbol
+                .as_ref()
+                .map(|symbol| symbol.id.as_str()),
+            Some(helper.id.as_str())
+        );
     }
 
     #[test]

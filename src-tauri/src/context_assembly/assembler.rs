@@ -131,9 +131,9 @@ impl ContextAssembler {
 
         // 2. Get symbol at cursor and include definitions
         if self.config.include_definitions {
-            if let Ok(Some(symbol)) = self
-                .language_service
-                .get_symbol_at(&indexed_file_path, line, character)
+            if let Ok(Some(symbol)) =
+                self.language_service
+                    .get_symbol_at(&indexed_file_path, line, character)
             {
                 cursor_symbol = Some(symbol.clone());
                 symbols_included.push(SymbolInfo {
@@ -181,10 +181,8 @@ impl ContextAssembler {
 
                 if self.config.include_references {
                     for reference_name in self.resolve_reference_names(&symbol)? {
-                        let resolved_symbols = self.resolve_reference_symbols(
-                            &reference_name,
-                            &indexed_file_path,
-                        )?;
+                        let resolved_symbols =
+                            self.resolve_reference_symbols(&reference_name, &indexed_file_path)?;
 
                         if !resolved_symbols.is_empty() {
                             for resolved_symbol in resolved_symbols {
@@ -260,12 +258,14 @@ impl ContextAssembler {
 
         // 3. Include relevant symbols from current file
         if let Ok(file_symbols) = self.language_service.get_file_symbols(&indexed_file_path) {
-            let nearby_symbols = self.select_nearby_symbols(&file_symbols, cursor_symbol.as_ref(), line, 6);
+            let nearby_symbols =
+                self.select_nearby_symbols(&file_symbols, cursor_symbol.as_ref(), line, 6);
 
             for symbol in nearby_symbols {
-                if !symbols_included.iter().any(|s| {
-                    s.name == symbol.name && s.file == symbol.file_path
-                }) {
+                if !symbols_included
+                    .iter()
+                    .any(|s| s.name == symbol.name && s.file == symbol.file_path)
+                {
                     let symbol_content = self.get_symbol_context(symbol)?;
                     let symbol_tokens = estimate_tokens(&symbol_content);
 
@@ -273,7 +273,11 @@ impl ContextAssembler {
                         allocation.definitions += symbol_tokens;
                         context_parts.push(ContextPart {
                             content: symbol_content,
-                            priority: self.score_nearby_symbol(symbol, cursor_symbol.as_ref(), line),
+                            priority: self.score_nearby_symbol(
+                                symbol,
+                                cursor_symbol.as_ref(),
+                                line,
+                            ),
                             source: ContextSource::Reference(symbol.name.clone()),
                         });
                         files_included.insert(symbol.file_path.clone());
@@ -288,7 +292,8 @@ impl ContextAssembler {
             }
 
             if self.config.include_imports {
-                for imported_file in self.resolve_imported_files(&indexed_file_path, &file_symbols) {
+                for imported_file in self.resolve_imported_files(&indexed_file_path, &file_symbols)
+                {
                     if let Ok(symbols) = self.language_service.get_file_symbols(&imported_file) {
                         let summary = self.create_file_summary(&imported_file, &symbols);
                         let summary_tokens = estimate_tokens(&summary);
@@ -381,10 +386,12 @@ impl ContextAssembler {
         let active_file = normalized_open_files.first().map(|path| path.as_str());
 
         // Search for relevant symbols based on query
-        if let Ok(results) = self
-            .language_service
-            .search_symbols_contextual(query, 20, active_file, &normalized_open_files)
-        {
+        if let Ok(results) = self.language_service.search_symbols_contextual(
+            query,
+            20,
+            active_file,
+            &normalized_open_files,
+        ) {
             for result in results {
                 let symbol_content = self.get_symbol_context(&result.symbol)?;
                 let tokens = estimate_tokens(&symbol_content);
@@ -407,7 +414,10 @@ impl ContextAssembler {
         }
 
         // Include summaries of open files
-        for open_file in normalized_open_files.iter().take(self.config.max_open_files) {
+        for open_file in normalized_open_files
+            .iter()
+            .take(self.config.max_open_files)
+        {
             if !files_included.contains(open_file) {
                 if let Ok(symbols) = self.language_service.get_file_symbols(open_file) {
                     let summary = self.create_file_summary(open_file, &symbols);
@@ -599,7 +609,11 @@ impl ContextAssembler {
         Ok(self.collect_reference_candidates(&excerpt, &symbol.name))
     }
 
-    fn collect_reference_candidates(&self, excerpt: &str, current_symbol_name: &str) -> Vec<String> {
+    fn collect_reference_candidates(
+        &self,
+        excerpt: &str,
+        current_symbol_name: &str,
+    ) -> Vec<String> {
         let mut references = Vec::new();
         let mut seen = HashSet::new();
         let mut window = VecDeque::new();
@@ -728,10 +742,11 @@ impl ContextAssembler {
         let mut imported_files = Vec::new();
         let mut seen = HashSet::new();
 
-        if let Ok(stored_targets) = self
-            .language_service
-            .get_file_relationship_targets(file_path, SymbolRelationshipType::Import, 12)
-        {
+        if let Ok(stored_targets) = self.language_service.get_file_relationship_targets(
+            file_path,
+            SymbolRelationshipType::Import,
+            12,
+        ) {
             for import_target in stored_targets {
                 if let Some(imported_file) = self.resolve_import_target(file_path, &import_target) {
                     if seen.insert(imported_file.clone()) {
@@ -779,12 +794,15 @@ impl ContextAssembler {
                 .trim_start_matches("self::")
                 .trim_start_matches("super::")
                 .replace("::", "/");
-            return self.find_existing_import_candidate(&self.language_service.resolve_path(&crate_relative));
+            return self.find_existing_import_candidate(
+                &self.language_service.resolve_path(&crate_relative),
+            );
         }
 
         if import_target.contains('.') {
             let dotted = import_target.replace('.', "/");
-            return self.find_existing_import_candidate(&self.language_service.resolve_path(&dotted));
+            return self
+                .find_existing_import_candidate(&self.language_service.resolve_path(&dotted));
         }
 
         None
@@ -800,13 +818,22 @@ impl ContextAssembler {
                 candidates.push(base_path.with_extension(extension));
             }
 
-            for index_name in ["index.ts", "index.tsx", "index.js", "index.jsx", "mod.rs", "__init__.py"] {
+            for index_name in [
+                "index.ts",
+                "index.tsx",
+                "index.js",
+                "index.jsx",
+                "mod.rs",
+                "__init__.py",
+            ] {
                 candidates.push(base_path.join(index_name));
             }
         }
 
         candidates.into_iter().find_map(|candidate| {
-            candidate.exists().then(|| self.path_to_workspace_relative(&candidate))
+            candidate
+                .exists()
+                .then(|| self.path_to_workspace_relative(&candidate))
         })
     }
 

@@ -33,6 +33,8 @@ pub struct ChatMessage {
     pub role: ChatRole,
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend_content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub images: Option<Vec<ChatImage>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mentions: Option<Vec<ChatMention>>,
@@ -54,6 +56,7 @@ impl ChatMessage {
             id: Some(Uuid::new_v4().to_string()),
             role,
             content,
+            backend_content: None,
             images: None,
             mentions: None,
             reasoning: None,

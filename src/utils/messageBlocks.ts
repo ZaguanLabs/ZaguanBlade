@@ -71,7 +71,15 @@ export function moveExistingContentAfterTools(
 
 export function insertAssistantMessageAfterLastUser(messages: ChatMessage[], message: ChatMessage): ChatMessage[] {
     const lastUserIndex = messages.map((item) => item.role).lastIndexOf('User');
-    if (lastUserIndex === -1) {
+    if (lastUserIndex === -1 || lastUserIndex === messages.length - 1) {
+        return [...messages, message];
+    }
+
+    // If the conversation already continued past the latest user turn, a newly
+    // discovered assistant message belongs at the tail. This matters for
+    // tool-driven continuation phases where the first event may be a ToolUpdate
+    // for a fresh assistant message_id that the UI has not seen yet.
+    if (messages.slice(lastUserIndex + 1).some((item) => item.role !== 'System')) {
         return [...messages, message];
     }
 

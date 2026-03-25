@@ -4,7 +4,7 @@ import { normalizeSplitBlocks } from '../hooks/useChatV2';
 import type { ChatMessage, CommandExecution, ToolCall } from '../types/chat';
 import type { StructuredAction } from '../types/events';
 import { deriveChatRows, deriveMessageRenderSegments } from './chatTimeline';
-import { ensureMessagesHaveBlocks, insertToolCallBlockPreservingOrder, moveExistingContentAfterTools, upsertSplitTextBlocks } from './messageBlocks';
+import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertToolCallBlockPreservingOrder, moveExistingContentAfterTools, upsertSplitTextBlocks } from './messageBlocks';
 
 function makeToolCall(overrides: Partial<ToolCall> & Pick<ToolCall, 'id'>): ToolCall {
     return {
@@ -211,6 +211,25 @@ test('moveExistingContentAfterTools moves streamed assistant text below a late t
     assert.deepEqual(
         reordered.blocks.map((block) => block.type === 'text' ? `${block.type}:${block.content}` : `${block.type}:${block.id}`),
         ['tool_call:tool-1', 'text:Final answer']
+    );
+});
+
+test('insertAssistantMessageAfterLastUser appends unseen continuation assistants at the tail once the conversation already progressed', () => {
+    const messages: ChatMessage[] = [
+        { id: 'user-1', role: 'User', content: 'run the build' },
+        makeAssistantMessage({ id: 'assistant-1', content: 'Running checks' }),
+        { id: 'tool-1', role: 'Tool', content: 'Build passed', tool_call_id: 'call-1' },
+    ];
+
+    const nextMessages = insertAssistantMessageAfterLastUser(messages, makeAssistantMessage({
+        id: 'assistant-2',
+        content: '',
+        blocks: [{ type: 'tool_call', id: 'call-2' }],
+    }));
+
+    assert.deepEqual(
+        nextMessages.map((message) => `${message.role}:${message.id}`),
+        ['User:user-1', 'Assistant:assistant-1', 'Tool:tool-1', 'Assistant:assistant-2']
     );
 });
 

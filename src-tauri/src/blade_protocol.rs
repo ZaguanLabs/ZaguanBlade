@@ -126,21 +126,35 @@ pub struct EditorContext {
 #[serde(tag = "type", content = "payload")]
 pub enum EditorIntent {
     /// Open a file (adds to open files, sets as active)
-    OpenFile { path: String },
+    OpenFile {
+        path: String,
+    },
     /// Close a file (removes from open files)
-    CloseFile { path: String },
+    CloseFile {
+        path: String,
+    },
     /// Set the active file (must already be in open files, or None to clear)
-    SetActiveFile { path: Option<String> },
+    SetActiveFile {
+        path: Option<String>,
+    },
     SyncDocument {
         path: String,
         content: String,
         version: u32,
     },
-    CloseDocument { path: String },
+    CloseDocument {
+        path: String,
+    },
     /// Update cursor position (for AI context)
-    UpdateCursor { line: u32, column: u32 },
+    UpdateCursor {
+        line: u32,
+        column: u32,
+    },
     /// Update selection (for AI context)
-    UpdateSelection { start: u32, end: u32 },
+    UpdateSelection {
+        start: u32,
+        end: u32,
+    },
     /// Request current editor state snapshot
     GetState {},
     // Tab management (headless)
@@ -158,11 +172,17 @@ pub enum EditorIntent {
         suggested_name: Option<String>, // For ephemeral tabs
     },
     /// Close a tab by ID
-    CloseTab { tab_id: String },
+    CloseTab {
+        tab_id: String,
+    },
     /// Set the active tab
-    SetActiveTab { tab_id: Option<String> },
+    SetActiveTab {
+        tab_id: Option<String>,
+    },
     /// Reorder tabs
-    ReorderTabs { tab_ids: Vec<String> },
+    ReorderTabs {
+        tab_ids: Vec<String>,
+    },
     /// Request tab state snapshot
     GetTabState {},
 }

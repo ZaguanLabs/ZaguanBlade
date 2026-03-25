@@ -12,7 +12,11 @@ fn current_timestamp_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn emit_blade_event(window: &tauri::Window, causality_id: Option<String>, event: blade_protocol::BladeEvent) {
+fn emit_blade_event(
+    window: &tauri::Window,
+    causality_id: Option<String>,
+    event: blade_protocol::BladeEvent,
+) {
     let _ = window.emit(
         "blade-event",
         blade_protocol::BladeEventEnvelope {
@@ -71,7 +75,11 @@ pub async fn dispatch(
             // Return cached result
             match cached_result {
                 crate::idempotency::IdempotencyResult::Success => {
-                    emit_system_event(&window, intent_id, SystemEvent::ProcessCompleted { intent_id });
+                    emit_system_event(
+                        &window,
+                        intent_id,
+                        SystemEvent::ProcessCompleted { intent_id },
+                    );
                     return Ok(());
                 }
                 crate::idempotency::IdempotencyResult::Failed { error } => {
@@ -114,7 +122,11 @@ pub async fn dispatch(
     }
 
     // 4. Ack (Process Started)
-    emit_system_event(&window, intent_id, SystemEvent::ProcessStarted { intent_id });
+    emit_system_event(
+        &window,
+        intent_id,
+        SystemEvent::ProcessStarted { intent_id },
+    );
 
     // 3. Route Intent
     match intent {

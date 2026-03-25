@@ -219,9 +219,7 @@ fn apply_contextual_boosts(results: &mut [SearchResult], query: &SearchQuery) {
             result.score += 0.15;
         }
 
-        if active_directory
-            .is_some_and(|dir| same_directory(dir, &result.symbol.file_path))
-        {
+        if active_directory.is_some_and(|dir| same_directory(dir, &result.symbol.file_path)) {
             result.score += 0.12;
         } else if query
             .preferred_directories
@@ -231,7 +229,11 @@ fn apply_contextual_boosts(results: &mut [SearchResult], query: &SearchQuery) {
             result.score += 0.07;
         }
 
-        if result.symbol.qualified_name.eq_ignore_ascii_case(result.symbol.name.as_str()) {
+        if result
+            .symbol
+            .qualified_name
+            .eq_ignore_ascii_case(result.symbol.name.as_str())
+        {
             result.score += 0.02;
         }
     }

@@ -15,7 +15,10 @@ fn reindex_changed_paths(state: &AppState, workspace_root: &Path, event: &notify
     let service = match state.language_service() {
         Ok(service) => service,
         Err(error) => {
-            eprintln!("[WATCHER] Failed to initialize language service for reindex: {}", error);
+            eprintln!(
+                "[WATCHER] Failed to initialize language service for reindex: {}",
+                error
+            );
             return;
         }
     };
@@ -25,7 +28,8 @@ fn reindex_changed_paths(state: &AppState, workspace_root: &Path, event: &notify
             continue;
         };
 
-        let Some(relative_str) = relative_path.to_str().map(|value| value.replace('\\', "/")) else {
+        let Some(relative_str) = relative_path.to_str().map(|value| value.replace('\\', "/"))
+        else {
             continue;
         };
 
@@ -36,7 +40,10 @@ fn reindex_changed_paths(state: &AppState, workspace_root: &Path, event: &notify
         let is_delete = matches!(event.kind, EventKind::Remove(_));
         if is_delete || !path.exists() {
             if let Err(error) = service.remove_file(&relative_str) {
-                eprintln!("[WATCHER] Failed to remove {} from symbol index: {}", relative_str, error);
+                eprintln!(
+                    "[WATCHER] Failed to remove {} from symbol index: {}",
+                    relative_str, error
+                );
             }
             continue;
         }

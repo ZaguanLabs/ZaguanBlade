@@ -147,8 +147,7 @@ pub fn execute_tool_with_default_timeout<R: Runtime>(
     context: &ToolExecutionContext<R>,
     tool_name: &str,
     args: &str,
-) -> ToolResult
-{
+) -> ToolResult {
     let workspace_root = context.workspace_root.clone();
     let editor_state = build_editor_state(context);
     let tool_name_owned = tool_name.to_string();

@@ -11,14 +11,8 @@ use crate::gitignore_filter::GitignoreFilter;
 use crate::project_settings;
 use crate::symbol_index::{SearchQuery, SearchResult, SymbolReference, SymbolStore};
 use crate::tree_sitter::{
-    extract_symbol_relationships,
-    extract_symbols,
-    Language,
-    Symbol,
-    SymbolRelationship,
-    SymbolRelationshipType,
-    SymbolType,
-    TreeSitterParser,
+    extract_symbol_relationships, extract_symbols, Language, Symbol, SymbolRelationship,
+    SymbolRelationshipType, SymbolType, TreeSitterParser,
 };
 
 /// Unified language service
@@ -92,7 +86,10 @@ fn typescript_named_export_clauses(content: &str) -> Vec<(String, String, Option
         let module_target = trailing
             .split_once(" from ")
             .and_then(|(_, rest)| extract_quoted_literal(rest));
-        let line = content[..start].bytes().filter(|byte| *byte == b'\n').count() as u32;
+        let line = content[..start]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count() as u32;
 
         for specifier in clause.split(',') {
             let specifier = specifier.trim();
@@ -148,7 +145,8 @@ fn rust_pub_use_plain_module_reexports(content: &str) -> Vec<(String, String, u3
             continue;
         };
         let rest = rest.trim_end_matches(';').trim();
-        if rest.is_empty() || rest.contains(" as ") || rest.contains("::{") || rest.ends_with("::*") {
+        if rest.is_empty() || rest.contains(" as ") || rest.contains("::{") || rest.ends_with("::*")
+        {
             continue;
         }
 
@@ -160,7 +158,11 @@ fn rust_pub_use_plain_module_reexports(content: &str) -> Vec<(String, String, u3
             continue;
         }
 
-        exports.push((rest.to_string(), exported_name.to_string(), line_index as u32));
+        exports.push((
+            rest.to_string(),
+            exported_name.to_string(),
+            line_index as u32,
+        ));
     }
 
     exports
@@ -199,7 +201,11 @@ fn rust_grouped_pub_use_module_reexports(content: &str) -> Vec<(String, String, 
                 continue;
             }
 
-            exports.push((module_prefix.to_string(), alias_name.to_string(), line_index as u32));
+            exports.push((
+                module_prefix.to_string(),
+                alias_name.to_string(),
+                line_index as u32,
+            ));
         }
     }
 
@@ -228,7 +234,11 @@ fn rust_pub_use_module_reexports(content: &str) -> Vec<(String, String, u32)> {
             continue;
         }
 
-        exports.push((target_path.to_string(), alias_name.to_string(), line_index as u32));
+        exports.push((
+            target_path.to_string(),
+            alias_name.to_string(),
+            line_index as u32,
+        ));
     }
 
     exports
@@ -574,7 +584,13 @@ impl LanguageService {
             extract_symbol_relationships(&tree, &content, language, file_path, &extracted_symbols);
         let symbols = self.with_file_root_symbol(file_path, &content, extracted_symbols);
         self.canonicalize_import_relationships(file_path, &mut relationships);
-        self.append_module_export_relationships(file_path, &content, language, &symbols, &mut relationships);
+        self.append_module_export_relationships(
+            file_path,
+            &content,
+            language,
+            &symbols,
+            &mut relationships,
+        );
 
         // Delete old symbols and insert new ones
         self.symbol_store.delete_file_symbols(file_path)?;
@@ -709,8 +725,10 @@ impl LanguageService {
         preferred_files: &[String],
     ) -> Result<Vec<SearchResult>, LanguageError> {
         let mut search_query = SearchQuery::text(query).with_limit(limit);
-        let preferred_directories =
-            crate::symbol_index::search::collect_preferred_directories(active_file, preferred_files);
+        let preferred_directories = crate::symbol_index::search::collect_preferred_directories(
+            active_file,
+            preferred_files,
+        );
 
         if let Some(path) = active_file {
             search_query = search_query.with_active_file(path);
@@ -788,9 +806,11 @@ impl LanguageService {
         relationship_type: SymbolRelationshipType,
         limit: usize,
     ) -> Result<Vec<String>, LanguageError> {
-        Ok(self
-            .symbol_store
-            .get_relationship_targets(source_symbol_id, relationship_type, limit)?)
+        Ok(self.symbol_store.get_relationship_targets(
+            source_symbol_id,
+            relationship_type,
+            limit,
+        )?)
     }
 
     pub fn get_file_relationship_targets(
@@ -799,9 +819,11 @@ impl LanguageService {
         relationship_type: SymbolRelationshipType,
         limit: usize,
     ) -> Result<Vec<String>, LanguageError> {
-        Ok(self
-            .symbol_store
-            .get_file_relationship_targets(source_file_path, relationship_type, limit)?)
+        Ok(self.symbol_store.get_file_relationship_targets(
+            source_file_path,
+            relationship_type,
+            limit,
+        )?)
     }
 
     pub fn find_references_to_symbol(
@@ -928,7 +950,8 @@ impl LanguageService {
                 continue;
             }
 
-            if let Some(resolved) = self.resolve_import_target(file_path, &relationship.target_name) {
+            if let Some(resolved) = self.resolve_import_target(file_path, &relationship.target_name)
+            {
                 relationship.target_name = resolved;
             }
         }
@@ -979,7 +1002,14 @@ impl LanguageService {
                 candidates.push(base_path.with_extension(extension));
             }
 
-            for index_name in ["index.ts", "index.tsx", "index.js", "index.jsx", "mod.rs", "__init__.py"] {
+            for index_name in [
+                "index.ts",
+                "index.tsx",
+                "index.js",
+                "index.jsx",
+                "mod.rs",
+                "__init__.py",
+            ] {
                 candidates.push(base_path.join(index_name));
             }
         }
@@ -1012,7 +1042,11 @@ impl LanguageService {
         Ok(())
     }
 
-    fn ensure_scope_index_fresh(&self, scope_root: Option<&Path>, probe_limit: usize) -> Result<(), LanguageError> {
+    fn ensure_scope_index_fresh(
+        &self,
+        scope_root: Option<&Path>,
+        probe_limit: usize,
+    ) -> Result<(), LanguageError> {
         let indexed_files = self.symbol_store.list_indexed_files(probe_limit.max(32))?;
         let scope_has_any = match scope_root {
             Some(scope_root) => indexed_files
@@ -1109,9 +1143,16 @@ impl LanguageService {
 
         self.collect_matching_symbols(&file_symbols, reference_name, &mut resolved, &mut seen);
 
-        for imported_file in self.get_file_relationship_targets(file_path, SymbolRelationshipType::Import, 24)? {
+        for imported_file in
+            self.get_file_relationship_targets(file_path, SymbolRelationshipType::Import, 24)?
+        {
             let imported_symbols = self.get_file_symbols(&imported_file)?;
-            self.collect_matching_symbols(&imported_symbols, reference_name, &mut resolved, &mut seen);
+            self.collect_matching_symbols(
+                &imported_symbols,
+                reference_name,
+                &mut resolved,
+                &mut seen,
+            );
         }
 
         Ok(resolved)
@@ -1127,10 +1168,11 @@ impl LanguageService {
         let mut seen = HashSet::new();
         let expanded_limit = limit.saturating_mul(8).max(limit);
 
-        for reference in self
-            .symbol_store
-            .find_references_to_symbol_id(&symbol.id, relationship_type, expanded_limit)?
-        {
+        for reference in self.symbol_store.find_references_to_symbol_id(
+            &symbol.id,
+            relationship_type,
+            expanded_limit,
+        )? {
             let key = (
                 reference.source_symbol.id.clone(),
                 reference.relationship_type,
@@ -1145,10 +1187,11 @@ impl LanguageService {
             }
         }
 
-        for reference in self
-            .symbol_store
-            .find_references_to_target(&symbol.name, relationship_type, expanded_limit)?
-        {
+        for reference in self.symbol_store.find_references_to_target(
+            &symbol.name,
+            relationship_type,
+            expanded_limit,
+        )? {
             if !self.reference_matches_symbol(&reference, symbol)? {
                 continue;
             }
@@ -1314,7 +1357,13 @@ impl LanguageService {
             extract_symbol_relationships(&tree, content, language, file_path, &extracted_symbols);
         let symbols = self.with_file_root_symbol(file_path, content, extracted_symbols);
         self.canonicalize_import_relationships(file_path, &mut relationships);
-        self.append_module_export_relationships(file_path, content, language, &symbols, &mut relationships);
+        self.append_module_export_relationships(
+            file_path,
+            content,
+            language,
+            &symbols,
+            &mut relationships,
+        );
 
         // Delete old symbols and insert new ones
         self.symbol_store.delete_file_symbols(file_path)?;
@@ -1357,19 +1406,28 @@ impl LanguageService {
         max_symbols_per_module: usize,
     ) -> Result<Option<String>, LanguageError> {
         let scope_root = scope_root.and_then(|path| std::fs::canonicalize(path).ok());
-        self.ensure_scope_index_fresh(scope_root.as_deref(), max_modules.saturating_mul(8).max(64))?;
+        self.ensure_scope_index_fresh(
+            scope_root.as_deref(),
+            max_modules.saturating_mul(8).max(64),
+        )?;
         let stats = self.stats()?;
-        let mut indexed_files = self.symbol_store.list_indexed_files(max_modules.saturating_mul(8).max(64))?;
+        let mut indexed_files = self
+            .symbol_store
+            .list_indexed_files(max_modules.saturating_mul(8).max(64))?;
 
         if let Some(scope_root) = scope_root.as_ref() {
-            indexed_files.retain(|record| self.resolve_path(&record.file_path).starts_with(scope_root));
+            indexed_files
+                .retain(|record| self.resolve_path(&record.file_path).starts_with(scope_root));
         }
 
         self.refresh_stale_indexed_files(&indexed_files)?;
 
-        indexed_files = self.symbol_store.list_indexed_files(max_modules.saturating_mul(8).max(64))?;
+        indexed_files = self
+            .symbol_store
+            .list_indexed_files(max_modules.saturating_mul(8).max(64))?;
         if let Some(scope_root) = scope_root.as_ref() {
-            indexed_files.retain(|record| self.resolve_path(&record.file_path).starts_with(scope_root));
+            indexed_files
+                .retain(|record| self.resolve_path(&record.file_path).starts_with(scope_root));
         }
 
         if indexed_files.is_empty() {
@@ -1405,18 +1463,27 @@ impl LanguageService {
             let symbols = self.get_file_symbols(&record.file_path).unwrap_or_default();
             let key_symbols = summarize_key_symbols(&symbols, max_symbols_per_module);
             let import_count = self
-                .get_file_relationship_targets(&record.file_path, SymbolRelationshipType::Import, 64)
+                .get_file_relationship_targets(
+                    &record.file_path,
+                    SymbolRelationshipType::Import,
+                    64,
+                )
                 .map(|targets| targets.len())
                 .unwrap_or(0);
             let export_count = match self.get_file_module_symbol(&record.file_path)? {
                 Some(module_symbol) => self
                     .symbol_store
-                    .get_relationship_edges_from_source(&module_symbol.id, SymbolRelationshipType::Export, 64)
+                    .get_relationship_edges_from_source(
+                        &module_symbol.id,
+                        SymbolRelationshipType::Export,
+                        64,
+                    )
                     .map(|references| references.len())
                     .unwrap_or(0),
                 None => 0,
             };
-            let score = record.symbol_count + (import_count * 2) + (export_count * 3) + key_symbols.len();
+            let score =
+                record.symbol_count + (import_count * 2) + (export_count * 3) + key_symbols.len();
 
             if is_probable_entrypoint(&record.file_path, &symbols, export_count) {
                 push_unique_limited(&mut entrypoints, record.file_path.clone(), 12);
@@ -1445,7 +1512,10 @@ impl LanguageService {
                 .then_with(|| b.import_count.cmp(&a.import_count))
                 .then_with(|| a.file_path.cmp(&b.file_path))
         });
-        let important_modules = important_modules.into_iter().take(max_modules).collect::<Vec<_>>();
+        let important_modules = important_modules
+            .into_iter()
+            .take(max_modules)
+            .collect::<Vec<_>>();
 
         let project_name = scope_root
             .as_ref()
@@ -1455,12 +1525,18 @@ impl LanguageService {
             .unwrap_or("project");
 
         let mut output = String::new();
-        output.push_str(&format!("# Semantic Project Overview: {}\n\n", project_name));
+        output.push_str(&format!(
+            "# Semantic Project Overview: {}\n\n",
+            project_name
+        ));
         output.push_str("## Index Summary\n\n");
         output.push_str(&format!("- Indexed files: {}\n", stats.files_indexed));
         output.push_str(&format!("- Indexed symbols: {}\n", stats.symbols_extracted));
         if let Some(scope_root) = scope_root.as_ref() {
-            output.push_str(&format!("- Scope root: {}\n", self.path_to_workspace_relative(scope_root)));
+            output.push_str(&format!(
+                "- Scope root: {}\n",
+                self.path_to_workspace_relative(scope_root)
+            ));
         }
         output.push('\n');
 
@@ -1501,7 +1577,10 @@ impl LanguageService {
             if module.key_symbols.is_empty() {
                 output.push_str("- Key symbols: (none indexed)\n\n");
             } else {
-                output.push_str(&format!("- Key symbols: {}\n\n", module.key_symbols.join(", ")));
+                output.push_str(&format!(
+                    "- Key symbols: {}\n\n",
+                    module.key_symbols.join(", ")
+                ));
             }
         }
 
@@ -1536,9 +1615,11 @@ impl LanguageService {
     ) -> Result<SymbolGraph, LanguageError> {
         let incoming = match relationship_type {
             SymbolRelationshipType::Call => self.find_references_to_symbol(symbol, limit)?,
-            SymbolRelationshipType::Import => self
-                .symbol_store
-                .find_references_to_target(&symbol.file_path, SymbolRelationshipType::Import, limit)?,
+            SymbolRelationshipType::Import => self.symbol_store.find_references_to_target(
+                &symbol.file_path,
+                SymbolRelationshipType::Import,
+                limit,
+            )?,
             SymbolRelationshipType::Export
             | SymbolRelationshipType::Extends
             | SymbolRelationshipType::Implements => {
@@ -1548,9 +1629,11 @@ impl LanguageService {
         };
         let outgoing = match relationship_type {
             SymbolRelationshipType::Contains => self.get_containment_outgoing(symbol, limit)?,
-            _ => self
-                .symbol_store
-                .get_relationship_edges_from_source(&symbol.id, relationship_type, limit)?,
+            _ => self.symbol_store.get_relationship_edges_from_source(
+                &symbol.id,
+                relationship_type,
+                limit,
+            )?,
         };
 
         Ok(SymbolGraph {
@@ -1620,9 +1703,11 @@ impl LanguageService {
             return Ok(None);
         };
 
-        let references = self
-            .symbol_store
-            .get_relationship_edges_from_source(&module_symbol.id, SymbolRelationshipType::Export, 256)?;
+        let references = self.symbol_store.get_relationship_edges_from_source(
+            &module_symbol.id,
+            SymbolRelationshipType::Export,
+            256,
+        )?;
 
         Ok(references
             .into_iter()
@@ -1638,9 +1723,11 @@ impl LanguageService {
             return Ok(Vec::new());
         };
 
-        Ok(self
-            .symbol_store
-            .get_relationship_edges_from_source(&module_symbol.id, SymbolRelationshipType::Export, 256)?)
+        Ok(self.symbol_store.get_relationship_edges_from_source(
+            &module_symbol.id,
+            SymbolRelationshipType::Export,
+            256,
+        )?)
     }
 
     fn resolve_python_module_target(&self, file_path: &str, module_target: &str) -> Option<String> {
@@ -1648,7 +1735,10 @@ impl LanguageService {
         let parent = base_file.parent()?;
 
         if module_target.starts_with('.') {
-            let depth = module_target.chars().take_while(|character| *character == '.').count();
+            let depth = module_target
+                .chars()
+                .take_while(|character| *character == '.')
+                .count();
             let remainder = module_target[depth..].trim();
             let mut anchor = parent.to_path_buf();
             for _ in 1..depth {
@@ -1660,7 +1750,8 @@ impl LanguageService {
             }
 
             let normalized = remainder.replace('.', "/");
-            return self.find_existing_import_candidate(&anchor.join(&normalized))
+            return self
+                .find_existing_import_candidate(&anchor.join(&normalized))
                 .or_else(|| self.find_existing_import_candidate(&self.resolve_path(&normalized)));
         }
 
@@ -1696,7 +1787,9 @@ impl LanguageService {
             if symbol.parent_id.as_deref() != Some(root_id.as_str()) {
                 continue;
             }
-            if symbol.symbol_type == SymbolType::Import || Self::is_synthetic_file_root_symbol(symbol) {
+            if symbol.symbol_type == SymbolType::Import
+                || Self::is_synthetic_file_root_symbol(symbol)
+            {
                 continue;
             }
             let Some(exported_name) = Self::direct_export_name(content, language, symbol) else {
@@ -1718,17 +1811,24 @@ impl LanguageService {
             });
         }
 
-        if matches!(language, Language::TypeScript | Language::Tsx | Language::JavaScript | Language::Jsx) {
-            for (local_name, exported_name, module_target, line) in typescript_named_export_clauses(content) {
+        if matches!(
+            language,
+            Language::TypeScript | Language::Tsx | Language::JavaScript | Language::Jsx
+        ) {
+            for (local_name, exported_name, module_target, line) in
+                typescript_named_export_clauses(content)
+            {
                 let matching_symbol = if let Some(module_target) = module_target {
-                    let Some(resolved_file) = self.resolve_import_target(file_path, &module_target) else {
+                    let Some(resolved_file) = self.resolve_import_target(file_path, &module_target)
+                    else {
                         continue;
                     };
                     self.resolve_exported_symbol_from_module(&resolved_file, &local_name)
                         .ok()
                         .flatten()
                         .or_else(|| {
-                            let imported_symbols = self.get_file_symbols_raw(&resolved_file).ok()?;
+                            let imported_symbols =
+                                self.get_file_symbols_raw(&resolved_file).ok()?;
                             imported_symbols.into_iter().find(|symbol| {
                                 symbol.name == local_name
                                     && symbol.symbol_type != SymbolType::Import
@@ -1736,12 +1836,15 @@ impl LanguageService {
                             })
                         })
                 } else {
-                    symbols.iter().find(|symbol| {
-                        symbol.parent_id.as_deref() == Some(root_id.as_str())
-                            && symbol.name == local_name
-                            && symbol.symbol_type != SymbolType::Import
-                            && !Self::is_synthetic_file_root_symbol(symbol)
-                    }).cloned()
+                    symbols
+                        .iter()
+                        .find(|symbol| {
+                            symbol.parent_id.as_deref() == Some(root_id.as_str())
+                                && symbol.name == local_name
+                                && symbol.symbol_type != SymbolType::Import
+                                && !Self::is_synthetic_file_root_symbol(symbol)
+                        })
+                        .cloned()
                 };
                 let Some(target_symbol) = matching_symbol else {
                     continue;
@@ -1762,11 +1865,15 @@ impl LanguageService {
                 });
             }
 
-            for (exported_name, module_target, line) in typescript_namespace_export_clauses(content) {
-                let Some(resolved_file) = self.resolve_import_target(file_path, &module_target) else {
+            for (exported_name, module_target, line) in typescript_namespace_export_clauses(content)
+            {
+                let Some(resolved_file) = self.resolve_import_target(file_path, &module_target)
+                else {
                     continue;
                 };
-                let Some(target_symbol) = self.get_file_module_symbol(&resolved_file).ok().flatten() else {
+                let Some(target_symbol) =
+                    self.get_file_module_symbol(&resolved_file).ok().flatten()
+                else {
                     continue;
                 };
 
@@ -1786,7 +1893,8 @@ impl LanguageService {
             }
 
             for (module_target, line) in typescript_export_star_targets(content) {
-                let Some(resolved_file) = self.resolve_import_target(file_path, &module_target) else {
+                let Some(resolved_file) = self.resolve_import_target(file_path, &module_target)
+                else {
                     continue;
                 };
                 let references = match self.get_module_export_references(&resolved_file) {
@@ -1821,10 +1929,13 @@ impl LanguageService {
 
         if matches!(language, Language::Rust) {
             for (module_path, exported_name, line) in rust_pub_use_plain_module_reexports(content) {
-                let Some(resolved_file) = self.resolve_import_target(file_path, &module_path) else {
+                let Some(resolved_file) = self.resolve_import_target(file_path, &module_path)
+                else {
                     continue;
                 };
-                let Some(target_symbol) = self.get_file_module_symbol(&resolved_file).ok().flatten() else {
+                let Some(target_symbol) =
+                    self.get_file_module_symbol(&resolved_file).ok().flatten()
+                else {
                     continue;
                 };
 
@@ -1843,11 +1954,15 @@ impl LanguageService {
                 });
             }
 
-            for (module_path, exported_name, line) in rust_grouped_pub_use_module_reexports(content) {
-                let Some(resolved_file) = self.resolve_import_target(file_path, &module_path) else {
+            for (module_path, exported_name, line) in rust_grouped_pub_use_module_reexports(content)
+            {
+                let Some(resolved_file) = self.resolve_import_target(file_path, &module_path)
+                else {
                     continue;
                 };
-                let Some(target_symbol) = self.get_file_module_symbol(&resolved_file).ok().flatten() else {
+                let Some(target_symbol) =
+                    self.get_file_module_symbol(&resolved_file).ok().flatten()
+                else {
                     continue;
                 };
 
@@ -1867,10 +1982,13 @@ impl LanguageService {
             }
 
             for (module_path, exported_name, line) in rust_pub_use_module_reexports(content) {
-                let Some(resolved_file) = self.resolve_import_target(file_path, &module_path) else {
+                let Some(resolved_file) = self.resolve_import_target(file_path, &module_path)
+                else {
                     continue;
                 };
-                let Some(target_symbol) = self.get_file_module_symbol(&resolved_file).ok().flatten() else {
+                let Some(target_symbol) =
+                    self.get_file_module_symbol(&resolved_file).ok().flatten()
+                else {
                     continue;
                 };
 
@@ -1890,7 +2008,8 @@ impl LanguageService {
             }
 
             for (module_path, symbol_name, exported_name, line) in rust_pub_use_reexports(content) {
-                let Some(resolved_file) = self.resolve_import_target(file_path, &module_path) else {
+                let Some(resolved_file) = self.resolve_import_target(file_path, &module_path)
+                else {
                     continue;
                 };
                 let imported_symbols = match self.get_file_symbols_raw(&resolved_file) {
@@ -1922,7 +2041,8 @@ impl LanguageService {
             }
 
             for (module_path, line) in rust_pub_use_glob_reexports(content) {
-                let Some(resolved_file) = self.resolve_import_target(file_path, &module_path) else {
+                let Some(resolved_file) = self.resolve_import_target(file_path, &module_path)
+                else {
                     continue;
                 };
                 let references = match self.get_module_export_references(&resolved_file) {
@@ -1957,10 +2077,14 @@ impl LanguageService {
                 if !python_is_exported_name(content, &exported_name) {
                     continue;
                 }
-                let Some(resolved_file) = self.resolve_python_module_target(file_path, &module_target) else {
+                let Some(resolved_file) =
+                    self.resolve_python_module_target(file_path, &module_target)
+                else {
                     continue;
                 };
-                let Some(target_symbol) = self.get_file_module_symbol(&resolved_file).ok().flatten() else {
+                let Some(target_symbol) =
+                    self.get_file_module_symbol(&resolved_file).ok().flatten()
+                else {
                     continue;
                 };
 
@@ -1979,11 +2103,15 @@ impl LanguageService {
                 });
             }
 
-            for (module_target, local_name, exported_name, line) in python_from_import_clauses(content) {
+            for (module_target, local_name, exported_name, line) in
+                python_from_import_clauses(content)
+            {
                 if !python_is_exported_name(content, &exported_name) {
                     continue;
                 }
-                let Some(resolved_file) = self.resolve_python_module_target(file_path, &module_target) else {
+                let Some(resolved_file) =
+                    self.resolve_python_module_target(file_path, &module_target)
+                else {
                     continue;
                 };
                 let matching_symbol = self
@@ -1991,8 +2119,10 @@ impl LanguageService {
                     .ok()
                     .flatten()
                     .or_else(|| {
-                        let submodule_target = python_join_module_target(&module_target, &local_name);
-                        let submodule_file = self.resolve_python_module_target(file_path, &submodule_target)?;
+                        let submodule_target =
+                            python_join_module_target(&module_target, &local_name);
+                        let submodule_file =
+                            self.resolve_python_module_target(file_path, &submodule_target)?;
                         self.get_file_module_symbol(&submodule_file).ok().flatten()
                     })
                     .or_else(|| {
@@ -2023,7 +2153,9 @@ impl LanguageService {
             }
 
             for (module_target, line) in python_from_import_star_targets(content) {
-                let Some(resolved_file) = self.resolve_python_module_target(file_path, &module_target) else {
+                let Some(resolved_file) =
+                    self.resolve_python_module_target(file_path, &module_target)
+                else {
                     continue;
                 };
                 let references = match self.get_module_export_references(&resolved_file) {
@@ -2088,7 +2220,12 @@ impl LanguageService {
         Some(symbol)
     }
 
-    fn with_file_root_symbol(&self, file_path: &str, content: &str, mut symbols: Vec<Symbol>) -> Vec<Symbol> {
+    fn with_file_root_symbol(
+        &self,
+        file_path: &str,
+        content: &str,
+        mut symbols: Vec<Symbol>,
+    ) -> Vec<Symbol> {
         let root = Self::synthetic_file_root_symbol(file_path, content);
         let root_id = root.id.clone();
 
@@ -2099,7 +2236,13 @@ impl LanguageService {
         }
 
         symbols.push(root);
-        symbols.sort_by_key(|symbol| (symbol.range.start.line, symbol.range.start.character, symbol.byte_offset));
+        symbols.sort_by_key(|symbol| {
+            (
+                symbol.range.start.line,
+                symbol.range.start.character,
+                symbol.byte_offset,
+            )
+        });
         symbols
     }
 
@@ -2151,7 +2294,9 @@ impl LanguageService {
                 }
             }
             Language::Rust => line.starts_with("pub ").then(|| symbol.name.clone()),
-            Language::Python => python_is_exported_name(content, &symbol.name).then(|| symbol.name.clone()),
+            Language::Python => {
+                python_is_exported_name(content, &symbol.name).then(|| symbol.name.clone())
+            }
         }
     }
 }
@@ -2426,14 +2571,21 @@ mod tests {
             .get_symbol_graph(caller, SymbolRelationshipType::Call, 10)
             .unwrap();
         assert_eq!(graph.outgoing.len(), 1);
-        assert_eq!(graph.outgoing[0].target_symbol_id.as_deref(), Some("main.ts::helperName#function"));
+        assert_eq!(
+            graph.outgoing[0].target_symbol_id.as_deref(),
+            Some("main.ts::helperName#function")
+        );
     }
 
     #[test]
     fn test_index_file_persists_import_relationships() {
         let (service, temp_dir) = create_test_service();
 
-        fs::write(temp_dir.path().join("utils.ts"), "export function helper() { return 'ok'; }").unwrap();
+        fs::write(
+            temp_dir.path().join("utils.ts"),
+            "export function helper() { return 'ok'; }",
+        )
+        .unwrap();
         fs::write(
             temp_dir.path().join("main.ts"),
             r#"
@@ -2666,8 +2818,15 @@ mod tests {
             .get_symbol_graph(greet_user, SymbolRelationshipType::Call, 10)
             .unwrap();
 
-        assert!(graph.incoming.iter().any(|reference| reference.source_symbol.name == "greetAgain"));
-        assert!(graph.outgoing.iter().any(|reference| reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("helperName")));
+        assert!(graph
+            .incoming
+            .iter()
+            .any(|reference| reference.source_symbol.name == "greetAgain"));
+        assert!(graph.outgoing.iter().any(|reference| reference
+            .target_symbol
+            .as_ref()
+            .map(|symbol| symbol.name.as_str())
+            == Some("helperName")));
     }
 
     #[test]
@@ -2704,7 +2863,11 @@ mod tests {
             .unwrap();
         assert!(extends_graph.outgoing.iter().any(|reference| {
             reference.target_name == "CoreService"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("CoreService")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.name.as_str())
+                    == Some("CoreService")
         }));
 
         let implements_graph = service
@@ -2746,7 +2909,11 @@ mod tests {
             .get_symbol_graph(user_service, SymbolRelationshipType::Contains, 10)
             .unwrap();
         assert!(parent_graph.outgoing.iter().any(|reference| {
-            reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("getUser")
+            reference
+                .target_symbol
+                .as_ref()
+                .map(|symbol| symbol.name.as_str())
+                == Some("getUser")
         }));
 
         let child_graph = service
@@ -2775,11 +2942,17 @@ mod tests {
         .unwrap();
 
         let visible_symbols = service.index_file("service.ts").unwrap();
-        assert!(visible_symbols.iter().all(|symbol| symbol.qualified_name != "__file__"));
-        assert!(visible_symbols.iter().all(|symbol| symbol.parent_id.as_deref() != Some("service.ts::__file__#module")));
+        assert!(visible_symbols
+            .iter()
+            .all(|symbol| symbol.qualified_name != "__file__"));
+        assert!(visible_symbols
+            .iter()
+            .all(|symbol| symbol.parent_id.as_deref() != Some("service.ts::__file__#module")));
 
         let stored_symbols = service.get_file_symbols_raw("service.ts").unwrap();
-        assert!(stored_symbols.iter().any(|symbol| symbol.qualified_name == "__file__"));
+        assert!(stored_symbols
+            .iter()
+            .any(|symbol| symbol.qualified_name == "__file__"));
     }
 
     #[test]
@@ -2801,8 +2974,12 @@ mod tests {
         service.index_file("service.ts").unwrap();
         let results = service.search_symbols("service", 10).unwrap();
 
-        assert!(results.iter().all(|result| result.symbol.qualified_name != "__file__"));
-        assert!(results.iter().any(|result| result.symbol.name == "UserService"));
+        assert!(results
+            .iter()
+            .all(|result| result.symbol.qualified_name != "__file__"));
+        assert!(results
+            .iter()
+            .any(|result| result.symbol.name == "UserService"));
     }
 
     #[test]
@@ -2835,9 +3012,16 @@ mod tests {
 
         assert!(graph.outgoing.iter().any(|reference| {
             reference.target_name == "UserService"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.name.as_str())
+                    == Some("UserService")
         }));
-        assert!(!graph.outgoing.iter().any(|reference| reference.target_name == "InternalService"));
+        assert!(!graph
+            .outgoing
+            .iter()
+            .any(|reference| reference.target_name == "InternalService"));
     }
 
     #[test]
@@ -2872,9 +3056,16 @@ mod tests {
 
         assert!(graph.outgoing.iter().any(|reference| {
             reference.target_name == "Service"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.name.as_str())
+                    == Some("UserService")
         }));
-        assert!(!graph.outgoing.iter().any(|reference| reference.target_name == "InternalService"));
+        assert!(!graph
+            .outgoing
+            .iter()
+            .any(|reference| reference.target_name == "InternalService"));
     }
 
     #[test]
@@ -2914,8 +3105,16 @@ mod tests {
 
         assert!(graph.outgoing.iter().any(|reference| {
             reference.target_name == "Service"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.ts")
-                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.file_path.as_str())
+                    == Some("base.ts")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.name.as_str())
+                    == Some("UserService")
         }));
     }
 
@@ -2953,9 +3152,18 @@ mod tests {
             .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
             .unwrap();
 
-        assert!(graph.outgoing.iter().any(|reference| reference.target_name == "UserService"));
-        assert!(graph.outgoing.iter().any(|reference| reference.target_name == "AuditService"));
-        assert!(!graph.outgoing.iter().any(|reference| reference.target_name == "default"));
+        assert!(graph
+            .outgoing
+            .iter()
+            .any(|reference| reference.target_name == "UserService"));
+        assert!(graph
+            .outgoing
+            .iter()
+            .any(|reference| reference.target_name == "AuditService"));
+        assert!(!graph
+            .outgoing
+            .iter()
+            .any(|reference| reference.target_name == "default"));
     }
 
     #[test]
@@ -2991,9 +3199,21 @@ mod tests {
 
         assert!(graph.outgoing.iter().any(|reference| {
             reference.target_name == "api"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.ts")
-                && reference.target_symbol.as_ref().map(|symbol| symbol.qualified_name.as_str()) == Some("__file__")
-                && reference.target_symbol.as_ref().map(|symbol| symbol.symbol_type) == Some(SymbolType::Module)
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.file_path.as_str())
+                    == Some("base.ts")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.qualified_name.as_str())
+                    == Some("__file__")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.symbol_type)
+                    == Some(SymbolType::Module)
         }));
     }
 
@@ -3025,7 +3245,11 @@ mod tests {
 
         assert!(graph.outgoing.iter().any(|reference| {
             reference.target_name == "default"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.name.as_str())
+                    == Some("UserService")
         }));
     }
 
@@ -3066,8 +3290,16 @@ mod tests {
 
         assert!(graph.outgoing.iter().any(|reference| {
             reference.target_name == "Service"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.ts")
-                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.file_path.as_str())
+                    == Some("base.ts")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.name.as_str())
+                    == Some("UserService")
         }));
     }
 
@@ -3093,10 +3325,7 @@ mod tests {
 
         service.index_file("base.rs").unwrap();
         service.index_file("lib.rs").unwrap();
-        let module_symbol = service
-            .get_file_module_symbol("lib.rs")
-            .unwrap()
-            .unwrap();
+        let module_symbol = service.get_file_module_symbol("lib.rs").unwrap().unwrap();
 
         let graph = service
             .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
@@ -3104,8 +3333,16 @@ mod tests {
 
         assert!(graph.outgoing.iter().any(|reference| {
             reference.target_name == "UserService"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.rs")
-                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.file_path.as_str())
+                    == Some("base.rs")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.name.as_str())
+                    == Some("UserService")
         }));
     }
 
@@ -3123,10 +3360,7 @@ mod tests {
         .unwrap();
 
         service.index_file("base.rs").unwrap();
-        let module_symbol = service
-            .get_file_module_symbol("base.rs")
-            .unwrap()
-            .unwrap();
+        let module_symbol = service.get_file_module_symbol("base.rs").unwrap().unwrap();
 
         let graph = service
             .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
@@ -3134,9 +3368,16 @@ mod tests {
 
         assert!(graph.outgoing.iter().any(|reference| {
             reference.target_name == "UserService"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.name.as_str())
+                    == Some("UserService")
         }));
-        assert!(!graph.outgoing.iter().any(|reference| reference.target_name == "InternalService"));
+        assert!(!graph
+            .outgoing
+            .iter()
+            .any(|reference| reference.target_name == "InternalService"));
     }
 
     #[test]
@@ -3161,10 +3402,7 @@ mod tests {
 
         service.index_file("base.rs").unwrap();
         service.index_file("lib.rs").unwrap();
-        let module_symbol = service
-            .get_file_module_symbol("lib.rs")
-            .unwrap()
-            .unwrap();
+        let module_symbol = service.get_file_module_symbol("lib.rs").unwrap().unwrap();
 
         let graph = service
             .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
@@ -3172,7 +3410,11 @@ mod tests {
 
         assert!(graph.outgoing.iter().any(|reference| {
             reference.target_name == "Service"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.name.as_str())
+                    == Some("UserService")
         }));
     }
 
@@ -3198,10 +3440,7 @@ mod tests {
 
         service.index_file("base.rs").unwrap();
         service.index_file("lib.rs").unwrap();
-        let module_symbol = service
-            .get_file_module_symbol("lib.rs")
-            .unwrap()
-            .unwrap();
+        let module_symbol = service.get_file_module_symbol("lib.rs").unwrap().unwrap();
 
         let graph = service
             .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
@@ -3209,9 +3448,21 @@ mod tests {
 
         assert!(graph.outgoing.iter().any(|reference| {
             reference.target_name == "api"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.rs")
-                && reference.target_symbol.as_ref().map(|symbol| symbol.qualified_name.as_str()) == Some("__file__")
-                && reference.target_symbol.as_ref().map(|symbol| symbol.symbol_type) == Some(SymbolType::Module)
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.file_path.as_str())
+                    == Some("base.rs")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.qualified_name.as_str())
+                    == Some("__file__")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.symbol_type)
+                    == Some(SymbolType::Module)
         }));
     }
 
@@ -3237,10 +3488,7 @@ mod tests {
 
         service.index_file("base.rs").unwrap();
         service.index_file("lib.rs").unwrap();
-        let module_symbol = service
-            .get_file_module_symbol("lib.rs")
-            .unwrap()
-            .unwrap();
+        let module_symbol = service.get_file_module_symbol("lib.rs").unwrap().unwrap();
 
         let graph = service
             .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
@@ -3248,9 +3496,21 @@ mod tests {
 
         assert!(graph.outgoing.iter().any(|reference| {
             reference.target_name == "base"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.rs")
-                && reference.target_symbol.as_ref().map(|symbol| symbol.qualified_name.as_str()) == Some("__file__")
-                && reference.target_symbol.as_ref().map(|symbol| symbol.symbol_type) == Some(SymbolType::Module)
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.file_path.as_str())
+                    == Some("base.rs")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.qualified_name.as_str())
+                    == Some("__file__")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.symbol_type)
+                    == Some(SymbolType::Module)
         }));
     }
 
@@ -3276,10 +3536,7 @@ mod tests {
 
         service.index_file("base.rs").unwrap();
         service.index_file("lib.rs").unwrap();
-        let module_symbol = service
-            .get_file_module_symbol("lib.rs")
-            .unwrap()
-            .unwrap();
+        let module_symbol = service.get_file_module_symbol("lib.rs").unwrap().unwrap();
 
         let graph = service
             .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
@@ -3287,13 +3544,29 @@ mod tests {
 
         assert!(graph.outgoing.iter().any(|reference| {
             reference.target_name == "api"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.rs")
-                && reference.target_symbol.as_ref().map(|symbol| symbol.qualified_name.as_str()) == Some("__file__")
-                && reference.target_symbol.as_ref().map(|symbol| symbol.symbol_type) == Some(SymbolType::Module)
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.file_path.as_str())
+                    == Some("base.rs")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.qualified_name.as_str())
+                    == Some("__file__")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.symbol_type)
+                    == Some(SymbolType::Module)
         }));
         assert!(graph.outgoing.iter().any(|reference| {
             reference.target_name == "UserService"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.name.as_str())
+                    == Some("UserService")
         }));
     }
 
@@ -3320,10 +3593,7 @@ mod tests {
 
         service.index_file("base.rs").unwrap();
         service.index_file("lib.rs").unwrap();
-        let module_symbol = service
-            .get_file_module_symbol("lib.rs")
-            .unwrap()
-            .unwrap();
+        let module_symbol = service.get_file_module_symbol("lib.rs").unwrap().unwrap();
 
         let graph = service
             .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
@@ -3331,11 +3601,19 @@ mod tests {
 
         assert!(graph.outgoing.iter().any(|reference| {
             reference.target_name == "UserService"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.rs")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.file_path.as_str())
+                    == Some("base.rs")
         }));
         assert!(graph.outgoing.iter().any(|reference| {
             reference.target_name == "AuditService"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.rs")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.file_path.as_str())
+                    == Some("base.rs")
         }));
     }
 
@@ -3362,17 +3640,20 @@ mod tests {
 
         service.index_file("base.rs").unwrap();
         service.index_file("lib.rs").unwrap();
-        let module_symbol = service
-            .get_file_module_symbol("lib.rs")
-            .unwrap()
-            .unwrap();
+        let module_symbol = service.get_file_module_symbol("lib.rs").unwrap().unwrap();
 
         let graph = service
             .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
             .unwrap();
 
-        assert!(graph.outgoing.iter().any(|reference| reference.target_name == "UserService"));
-        assert!(graph.outgoing.iter().any(|reference| reference.target_name == "AuditService"));
+        assert!(graph
+            .outgoing
+            .iter()
+            .any(|reference| reference.target_name == "UserService"));
+        assert!(graph
+            .outgoing
+            .iter()
+            .any(|reference| reference.target_name == "AuditService"));
     }
 
     #[test]
@@ -3405,9 +3686,16 @@ class _InternalService:
 
         assert!(graph.outgoing.iter().any(|reference| {
             reference.target_name == "UserService"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.name.as_str())
+                    == Some("UserService")
         }));
-        assert!(!graph.outgoing.iter().any(|reference| reference.target_name == "_InternalService"));
+        assert!(!graph
+            .outgoing
+            .iter()
+            .any(|reference| reference.target_name == "_InternalService"));
     }
 
     #[test]
@@ -3447,8 +3735,16 @@ from base import UserService
 
         assert!(graph.outgoing.iter().any(|reference| {
             reference.target_name == "UserService"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.py")
-                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.file_path.as_str())
+                    == Some("base.py")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.name.as_str())
+                    == Some("UserService")
         }));
     }
 
@@ -3488,8 +3784,16 @@ from .base import UserService
 
         assert!(graph.outgoing.iter().any(|reference| {
             reference.target_name == "UserService"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("pkg/base.py")
-                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.file_path.as_str())
+                    == Some("pkg/base.py")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.name.as_str())
+                    == Some("UserService")
         }));
     }
 
@@ -3529,9 +3833,21 @@ from . import base
 
         assert!(graph.outgoing.iter().any(|reference| {
             reference.target_name == "base"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("pkg/base.py")
-                && reference.target_symbol.as_ref().map(|symbol| symbol.qualified_name.as_str()) == Some("__file__")
-                && reference.target_symbol.as_ref().map(|symbol| symbol.symbol_type) == Some(SymbolType::Module)
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.file_path.as_str())
+                    == Some("pkg/base.py")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.qualified_name.as_str())
+                    == Some("__file__")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.symbol_type)
+                    == Some(SymbolType::Module)
         }));
     }
 
@@ -3573,9 +3889,21 @@ from . import base as api
 
         assert!(graph.outgoing.iter().any(|reference| {
             reference.target_name == "api"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("pkg/base.py")
-                && reference.target_symbol.as_ref().map(|symbol| symbol.qualified_name.as_str()) == Some("__file__")
-                && reference.target_symbol.as_ref().map(|symbol| symbol.symbol_type) == Some(SymbolType::Module)
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.file_path.as_str())
+                    == Some("pkg/base.py")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.qualified_name.as_str())
+                    == Some("__file__")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.symbol_type)
+                    == Some(SymbolType::Module)
         }));
     }
 
@@ -3615,8 +3943,16 @@ from base import UserService as Service
 
         assert!(graph.outgoing.iter().any(|reference| {
             reference.target_name == "Service"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.py")
-                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.file_path.as_str())
+                    == Some("base.py")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.name.as_str())
+                    == Some("UserService")
         }));
     }
 
@@ -3658,9 +3994,18 @@ from base import *
             .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
             .unwrap();
 
-        assert!(graph.outgoing.iter().any(|reference| reference.target_name == "UserService"));
-        assert!(graph.outgoing.iter().any(|reference| reference.target_name == "AuditService"));
-        assert!(!graph.outgoing.iter().any(|reference| reference.target_name == "_InternalService"));
+        assert!(graph
+            .outgoing
+            .iter()
+            .any(|reference| reference.target_name == "UserService"));
+        assert!(graph
+            .outgoing
+            .iter()
+            .any(|reference| reference.target_name == "AuditService"));
+        assert!(!graph
+            .outgoing
+            .iter()
+            .any(|reference| reference.target_name == "_InternalService"));
     }
 
     #[test]
@@ -3700,8 +4045,14 @@ from .base import *
             .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
             .unwrap();
 
-        assert!(graph.outgoing.iter().any(|reference| reference.target_name == "UserService"));
-        assert!(graph.outgoing.iter().any(|reference| reference.target_name == "AuditService"));
+        assert!(graph
+            .outgoing
+            .iter()
+            .any(|reference| reference.target_name == "UserService"));
+        assert!(graph
+            .outgoing
+            .iter()
+            .any(|reference| reference.target_name == "AuditService"));
     }
 
     #[test]
@@ -3741,8 +4092,14 @@ from base import *
             .get_symbol_graph(&module_symbol, SymbolRelationshipType::Export, 10)
             .unwrap();
 
-        assert!(graph.outgoing.iter().any(|reference| reference.target_name == "AuditService"));
-        assert!(!graph.outgoing.iter().any(|reference| reference.target_name == "UserService"));
+        assert!(graph
+            .outgoing
+            .iter()
+            .any(|reference| reference.target_name == "AuditService"));
+        assert!(!graph
+            .outgoing
+            .iter()
+            .any(|reference| reference.target_name == "UserService"));
     }
 
     #[test]
@@ -3779,9 +4136,21 @@ import base
 
         assert!(graph.outgoing.iter().any(|reference| {
             reference.target_name == "base"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.py")
-                && reference.target_symbol.as_ref().map(|symbol| symbol.qualified_name.as_str()) == Some("__file__")
-                && reference.target_symbol.as_ref().map(|symbol| symbol.symbol_type) == Some(SymbolType::Module)
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.file_path.as_str())
+                    == Some("base.py")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.qualified_name.as_str())
+                    == Some("__file__")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.symbol_type)
+                    == Some(SymbolType::Module)
         }));
     }
 
@@ -3822,9 +4191,21 @@ import pkg.base
 
         assert!(graph.outgoing.iter().any(|reference| {
             reference.target_name == "pkg"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("pkg/__init__.py")
-                && reference.target_symbol.as_ref().map(|symbol| symbol.qualified_name.as_str()) == Some("__file__")
-                && reference.target_symbol.as_ref().map(|symbol| symbol.symbol_type) == Some(SymbolType::Module)
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.file_path.as_str())
+                    == Some("pkg/__init__.py")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.qualified_name.as_str())
+                    == Some("__file__")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.symbol_type)
+                    == Some(SymbolType::Module)
         }));
     }
 
@@ -3864,9 +4245,21 @@ import base as api
 
         assert!(graph.outgoing.iter().any(|reference| {
             reference.target_name == "api"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.file_path.as_str()) == Some("base.py")
-                && reference.target_symbol.as_ref().map(|symbol| symbol.qualified_name.as_str()) == Some("__file__")
-                && reference.target_symbol.as_ref().map(|symbol| symbol.symbol_type) == Some(SymbolType::Module)
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.file_path.as_str())
+                    == Some("base.py")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.qualified_name.as_str())
+                    == Some("__file__")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.symbol_type)
+                    == Some(SymbolType::Module)
         }));
     }
 
@@ -3898,9 +4291,16 @@ class _InternalService:
 
         assert!(graph.outgoing.iter().any(|reference| {
             reference.target_name == "UserService"
-                && reference.target_symbol.as_ref().map(|symbol| symbol.name.as_str()) == Some("UserService")
+                && reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.name.as_str())
+                    == Some("UserService")
         }));
-        assert!(!graph.outgoing.iter().any(|reference| reference.target_name == "_InternalService"));
+        assert!(!graph
+            .outgoing
+            .iter()
+            .any(|reference| reference.target_name == "_InternalService"));
     }
 
     #[test]

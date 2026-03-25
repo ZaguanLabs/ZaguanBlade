@@ -203,7 +203,12 @@ impl ConversationHistory {
                                 c.push_str("</think>\n");
                             }
                         }
-                        c.push_str(&m.content);
+                        let effective_content = if m.role == ChatRole::User {
+                            m.backend_content.as_deref().unwrap_or(&m.content)
+                        } else {
+                            &m.content
+                        };
+                        c.push_str(effective_content);
                         Some(c)
                     },
                     tool_calls: None,

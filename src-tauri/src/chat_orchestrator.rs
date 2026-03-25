@@ -76,6 +76,33 @@ fn should_allow_planning_artifact_write(mode: Option<&str>, message: &str) -> Op
     Some(output_path)
 }
 
+fn build_image_only_fallback_prompt(image_count: usize) -> String {
+    let image_label = if image_count == 1 { "image" } else { "images" };
+    format!(
+        "[SYSTEM NOTE: The user attached {} {} without typing additional instructions. Analyze the attached {} in the context of the current workspace and help directly based on what you see. Do not treat this as an empty input and do not ask a generic \"How can I help?\" question. If intent is ambiguous, briefly describe the most relevant issue visible and propose the next concrete debugging step.]",
+        image_count,
+        image_label,
+        image_label,
+    )
+}
+
+fn ensure_non_empty_image_prompt(
+    visible_user_message: &str,
+    actual_message: String,
+    image_count: usize,
+) -> String {
+    if image_count == 0 || !visible_user_message.trim().is_empty() {
+        return actual_message;
+    }
+
+    let fallback = build_image_only_fallback_prompt(image_count);
+    if actual_message.trim().is_empty() {
+        return fallback;
+    }
+
+    format!("{}\n\n{}", actual_message, fallback)
+}
+
 fn infer_context_files_from_query(
     state: &State<'_, AppState>,
     query: &str,
@@ -87,7 +114,10 @@ fn infer_context_files_from_query(
     let service = match state.language_service() {
         Ok(service) => service,
         Err(error) => {
-            eprintln!("[LANGUAGE] Failed to initialize language service for query context: {}", error);
+            eprintln!(
+                "[LANGUAGE] Failed to initialize language service for query context: {}",
+                error
+            );
             return files;
         }
     };
@@ -116,14 +146,11 @@ fn infer_context_files_from_query(
         .filter(|token| token.len() >= 4)
         .take(8)
         .collect();
-    
+
     for token in tokens {
-        if let Ok(results) = service.search_symbols_contextual(
-            token,
-            4,
-            active_file.as_deref(),
-            &open_files,
-        ) {
+        if let Ok(results) =
+            service.search_symbols_contextual(token, 4, active_file.as_deref(), &open_files)
+        {
             for result in results {
                 let path = result.symbol.file_path;
                 if seen.insert(path.clone()) {
@@ -373,8 +400,9 @@ pub async fn handle_send_message<R: Runtime>(
             .map_err(|e| format!("Failed to lock conversation: {}", e))?;
         let mut chat_msg = crate::protocol::ChatMessage::new(
             crate::protocol::ChatRole::User,
-            visible_user_message,
+            visible_user_message.clone(),
         );
+        chat_msg.backend_content = Some(actual_message.clone());
         chat_msg.images = images.clone();
         if !normalized_mentions.is_empty() {
             chat_msg.mentions = Some(
@@ -399,6 +427,21 @@ pub async fn handle_send_message<R: Runtime>(
             tool_name, query
         );
         eprintln!("[COMMAND] zcoderd will handle this directly");
+    }
+
+    let image_count = images.as_ref().map(|imgs| imgs.len()).unwrap_or(0);
+    actual_message =
+        ensure_non_empty_image_prompt(visible_user_message.as_str(), actual_message, image_count);
+    if image_count > 0 {
+        let preview: String = actual_message.chars().take(160).collect();
+        eprintln!(
+            "[IMAGE SEND] visible_len={}, actual_len={}, image_count={}, actual_blank={}, preview={:?}",
+            visible_user_message.len(),
+            actual_message.len(),
+            image_count,
+            actual_message.trim().is_empty(),
+            preview,
+        );
     }
 
     // 2. Start Stream
@@ -561,7 +604,9 @@ pub async fn handle_send_message<R: Runtime>(
                         let mut stored = conversation.to_stored();
                         // Persist the current session ID to the stored metadata
                         stored.metadata.session_id = session_id.clone();
-                        if let Err(e) = state.with_conversation_store(|store| store.save_conversation(&stored)) {
+                        if let Err(e) =
+                            state.with_conversation_store(|store| store.save_conversation(&stored))
+                        {
                             eprintln!("Failed to auto-save conversation: {}", e);
                         } else {
                             println!("Auto-saved conversation: {}", stored.metadata.id);
@@ -1342,4 +1387,26 @@ pub async fn handle_send_message<R: Runtime>(
     });
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_non_empty_image_prompt;
+
+    #[test]
+    fn image_only_turns_get_a_fallback_prompt() {
+        let result = ensure_non_empty_image_prompt("", String::new(), 1);
+        assert!(result.contains("attached 1 image"));
+        assert!(result.contains("Do not treat this as an empty input"));
+    }
+
+    #[test]
+    fn text_turns_do_not_get_image_only_fallback() {
+        let result = ensure_non_empty_image_prompt(
+            "Please inspect this",
+            "Please inspect this".to_string(),
+            1,
+        );
+        assert_eq!(result, "Please inspect this");
+    }
 }

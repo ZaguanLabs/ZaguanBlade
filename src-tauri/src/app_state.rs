@@ -164,7 +164,10 @@ impl AppState {
     }
 
     fn workspace_root(&self) -> Option<PathBuf> {
-        self.workspace.lock().ok().and_then(|workspace| workspace.workspace.clone())
+        self.workspace
+            .lock()
+            .ok()
+            .and_then(|workspace| workspace.workspace.clone())
     }
 
     fn ensure_project_data_dir(&self) -> Result<PathBuf, String> {
@@ -177,7 +180,9 @@ impl AppState {
         Ok(project_data_root(workspace_root.as_ref()))
     }
 
-    fn create_conversation_store(project_data_dir: &Path) -> Result<conversation_store::ConversationStore, String> {
+    fn create_conversation_store(
+        project_data_dir: &Path,
+    ) -> Result<conversation_store::ConversationStore, String> {
         let storage_path = project_data_dir.join("artifacts").join("conversations");
         conversation_store::ConversationStore::new(storage_path).or_else(|e| {
             eprintln!("Failed to initialize conversation store: {}", e);

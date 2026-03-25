@@ -111,7 +111,8 @@ pub fn new_conversation(model_id: String, state: State<'_, AppState>) -> Result<
     }
 
     // Create new conversation
-    let metadata = state.with_conversation_store(|store| Ok(store.create_new_conversation(model_id)))?;
+    let metadata =
+        state.with_conversation_store(|store| Ok(store.create_new_conversation(model_id)))?;
     let id = metadata.id.clone();
 
     let mut conversation = state.conversation.lock().unwrap();

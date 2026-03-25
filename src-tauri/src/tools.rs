@@ -378,8 +378,8 @@ impl ToolResult {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_multi_patch_to_string, apply_patch_to_string, execute_tool, grep_search, PatchHunk,
-        parse_grep_timeout_ms, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS,
+        apply_multi_patch_to_string, apply_patch_to_string, execute_tool, grep_search,
+        parse_grep_timeout_ms, PatchHunk, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS,
         GREP_TIMEOUT_MIN_MS,
     };
     use std::collections::HashMap;
@@ -404,7 +404,10 @@ mod tests {
     fn apply_patch_rejects_whitespace_only_fuzzy_match() {
         let content = "    TARGET   \nB\n";
         let err = apply_patch_to_string(content, "TARGET\n", "TARGET\nEXTRA\n").unwrap_err();
-        assert!(err.contains("Exact match required"), "unexpected error: {err}");
+        assert!(
+            err.contains("Exact match required"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -417,7 +420,10 @@ mod tests {
             end_line: None,
         }];
         let err = apply_multi_patch_to_string(content, &patches).unwrap_err();
-        assert!(err.contains("old_text not found in file"), "unexpected error: {err}");
+        assert!(
+            err.contains("old_text not found in file"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -1515,7 +1521,8 @@ fn get_project_index_overview<R: tauri::Runtime>(
         };
         match service.build_semantic_project_overview(scope_root, 8, 6) {
             Ok(Some(content)) => {
-                let (window, end, total_chars, has_more) = slice_by_char_window(&content, offset, max_chars);
+                let (window, end, total_chars, has_more) =
+                    slice_by_char_window(&content, offset, max_chars);
                 let returned_chars = window.chars().count();
                 let result = serde_json::json!({
                     "tool": "get_project_index_overview",
@@ -2041,13 +2048,17 @@ fn language_service_from_app_handle<R: tauri::Runtime>(
 
     use tauri::Manager;
 
-    app_handle.state::<crate::app_state::AppState>().language_service()
+    app_handle
+        .state::<crate::app_state::AppState>()
+        .language_service()
 }
 
 fn symbol_path_arg(workspace_root: &Path, raw_path: &str) -> Result<String, String> {
     let resolved = validate_path_under_workspace(workspace_root, Path::new(raw_path))?;
     let workspace = fs::canonicalize(workspace_root).map_err(|e| e.to_string())?;
-    let relative = resolved.strip_prefix(&workspace).map_err(|e| e.to_string())?;
+    let relative = resolved
+        .strip_prefix(&workspace)
+        .map_err(|e| e.to_string())?;
     Ok(normalize_rel_path(relative))
 }
 
@@ -2095,7 +2106,9 @@ fn resolve_symbol_from_graph_args(
     args: &HashMap<String, serde_json::Value>,
 ) -> Result<Option<crate::tree_sitter::Symbol>, String> {
     if let Some(symbol_id) = get_str_arg(args, &["symbol_id", "id"]) {
-        return service.get_symbol(&symbol_id).map_err(|err| err.to_string());
+        return service
+            .get_symbol(&symbol_id)
+            .map_err(|err| err.to_string());
     }
 
     let Some(file_path) = get_str_arg(args, &["path", "file", "file_path"]) else {
@@ -2105,10 +2118,14 @@ fn resolve_symbol_from_graph_args(
     let qualified_name = get_str_arg(args, &["qualified_name"]);
     let name = get_str_arg(args, &["name"]);
     if qualified_name.is_none() && name.is_none() {
-        return Err("symbol_graph requires 'name' or 'qualified_name' when resolving by path".to_string());
+        return Err(
+            "symbol_graph requires 'name' or 'qualified_name' when resolving by path".to_string(),
+        );
     }
 
-    let symbols = service.get_file_symbols(&file_path).map_err(|err| err.to_string())?;
+    let symbols = service
+        .get_file_symbols(&file_path)
+        .map_err(|err| err.to_string())?;
     Ok(symbols.into_iter().find(|symbol| {
         qualified_name
             .as_ref()
@@ -2135,7 +2152,8 @@ fn outline_nodes_for_parent(
         .into_iter()
         .map(|symbol| {
             let mut value = symbol_to_json(&symbol);
-            value["children"] = serde_json::Value::Array(outline_nodes_for_parent(by_parent, Some(&symbol.id)));
+            value["children"] =
+                serde_json::Value::Array(outline_nodes_for_parent(by_parent, Some(&symbol.id)));
             value
         })
         .collect()
@@ -2362,7 +2380,9 @@ fn symbol_graph_tool<R: tauri::Runtime>(
             .entry(reference.source_symbol.file_path.clone())
             .or_insert(0) += 1;
         if let Some(target_symbol) = reference.target_symbol.as_ref() {
-            *file_counts.entry(target_symbol.file_path.clone()).or_insert(0) += 1;
+            *file_counts
+                .entry(target_symbol.file_path.clone())
+                .or_insert(0) += 1;
         }
     }
     let mut hot_files = file_counts.into_iter().collect::<Vec<_>>();
@@ -2370,13 +2390,22 @@ fn symbol_graph_tool<R: tauri::Runtime>(
 
     let warning = match relationship_type {
         crate::tree_sitter::SymbolRelationshipType::Call if !graph.incoming.is_empty() => {
-            format!("changing this symbol may affect {} caller(s)", graph.incoming.len())
+            format!(
+                "changing this symbol may affect {} caller(s)",
+                graph.incoming.len()
+            )
         }
         crate::tree_sitter::SymbolRelationshipType::Export if !graph.incoming.is_empty() => {
-            format!("changing this export may affect {} importer/re-export site(s)", graph.incoming.len())
+            format!(
+                "changing this export may affect {} importer/re-export site(s)",
+                graph.incoming.len()
+            )
         }
         crate::tree_sitter::SymbolRelationshipType::Contains if !graph.outgoing.is_empty() => {
-            format!("this symbol contains {} nested symbol(s)", graph.outgoing.len())
+            format!(
+                "this symbol contains {} nested symbol(s)",
+                graph.outgoing.len()
+            )
         }
         _ => format!(
             "graph has {} incoming and {} outgoing {} edge(s)",
@@ -2615,8 +2644,10 @@ fn apply_multi_patch_to_string(content: &str, patches: &[PatchHunk]) -> Result<S
         return Err(format!(
             "Multi-patch validation failed (no changes made):
 {}",
-            validation_errors.join("
-")
+            validation_errors.join(
+                "
+"
+            )
         ));
     }
 

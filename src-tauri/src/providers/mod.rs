@@ -136,15 +136,13 @@ impl From<ProviderEvent> for ChatEvent {
                 planning_mode,
                 runtime_mode,
                 mode_source,
-            } => {
-                ChatEvent::Session {
-                    session_id,
-                    model,
-                    planning_mode,
-                    runtime_mode,
-                    mode_source,
-                }
-            }
+            } => ChatEvent::Session {
+                session_id,
+                model,
+                planning_mode,
+                runtime_mode,
+                mode_source,
+            },
             ProviderEvent::Chunk(text) => ChatEvent::Chunk(text),
             ProviderEvent::ReasoningChunk(text) => ChatEvent::ReasoningChunk(text),
             ProviderEvent::Research {

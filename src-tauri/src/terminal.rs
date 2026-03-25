@@ -1,12 +1,12 @@
-use crate::events::{TerminalCwdChangedPayload, event_names};
+use crate::events::{event_names, TerminalCwdChangedPayload};
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use serde::Serialize;
 use std::{
     collections::HashMap,
     io::{Read, Write},
     sync::{
-        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
     },
     thread,
 };

@@ -24,7 +24,8 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
 fn is_semantically_empty_message(msg: &ChatMessage) -> bool {
-    let has_text = !msg.content.trim().is_empty();
+    let effective_content = msg.backend_content.as_deref().unwrap_or(&msg.content);
+    let has_text = !effective_content.trim().is_empty();
     let has_reasoning = msg
         .reasoning
         .as_ref()
@@ -326,7 +327,8 @@ impl ChatManager {
             .iter()
             .enumerate()
             .filter_map(|(idx, msg)| {
-                let has_content = !msg.content.trim().is_empty();
+                let effective_content = msg.backend_content.as_deref().unwrap_or(&msg.content);
+                let has_content = !effective_content.trim().is_empty();
                 let has_reasoning = msg
                     .reasoning
                     .as_ref()
@@ -364,7 +366,7 @@ impl ChatManager {
                 };
                 let mut blade_msg = serde_json::json!({
                     "role": role,
-                    "content": msg.content,
+                    "content": msg.backend_content.as_deref().unwrap_or(&msg.content),
                 });
                 if let Some(ref reasoning) = msg.reasoning {
                     blade_msg["reasoning"] = serde_json::json!(reasoning);
@@ -405,6 +407,17 @@ impl ChatManager {
     fn sync_ws_conversation_messages(&self, conversation: &ConversationHistory) {
         if let Ok(mut guard) = self.ws_conversation_messages.lock() {
             *guard = Self::to_blade_conversation_messages(conversation);
+        }
+    }
+
+    fn ensure_assistant_placeholder(conversation: &mut ConversationHistory) {
+        let has_empty_assistant_tail = conversation
+            .last()
+            .map(|msg| msg.role == ChatRole::Assistant && is_semantically_empty_message(msg))
+            .unwrap_or(false);
+
+        if !has_empty_assistant_tail {
+            conversation.push(ChatMessage::new(ChatRole::Assistant, String::new()));
         }
     }
 
@@ -564,7 +577,11 @@ impl ChatManager {
             .iter()
             .rev()
             .find(|m| m.role == ChatRole::User)
-            .map(|m| m.content.clone())
+            .map(|m| {
+                m.backend_content
+                    .clone()
+                    .unwrap_or_else(|| m.content.clone())
+            })
             .unwrap_or_default();
 
         // Close any existing WebSocket connection before starting a new one
@@ -822,7 +839,7 @@ impl ChatManager {
                                     "message_too_large" => {
                                         // Message size limit exceeded - send error with recovery hint
                                         // The recovery hint will be shown to the user and included in the error
-                                        let hint = recovery_hint.unwrap_or_else(|| 
+                                        let hint = recovery_hint.unwrap_or_else(||
                                             "Please use smaller responses and break large changes into multiple tool calls.".to_string()
                                         );
                                         let _ = tx.send(ChatEvent::MessageTooLarge {
@@ -958,8 +975,8 @@ impl ChatManager {
             // Connection will be closed when a new message starts or conversation ends
         });
 
-        // Push placeholder for assistant response
-        conversation.push(ChatMessage::new(ChatRole::Assistant, String::new()));
+        // Push placeholder for the next streamed assistant item.
+        Self::ensure_assistant_placeholder(conversation);
 
         self.rx = Some(rx);
         self.streaming = true;
@@ -1029,7 +1046,15 @@ impl ChatManager {
                 continue;
             }
             let (role, content, tool_call_id) = match msg.role {
-                ChatRole::User => ("user", Some(msg.content.clone()), None),
+                ChatRole::User => (
+                    "user",
+                    Some(
+                        msg.backend_content
+                            .clone()
+                            .unwrap_or_else(|| msg.content.clone()),
+                    ),
+                    None,
+                ),
                 ChatRole::Assistant => {
                     let content = if msg.content.trim().is_empty() {
                         None
@@ -1378,7 +1403,7 @@ impl ChatManager {
             }
         });
 
-        conversation.push(ChatMessage::new(ChatRole::Assistant, String::new()));
+        Self::ensure_assistant_placeholder(conversation);
         self.rx = Some(rx);
         self.streaming = true;
         self.abort_handle = Some(task.abort_handle());
@@ -1478,10 +1503,11 @@ impl ChatManager {
             }
             match msg.role {
                 ChatRole::User => {
+                    let effective_content = msg.backend_content.as_deref().unwrap_or(&msg.content);
                     let mut parts: Vec<OpenAIContentPart> = Vec::new();
-                    if !msg.content.trim().is_empty() {
+                    if !effective_content.trim().is_empty() {
                         parts.push(OpenAIContentPart::Text {
-                            text: msg.content.clone(),
+                            text: effective_content.to_string(),
                         });
                     }
                     if let Some(images) = &msg.images {
@@ -1789,7 +1815,7 @@ impl ChatManager {
             let _ = tx.send(ChatEvent::Done);
         });
 
-        conversation.push(ChatMessage::new(ChatRole::Assistant, String::new()));
+        Self::ensure_assistant_placeholder(conversation);
         self.rx = Some(rx);
         self.streaming = true;
         self.abort_handle = Some(task.abort_handle());
@@ -1925,7 +1951,7 @@ impl ChatManager {
     pub(crate) fn continue_zaguan_after_tools(
         &mut self,
         batch: &PendingToolBatch,
-        conversation: &ConversationHistory,
+        conversation: &mut ConversationHistory,
         workspace: Option<&PathBuf>,
         is_local_mode: bool,
     ) -> Result<(), String> {
@@ -1947,6 +1973,11 @@ impl ChatManager {
         let provider_event_tx = self.provider_event_tx.clone();
         let _ = workspace;
 
+        // Zaguan reuses the same websocket after tool results, so we need a fresh
+        // assistant placeholder here. Without it, the next streamed chunks reuse
+        // the pre-tool assistant message id and the final response renders inline
+        // with the earlier text instead of as the trailing assistant turn.
+        Self::ensure_assistant_placeholder(conversation);
         self.sync_ws_conversation_messages(conversation);
 
         // Send tool results through the existing WebSocket connection
@@ -2710,7 +2741,35 @@ impl ChatManager {
 mod tests {
     use super::*;
     use crate::config::ApiConfig;
-    use crate::protocol::{ChatMessage, ChatRole};
+    use crate::protocol::{ChatImage, ChatMessage, ChatRole};
+
+    #[test]
+    fn blade_conversation_context_uses_backend_content_for_user_image_turns() {
+        let mut conversation = ConversationHistory::new();
+        let mut user = ChatMessage::new(ChatRole::User, "Fix this".to_string());
+        user.backend_content =
+            Some("[SYSTEM NOTE: Use the active workspace context.]\n\nFix this".to_string());
+        user.images = Some(vec![ChatImage {
+            data: "abc123".to_string(),
+            mime_type: "image/png".to_string(),
+            name: Some("capture.png".to_string()),
+            size: Some(6),
+        }]);
+        conversation.push(user);
+
+        let messages = ChatManager::to_blade_conversation_messages(&conversation);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[0].get("content").and_then(|value| value.as_str()),
+            Some("[SYSTEM NOTE: Use the active workspace context.]\n\nFix this")
+        );
+        let images = messages[0]
+            .get("images")
+            .and_then(|value| value.as_array())
+            .expect("expected images on latest user turn");
+        assert_eq!(images.len(), 1);
+    }
 
     #[test]
     fn test_start_stream_adds_assistant_placeholder() {
@@ -2763,5 +2822,48 @@ mod tests {
                 "Placeholder should be empty"
             );
         });
+    }
+
+    #[test]
+    fn ensure_assistant_placeholder_starts_new_tail_after_tool_messages() {
+        let mut conversation = ConversationHistory::new();
+        conversation.push(ChatMessage::new(
+            ChatRole::User,
+            "Run the build".to_string(),
+        ));
+
+        let mut assistant =
+            ChatMessage::new(ChatRole::Assistant, "Checking the project".to_string());
+        assistant.tool_calls = Some(vec![ToolCall {
+            id: "call-1".to_string(),
+            typ: "function".to_string(),
+            function: ToolFunction {
+                name: "run_command".to_string(),
+                arguments: "{\"command\":\"npm run build\"}".to_string(),
+            },
+            status: Some("complete".to_string()),
+            result: Some("ok".to_string()),
+        }]);
+        conversation.push(assistant);
+
+        let mut tool = ChatMessage::new(ChatRole::Tool, "Build passed".to_string());
+        tool.tool_call_id = Some("call-1".to_string());
+        conversation.push(tool);
+
+        ChatManager::ensure_assistant_placeholder(&mut conversation);
+        let len_after_first_insert = conversation.len();
+        ChatManager::ensure_assistant_placeholder(&mut conversation);
+
+        assert_eq!(len_after_first_insert, 4);
+        assert_eq!(
+            conversation.len(),
+            4,
+            "placeholder insertion should be idempotent"
+        );
+        assert_eq!(conversation.last().unwrap().role, ChatRole::Assistant);
+        assert!(
+            conversation.last().unwrap().content.is_empty(),
+            "new tail assistant should be a fresh placeholder"
+        );
     }
 }

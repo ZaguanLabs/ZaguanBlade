@@ -323,7 +323,8 @@ impl SymbolExtractor {
                 Some(parent) => format!("{}.{}", parent.qualified_name, symbol.name),
                 None => symbol.name.clone(),
             };
-            symbol.id = stable_symbol_id(&self.file_path, &symbol.qualified_name, symbol.symbol_type);
+            symbol.id =
+                stable_symbol_id(&self.file_path, &symbol.qualified_name, symbol.symbol_type);
 
             let symbol_id = symbol.id.clone();
             let symbol_qualified_name = symbol.qualified_name.clone();
@@ -348,7 +349,13 @@ impl SymbolExtractor {
             // No symbol at this node, process children with same parent
             for i in 0..node.child_count() {
                 if let Some(child) = node.child(i as u32) {
-                    self.extract_from_node(child, source, language, parent_context.clone(), symbols);
+                    self.extract_from_node(
+                        child,
+                        source,
+                        language,
+                        parent_context.clone(),
+                        symbols,
+                    );
                 }
             }
         }
@@ -676,10 +683,7 @@ impl SymbolExtractor {
 
     fn extract_rust_use_target(&self, text: &str) -> Option<String> {
         let trimmed = text.trim();
-        let target = trimmed
-            .strip_prefix("use ")?
-            .trim_end_matches(';')
-            .trim();
+        let target = trimmed.strip_prefix("use ")?.trim_end_matches(';').trim();
         if target.is_empty() {
             None
         } else {
@@ -804,14 +808,31 @@ fn extract_structural_relationships_from_node(
 ) {
     match language {
         Language::TypeScript | Language::Tsx | Language::JavaScript | Language::Jsx => {
-            extract_typescript_structural_relationships(node, source, file_path, symbols, relationships, seen)
+            extract_typescript_structural_relationships(
+                node,
+                source,
+                file_path,
+                symbols,
+                relationships,
+                seen,
+            )
         }
-        Language::Python => {
-            extract_python_structural_relationships(node, source, file_path, symbols, relationships, seen)
-        }
-        Language::Rust => {
-            extract_rust_structural_relationships(node, source, file_path, symbols, relationships, seen)
-        }
+        Language::Python => extract_python_structural_relationships(
+            node,
+            source,
+            file_path,
+            symbols,
+            relationships,
+            seen,
+        ),
+        Language::Rust => extract_rust_structural_relationships(
+            node,
+            source,
+            file_path,
+            symbols,
+            relationships,
+            seen,
+        ),
     }
 
     for i in 0..node.child_count() {
@@ -1182,7 +1203,11 @@ fn extract_relationships_from_node(
     }
 }
 
-fn extract_relationship_target_name(node: &Node, source: &str, language: Language) -> Option<String> {
+fn extract_relationship_target_name(
+    node: &Node,
+    source: &str,
+    language: Language,
+) -> Option<String> {
     match language {
         Language::TypeScript | Language::Tsx | Language::JavaScript | Language::Jsx => {
             if node.kind() != "call_expression" {
@@ -1210,9 +1235,10 @@ fn extract_relationship_target_name(node: &Node, source: &str, language: Languag
 
 fn extract_callable_name(node: &Node, source: &str) -> Option<String> {
     match node.kind() {
-        "identifier" | "property_identifier" | "field_identifier" | "type_identifier" => {
-            node.utf8_text(source.as_bytes()).ok().map(|s| s.to_string())
-        }
+        "identifier" | "property_identifier" | "field_identifier" | "type_identifier" => node
+            .utf8_text(source.as_bytes())
+            .ok()
+            .map(|s| s.to_string()),
         "member_expression" | "member_access_expression" | "field_expression" => {
             if let Some(child) = node
                 .child_by_field_name("property")
@@ -1255,7 +1281,11 @@ fn find_enclosing_symbol<'a>(symbols: &'a [Symbol], range: &Range) -> Option<&'a
         .iter()
         .filter(|symbol| symbol_contains_range(symbol, range))
         .min_by_key(|symbol| {
-            let line_span = symbol.range.end.line.saturating_sub(symbol.range.start.line);
+            let line_span = symbol
+                .range
+                .end
+                .line
+                .saturating_sub(symbol.range.start.line);
             let char_span = symbol
                 .range
                 .end
@@ -1266,7 +1296,8 @@ fn find_enclosing_symbol<'a>(symbols: &'a [Symbol], range: &Range) -> Option<&'a
 }
 
 fn symbol_contains_range(symbol: &Symbol, range: &Range) -> bool {
-    starts_before_or_at(symbol.range.start, range.start) && starts_before_or_at(range.end, symbol.range.end)
+    starts_before_or_at(symbol.range.start, range.start)
+        && starts_before_or_at(range.end, symbol.range.end)
 }
 
 fn starts_before_or_at(left: Position, right: Position) -> bool {
@@ -1354,7 +1385,8 @@ function greetUser(): string {
 "#;
         let tree = parser.parse(code, Language::TypeScript).unwrap();
         let symbols = extract_symbols(&tree, code, Language::TypeScript, "main.ts");
-        let relationships = extract_symbol_relationships(&tree, code, Language::TypeScript, "main.ts", &symbols);
+        let relationships =
+            extract_symbol_relationships(&tree, code, Language::TypeScript, "main.ts", &symbols);
 
         assert!(relationships.iter().any(|relationship| {
             relationship.target_name == "helperName"
@@ -1374,7 +1406,8 @@ function run(): string {
 "#;
         let tree = parser.parse(code, Language::TypeScript).unwrap();
         let symbols = extract_symbols(&tree, code, Language::TypeScript, "main.ts");
-        let relationships = extract_symbol_relationships(&tree, code, Language::TypeScript, "main.ts", &symbols);
+        let relationships =
+            extract_symbol_relationships(&tree, code, Language::TypeScript, "main.ts", &symbols);
 
         assert!(relationships.iter().any(|relationship| {
             relationship.target_name == "./utils"
@@ -1394,7 +1427,8 @@ class UserService extends CoreService implements Service, Disposable {
 "#;
         let tree = parser.parse(code, Language::TypeScript).unwrap();
         let symbols = extract_symbols(&tree, code, Language::TypeScript, "service.ts");
-        let relationships = extract_symbol_relationships(&tree, code, Language::TypeScript, "service.ts", &symbols);
+        let relationships =
+            extract_symbol_relationships(&tree, code, Language::TypeScript, "service.ts", &symbols);
 
         assert!(relationships.iter().any(|relationship| {
             relationship.source_symbol_id == "service.ts::Service#interface"
@@ -1422,7 +1456,8 @@ class Service(BaseService, Auditable):
 "#;
         let tree = parser.parse(code, Language::Python).unwrap();
         let symbols = extract_symbols(&tree, code, Language::Python, "service.py");
-        let relationships = extract_symbol_relationships(&tree, code, Language::Python, "service.py", &symbols);
+        let relationships =
+            extract_symbol_relationships(&tree, code, Language::Python, "service.py", &symbols);
 
         assert!(relationships.iter().any(|relationship| {
             relationship.source_symbol_id == "service.py::Service#class"
@@ -1448,7 +1483,8 @@ impl Renderable for Button {}
 "#;
         let tree = parser.parse(code, Language::Rust).unwrap();
         let symbols = extract_symbols(&tree, code, Language::Rust, "lib.rs");
-        let relationships = extract_symbol_relationships(&tree, code, Language::Rust, "lib.rs", &symbols);
+        let relationships =
+            extract_symbol_relationships(&tree, code, Language::Rust, "lib.rs", &symbols);
 
         assert!(relationships.iter().any(|relationship| {
             relationship.source_symbol_id == "lib.rs::Button#struct"

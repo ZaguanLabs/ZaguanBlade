@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use tauri::State;
 
 #[tauri::command]
-pub fn get_uncommitted_changes(state: State<'_, AppState>) -> Result<Vec<UncommittedChange>, String> {
+pub fn get_uncommitted_changes(
+    state: State<'_, AppState>,
+) -> Result<Vec<UncommittedChange>, String> {
     let history_service = state.history_service()?;
     let existing = state.uncommitted_changes.get_all();
     if existing.is_empty() {

@@ -42,7 +42,10 @@ pub fn ensure_post_ui_startup<R: Runtime>(app_handle: &tauri::AppHandle<R>) {
                     }
                 }
                 Err(error) => {
-                    eprintln!("[LanguageService] Failed to initialize post-UI indexing: {}", error);
+                    eprintln!(
+                        "[LanguageService] Failed to initialize post-UI indexing: {}",
+                        error
+                    );
                 }
             }
         }
