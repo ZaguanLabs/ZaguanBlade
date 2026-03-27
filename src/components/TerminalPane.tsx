@@ -13,6 +13,7 @@ interface TerminalTab {
     title: string;
     cwd?: string;
     command?: string;
+    interactive?: boolean;
     transient?: boolean;
 }
 
@@ -93,6 +94,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(({
             id?: string;
             title?: string;
             command?: string;
+            interactive?: boolean;
             focus?: boolean;
             transient?: boolean;
         }>('open-terminal', (event) => {
@@ -100,6 +102,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(({
             const id = event.payload.id ?? `term-${Date.now()}`;
             const title = event.payload.title ?? getTitleFromCwd(cwd, t('terminal.title'));
             const focus = event.payload.focus ?? true;
+            const interactive = event.payload.interactive ?? true;
 
             setTerminals(prev => {
                 const existingIndex = prev.findIndex((term) => term.id === id);
@@ -108,6 +111,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(({
                     title,
                     cwd,
                     command: event.payload.command,
+                    interactive,
                     transient: event.payload.transient,
                 };
 
@@ -199,7 +203,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(({
                         }}
                     >
                         <Suspense fallback={<div className="h-full w-full bg-(--term-bg)" />}>
-                            <Terminal id={term.id} cwd={term.cwd} command={term.command} />
+                            <Terminal id={term.id} cwd={term.cwd} command={term.command} interactive={term.interactive} />
                         </Suspense>
                     </div>
                 ))}

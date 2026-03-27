@@ -602,6 +602,7 @@ pub fn create_terminal<R: Runtime>(
 const SENTINEL_START: &str = "##BLADE_CMD_START:";
 const SENTINEL_EXIT: &str = "##BLADE_CMD_EXIT:";
 const SENTINEL_END: &str = "##";
+const MIN_SENTINEL_ECHO_FRAGMENT_LEN: usize = 4;
 const SENTINEL_ECHO_PREFIX_PATTERNS: [&str; 8] = [
     "( echo '",
     "(echo '",
@@ -638,10 +639,17 @@ fn has_recent_sentinel_echo_prefix_fragment(input: &str) -> bool {
     }
 
     SENTINEL_ECHO_PREFIX_PATTERNS.iter().any(|pattern| {
+        let pattern = pattern.trim_start();
         let recent_len = recent_trimmed.chars().count();
         let pattern_len = pattern.chars().count();
 
-        (1..=pattern_len.min(recent_len)).any(|suffix_len| {
+        if recent_len < MIN_SENTINEL_ECHO_FRAGMENT_LEN
+            || pattern_len < MIN_SENTINEL_ECHO_FRAGMENT_LEN
+        {
+            return false;
+        }
+
+        (MIN_SENTINEL_ECHO_FRAGMENT_LEN..=pattern_len.min(recent_len)).any(|suffix_len| {
             let suffix: String = recent_trimmed
                 .chars()
                 .rev()
@@ -650,7 +658,7 @@ fn has_recent_sentinel_echo_prefix_fragment(input: &str) -> bool {
                 .into_iter()
                 .rev()
                 .collect();
-            pattern.starts_with(&suffix)
+            !suffix.trim().is_empty() && pattern.starts_with(&suffix)
         })
     })
 }
@@ -800,6 +808,16 @@ mod tests {
     fn detects_partial_wrapper_echo_prefix() {
         assert!(has_recent_sentinel_echo_prefix_fragment("( echo '"));
         assert!(has_recent_sentinel_echo_prefix_fragment("prompt % ( ec"));
+    }
+
+    #[test]
+    fn does_not_treat_normal_interactive_prompts_as_wrapper_fragments() {
+        assert!(!has_recent_sentinel_echo_prefix_fragment(
+            "cp: overwrite '/tmp/example.txt'? "
+        ));
+        assert!(!has_recent_sentinel_echo_prefix_fragment(
+            "docs/TOOL_CALLS.md "
+        ));
     }
 
     #[test]

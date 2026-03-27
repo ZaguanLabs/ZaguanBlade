@@ -313,15 +313,14 @@ export function useCommandExecution() {
         const payload = buildInteractiveCommandPayload(pending);
 
         try {
-            await openManagedTerminal(pending.terminalId, pending.terminalTitle, pending.cwd);
+            await openManagedTerminal(
+                pending.terminalId,
+                pending.terminalTitle,
+                pending.cwd,
+                payload,
+                false,
+            );
             updateTerminal(pending.terminalId, terminal => terminal ? { ...terminal, ready: true, opening: false } : terminal);
-            await BladeDispatcher.terminal({
-                type: 'Input',
-                payload: {
-                    id: pending.terminalId,
-                    data: payload,
-                },
-            });
         } catch (err) {
             invalidateTerminal(pending.terminalId);
             releaseTerminalReservation(pending, false);

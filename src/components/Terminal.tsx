@@ -56,9 +56,10 @@ interface TerminalProps {
     id?: string;
     cwd?: string;
     command?: string;
+    interactive?: boolean;
 }
 
-export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, command }) => {
+export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, command, interactive = true }) => {
     const { t } = useTranslation();
     const { themeId } = useTheme();
     const terminalRef = useRef<HTMLDivElement>(null);
@@ -70,6 +71,7 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
     const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null);
     const initialCwdRef = useRef(cwd);
     const initialCommandRef = useRef(command);
+    const initialInteractiveRef = useRef(interactive);
     const { showMenu } = useContextMenu();
 
     // Context menu handler
@@ -311,45 +313,8 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
 
         xtermRef.current = term;
         fitAddonRef.current = fitAddon;
+        let disposed = false;
 
-        // 2. Setup backend PTY
-        const initBackend = async () => {
-            try {
-                // Use provided cwd or fall back to workspace root
-                let terminalCwd = initialCwdRef.current;
-                if (!terminalCwd) {
-                    const workspaceRoot = await invoke<string | null>("get_current_workspace");
-                    terminalCwd = workspaceRoot || undefined;
-                }
-
-                await BladeDispatcher.terminal({
-                    type: "Spawn",
-                    payload: {
-                        id,
-                        command: initialCommandRef.current,
-                        cwd: terminalCwd,
-                        interactive: true,
-                    }
-                });
-
-                emit('terminal-ready', { id }).catch(console.error);
-                if (id === BLADE_TERMINAL_ID) {
-                    emit('blade-terminal-ready', { id }).catch(console.error);
-                }
-
-                // Initial resize after backend spawn
-                setTimeout(() => {
-                    scheduleResize();
-                }, 50);
-            } catch (err) {
-                console.error("Failed to create terminal:", err);
-                term.write("\r\n\x1b[31mFailed to initialize terminal backend.\x1b[0m\r\n");
-            }
-        };
-
-        initBackend();
-
-        // Initialize v1.1 terminal buffer
         if (!terminalBufferRef.current) {
             terminalBufferRef.current = new TerminalBuffer(
                 (termId, data) => {
@@ -361,7 +326,6 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
             );
         }
 
-        // v1.1: Listen for blade-event with sequence numbers
         const unlistenV11 = listen<BladeEventEnvelope>(
             "blade-event",
             (event) => {
@@ -387,6 +351,55 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
                 }
             }
         );
+
+        // 2. Setup backend PTY
+        const initBackend = async () => {
+            try {
+                // Use provided cwd or fall back to workspace root
+                let terminalCwd = initialCwdRef.current;
+                if (!terminalCwd) {
+                    const workspaceRoot = await invoke<string | null>("get_current_workspace");
+                    terminalCwd = workspaceRoot || undefined;
+                }
+
+                await BladeDispatcher.terminal({
+                    type: "Spawn",
+                    payload: {
+                        id,
+                        command: initialCommandRef.current,
+                        cwd: terminalCwd,
+                        interactive: initialInteractiveRef.current,
+                    }
+                });
+
+                emit('terminal-ready', { id }).catch(console.error);
+                if (id === BLADE_TERMINAL_ID) {
+                    emit('blade-terminal-ready', { id }).catch(console.error);
+                }
+
+                // Initial resize after backend spawn
+                setTimeout(() => {
+                    scheduleResize();
+                }, 50);
+            } catch (err) {
+                console.error("Failed to create terminal:", err);
+                term.write("\r\n\x1b[31mFailed to initialize terminal backend.\x1b[0m\r\n");
+            }
+        };
+
+        unlistenV11
+            .then(() => {
+                if (!disposed) {
+                    return initBackend();
+                }
+            })
+            .catch((err) => {
+                console.error("Failed to register terminal event listener:", err);
+                if (!disposed) {
+                    term.write("\r\n\x1b[31mFailed to initialize terminal event listener.\x1b[0m\r\n");
+                }
+            });
+
         // 4. Send input to backend
         term.onData((data) => {
             BladeDispatcher.terminal({
@@ -411,6 +424,7 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
                 cancelAnimationFrame(resizeFrameRef.current);
                 resizeFrameRef.current = null;
             }
+            disposed = true;
 
             resizeObserver.disconnect();
             unlistenV11.then((unlisten) => unlisten());
@@ -427,6 +441,7 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
                 term.dispose();
             } catch (e) { console.error("Error disposing terminal", e); }
 
+            terminalBufferRef.current?.clear(id);
             xtermRef.current = null;
             fitAddonRef.current = null;
         };
