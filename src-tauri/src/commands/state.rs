@@ -3,7 +3,7 @@
 //! Tauri commands for querying core state and feature flags.
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{Manager, State};
 
 use crate::app_state::AppState;
 use crate::blade_protocol::Version;
@@ -86,25 +86,39 @@ fn build_core_state_snapshot(state: &AppState) -> CoreStateSnapshot {
 /// Returns a complete snapshot of the core application state.
 /// Used for UI initialization, reload recovery, and debugging.
 #[tauri::command]
-pub fn get_core_state(state: State<'_, AppState>) -> CoreStateSnapshot {
-    build_core_state_snapshot(&state)
+pub async fn get_core_state(app_handle: tauri::AppHandle) -> Result<CoreStateSnapshot, String> {
+    tokio::task::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        build_core_state_snapshot(&*state)
+    })
+    .await
+    .map_err(|e| format!("get core state task failed: {}", e))
 }
 
 /// Returns the startup bootstrap payload used to hydrate the frontend shell.
 #[tauri::command]
-pub fn bootstrap_state(state: State<'_, AppState>) -> BootstrapState {
-    let workspace_root = state.workspace.lock().unwrap().workspace.clone();
-    let has_zblade_directory = workspace_root
-        .as_ref()
-        .map(|path| crate::project_settings::has_zblade_dir(path));
+pub async fn bootstrap_state(app_handle: tauri::AppHandle) -> Result<BootstrapState, String> {
+    tokio::task::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        let workspace_root = state.workspace.lock().unwrap().workspace.clone();
+        let has_zblade_directory = workspace_root
+            .as_ref()
+            .map(|path| crate::project_settings::has_zblade_dir(path));
+        let core_state = build_core_state_snapshot(&*state);
+        let feature_flags = state.feature_flags.snapshot();
+        let remote_settings = state.config.lock().unwrap().remote_config();
+        let user_id = state.user_id.lock().unwrap().clone();
 
-    BootstrapState {
-        core_state: build_core_state_snapshot(&state),
-        feature_flags: state.feature_flags.snapshot(),
-        remote_settings: state.config.lock().unwrap().remote_config(),
-        user_id: state.user_id.lock().unwrap().clone(),
-        has_zblade_directory,
-    }
+        BootstrapState {
+            core_state,
+            feature_flags,
+            remote_settings,
+            user_id,
+            has_zblade_directory,
+        }
+    })
+    .await
+    .map_err(|e| format!("bootstrap state task failed: {}", e))
 }
 
 /// Returns the current feature flags configuration.

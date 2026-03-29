@@ -1830,21 +1830,12 @@ impl ChatManager {
         models: &[ModelInfo],
         selected_model: usize,
         workspace: Option<&PathBuf>,
+        is_local_mode: bool,
         http: reqwest::Client,
     ) -> Result<(), String> {
         self.pending_done_without_tools = false;
 
-        // RFC: Large Tool Result Handling - determine if we should truncate locally
-        let is_local_mode = workspace
-            .map(|ws| {
-                let settings = crate::project_settings::load_project_settings_or_default(ws);
-                matches!(
-                    settings.storage.mode,
-                    crate::project_settings::StorageMode::Local
-                )
-            })
-            .unwrap_or(true); // Default to local mode if no workspace
-                              // Agentic Loop Check
+        // Agentic Loop Check
         if self.agentic_loop.is_active() {
             self.agentic_loop.increment_turn();
             if !self.agentic_loop.is_active() {

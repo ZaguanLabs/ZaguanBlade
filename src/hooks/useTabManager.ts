@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { EditorFacade, isTabsBackendAuthoritative } from '../services/editorFacade';
-import type { BladeEventEnvelope, EditorEvent, TabInfo } from '../types/blade';
+import { subscribeBladeEventType } from '../services/bladeEvents';
+import type { EditorEvent, TabInfo } from '../types/blade';
 import type { UncommittedChange } from '../types/uncommitted';
 
 export interface Tab {
@@ -78,51 +78,42 @@ export function useTabManager(uncommittedChanges: UncommittedChange[]) {
 
     // Listen for backend tab events when tabs_backend_authority is enabled
     useEffect(() => {
-        let unlisten: (() => void) | undefined;
+        const unsubscribe = subscribeBladeEventType('Editor', (event) => {
+            const editorEvent = event.event.payload as EditorEvent;
 
-        const setup = async () => {
-            unlisten = await listen<BladeEventEnvelope>('blade-event', (event) => {
-                const bladeEvent = event.payload.event;
-                if (bladeEvent.type !== 'Editor') return;
-
-                const editorEvent = bladeEvent.payload as EditorEvent;
-
-                if (editorEvent.type === 'TabOpened') {
-                    const newTab = tabInfoToTab(editorEvent.payload.tab);
-                    setTabs(prev => {
-                        if (prev.find(t => t.id === newTab.id)) return prev;
-                        return [...prev, newTab];
+            if (editorEvent.type === 'TabOpened') {
+                const newTab = tabInfoToTab(editorEvent.payload.tab);
+                setTabs(prev => {
+                    if (prev.find(t => t.id === newTab.id)) return prev;
+                    return [...prev, newTab];
+                });
+            } else if (editorEvent.type === 'TabClosed') {
+                const closedId = editorEvent.payload.tab_id;
+                setTabs(prev => {
+                    const remaining = prev.filter(t => t.id !== closedId);
+                    setActiveTabId(prevActive => {
+                        if (prevActive !== closedId) return prevActive;
+                        return popTabHistory(closedId, prev);
                     });
-                } else if (editorEvent.type === 'TabClosed') {
-                    const closedId = editorEvent.payload.tab_id;
-                    setTabs(prev => {
-                        const remaining = prev.filter(t => t.id !== closedId);
-                        setActiveTabId(prevActive => {
-                            if (prevActive !== closedId) return prevActive;
-                            return popTabHistory(closedId, prev);
-                        });
-                        return remaining;
-                    });
-                } else if (editorEvent.type === 'ActiveTabChanged') {
-                    setActiveTabId(editorEvent.payload.tab_id);
-                } else if (editorEvent.type === 'TabsReordered') {
-                    const orderedIds = editorEvent.payload.tab_ids;
-                    setTabs(prev => {
-                        const tabMap = new Map(prev.map(t => [t.id, t]));
-                        return orderedIds.map(id => tabMap.get(id)).filter((t): t is Tab => !!t);
-                    });
-                } else if (editorEvent.type === 'TabStateSnapshot') {
-                    const { tabs: backendTabs, active_tab_id } = editorEvent.payload;
-                    setTabs(backendTabs.map(tabInfoToTab));
-                    setActiveTabId(active_tab_id);
-                }
-            });
-        };
-
-        setup().catch(console.error);
+                    return remaining;
+                });
+            } else if (editorEvent.type === 'ActiveTabChanged') {
+                setActiveTabId(editorEvent.payload.tab_id);
+            } else if (editorEvent.type === 'TabsReordered') {
+                const orderedIds = editorEvent.payload.tab_ids;
+                setTabs(prev => {
+                    const tabMap = new Map(prev.map(t => [t.id, t]));
+                    return orderedIds.map(id => tabMap.get(id)).filter((t): t is Tab => !!t);
+                });
+            } else if (editorEvent.type === 'TabStateSnapshot') {
+                const { tabs: backendTabs, active_tab_id } = editorEvent.payload;
+                setTabs(backendTabs.map(tabInfoToTab));
+                setActiveTabId(active_tab_id);
+            }
+        });
 
         return () => {
-            if (unlisten) unlisten();
+            unsubscribe();
         };
     }, [popTabHistory]);
 

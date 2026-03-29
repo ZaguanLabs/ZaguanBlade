@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
-import { listen } from '@tauri-apps/api/event';
+import { subscribeBladeEvents } from '../../services/bladeEvents';
 import { X, Play, Pause, Trash2, Activity, ArrowRight, Clock, Box } from 'lucide-react';
 import { BladeEvent, BladeEventEnvelope } from '../../types/blade';
 
@@ -31,28 +31,21 @@ export const ProtocolExplorer: React.FC = () => {
     useEffect(() => {
         if (!IS_DEV) return;
 
-        let unlisten: (() => void) | undefined;
+        const unsubscribe = subscribeBladeEvents((envelope) => {
+            if (isPaused) return;
 
-        const setup = async () => {
-            // Listen to the hardened 'blade-event' channel
-            unlisten = await listen<BladeEventEnvelope>('blade-event', (event) => {
-                if (isPaused) return;
+            const entry: LogEntry = {
+                id: envelope.id,
+                timestamp: envelope.timestamp,
+                causality_id: envelope.causality_id || undefined,
+                event: envelope.event,
+                receivedAt: Date.now()
+            };
 
-                const envelope = event.payload;
-                const entry: LogEntry = {
-                    id: envelope.id,
-                    timestamp: envelope.timestamp,
-                    causality_id: envelope.causality_id || undefined,
-                    event: envelope.event,
-                    receivedAt: Date.now()
-                };
+            setLogs(prev => [...prev.slice(-99), entry]);
+        });
 
-                setLogs(prev => [...prev.slice(-99), entry]); // Keep last 100
-            });
-        };
-
-        setup();
-        return () => { if (unlisten) unlisten(); };
+        return () => { unsubscribe(); };
     }, [isPaused]);
 
     if (!IS_DEV) return null;

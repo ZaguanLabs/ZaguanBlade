@@ -2,12 +2,13 @@ import { useCallback, useEffect, useReducer, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { BladeDispatcher } from '../services/blade';
+import { subscribeBladeEventType, waitForBladeEvent } from '../services/bladeEvents';
 import { EditorFacade } from '../services/editorFacade';
 import { useEditorState } from '../contexts/EditorContext';
 import { MessageBuffer } from '../utils/eventBuffer';
 import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertToolCallBlockPreservingOrder, moveExistingContentAfterTools, upsertSplitTextBlocks } from '../utils/messageBlocks';
 import { EventNames, type ChatErrorPayload, type ContextLengthExceededPayload, type MessageTooLargePayload, type RequestConfirmationPayload, type StructuredAction, type ToolExecutionCompletedPayload, type TodoItem } from '../types/events';
-import type { BladeEventEnvelope, ChatMention } from '../types/blade';
+import type { ChatMention } from '../types/blade';
 import type { ChatImage, ChatMessage, ChatMode, ComposerMention, CommandExecution, ImageAttachment, MessageBlock, ModelInfo, QueuedRequest, StreamingState, ToolActivityState, ToolCall } from '../types/chat';
 import { buildContextLengthSystemMessage, buildMessageTooLargeSystemMessage, formatChatErrorPayload } from '../utils/localizedEvents';
 
@@ -639,50 +640,26 @@ export function useChatV2() {
             return buildEditorContext(editorStateRef.current);
         }
 
-        let unlisten: (() => void) | undefined;
         try {
-            const snapshotPromise = new Promise<{
+            const snapshotPromise = waitForBladeEvent((envelope) => {
+                if (envelope.event.type !== 'Editor') {
+                    return false;
+                }
+
+                const payload = envelope.event.payload as { type: string; payload: any };
+                return payload.type === 'StateSnapshot';
+            }, 300);
+
+            await EditorFacade.getState();
+            const snapshotEnvelope = await snapshotPromise;
+            const snapshot = (snapshotEnvelope.event.payload as { type: 'StateSnapshot'; payload: {
                 active_file: string | null;
                 open_files: string[];
                 cursor_line: number | null;
                 cursor_column: number | null;
                 selection_start: number | null;
                 selection_end: number | null;
-            }>((resolve, reject) => {
-                const timeout = window.setTimeout(() => {
-                    if (unlisten) {
-                        unlisten();
-                        unlisten = undefined;
-                    }
-                    reject(new Error('Editor state snapshot timeout'));
-                }, 300);
-
-                listen<BladeEventEnvelope>('blade-event', (event) => {
-                    const bladeEvent = event.payload.event;
-                    if (bladeEvent.type !== 'Editor') {
-                        return;
-                    }
-                    const payload = bladeEvent.payload as { type: string; payload: any };
-                    if (payload.type !== 'StateSnapshot') {
-                        return;
-                    }
-
-                    window.clearTimeout(timeout);
-                    if (unlisten) {
-                        unlisten();
-                        unlisten = undefined;
-                    }
-                    resolve(payload.payload);
-                }).then((fn) => {
-                    unlisten = fn;
-                }).catch((error) => {
-                    window.clearTimeout(timeout);
-                    reject(error);
-                });
-            });
-
-            await EditorFacade.getState();
-            const snapshot = await snapshotPromise;
+            } }).payload;
             return buildEditorContext({
                 activeFile: snapshot.active_file,
                 openFiles: snapshot.open_files,
@@ -693,8 +670,6 @@ export function useChatV2() {
             });
         } catch {
             return buildEditorContext(editorStateRef.current);
-        } finally {
-            unlisten?.();
         }
     }, [buildEditorContext]);
 
@@ -1374,13 +1349,8 @@ export function useChatV2() {
                 pendingTimeoutsRef.current.push(timer);
             });
 
-            unlistenBladeEvent = await listen<BladeEventEnvelope>('blade-event', (event) => {
-                const envelope = event.payload;
-                if (envelope.event.type !== 'Chat') {
-                    return;
-                }
-
-                const chatEvent = envelope.event.payload as { type: string; payload: any };
+            unlistenBladeEvent = subscribeBladeEventType('Chat', (event) => {
+                const chatEvent = event.event.payload as { type: string; payload: any };
                 if (chatEvent.type === 'MessageDelta') {
                     if (STREAM_DEBUG_ENABLED) {
                         streamDebugLog('[stream-debug][ui-recv][text]', {

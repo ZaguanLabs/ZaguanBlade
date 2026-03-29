@@ -1,8 +1,8 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef, useMemo } from 'react';
-import { listen } from '@tauri-apps/api/event';
 import { useOptionalStartupBootstrap } from './StartupBootstrapContext';
 import { EditorFacade, initEditorFacade, isBackendAuthoritative } from '../services/editorFacade';
-import type { BladeEventEnvelope, EditorEvent } from '../types/blade';
+import { subscribeBladeEventType } from '../services/bladeEvents';
+import type { EditorEvent } from '../types/blade';
 
 interface EditorState {
     activeFile: string | null;
@@ -50,45 +50,40 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     // Listen for backend EditorEvent updates when backend authority is enabled
     useEffect(() => {
-        const unlistenPromise = listen<BladeEventEnvelope>('blade-event', (event) => {
-                const bladeEvent = event.payload.event;
-                if (bladeEvent.type !== 'Editor') return;
+        const unsubscribe = subscribeBladeEventType('Editor', (event) => {
+            const editorEvent = event.event.payload as EditorEvent;
 
-                const editorEvent = bladeEvent.payload as EditorEvent;
-
-                if (editorEvent.type === 'ActiveFileChanged') {
-                    setEditorState(prev => ({
-                        ...prev,
-                        activeFile: editorEvent.payload.path ?? null
-                    }));
-                } else if (editorEvent.type === 'CursorMoved') {
-                    setEditorState(prev => ({
-                        ...prev,
-                        cursorLine: editorEvent.payload.line,
-                        cursorColumn: editorEvent.payload.column
-                    }));
-                } else if (editorEvent.type === 'SelectionChanged') {
-                    setEditorState(prev => ({
-                        ...prev,
-                        selectionStartLine: editorEvent.payload.start,
-                        selectionEndLine: editorEvent.payload.end
-                    }));
-                } else if (editorEvent.type === 'StateSnapshot') {
-                    setEditorState(prev => ({
-                        activeFile: editorEvent.payload.active_file ?? null,
-                        openFiles: editorEvent.payload.open_files ?? prev.openFiles,
-                        cursorLine: editorEvent.payload.cursor_line ?? null,
-                        cursorColumn: editorEvent.payload.cursor_column ?? null,
-                        selectionStartLine: editorEvent.payload.selection_start ?? null,
-                        selectionEndLine: editorEvent.payload.selection_end ?? null,
-                    }));
-                }
-            });
+            if (editorEvent.type === 'ActiveFileChanged') {
+                setEditorState(prev => ({
+                    ...prev,
+                    activeFile: editorEvent.payload.path ?? null
+                }));
+            } else if (editorEvent.type === 'CursorMoved') {
+                setEditorState(prev => ({
+                    ...prev,
+                    cursorLine: editorEvent.payload.line,
+                    cursorColumn: editorEvent.payload.column
+                }));
+            } else if (editorEvent.type === 'SelectionChanged') {
+                setEditorState(prev => ({
+                    ...prev,
+                    selectionStartLine: editorEvent.payload.start,
+                    selectionEndLine: editorEvent.payload.end
+                }));
+            } else if (editorEvent.type === 'StateSnapshot') {
+                setEditorState(prev => ({
+                    activeFile: editorEvent.payload.active_file ?? null,
+                    openFiles: editorEvent.payload.open_files ?? prev.openFiles,
+                    cursorLine: editorEvent.payload.cursor_line ?? null,
+                    cursorColumn: editorEvent.payload.cursor_column ?? null,
+                    selectionStartLine: editorEvent.payload.selection_start ?? null,
+                    selectionEndLine: editorEvent.payload.selection_end ?? null,
+                }));
+            }
+        });
 
         return () => {
-            unlistenPromise
-                .then(unlisten => unlisten())
-                .catch(console.error);
+            unsubscribe();
         };
     }, []);
 

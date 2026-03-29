@@ -2,7 +2,7 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { listen, emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { BladeDispatcher } from '../services/blade';
-import type { BladeEventEnvelope } from '../types/blade';
+import { subscribeBladeEventType } from '../services/bladeEvents';
 
 import { BLADE_TERMINAL_ID, BLADE_TERMINAL_TITLE } from '../constants/terminal';
 
@@ -459,13 +459,8 @@ export function useCommandExecution() {
                 handleCommandComplete(callId, output, exitCode);
             });
 
-            unlistenExit = await listen<BladeEventEnvelope>('blade-event', (event) => {
-                const envelope = event.payload;
-                if (envelope.event.type !== 'Terminal') {
-                    return;
-                }
-
-                const terminalEvent = envelope.event.payload;
+            unlistenExit = subscribeBladeEventType('Terminal', (event) => {
+                const terminalEvent = event.event.payload;
                 if (terminalEvent.type !== 'Exit') {
                     return;
                 }

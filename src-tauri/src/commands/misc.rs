@@ -1,5 +1,6 @@
 // use crate::app_state::AppState;
 // use tauri::{AppHandle, Manager, State};
+use serde_json::Value;
 use tauri::AppHandle;
 #[cfg(feature = "devtools")]
 use tauri::Manager;
@@ -35,6 +36,11 @@ pub fn log_frontend(message: String) {
 #[tauri::command]
 pub fn frontend_shell_ready(app: AppHandle) {
     crate::startup::ensure_post_ui_startup(&app);
+}
+
+#[tauri::command]
+pub fn get_blade_event_metrics() -> Value {
+    crate::blade_event_scheduler::metrics_snapshot()
 }
 
 // Virtual Buffer Management Commands - Removed

@@ -10,7 +10,8 @@ import {
     dragAndDropFeature
 } from '@headless-tree/core';
 import { BladeDispatcher } from '../services/blade';
-import { BladeEventEnvelope, FileEntry, FileEvent } from '../types/blade';
+import { subscribeBladeEventType } from '../services/bladeEvents';
+import { FileEntry, FileEvent } from '../types/blade';
 import { Folder, ChevronRight, FileCode, FileText, FileBox, Search, FilePlus, FolderPlus, Pencil, Trash2, Copy, Scissors, Clipboard, Terminal, Loader2 } from 'lucide-react';
 import { useContextMenu, ContextMenuItem } from './ui/ContextMenu';
 import { ConfirmModal } from './ui/Modal';
@@ -536,41 +537,33 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
 
     // Listen for file system events to update tree dynamically
     React.useEffect(() => {
-        const unlistenPromise = listen<BladeEventEnvelope>('blade-event', (eventRaw) => {
-                const evt = eventRaw.payload.event;
+        const unsubscribe = subscribeBladeEventType('File', (event) => {
+            const filePayload = event.event.payload as FileEvent;
+            const pathsToInvalidate: string[] = [];
 
-                if (evt.type === 'File') {
-                    const filePayload = evt.payload as FileEvent;
-                    const pathsToInvalidate: string[] = [];
+            if (filePayload.type === 'Created' || filePayload.type === 'Deleted') {
+                pathsToInvalidate.push(filePayload.payload.path);
+            } else if (filePayload.type === 'Renamed') {
+                pathsToInvalidate.push(filePayload.payload.old_path);
+                pathsToInvalidate.push(filePayload.payload.new_path);
+            }
 
-                    if (filePayload.type === 'Created' || filePayload.type === 'Deleted') {
-                        pathsToInvalidate.push(filePayload.payload.path);
-                    } else if (filePayload.type === 'Renamed') {
-                        pathsToInvalidate.push(filePayload.payload.old_path);
-                        pathsToInvalidate.push(filePayload.payload.new_path);
-                    }
+            const currentTree = treeRef.current;
+            pathsToInvalidate.forEach(path => {
+                const parentPath = path.substring(0, path.lastIndexOf('/'));
+                itemCache.current.delete(path);
+                pendingRequests.current.delete(parentPath);
 
-                    // Invalidate parent folders using the correct API
-                    const currentTree = treeRef.current;
-                    pathsToInvalidate.forEach(path => {
-                        const parentPath = path.substring(0, path.lastIndexOf('/'));
-                        // Clear from local cache
-                        itemCache.current.delete(path);
-                        pendingRequests.current.delete(parentPath);
-                        
-                        if (parentPath) {
-                            invalidateFolderChildren(currentTree, parentPath);
-                        } else {
-                            invalidateFolderChildren(currentTree, 'root');
-                        }
-                    });
+                if (parentPath) {
+                    invalidateFolderChildren(currentTree, parentPath);
+                } else {
+                    invalidateFolderChildren(currentTree, 'root');
                 }
             });
+        });
 
         return () => {
-            unlistenPromise
-                .then(unlisten => unlisten())
-                .catch(console.error);
+            unsubscribe();
         };
     }, [invalidateFolderChildren]);
 

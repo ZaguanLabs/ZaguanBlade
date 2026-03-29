@@ -9,8 +9,9 @@ const MarkdownEditor = React.lazy(() =>
 import type { CodeEditorHandle } from './CodeEditor';
 import { useEditorActions } from '../contexts/EditorContext';
 import { BladeDispatcher } from '../services/blade';
+import { subscribeBladeEvents } from '../services/bladeEvents';
 import { EditorFacade } from '../services/editorFacade';
-import { BladeEventEnvelope, FileEvent } from '../types/blade';
+import { FileEvent } from '../types/blade';
 import { ArrowRight, Server, Cloud } from 'lucide-react';
 import zbladeLogoUrl from '../assets/zblade-in-app-logo.png';
 import { FileChangeBar } from './editor/FileChangeBar';
@@ -267,47 +268,41 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     useEffect(() => {
         if (!activeFile) return;
 
-        const unlistenBladePromise = listen<BladeEventEnvelope>('blade-event', (event) => {
-                const bladeEvent = event.payload.event;
-                if (bladeEvent.type === 'File') {
-                    const fileEvent = bladeEvent.payload as FileEvent;
-                    if (fileEvent.type === 'Content' && pathsMatch(fileEvent.payload.path, activeFile)) {
-                        console.debug('[EDITOR] Received content for:', activeFile);
-                        awaitingInitialSyncRef.current = false;
-                        setContent(fileEvent.payload.data);
-                        baseContentRef.current = fileEvent.payload.data;
-                        onContentStateChange?.({
-                            savedContent: fileEvent.payload.data,
-                            draftContent: undefined,
-                            isDirty: false,
-                        });
-                        setLoading(false);
-                        setError(null);
-                    } else if (fileEvent.type === 'Written' && pathsMatch(fileEvent.payload.path, activeFile)) {
-                        console.debug('[EDITOR] Confirmed written:', activeFile);
-                        // Optional: Show toast
-                    }
-                } else if (bladeEvent.type === 'System') {
-                    const sysEvent = bladeEvent.payload;
-                    if (sysEvent.type === 'IntentFailed') {
-                        // We can't easily match intent ID here without tracking it, 
-                        // but if we are loading and get an error referencing the file, we can assume.
-                        if (loading) {
-                            // Ideally check sysEvent.payload.error
-                            const err = sysEvent.payload.error;
-                            if ('details' in err && (err.details as any).id?.includes(activeFile)) {
-                                setError(`${t('editor.loadFailed')}: ${formatBladeError(err)}`);
-                                setLoading(false);
-                            }
+        const unsubscribe = subscribeBladeEvents((envelope) => {
+            const bladeEvent = envelope.event;
+            if (bladeEvent.type === 'File') {
+                const fileEvent = bladeEvent.payload as FileEvent;
+                if (fileEvent.type === 'Content' && pathsMatch(fileEvent.payload.path, activeFile)) {
+                    console.debug('[EDITOR] Received content for:', activeFile);
+                    awaitingInitialSyncRef.current = false;
+                    setContent(fileEvent.payload.data);
+                    baseContentRef.current = fileEvent.payload.data;
+                    onContentStateChange?.({
+                        savedContent: fileEvent.payload.data,
+                        draftContent: undefined,
+                        isDirty: false,
+                    });
+                    setLoading(false);
+                    setError(null);
+                } else if (fileEvent.type === 'Written' && pathsMatch(fileEvent.payload.path, activeFile)) {
+                    console.debug('[EDITOR] Confirmed written:', activeFile);
+                }
+            } else if (bladeEvent.type === 'System') {
+                const sysEvent = bladeEvent.payload;
+                if (sysEvent.type === 'IntentFailed') {
+                    if (loading) {
+                        const err = sysEvent.payload.error;
+                        if ('details' in err && (err.details as any).id?.includes(activeFile)) {
+                            setError(`${t('editor.loadFailed')}: ${formatBladeError(err)}`);
+                            setLoading(false);
                         }
                     }
                 }
-            });
+            }
+        });
 
         return () => {
-            unlistenBladePromise
-                .then(unlisten => unlisten())
-                .catch(console.error);
+            unsubscribe();
         };
     }, [activeFile, loading, onContentStateChange]);
 

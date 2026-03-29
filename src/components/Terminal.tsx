@@ -5,10 +5,10 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { invoke } from "@tauri-apps/api/core";
-import { listen, emit } from "@tauri-apps/api/event";
+import { emit } from "@tauri-apps/api/event";
 import { BladeDispatcher } from "../services/blade";
+import { subscribeBladeEventType } from "../services/bladeEvents";
 import { TerminalBuffer } from "../utils/eventBuffer";
-import type { BladeEventEnvelope } from "../types/blade";
 import { useTheme } from "../contexts/ThemeContext";
 import { useContextMenu, ContextMenuItem } from "./ui/ContextMenu";
 import { Copy, ClipboardPaste, Trash2, MessageSquare } from "lucide-react";
@@ -326,31 +326,24 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
             );
         }
 
-        const unlistenV11 = listen<BladeEventEnvelope>(
-            "blade-event",
-            (event) => {
-                const envelope = event.payload;
+        const unsubscribeBladeEvent = subscribeBladeEventType('Terminal', (envelope) => {
+            const terminalEvent = envelope.event.payload;
 
-                if (envelope.event.type === 'Terminal') {
-                    const terminalEvent = envelope.event.payload;
-
-                    if (terminalEvent.type === 'Output') {
-                        const { id: termId, seq, data } = terminalEvent.payload;
-                        if (terminalBufferRef.current) {
-                            terminalBufferRef.current.addOutput(termId, seq, data);
-                        }
-                    } else if (terminalEvent.type === 'Spawned') {
-                        const { id: termId, owner } = terminalEvent.payload;
-                        console.debug(`[v1.1 Terminal] Spawned: id=${termId}, owner=${owner.type}`);
-                    } else if (terminalEvent.type === 'Exit') {
-                        const { id: termId, code } = terminalEvent.payload;
-                        if (termId === id && xtermRef.current) {
-                            xtermRef.current.write(`\r\n\x1b[33mProcess exited with code ${code}\x1b[0m\r\n`);
-                        }
-                    }
+            if (terminalEvent.type === 'Output') {
+                const { id: termId, seq, data } = terminalEvent.payload;
+                if (terminalBufferRef.current) {
+                    terminalBufferRef.current.addOutput(termId, seq, data);
+                }
+            } else if (terminalEvent.type === 'Spawned') {
+                const { id: termId, owner } = terminalEvent.payload;
+                console.debug(`[v1.1 Terminal] Spawned: id=${termId}, owner=${owner.type}`);
+            } else if (terminalEvent.type === 'Exit') {
+                const { id: termId, code } = terminalEvent.payload;
+                if (termId === id && xtermRef.current) {
+                    xtermRef.current.write(`\r\n\x1b[33mProcess exited with code ${code}\x1b[0m\r\n`);
                 }
             }
-        );
+        });
 
         // 2. Setup backend PTY
         const initBackend = async () => {
@@ -387,18 +380,7 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
             }
         };
 
-        unlistenV11
-            .then(() => {
-                if (!disposed) {
-                    return initBackend();
-                }
-            })
-            .catch((err) => {
-                console.error("Failed to register terminal event listener:", err);
-                if (!disposed) {
-                    term.write("\r\n\x1b[31mFailed to initialize terminal event listener.\x1b[0m\r\n");
-                }
-            });
+        void initBackend();
 
         // 4. Send input to backend
         term.onData((data) => {
@@ -420,6 +402,7 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
                 clearInterval(fitIntervalRef.current);
                 fitIntervalRef.current = null;
             }
+            unsubscribeBladeEvent();
             if (resizeFrameRef.current !== null) {
                 cancelAnimationFrame(resizeFrameRef.current);
                 resizeFrameRef.current = null;
@@ -427,12 +410,11 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
             disposed = true;
 
             resizeObserver.disconnect();
-            unlistenV11.then((unlisten) => unlisten());
     
             BladeDispatcher.terminal({
                 type: "Kill",
                 payload: { id }
-            }).catch(() => {});
+            }).catch(console.error);
 
             // Dispose logic
             try {

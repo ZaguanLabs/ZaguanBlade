@@ -1,8 +1,8 @@
 import { useState, useCallback, useEffect } from 'react';
-import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { BladeDispatcher } from '../services/blade';
-import type { ConversationSummary, BladeEventEnvelope, HistoryMessage } from '../types/blade';
+import { subscribeBladeEventType, waitForBladeEvent } from '../services/bladeEvents';
+import type { ConversationSummary, HistoryMessage } from '../types/blade';
 import type { ChatMessage } from '../types/chat';
 import { ensureMessagesHaveBlocks } from '../utils/messageBlocks';
 import { formatUnknownBackendError } from '../utils/backendErrors';
@@ -51,43 +51,31 @@ export function useHistory() {
         }
 
         console.debug('[useHistory] Setting up blade-event listener');
-        let unlistenHistory: (() => void) | undefined;
+        const unsubscribeHistory = subscribeBladeEventType('History', (event) => {
+            const historyEvent = event.event.payload;
+            console.debug('[useHistory] Received blade-event:', event.event.type);
+            console.debug('[useHistory] History event type:', historyEvent.type);
 
-        const setupListener = async () => {
-            const unlisten = await listen<BladeEventEnvelope>('blade-event', (event) => {
-                const envelope = event.payload;
-                console.debug('[useHistory] Received blade-event:', envelope.event.type);
-
-                if (envelope.event.type === 'History') {
-                    const historyEvent = envelope.event.payload;
-                    console.debug('[useHistory] History event type:', historyEvent.type);
-
-                    if (historyEvent.type === 'ConversationList') {
-                        console.debug('[useHistory] ConversationList received with', historyEvent.payload.conversations.length, 'conversations');
-                        if (historyEvent.payload.conversations.length > 0) {
-                            const sample = historyEvent.payload.conversations[0];
-                            // Use Tauri's invoke to log to terminal
-                            invoke('log_frontend', {
-                                message: `[useHistory] Sample conversation: id=${sample.id}, created_at=${sample.created_at}, last_active_at=${sample.last_active_at}`
-                            });
-                        }
-                        setConversations(historyEvent.payload.conversations);
-                        setLoading(false);
-                    } else if (historyEvent.type === 'ConversationLoaded') {
-                        // This will be handled by the callback promise resolution
-                        setLoading(false);
-                    }
+            if (historyEvent.type === 'ConversationList') {
+                console.debug('[useHistory] ConversationList received with', historyEvent.payload.conversations.length, 'conversations');
+                if (historyEvent.payload.conversations.length > 0) {
+                    const sample = historyEvent.payload.conversations[0];
+                    void invoke('log_frontend', {
+                        message: `[useHistory] Sample conversation: id=${sample.id}, created_at=${sample.created_at}, last_active_at=${sample.last_active_at}`
+                    });
                 }
-            });
-            console.debug('[useHistory] blade-event listener set up successfully');
-            unlistenHistory = unlisten;
-        };
-
-        setupListener();
+                setConversations(historyEvent.payload.conversations);
+                setLoading(false);
+            } else if (historyEvent.type === 'ConversationLoaded') {
+                // This will be handled by the callback promise resolution
+                setLoading(false);
+            }
+        });
+        console.debug('[useHistory] blade-event listener set up successfully');
 
         return () => {
             console.debug('[useHistory] Cleaning up blade-event listener');
-            if (unlistenHistory) unlistenHistory();
+            unsubscribeHistory();
         };
     }, []);
 
@@ -191,49 +179,50 @@ export function useHistory() {
                 setLoading(true);
                 setError(null);
 
-                // Set up one-time listener for the ConversationLoaded event
-                const setupOneTimeListener = async () => {
-                    const unlisten = await listen<BladeEventEnvelope>('blade-event', (event) => {
-                        const envelope = event.payload;
-
-                        if (envelope.event.type === 'History') {
-                            const historyEvent = envelope.event.payload;
-
-                            if (historyEvent.type === 'ConversationLoaded' &&
-                                historyEvent.payload.session_id === sessionId) {
-
-                                const messages: ChatMessage[] = historyEvent.payload.messages.map(msg => ({
-                                    ...mapHistoryMessage(msg),
-                                    tool_calls: msg.tool_calls?.map(tc => ({
-                                        ...tc,
-                                        status: 'complete' as const
-                                    })),
-                                }));
-
-                                unlisten();
-                                setLoading(false);
-                                // Reconstruct blocks for proper conversation flow ordering
-                                resolve(ensureMessagesHaveBlocks(messages));
-                            }
-                        }
-                    });
-
-                    // Dispatch LoadConversation Intent via BCP
+                const loadFromServer = async () => {
                     try {
+                        const eventPromise = waitForBladeEvent((envelope) => {
+                            if (envelope.event.type !== 'History') {
+                                return false;
+                            }
+
+                            const historyEvent = envelope.event.payload;
+                            return historyEvent.type === 'ConversationLoaded'
+                                && historyEvent.payload.session_id === sessionId;
+                        }, 15000);
+
                         await BladeDispatcher.history({
                             type: 'LoadConversation',
                             payload: { session_id: sessionId }
                         });
+
+                        const event = await eventPromise;
+                        const historyEvent = event.event.payload as {
+                            type: 'ConversationLoaded';
+                            payload: {
+                                session_id: string;
+                                messages: HistoryMessage[];
+                            };
+                        };
+                        const messages: ChatMessage[] = historyEvent.payload.messages.map((msg: HistoryMessage) => ({
+                            ...mapHistoryMessage(msg),
+                            tool_calls: msg.tool_calls?.map((tc) => ({
+                                ...tc,
+                                status: 'complete' as const
+                            })),
+                        }));
+
+                        setLoading(false);
+                        resolve(ensureMessagesHaveBlocks(messages));
                     } catch (e) {
                         console.error('Failed to load conversation:', e);
                         setError(formatUnknownBackendError(e));
                         setLoading(false);
-                        unlisten();
                         reject(e);
                     }
                 };
 
-                setupOneTimeListener();
+                void loadFromServer();
             });
         }
     }, []);

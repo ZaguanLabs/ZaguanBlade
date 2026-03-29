@@ -8,7 +8,10 @@ pub fn get_global_settings(state: State<'_, AppState>) -> ApiConfig {
 }
 
 #[tauri::command]
-pub fn save_global_settings(settings: ApiConfig, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn save_global_settings(
+    settings: ApiConfig,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let mut config = state.config.lock().unwrap();
 
     if let Err(e) = config::ensure_global_prompts_dir() {
@@ -20,10 +23,13 @@ pub fn save_global_settings(settings: ApiConfig, state: State<'_, AppState>) -> 
     safe_settings.blade_url = "https://coder.zaguanai.com".to_string();
 
     *config = safe_settings.clone();
+    drop(config);
 
     // Persist to disk
     let path = config::default_api_config_path();
-    config::save_api_config(&path, &config)?;
+    tokio::task::spawn_blocking(move || config::save_api_config(&path, &safe_settings))
+        .await
+        .map_err(|e| format!("save global settings task failed: {}", e))??;
 
     Ok(())
 }

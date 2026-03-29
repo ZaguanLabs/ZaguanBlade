@@ -1,4 +1,5 @@
 use crate::app_state::AppState;
+use crate::blade_event_scheduler;
 use crate::blade_protocol::ChatMention;
 use crate::chat_manager::DrainResult;
 use crate::project_settings;
@@ -297,17 +298,23 @@ pub async fn handle_send_message<R: Runtime>(
     }
 
     if active_file.is_none() && effective_open_files.is_empty() {
-        effective_open_files = infer_context_files_from_query(&state, actual_message.as_str(), 6)
-            .into_iter()
-            .map(|path| normalize_to_workspace(path))
-            .collect();
-
-        if effective_open_files.is_empty() {
-            actual_message = format!(
-                "[SYSTEM NOTE: No file tabs are open. Start with get_project_index_overview for fast orientation. Use get_project_index_chunk only if you need deeper paging. Avoid broad repo-wide grep/search as a first action when index overview is available. Infer relevant files using tools and proceed with implementation. Do not summarize the project unless explicitly asked.]\n\n{}",
-                actual_message
+        let blocking_app = app.clone();
+        let blocking_query = actual_message.clone();
+        effective_open_files = tokio::task::spawn_blocking(move || {
+            let state = blocking_app.state::<AppState>();
+            infer_context_files_from_query(&state, blocking_query.as_str(), 6)
+        })
+        .await
+        .unwrap_or_else(|error| {
+            eprintln!(
+                "[LANGUAGE] Context inference task failed for chat query fallback: {}",
+                error
             );
-        }
+            Vec::new()
+        })
+        .into_iter()
+        .map(|path| normalize_to_workspace(path))
+        .collect();
     }
 
     if effective_active_file.is_none() {
@@ -446,6 +453,35 @@ pub async fn handle_send_message<R: Runtime>(
 
     // 2. Start Stream
     let models = load_available_models(&state).await?;
+    let workspace_path = {
+        let workspace = state
+            .workspace
+            .lock()
+            .map_err(|e| format!("Failed to lock workspace: {}", e))?;
+        workspace.workspace.clone()
+    };
+    let storage_mode = Some(
+        tokio::task::spawn_blocking({
+            let workspace_path = workspace_path.clone();
+            move || {
+                workspace_path
+                    .as_ref()
+                    .map(|p| {
+                        let settings = project_settings::load_project_settings_or_default(p);
+                        match settings.storage.mode {
+                            project_settings::StorageMode::Local => "local".to_string(),
+                            project_settings::StorageMode::Server => "server".to_string(),
+                        }
+                    })
+                    .unwrap_or_else(|| "local".to_string())
+            }
+        })
+        .await
+        .unwrap_or_else(|error| {
+            eprintln!("[CHAT] storage mode task failed: {}", error);
+            "local".to_string()
+        }),
+    );
     {
         let mut mgr = state
             .chat_manager
@@ -459,10 +495,6 @@ pub async fn handle_send_message<R: Runtime>(
             .config
             .lock()
             .map_err(|e| format!("Failed to lock config: {}", e))?;
-        let workspace = state
-            .workspace
-            .lock()
-            .map_err(|e| format!("Failed to lock workspace: {}", e))?;
 
         // Default to the currently selected model index from state, rather than 0
         let mut selected_model = *state
@@ -502,19 +534,7 @@ pub async fn handle_send_message<R: Runtime>(
         let http = reqwest::Client::new();
 
         // Ensure workspace root is valid
-        let ws = workspace.workspace.as_ref();
-
-        // RFC-002: Get storage mode from project settings, default to "local"
-        let storage_mode = Some(
-            ws.map(|p| {
-                let settings = project_settings::load_project_settings_or_default(p);
-                match settings.storage.mode {
-                    project_settings::StorageMode::Local => "local".to_string(),
-                    project_settings::StorageMode::Server => "server".to_string(),
-                }
-            })
-            .unwrap_or_else(|| "local".to_string()),
-        );
+        let ws = workspace_path.as_ref();
 
         let composite_tools_enabled = state.feature_flags.composite_tools_enabled();
 
@@ -535,6 +555,8 @@ pub async fn handle_send_message<R: Runtime>(
             composite_tools_enabled,
         )
         .map_err(|e| e.to_string())?;
+
+        blade_event_scheduler::reset_chat_stream();
     }
 
     // 3. Event-Driven Processing (Background Task)
@@ -600,60 +622,75 @@ pub async fn handle_send_message<R: Runtime>(
                 if !is_streaming && !has_rx {
                     // Auto-save conversation before emitting done
                     {
-                        let conversation = state.conversation.lock().unwrap();
-                        let mut stored = conversation.to_stored();
+                        let mut stored = {
+                            let conversation = state.conversation.lock().unwrap();
+                            conversation.to_stored()
+                        };
                         // Persist the current session ID to the stored metadata
                         stored.metadata.session_id = session_id.clone();
-                        if let Err(e) =
-                            state.with_conversation_store(|store| store.save_conversation(&stored))
-                        {
-                            eprintln!("Failed to auto-save conversation: {}", e);
-                        } else {
-                            println!("Auto-saved conversation: {}", stored.metadata.id);
-                        }
+                        let workspace_path = {
+                            let workspace = state.workspace.lock().unwrap();
+                            workspace.workspace.clone()
+                        };
+                        let blocking_app_handle = app_handle.clone();
+                        let autosave_result = tokio::task::spawn_blocking(move || {
+                            let state = blocking_app_handle.state::<AppState>();
 
-                        // RFC-002: Also save to local artifacts if in local storage mode
-                        let workspace = state.workspace.lock().unwrap();
-                        if let Some(ref ws_path) = workspace.workspace {
-                            let settings =
-                                project_settings::load_project_settings_or_default(ws_path);
-                            if settings.storage.mode == project_settings::StorageMode::Local {
-                                // Convert to local artifact format
-                                let project_id = crate::project::get_or_create_project_id(ws_path)
-                                    .unwrap_or_else(|_| "unknown".to_string());
+                            if let Err(e) =
+                                state.with_conversation_store(|store| store.save_conversation(&stored))
+                            {
+                                eprintln!("Failed to auto-save conversation: {}", e);
+                            } else {
+                                println!("Auto-saved conversation: {}", stored.metadata.id);
+                            }
 
-                                let title = if stored.metadata.title.is_empty() {
-                                    "Untitled".to_string()
-                                } else {
-                                    stored.metadata.title.clone()
-                                };
-                                let mut artifact = local_artifacts::ConversationArtifact::new(
-                                    stored.metadata.id.clone(),
-                                    project_id,
-                                    title,
-                                );
+                            // RFC-002: Also save to local artifacts if in local storage mode
+                            if let Some(ws_path) = workspace_path {
+                                let settings =
+                                    project_settings::load_project_settings_or_default(&ws_path);
+                                if settings.storage.mode == project_settings::StorageMode::Local {
+                                    // Convert to local artifact format
+                                    let project_id = crate::project::get_or_create_project_id(&ws_path)
+                                        .unwrap_or_else(|_| "unknown".to_string());
 
-                                // Convert messages
-                                for (idx, msg) in stored.messages.iter().enumerate() {
-                                    let local_msg = local_artifacts::Message {
-                                        id: format!("msg_{}", idx),
-                                        role: msg.role.clone(),
-                                        content: msg.content.clone(),
-                                        timestamp: chrono::Utc::now().to_rfc3339(),
-                                        code_references: vec![], // TODO: Extract from content
+                                    let title = if stored.metadata.title.is_empty() {
+                                        "Untitled".to_string()
+                                    } else {
+                                        stored.metadata.title.clone()
                                     };
-                                    artifact.messages.push(local_msg);
-                                }
-                                artifact.metadata.total_messages = artifact.messages.len() as i32;
+                                    let mut artifact = local_artifacts::ConversationArtifact::new(
+                                        stored.metadata.id.clone(),
+                                        project_id,
+                                        title,
+                                    );
 
-                                let artifact_store =
-                                    local_artifacts::LocalArtifactStore::new(ws_path);
-                                if let Err(e) = artifact_store.save_conversation(&artifact) {
-                                    eprintln!("[LOCAL] Failed to save local artifact: {}", e);
-                                } else {
-                                    eprintln!("[LOCAL] Saved conversation to .zblade/artifacts/conversations/{}.json", stored.metadata.id);
+                                    // Convert messages
+                                    for (idx, msg) in stored.messages.iter().enumerate() {
+                                        let local_msg = local_artifacts::Message {
+                                            id: format!("msg_{}", idx),
+                                            role: msg.role.clone(),
+                                            content: msg.content.clone(),
+                                            timestamp: chrono::Utc::now().to_rfc3339(),
+                                            code_references: vec![], // TODO: Extract from content
+                                        };
+                                        artifact.messages.push(local_msg);
+                                    }
+                                    artifact.metadata.total_messages = artifact.messages.len() as i32;
+
+                                    let artifact_store =
+                                        local_artifacts::LocalArtifactStore::new(&ws_path);
+                                    if let Err(e) = artifact_store.save_conversation(&artifact) {
+                                        eprintln!("[LOCAL] Failed to save local artifact: {}", e);
+                                    } else {
+                                        eprintln!("[LOCAL] Saved conversation to .zblade/artifacts/conversations/{}.json", stored.metadata.id);
+                                    }
                                 }
                             }
+                        })
+                        .await;
+
+                        if let Err(e) = autosave_result {
+                            eprintln!("Failed to run auto-save conversation task: {}", e);
                         }
                     }
                     window.emit("chat-done", ()).unwrap_or_default();
@@ -699,67 +736,30 @@ pub async fn handle_send_message<R: Runtime>(
 
                 // Continue polling for done event
             } else if let DrainResult::Update(msg_id, chunk) = result {
-                // Emit streaming chunk immediately for real-time updates
-                // v1.1: Use MessageDelta with sequence number
-                let mut mgr = state.chat_manager.lock().unwrap();
-                let seq = mgr.message_seq;
-                mgr.message_seq += 1;
-                drop(mgr);
                 let msg_id = if msg_id.is_empty() {
                     "streaming-msg".to_string()
                 } else {
                     msg_id
                 };
 
-                // 2. Emit Blade v1.1 MessageDelta
-                let _ = window.emit(
-                    "blade-event",
-                    blade_protocol::BladeEventEnvelope {
-                        id: uuid::Uuid::new_v4(),
-                        timestamp: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis() as u64,
-                        causality_id: Some(msg_id.clone()),
-                        event: blade_protocol::BladeEvent::Chat(
-                            blade_protocol::ChatEvent::MessageDelta {
-                                id: msg_id,
-                                seq,
-                                chunk,
-                                is_final: false, // Will be set in MessageCompleted
-                            },
-                        ),
-                    },
+                blade_event_scheduler::queue_chat_message_delta(
+                    &app_handle,
+                    msg_id.clone(),
+                    Some(msg_id),
+                    chunk,
                 );
             } else if let DrainResult::Reasoning(msg_id, chunk) = result {
-                let mut mgr = state.chat_manager.lock().unwrap();
-                let seq = mgr.message_seq;
-                mgr.message_seq += 1;
-                drop(mgr);
                 let msg_id = if msg_id.is_empty() {
                     "streaming-msg".to_string()
                 } else {
                     msg_id
                 };
 
-                let _ = window.emit(
-                    "blade-event",
-                    blade_protocol::BladeEventEnvelope {
-                        id: uuid::Uuid::new_v4(),
-                        timestamp: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis() as u64,
-                        causality_id: Some(msg_id.clone()),
-                        event: blade_protocol::BladeEvent::Chat(
-                            blade_protocol::ChatEvent::ReasoningDelta {
-                                id: msg_id,
-                                seq,
-                                chunk,
-                                is_final: false,
-                            },
-                        ),
-                    },
+                blade_event_scheduler::queue_chat_reasoning_delta(
+                    &app_handle,
+                    msg_id.clone(),
+                    Some(msg_id),
+                    chunk,
                 );
             } else if let DrainResult::Error(e) = result {
                 window
@@ -779,25 +779,14 @@ pub async fn handle_send_message<R: Runtime>(
             } else if let DrainResult::ToolCreated(msg, new_calls) = result {
                 let msg_id = msg.id.clone().unwrap_or_else(|| "unknown".to_string());
                 for tc in new_calls {
-                    let _ = window.emit(
-                        "blade-event",
-                        blade_protocol::BladeEventEnvelope {
-                            id: uuid::Uuid::new_v4(),
-                            timestamp: std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_millis() as u64,
-                            causality_id: Some(msg_id.clone()),
-                            event: blade_protocol::BladeEvent::Chat(
-                                blade_protocol::ChatEvent::ToolUpdate {
-                                    message_id: msg_id.clone(),
-                                    tool_call_id: tc.id.clone(),
-                                    status: "executing".to_string(),
-                                    result: None,
-                                    tool_call: Some(tc.clone()),
-                                },
-                            ),
-                        },
+                    blade_event_scheduler::queue_tool_update(
+                        &app_handle,
+                        Some(msg_id.clone()),
+                        msg_id.clone(),
+                        tc.id.clone(),
+                        "executing".to_string(),
+                        None,
+                        Some(tc.clone()),
                     );
                 }
             } else if let DrainResult::ToolActivity {
@@ -807,24 +796,12 @@ pub async fn handle_send_message<R: Runtime>(
                 tool_call_id,
             } = result
             {
-                let _ = window.emit(
-                    "blade-event",
-                    blade_protocol::BladeEventEnvelope {
-                        id: uuid::Uuid::new_v4(),
-                        timestamp: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis() as u64,
-                        causality_id: None,
-                        event: blade_protocol::BladeEvent::Chat(
-                            blade_protocol::ChatEvent::ToolActivity {
-                                tool_name,
-                                file_path,
-                                action,
-                                tool_call_id,
-                            },
-                        ),
-                    },
+                blade_event_scheduler::queue_tool_activity(
+                    &app_handle,
+                    tool_name,
+                    file_path,
+                    action,
+                    tool_call_id,
                 );
             } else if let DrainResult::ToolStatusUpdate(msg) = result {
                 // v1.1: Emit ToolUpdate events via blade-event
@@ -835,25 +812,14 @@ pub async fn handle_send_message<R: Runtime>(
                         // We emit indiscriminately here because the frontend will merge/update state based on ID
                         let status = tc.status.clone().unwrap_or_else(|| "unknown".to_string());
 
-                        let _ = window.emit(
-                            "blade-event",
-                            blade_protocol::BladeEventEnvelope {
-                                id: uuid::Uuid::new_v4(),
-                                timestamp: std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_millis() as u64,
-                                causality_id: Some(msg_id.clone()),
-                                event: blade_protocol::BladeEvent::Chat(
-                                    blade_protocol::ChatEvent::ToolUpdate {
-                                        message_id: msg_id.clone(),
-                                        tool_call_id: tc.id.clone(),
-                                        status,
-                                        result: tc.result.clone(),
-                                        tool_call: Some(tc.clone()),
-                                    },
-                                ),
-                            },
+                        blade_event_scheduler::queue_tool_update(
+                            &app_handle,
+                            Some(msg_id.clone()),
+                            msg_id.clone(),
+                            tc.id.clone(),
+                            status,
+                            tc.result.clone(),
+                            Some(tc.clone()),
                         );
                     }
                 }
@@ -904,19 +870,12 @@ pub async fn handle_send_message<R: Runtime>(
             } else if let DrainResult::MessageCompleted(id) = result {
                 // Emit MessageCompleted immediately to reset loading state
                 eprintln!("[ORCHESTRATOR] Emitting MessageCompleted: {}", id);
-                let _ = window.emit(
-                    "blade-event",
-                    blade_protocol::BladeEventEnvelope {
-                        id: uuid::Uuid::new_v4(),
-                        timestamp: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis() as u64,
-                        causality_id: None,
-                        event: blade_protocol::BladeEvent::Chat(
-                            blade_protocol::ChatEvent::MessageCompleted { id },
-                        ),
-                    },
+                blade_event_scheduler::emit_blade_event(
+                    &app_handle,
+                    None,
+                    blade_protocol::BladeEvent::Chat(
+                        blade_protocol::ChatEvent::MessageCompleted { id },
+                    ),
                 );
             } else if let DrainResult::ContextLengthExceeded {
                 message,
@@ -1019,10 +978,13 @@ pub async fn handle_send_message<R: Runtime>(
                     Some(app_handle.clone()),
                 );
 
-                let batch_opt = {
+                let blocking_app_handle = app_handle.clone();
+                let blocking_ws_root = ws_root.clone();
+                let batch_opt = tokio::task::spawn_blocking(move || {
+                    let state = blocking_app_handle.state::<AppState>();
                     let mut workflow = state.workflow.lock().unwrap();
                     workflow.handle_tool_calls(
-                        ws_root
+                        blocking_ws_root
                             .as_ref()
                             .map(|s| std::path::Path::new(s))
                             .unwrap_or_else(|| std::path::Path::new(".")),
@@ -1030,7 +992,12 @@ pub async fn handle_send_message<R: Runtime>(
                         content,
                         &context,
                     )
-                };
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    eprintln!("[ORCHESTRATOR] handle_tool_calls task failed: {}", e);
+                    None
+                });
 
                 // Auto-execute commands (CHECK PENDING)
                 let pending_opt = {
@@ -1314,13 +1281,38 @@ pub async fn handle_send_message<R: Runtime>(
                         };
 
                         {
+                            let workspace_path = {
+                                let ws = state.workspace.lock().unwrap();
+                                ws.workspace.clone()
+                            };
+                            let is_local_mode = tokio::task::spawn_blocking({
+                                let workspace_path = workspace_path.clone();
+                                move || {
+                                    workspace_path
+                                        .as_ref()
+                                        .map(|ws| {
+                                            let settings =
+                                                project_settings::load_project_settings_or_default(ws);
+                                            matches!(
+                                                settings.storage.mode,
+                                                project_settings::StorageMode::Local
+                                            )
+                                        })
+                                        .unwrap_or(true)
+                                }
+                            })
+                            .await
+                            .unwrap_or_else(|error| {
+                                eprintln!("[CHAT] continue batch mode task failed: {}", error);
+                                true
+                            });
+
                             let mut mgr = state.chat_manager.lock().unwrap();
                             mgr.agentic_loop.stop("loop detected");
                             // Still send the tool results back to the model so it can respond
                             let mut conversation = state.conversation.lock().unwrap();
                             let config = state.config.lock().unwrap();
                             let selected_model_idx = *state.selected_model_index.lock().unwrap();
-                            let ws = state.workspace.lock().unwrap();
                             let http = reqwest::Client::new();
 
                             mgr.continue_tool_batch(
@@ -1329,7 +1321,8 @@ pub async fn handle_send_message<R: Runtime>(
                                 &config,
                                 &models,
                                 selected_model_idx,
-                                ws.workspace.as_ref(),
+                                workspace_path.as_ref(),
+                                is_local_mode,
                                 http,
                             )
                             .unwrap_or_else(|e| eprintln!("Continue batch failed: {}", e));
@@ -1352,11 +1345,36 @@ pub async fn handle_send_message<R: Runtime>(
                         };
 
                         {
+                            let workspace_path = {
+                                let ws = state.workspace.lock().unwrap();
+                                ws.workspace.clone()
+                            };
+                            let is_local_mode = tokio::task::spawn_blocking({
+                                let workspace_path = workspace_path.clone();
+                                move || {
+                                    workspace_path
+                                        .as_ref()
+                                        .map(|ws| {
+                                            let settings =
+                                                project_settings::load_project_settings_or_default(ws);
+                                            matches!(
+                                                settings.storage.mode,
+                                                project_settings::StorageMode::Local
+                                            )
+                                        })
+                                        .unwrap_or(true)
+                                }
+                            })
+                            .await
+                            .unwrap_or_else(|error| {
+                                eprintln!("[CHAT] continue batch mode task failed: {}", error);
+                                true
+                            });
+
                             let mut mgr = state.chat_manager.lock().unwrap();
                             let mut conversation = state.conversation.lock().unwrap();
                             let config = state.config.lock().unwrap();
                             let selected_model_idx = *state.selected_model_index.lock().unwrap();
-                            let ws = state.workspace.lock().unwrap();
                             let http = reqwest::Client::new();
 
                             mgr.continue_tool_batch(
@@ -1365,7 +1383,8 @@ pub async fn handle_send_message<R: Runtime>(
                                 &config,
                                 &models,
                                 selected_model_idx,
-                                ws.workspace.as_ref(), // Ensure this matches Option<&PathBuf>
+                                workspace_path.as_ref(),
+                                is_local_mode,
                                 http,
                             )
                             .unwrap_or_else(|e| eprintln!("Continue batch failed: {}", e));

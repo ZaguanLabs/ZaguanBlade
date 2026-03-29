@@ -1,6 +1,7 @@
 pub mod agentic_loop;
 pub mod ai_workflow;
 pub mod app_state;
+pub mod blade_event_scheduler;
 pub mod blade_client;
 pub mod blade_protocol;
 pub mod blade_ws_client;
@@ -114,6 +115,7 @@ pub fn run() {
             commands::misc::toggle_devtools,
             commands::misc::log_frontend,
             commands::misc::frontend_shell_ready,
+            commands::misc::get_blade_event_metrics,
             // commands::misc::set_virtual_buffer,
             // commands::misc::clear_virtual_buffer,
             // commands::misc::has_virtual_buffer,

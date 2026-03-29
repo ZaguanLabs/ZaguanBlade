@@ -1,6 +1,7 @@
 use crate::ephemeral_documents::EphemeralDocument;
 use crate::AppState;
 use tauri::State;
+use tokio::fs;
 
 #[tauri::command]
 pub fn create_ephemeral_document(
@@ -69,7 +70,7 @@ pub async fn save_ephemeral_document(
         .get(&id)
         .ok_or_else(|| "Document not found".to_string())?;
 
-    std::fs::write(&path, doc.content).map_err(|e| e.to_string())?;
+    fs::write(&path, doc.content).await.map_err(|e| e.to_string())?;
 
     // Remove from ephemeral storage after successful save
     state.ephemeral_docs.remove(&id);
@@ -89,11 +90,13 @@ pub async fn save_ephemeral_document_to_workspace(
         .ok_or_else(|| "Document not found".to_string())?;
 
     // Get workspace root
-    let workspace = state.workspace.lock().unwrap();
-    let workspace_root = workspace
-        .workspace
-        .as_ref()
-        .ok_or_else(|| "No workspace open".to_string())?;
+    let workspace_root = {
+        let workspace = state.workspace.lock().unwrap();
+        workspace
+            .workspace
+            .clone()
+            .ok_or_else(|| "No workspace open".to_string())?
+    };
 
     // Add timestamp to filename
     // Extract base name and extension
@@ -110,7 +113,9 @@ pub async fn save_ephemeral_document_to_workspace(
     let file_path_str = file_path.to_string_lossy().to_string();
 
     // Write file
-    std::fs::write(&file_path, &doc.content).map_err(|e| e.to_string())?;
+    fs::write(&file_path, &doc.content)
+        .await
+        .map_err(|e| e.to_string())?;
 
     println!("[EPHEMERAL] Saved document to workspace: {}", file_path_str);
 

@@ -2,6 +2,7 @@ use crate::app_state::AppState;
 use crate::gitignore_filter::GitignoreFilter;
 use serde::Serialize;
 use tauri::{Emitter, Manager};
+use tokio::fs;
 use walkdir::WalkDir;
 
 fn normalize_path(path: &std::path::Path) -> std::path::PathBuf {
@@ -64,6 +65,22 @@ pub(crate) fn resolve_path_under_workspace(
     };
 
     resolve_path_under_workspace_root(&workspace_root, path)
+}
+
+pub(crate) async fn resolve_path_under_workspace_async(
+    state: &AppState,
+    path: std::path::PathBuf,
+) -> Result<std::path::PathBuf, String> {
+    let workspace_root = {
+        let ws = state.workspace.lock().unwrap();
+        ws.workspace
+            .clone()
+            .ok_or_else(|| "No workspace open".to_string())?
+    };
+
+    tokio::task::spawn_blocking(move || resolve_path_under_workspace_root(&workspace_root, &path))
+        .await
+        .map_err(|e| format!("path resolution task failed: {}", e))?
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -184,39 +201,51 @@ pub async fn open_workspace_logic(
     state: &AppState,
     app_handle: &tauri::AppHandle,
 ) -> Result<(), String> {
-    let mut ws = state.workspace.lock().unwrap();
-    ws.set_workspace(std::path::PathBuf::from(&path));
-    drop(ws);
-
-    // Re-discover git repository for new workspace
-    let new_git_dir = match gix::discover(&path) {
-        Ok(repo) => {
-            let git_path = repo.path().to_path_buf();
-            eprintln!("[GIT] Discovered repository at: {:?}", git_path);
-            Some(git_path)
+    let blocking_app_handle = app_handle.clone();
+    let blocking_path = path.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let state = blocking_app_handle.state::<AppState>();
+        {
+            let mut ws = state.workspace.lock().unwrap();
+            ws.set_workspace(std::path::PathBuf::from(&blocking_path));
         }
-        Err(e) => {
-            eprintln!("[GIT] No repository found: {}", e);
-            None
-        }
-    };
-    *state.git_dir.write().unwrap() = new_git_dir;
 
-    // Ensure project-local .zblade exists for workspace-scoped persistence
-    let workspace_root = std::path::PathBuf::from(&path);
-    crate::project_settings::init_zblade_dir(&workspace_root)?;
-    state.reset_project_services()?;
+        // Re-discover git repository for new workspace
+        let new_git_dir = match gix::discover(&blocking_path) {
+            Ok(repo) => {
+                let git_path = repo.path().to_path_buf();
+                eprintln!("[GIT] Discovered repository at: {:?}", git_path);
+                Some(git_path)
+            }
+            Err(e) => {
+                eprintln!("[GIT] No repository found: {}", e);
+                None
+            }
+        };
+        *state.git_dir.write().unwrap() = new_git_dir;
+
+        // Ensure project-local .zblade exists for workspace-scoped persistence
+        let workspace_root = std::path::PathBuf::from(&blocking_path);
+        crate::project_settings::init_zblade_dir(&workspace_root)?;
+        state.reset_project_services()?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("failed to initialize workspace: {}", e))??;
 
     crate::fs_watcher::restart_fs_watcher(app_handle);
-    let _ = app_handle.emit(crate::events::event_names::REFRESH_EXPLORER, ());
+    crate::blade_event_scheduler::queue_refresh_explorer(app_handle);
 
     if state
         .startup_services_started
         .load(std::sync::atomic::Ordering::Acquire)
     {
-        let language_service = state.language_service()?;
+        let blocking_app_handle = app_handle.clone();
         tokio::task::spawn_blocking(move || {
-            let _ = language_service.index_directory(".");
+            let state = blocking_app_handle.state::<AppState>();
+            if let Ok(language_service) = state.language_service() {
+                let _ = language_service.index_directory(".");
+            }
         });
     }
 
@@ -251,18 +280,30 @@ pub fn list_files_logic(
 #[tauri::command]
 pub async fn list_files(
     path: Option<String>,
-    state: tauri::State<'_, AppState>,
+    _state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
 ) -> Result<Vec<crate::explorer::FileEntry>, String> {
-    list_files_logic(path, &*state)
+    tokio::task::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        list_files_logic(path, &*state)
+    })
+    .await
+    .map_err(|e| format!("list files task failed: {}", e))?
 }
 
 #[tauri::command]
 pub async fn search_workspace_paths(
     query: String,
     limit: Option<usize>,
-    state: tauri::State<'_, AppState>,
+    _state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
 ) -> Result<Vec<WorkspacePathMatch>, String> {
-    search_workspace_paths_logic(query, limit, &*state)
+    tokio::task::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        search_workspace_paths_logic(query, limit, &*state)
+    })
+    .await
+    .map_err(|e| format!("search workspace paths task failed: {}", e))?
 }
 
 pub fn read_file_content_logic(path: String, state: &AppState) -> Result<String, String> {
@@ -300,7 +341,30 @@ pub async fn read_file_content(
     path: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
-    read_file_content_logic(path, &*state)
+    let requested_path = std::path::PathBuf::from(&path);
+    let resolved_path = resolve_path_under_workspace_async(&*state, requested_path).await?;
+
+    match fs::read_to_string(&resolved_path).await {
+        Ok(content) => {
+            if content.is_empty() {
+                println!(
+                    "[READ FILE CONTENT] Read empty content from: {} (requested: {})",
+                    resolved_path.display(),
+                    path
+                );
+            }
+            Ok(content)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            println!(
+                "[READ FILE CONTENT] Not found: {} (requested: {})",
+                resolved_path.display(),
+                path
+            );
+            Ok(String::new())
+        }
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 pub fn write_file_content_logic(
@@ -321,8 +385,13 @@ pub async fn write_file_content(
     state: tauri::State<'_, AppState>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
-    write_file_content_logic(path, content, &*state)?;
-    let _ = app_handle.emit(crate::events::event_names::REFRESH_EXPLORER, ());
+    let requested_path = std::path::PathBuf::from(&path);
+    let resolved_path = resolve_path_under_workspace_async(&*state, requested_path).await?;
+
+    fs::write(&resolved_path, content)
+        .await
+        .map_err(|e| e.to_string())?;
+    crate::blade_event_scheduler::queue_refresh_explorer(&app_handle);
     Ok(())
 }
 

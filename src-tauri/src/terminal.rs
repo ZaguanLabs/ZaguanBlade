@@ -1,3 +1,4 @@
+use crate::blade_event_scheduler;
 use crate::events::{event_names, TerminalCwdChangedPayload};
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use serde::Serialize;
@@ -94,62 +95,26 @@ fn configure_terminal_environment(cmd: &mut CommandBuilder) {
     strip_appimage_env(cmd);
 }
 
-fn current_timestamp_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
-
-fn next_seq(seq: &Arc<Mutex<u64>>) -> u64 {
-    let mut seq_guard = seq.lock().unwrap();
-    let current = *seq_guard;
-    *seq_guard += 1;
-    current
-}
-
 fn emit_terminal_output<R: Runtime>(
     app: &tauri::AppHandle<R>,
     id: &str,
     data: String,
-    seq: &Arc<Mutex<u64>>,
 ) {
     if data.is_empty() {
         return;
     }
 
-    let current_seq = next_seq(seq);
-    let _ = app.emit(
-        "blade-event",
-        crate::blade_protocol::BladeEventEnvelope {
-            id: uuid::Uuid::new_v4(),
-            timestamp: current_timestamp_ms(),
-            causality_id: None,
-            event: crate::blade_protocol::BladeEvent::Terminal(
-                crate::blade_protocol::TerminalEvent::Output {
-                    id: id.to_string(),
-                    seq: current_seq,
-                    data,
-                },
-            ),
-        },
-    );
+    blade_event_scheduler::queue_terminal_output(app, id, data);
 }
 
 fn emit_terminal_exit<R: Runtime>(app: &tauri::AppHandle<R>, id: String, exit_code: i32) {
-    let _ = app.emit(
-        "blade-event",
-        crate::blade_protocol::BladeEventEnvelope {
-            id: uuid::Uuid::new_v4(),
-            timestamp: current_timestamp_ms(),
-            causality_id: None,
-            event: crate::blade_protocol::BladeEvent::Terminal(
-                crate::blade_protocol::TerminalEvent::Exit {
-                    id,
-                    code: exit_code,
-                },
-            ),
-        },
+    blade_event_scheduler::emit_blade_event(
+        app,
+        None,
+        crate::blade_protocol::BladeEvent::Terminal(crate::blade_protocol::TerminalEvent::Exit {
+            id,
+            code: exit_code,
+        }),
     );
 }
 
@@ -355,19 +320,15 @@ pub fn create_terminal<R: Runtime>(
     }
 
     // v1.1: Emit TerminalSpawned event
-    let _ = app_handle.emit(
-        "blade-event",
-        crate::blade_protocol::BladeEventEnvelope {
-            id: uuid::Uuid::new_v4(),
-            timestamp: current_timestamp_ms(),
-            causality_id: None,
-            event: crate::blade_protocol::BladeEvent::Terminal(
-                crate::blade_protocol::TerminalEvent::Spawned {
-                    id: id.clone(),
-                    owner,
-                },
-            ),
-        },
+    blade_event_scheduler::emit_blade_event(
+        &app_handle,
+        None,
+        crate::blade_protocol::BladeEvent::Terminal(
+            crate::blade_protocol::TerminalEvent::Spawned {
+                id: id.clone(),
+                owner: owner.clone(),
+            },
+        ),
     );
 
     // Spawn a thread to read output and emit to frontend
@@ -414,7 +375,8 @@ pub fn create_terminal<R: Runtime>(
                 if active_cmd.is_some() {
                     cmd_output_buffer.push_str(&sentinel_result.cleaned);
                 }
-                emit_terminal_output(app, id, sentinel_result.cleaned, seq);
+                let _ = seq;
+                emit_terminal_output(app, id, sentinel_result.cleaned);
             }
 
             // 3. Process EXITED sentinels last → takes the accumulated output.
@@ -592,8 +554,7 @@ pub fn create_terminal<R: Runtime>(
         emit_terminal_exit(&app_handle_clone, id_clone, exit_code);
 
         // Refresh explorer to show changes from command
-        let _ = app_handle_clone.emit("refresh-explorer", ());
-        let _ = app_handle_clone.emit(event_names::REFRESH_EXPLORER, ());
+        blade_event_scheduler::queue_refresh_explorer(&app_handle_clone);
     });
 
     Ok(())
@@ -880,7 +841,6 @@ pub fn execute_command_in_terminal<R: Runtime>(
     let id_clone = id.clone();
     // Clone the Arc to the Mutex so we can access it from the thread
     let executing_commands = state.executing_commands.clone();
-    let seq_counter = Arc::new(Mutex::new(0u64)); // v1.1: sequence counter
     thread::spawn(move || {
         let mut buffer = [0u8; 1024];
         loop {
@@ -900,7 +860,7 @@ pub fn execute_command_in_terminal<R: Runtime>(
             match reader.read(&mut buffer) {
                 Ok(n) if n > 0 => {
                     let output = String::from_utf8_lossy(&buffer[..n]).to_string();
-                    emit_terminal_output(&app_handle, &id_clone, output, &seq_counter);
+                    emit_terminal_output(&app_handle, &id_clone, output);
                 }
                 Ok(_) => break,
                 Err(_) => break,
@@ -916,7 +876,7 @@ pub fn execute_command_in_terminal<R: Runtime>(
         emit_terminal_exit(&app_handle, id_clone.clone(), exit_code);
 
         // Refresh explorer
-        let _ = app_handle.emit("refresh-explorer", ());
+        blade_event_scheduler::queue_refresh_explorer(&app_handle);
 
         // Remove from executing commands
         let mut executing = executing_commands.lock().unwrap();
@@ -970,7 +930,7 @@ pub fn kill_terminal(id: String, state: tauri::State<'_, TerminalManager>) -> Re
 }
 
 #[tauri::command]
-pub fn execute_native_command(
+pub async fn execute_native_command(
     call_id: String,
     program: String,
     args: Vec<String>,
@@ -978,74 +938,77 @@ pub fn execute_native_command(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, crate::AppState>,
 ) -> Result<(), String> {
-    let pty_system = NativePtySystem::default();
-    let pair = pty_system
-        .openpty(PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| e.to_string())?;
-
-    let mut cmd = CommandBuilder::new(&program);
-    for arg in &args {
-        cmd.arg(arg);
-    }
-
     let working_dir = cwd.or_else(|| workspace_default_cwd(&state));
-    if let Some(path) = working_dir {
-        cmd.cwd(path);
-    }
-    configure_terminal_environment(&mut cmd);
-
-    let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
-    let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-
-    let cancel_flag = Arc::new(AtomicBool::new(false));
-    let cancel_flag_clone = cancel_flag.clone();
-    {
-        let mut executing = state.executing_commands.lock().map_err(|e| e.to_string())?;
-        executing.insert(call_id.clone(), cancel_flag);
-    }
-
-    let id_clone = call_id.clone();
     let executing_commands = state.executing_commands.clone();
-    thread::spawn(move || {
-        let mut buffer = [0u8; 4096];
-        let seq_counter = Arc::new(Mutex::new(0u64));
+    tokio::task::spawn_blocking(move || {
+        let pty_system = NativePtySystem::default();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| e.to_string())?;
 
-        loop {
-            if cancel_flag_clone.load(Ordering::Relaxed) {
-                let _ = child.kill();
-                let _ = child.wait();
-                emit_terminal_exit(&app_handle, id_clone.clone(), 130);
-                let mut executing = executing_commands.lock().unwrap();
-                executing.remove(&id_clone);
-                return;
-            }
-
-            match reader.read(&mut buffer) {
-                Ok(n) if n > 0 => {
-                    let output = String::from_utf8_lossy(&buffer[..n]).to_string();
-                    emit_terminal_output(&app_handle, &id_clone, output, &seq_counter);
-                }
-                Ok(_) => break,
-                Err(_) => break,
-            }
+        let mut cmd = CommandBuilder::new(&program);
+        for arg in &args {
+            cmd.arg(arg);
         }
 
-        let exit_code = match child.wait() {
-            Ok(status) => status.exit_code() as i32,
-            Err(_) => 1,
-        };
-        emit_terminal_exit(&app_handle, id_clone.clone(), exit_code);
+        if let Some(path) = working_dir {
+            cmd.cwd(path);
+        }
+        configure_terminal_environment(&mut cmd);
 
-        let mut executing = executing_commands.lock().unwrap();
-        executing.remove(&id_clone);
-    });
+        let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+        let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
 
-    Ok(())
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        let cancel_flag_clone = cancel_flag.clone();
+        {
+            let mut executing = executing_commands.lock().map_err(|e| e.to_string())?;
+            executing.insert(call_id.clone(), cancel_flag);
+        }
+
+        let id_clone = call_id.clone();
+        thread::spawn(move || {
+            let mut buffer = [0u8; 4096];
+
+            loop {
+                if cancel_flag_clone.load(Ordering::Relaxed) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    emit_terminal_exit(&app_handle, id_clone.clone(), 130);
+                    let mut executing = executing_commands.lock().unwrap();
+                    executing.remove(&id_clone);
+                    return;
+                }
+
+                match reader.read(&mut buffer) {
+                    Ok(n) if n > 0 => {
+                        let output = String::from_utf8_lossy(&buffer[..n]).to_string();
+                        emit_terminal_output(&app_handle, &id_clone, output);
+                    }
+                    Ok(_) => break,
+                    Err(_) => break,
+                }
+            }
+
+            let exit_code = match child.wait() {
+                Ok(status) => status.exit_code() as i32,
+                Err(_) => 1,
+            };
+            emit_terminal_exit(&app_handle, id_clone.clone(), exit_code);
+
+            let mut executing = executing_commands.lock().unwrap();
+            executing.remove(&id_clone);
+        });
+
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("execute native command task failed: {}", e))?
 }
 
 #[tauri::command]

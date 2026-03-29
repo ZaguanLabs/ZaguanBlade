@@ -8,7 +8,7 @@ pub fn get_local_ai_settings(state: State<'_, AppState>) -> LocalAiConfig {
 }
 
 #[tauri::command]
-pub fn save_local_ai_settings(
+pub async fn save_local_ai_settings(
     settings: LocalAiConfig,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
@@ -18,7 +18,9 @@ pub fn save_local_ai_settings(
     }
 
     let path = config::default_api_config_path();
-    config::save_local_ai_config(&path, &settings)
+    tokio::task::spawn_blocking(move || config::save_local_ai_config(&path, &settings))
+        .await
+        .map_err(|e| format!("save local ai settings task failed: {}", e))?
 }
 
 #[tauri::command]

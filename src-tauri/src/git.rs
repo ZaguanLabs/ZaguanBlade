@@ -2,7 +2,7 @@ use serde::Serialize;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::process::Command;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 use crate::{
     app_state::AppState,
@@ -1111,22 +1111,46 @@ fn parse_git_status_files(output: &str) -> Vec<GitFileStatus> {
 }
 
 #[tauri::command]
-pub fn git_status_summary(state: State<'_, AppState>) -> Result<GitStatusSummary, String> {
-    Ok(collect_git_status_snapshot(&state)?.summary)
+pub async fn git_status_summary(
+    _state: State<'_, AppState>,
+    app_handle: AppHandle,
+) -> Result<GitStatusSummary, String> {
+    tokio::task::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        collect_git_status_snapshot(&state).map(|snapshot| snapshot.summary)
+    })
+    .await
+    .map_err(|e| format!("git status summary task failed: {}", e))?
 }
 
 #[tauri::command]
-pub fn git_status_files(state: State<'_, AppState>) -> Result<Vec<GitFileStatus>, String> {
-    Ok(collect_git_status_snapshot(&state)?.files)
+pub async fn git_status_files(
+    _state: State<'_, AppState>,
+    app_handle: AppHandle,
+) -> Result<Vec<GitFileStatus>, String> {
+    tokio::task::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        collect_git_status_snapshot(&state).map(|snapshot| snapshot.files)
+    })
+    .await
+    .map_err(|e| format!("git status files task failed: {}", e))?
 }
 
 #[tauri::command]
-pub fn git_status(state: State<'_, AppState>) -> Result<GitStatusSnapshot, String> {
-    collect_git_status_snapshot(&state)
+pub async fn git_status(
+    _state: State<'_, AppState>,
+    app_handle: AppHandle,
+) -> Result<GitStatusSnapshot, String> {
+    tokio::task::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        collect_git_status_snapshot(&state)
+    })
+    .await
+    .map_err(|e| format!("git status task failed: {}", e))?
 }
 
 #[tauri::command]
-pub fn git_stage_file(state: State<'_, AppState>, path: String) -> Result<(), String> {
+pub async fn git_stage_file(state: State<'_, AppState>, path: String) -> Result<(), String> {
     let Some(root) = workspace_root(&state) else {
         return Err("No workspace open".to_string());
     };
@@ -1135,275 +1159,314 @@ pub fn git_stage_file(state: State<'_, AppState>, path: String) -> Result<(), St
         return Ok(());
     }
 
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(&root)
-        .arg("add")
-        .arg("--")
-        .arg(&path)
-        .output()
-        .map_err(|e| format!("failed to run git add: {}", e))?;
+    tokio::task::spawn_blocking(move || {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .arg("add")
+            .arg("--")
+            .arg(&path)
+            .output()
+            .map_err(|e| format!("failed to run git add: {}", e))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(format!("git add failed: {}", stderr.trim()));
-    }
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            return Err(format!("git add failed: {}", stderr.trim()));
+        }
 
-    Ok(())
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("git stage file task failed: {}", e))?
 }
 
 #[tauri::command]
-pub fn git_unstage_file(state: State<'_, AppState>, path: String) -> Result<(), String> {
+pub async fn git_unstage_file(state: State<'_, AppState>, path: String) -> Result<(), String> {
     let Some(root) = workspace_root(&state) else {
         return Err("No workspace open".to_string());
     };
 
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(&root)
-        .arg("restore")
-        .arg("--staged")
-        .arg("--")
-        .arg(&path)
-        .output()
-        .map_err(|e| format!("failed to run git restore: {}", e))?;
+    tokio::task::spawn_blocking(move || {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .arg("restore")
+            .arg("--staged")
+            .arg("--")
+            .arg(&path)
+            .output()
+            .map_err(|e| format!("failed to run git restore: {}", e))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(format!("git restore failed: {}", stderr.trim()));
-    }
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            return Err(format!("git restore failed: {}", stderr.trim()));
+        }
 
-    Ok(())
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("git unstage file task failed: {}", e))?
 }
 
 #[tauri::command]
-pub fn git_stage_all(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn git_stage_all(state: State<'_, AppState>) -> Result<(), String> {
     let Some(root) = workspace_root(&state) else {
         return Err("No workspace open".to_string());
     };
 
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(&root)
-        .arg("add")
-        .arg("-A")
-        .output()
-        .map_err(|e| format!("failed to run git add -A: {}", e))?;
+    tokio::task::spawn_blocking(move || {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .arg("add")
+            .arg("-A")
+            .output()
+            .map_err(|e| format!("failed to run git add -A: {}", e))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(format!("git add -A failed: {}", stderr.trim()));
-    }
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            return Err(format!("git add -A failed: {}", stderr.trim()));
+        }
 
-    // Ensure local .zblade data never ends up staged/committed via app workflows,
-    // even if files were tracked historically.
-    let _ = Command::new("git")
-        .arg("-C")
-        .arg(&root)
-        .arg("rm")
-        .arg("-r")
-        .arg("--cached")
-        .arg("--ignore-unmatch")
-        .arg("--")
-        .arg(".zblade")
-        .output();
+        let _ = Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .arg("rm")
+            .arg("-r")
+            .arg("--cached")
+            .arg("--ignore-unmatch")
+            .arg("--")
+            .arg(".zblade")
+            .output();
 
-    Ok(())
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("git stage all task failed: {}", e))?
 }
 
 #[tauri::command]
-pub fn git_unstage_all(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn git_unstage_all(state: State<'_, AppState>) -> Result<(), String> {
     let Some(root) = workspace_root(&state) else {
         return Err("No workspace open".to_string());
     };
 
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(&root)
-        .arg("restore")
-        .arg("--staged")
-        .arg(".")
-        .output()
-        .map_err(|e| format!("failed to run git restore --staged: {}", e))?;
+    tokio::task::spawn_blocking(move || {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .arg("restore")
+            .arg("--staged")
+            .arg(".")
+            .output()
+            .map_err(|e| format!("failed to run git restore --staged: {}", e))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(format!("git restore --staged failed: {}", stderr.trim()));
-    }
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            return Err(format!("git restore --staged failed: {}", stderr.trim()));
+        }
 
-    Ok(())
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("git unstage all task failed: {}", e))?
 }
 
 #[tauri::command]
-pub fn git_commit(state: State<'_, AppState>, message: String) -> Result<String, String> {
+pub async fn git_commit(state: State<'_, AppState>, message: String) -> Result<String, String> {
     let Some(root) = workspace_root(&state) else {
         return Err("No workspace open".to_string());
     };
 
-    let message = message.trim();
+    let message = message.trim().to_string();
     if message.is_empty() {
         return Err("Commit message is required".to_string());
     }
 
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(&root)
-        .arg("commit")
-        .arg("-m")
-        .arg(message)
-        .output()
-        .map_err(|e| format!("failed to run git commit: {}", e))?;
+    tokio::task::spawn_blocking(move || {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .arg("commit")
+            .arg("-m")
+            .arg(message)
+            .output()
+            .map_err(|e| format!("failed to run git commit: {}", e))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(format!("git commit failed: {}", stderr.trim()));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    Ok(stdout)
-}
-
-#[tauri::command]
-pub fn git_commit_preflight(state: State<'_, AppState>) -> Result<CommitPreflightResult, String> {
-    let repo = match open_repo(&state) {
-        Ok(r) => r,
-        Err(_) => {
-            return Ok(CommitPreflightResult {
-                can_commit: false,
-                is_repo: false,
-                branch: None,
-                is_detached: false,
-                has_upstream: false,
-                has_conflicts: false,
-                staged_count: 0,
-                error_message: Some("Not a Git repository".to_string()),
-                error_key: Some("git.notRepository".to_string()),
-            });
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            return Err(format!("git commit failed: {}", stderr.trim()));
         }
-    };
 
-    // Branch info from HEAD
-    let head = repo
-        .head()
-        .map_err(|e| format!("Failed to read HEAD: {}", e))?;
-    let is_detached = head.is_detached();
-    let branch = if is_detached {
-        None
-    } else {
-        head.referent_name().map(|n| n.shorten().to_string())
-    };
-
-    // Check for upstream tracking ref via config: branch.<name>.remote
-    let has_upstream = branch.as_ref().map_or(false, |b| {
-        let config = repo.config_snapshot();
-        let key = format!("branch.{}.remote", b);
-        config.string(key.as_str()).is_some()
-    });
-
-    // Use CLI for status checks (staged count + conflicts) until gix status API is wired
-    let root = match workspace_root(&state) {
-        Some(r) => r,
-        None => return Err("No workspace open".to_string()),
-    };
-    let status_output = run_git(&root, &["status", "--porcelain=v2"][..]).unwrap_or_default();
-    let has_conflicts = status_output.lines().any(|l| l.starts_with("u "));
-    let staged_count = status_output
-        .lines()
-        .filter(|l| {
-            if let Some(rest) = l.strip_prefix("1 ").or_else(|| l.strip_prefix("2 ")) {
-                let xy = rest.split_whitespace().next().unwrap_or("..");
-                xy.chars().next().unwrap_or('.') != '.'
-            } else {
-                false
-            }
-        })
-        .count() as u32;
-
-    // Determine if we can commit
-    let mut error_message = None;
-    let can_commit = if has_conflicts {
-        error_message = Some("Resolve merge conflicts before committing".to_string());
-        false
-    } else if staged_count == 0 {
-        error_message = Some("No staged changes to commit".to_string());
-        false
-    } else if is_detached {
-        error_message = Some("Warning: HEAD is detached. Commits may be lost.".to_string());
-        true // Allow but warn
-    } else {
-        true
-    };
-
-    Ok(CommitPreflightResult {
-        can_commit,
-        is_repo: true,
-        branch,
-        is_detached,
-        has_upstream,
-        has_conflicts,
-        staged_count,
-        error_message,
-        error_key: None,
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
     })
+    .await
+    .map_err(|e| format!("git commit task failed: {}", e))?
 }
 
 #[tauri::command]
-pub fn git_push(state: State<'_, AppState>) -> Result<String, String> {
+pub async fn git_commit_preflight(
+    _state: State<'_, AppState>,
+    app_handle: AppHandle,
+) -> Result<CommitPreflightResult, String> {
+    tokio::task::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        let repo = match open_repo(&state) {
+            Ok(r) => r,
+            Err(_) => {
+                return Ok(CommitPreflightResult {
+                    can_commit: false,
+                    is_repo: false,
+                    branch: None,
+                    is_detached: false,
+                    has_upstream: false,
+                    has_conflicts: false,
+                    staged_count: 0,
+                    error_message: Some("Not a Git repository".to_string()),
+                    error_key: Some("git.notRepository".to_string()),
+                });
+            }
+        };
+
+        let head = repo
+            .head()
+            .map_err(|e| format!("Failed to read HEAD: {}", e))?;
+        let is_detached = head.is_detached();
+        let branch = if is_detached {
+            None
+        } else {
+            head.referent_name().map(|n| n.shorten().to_string())
+        };
+
+        let has_upstream = branch.as_ref().map_or(false, |b| {
+            let config = repo.config_snapshot();
+            let key = format!("branch.{}.remote", b);
+            config.string(key.as_str()).is_some()
+        });
+
+        let root = match workspace_root(&state) {
+            Some(r) => r,
+            None => return Err("No workspace open".to_string()),
+        };
+        let status_output = run_git(&root, &["status", "--porcelain=v2"][..]).unwrap_or_default();
+        let has_conflicts = status_output.lines().any(|l| l.starts_with("u "));
+        let staged_count = status_output
+            .lines()
+            .filter(|l| {
+                if let Some(rest) = l.strip_prefix("1 ").or_else(|| l.strip_prefix("2 ")) {
+                    let xy = rest.split_whitespace().next().unwrap_or("..");
+                    xy.chars().next().unwrap_or('.') != '.'
+                } else {
+                    false
+                }
+            })
+            .count() as u32;
+
+        let mut error_message = None;
+        let can_commit = if has_conflicts {
+            error_message = Some("Resolve merge conflicts before committing".to_string());
+            false
+        } else if staged_count == 0 {
+            error_message = Some("No staged changes to commit".to_string());
+            false
+        } else if is_detached {
+            error_message = Some("Warning: HEAD is detached. Commits may be lost.".to_string());
+            true
+        } else {
+            true
+        };
+
+        Ok(CommitPreflightResult {
+            can_commit,
+            is_repo: true,
+            branch,
+            is_detached,
+            has_upstream,
+            has_conflicts,
+            staged_count,
+            error_message,
+            error_key: None,
+        })
+    })
+    .await
+    .map_err(|e| format!("git commit preflight task failed: {}", e))?
+}
+
+#[tauri::command]
+pub async fn git_push(state: State<'_, AppState>) -> Result<String, String> {
     let Some(root) = workspace_root(&state) else {
         return Err("No workspace open".to_string());
     };
 
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(&root)
-        .arg("push")
-        .output()
-        .map_err(|e| format!("failed to run git push: {}", e))?;
+    tokio::task::spawn_blocking(move || {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .arg("push")
+            .output()
+            .map_err(|e| format!("failed to run git push: {}", e))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(format!("git push failed: {}", stderr.trim()));
-    }
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            return Err(format!("git push failed: {}", stderr.trim()));
+        }
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    Ok(stdout)
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    })
+    .await
+    .map_err(|e| format!("git push task failed: {}", e))?
 }
 
 #[tauri::command]
-pub fn git_diff(state: State<'_, AppState>, path: String, staged: bool) -> Result<String, String> {
+pub async fn git_diff(
+    state: State<'_, AppState>,
+    path: String,
+    staged: bool,
+    app_handle: AppHandle,
+) -> Result<String, String> {
     let Some(root) = workspace_root(&state) else {
         return Err("No workspace open".to_string());
     };
 
-    let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(&root).arg("diff").arg("--no-color");
+    tokio::task::spawn_blocking(move || {
+        let _state = app_handle.state::<AppState>();
+        let mut cmd = Command::new("git");
+        cmd.arg("-C").arg(&root).arg("diff").arg("--no-color");
 
-    if staged {
-        cmd.arg("--staged");
-    }
+        if staged {
+            cmd.arg("--staged");
+        }
 
-    let output = cmd
-        .arg("--")
-        .arg(&path)
-        .output()
-        .map_err(|e| format!("failed to run git diff: {}", e))?;
+        let output = cmd
+            .arg("--")
+            .arg(&path)
+            .output()
+            .map_err(|e| format!("failed to run git diff: {}", e))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(format!("git diff failed: {}", stderr.trim()));
-    }
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            return Err(format!("git diff failed: {}", stderr.trim()));
+        }
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    Ok(stdout)
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    })
+    .await
+    .map_err(|e| format!("git diff task failed: {}", e))?
 }
 
 #[tauri::command]
-pub fn git_generate_commit_message(state: State<'_, AppState>) -> Result<String, String> {
+pub async fn git_generate_commit_message(
+    state: State<'_, AppState>,
+    _app_handle: AppHandle,
+) -> Result<String, String> {
     let Some(root) = workspace_root(&state) else {
         return Err("No workspace open".to_string());
     };
 
-    let ctx = collect_changes_for_message(&root)?;
+    let blocking_root = root.clone();
+    let ctx = tokio::task::spawn_blocking(move || collect_changes_for_message(&blocking_root))
+        .await
+        .map_err(|e| format!("failed to collect commit context: {}", e))??;
 
     if ctx.files.is_empty() {
         return Err("No changes to commit".to_string());
@@ -1429,7 +1492,10 @@ pub async fn git_generate_commit_message_ai(
         return Err("No workspace open".to_string());
     };
 
-    let ctx = collect_changes_for_message(&root)?;
+    let blocking_root = root.clone();
+    let ctx = tokio::task::spawn_blocking(move || collect_changes_for_message(&blocking_root))
+        .await
+        .map_err(|e| format!("failed to collect commit context: {}", e))??;
     if ctx.files.is_empty() {
         return Err("No changes to commit".to_string());
     }
@@ -1538,14 +1604,22 @@ Do NOT include analysis, reasoning, explanations, or multiple options."#,
             .await;
     }
 
-    let storage_mode = Some({
-        let settings =
-            crate::project_settings::load_project_settings_or_default(std::path::Path::new(&root));
-        match settings.storage.mode {
-            crate::project_settings::StorageMode::Local => "local".to_string(),
-            crate::project_settings::StorageMode::Server => "server".to_string(),
-        }
-    });
+    let storage_mode = Some(
+        tokio::task::spawn_blocking({
+            let root = root.clone();
+            move || {
+                let settings = crate::project_settings::load_project_settings_or_default(
+                    std::path::Path::new(&root),
+                );
+                match settings.storage.mode {
+                    crate::project_settings::StorageMode::Local => "local".to_string(),
+                    crate::project_settings::StorageMode::Server => "server".to_string(),
+                }
+            }
+        })
+        .await
+        .map_err(|e| format!("storage mode task failed: {}", e))?,
+    );
 
     // Use shared WebSocket connection manager from AppState
     let ws_manager = state.ws_connection.clone();
@@ -1635,51 +1709,57 @@ pub struct GitCommitStats {
 }
 
 #[tauri::command]
-pub fn git_commit_stats(
-    state: State<'_, AppState>,
+pub async fn git_commit_stats(
+    _state: State<'_, AppState>,
     hash: String,
+    app_handle: AppHandle,
 ) -> Result<GitCommitStats, String> {
-    let repo = open_repo(&state)?;
-    let commit = repo
-        .rev_parse_single(hash.as_str())
-        .map_err(|e| format!("Failed to resolve revision {hash}: {}", e))?
-        .object()
-        .map_err(|e| format!("Failed to read revision {hash}: {}", e))?
-        .try_into_commit()
-        .map_err(|e| format!("Revision {hash} is not a commit: {}", e))?;
-
-    let commit_tree = commit
-        .tree()
-        .map_err(|e| format!("Failed to read commit tree for {hash}: {}", e))?;
-
-    let base_tree = if let Some(parent_id) = commit.parent_ids().next() {
-        parent_id
+    tokio::task::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        let repo = open_repo(&state)?;
+        let commit = repo
+            .rev_parse_single(hash.as_str())
+            .map_err(|e| format!("Failed to resolve revision {hash}: {}", e))?
             .object()
-            .map_err(|e| format!("Failed to read parent commit for {hash}: {}", e))?
+            .map_err(|e| format!("Failed to read revision {hash}: {}", e))?
             .try_into_commit()
-            .map_err(|e| format!("Parent revision for {hash} is not a commit: {}", e))?
+            .map_err(|e| format!("Revision {hash} is not a commit: {}", e))?;
+
+        let commit_tree = commit
             .tree()
-            .map_err(|e| format!("Failed to read parent tree for {hash}: {}", e))?
-    } else {
-        repo.empty_tree()
-    };
+            .map_err(|e| format!("Failed to read commit tree for {hash}: {}", e))?;
 
-    let mut changes = base_tree
-        .changes()
-        .map_err(|e| format!("Failed to initialize tree diff for {hash}: {}", e))?;
-    changes.options(|options| {
-        options.track_rewrites(None);
-    });
+        let base_tree = if let Some(parent_id) = commit.parent_ids().next() {
+            parent_id
+                .object()
+                .map_err(|e| format!("Failed to read parent commit for {hash}: {}", e))?
+                .try_into_commit()
+                .map_err(|e| format!("Parent revision for {hash} is not a commit: {}", e))?
+                .tree()
+                .map_err(|e| format!("Failed to read parent tree for {hash}: {}", e))?
+        } else {
+            repo.empty_tree()
+        };
 
-    let stats = changes
-        .stats(&commit_tree)
-        .map_err(|e| format!("Failed to calculate commit stats for {hash}: {}", e))?;
+        let mut changes = base_tree
+            .changes()
+            .map_err(|e| format!("Failed to initialize tree diff for {hash}: {}", e))?;
+        changes.options(|options| {
+            options.track_rewrites(None);
+        });
 
-    Ok(GitCommitStats {
-        insertions: stats.lines_added.min(u64::from(u32::MAX)) as u32,
-        deletions: stats.lines_removed.min(u64::from(u32::MAX)) as u32,
-        files_changed: stats.files_changed.min(u64::from(u32::MAX)) as u32,
+        let stats = changes
+            .stats(&commit_tree)
+            .map_err(|e| format!("Failed to calculate commit stats for {hash}: {}", e))?;
+
+        Ok(GitCommitStats {
+            insertions: stats.lines_added.min(u64::from(u32::MAX)) as u32,
+            deletions: stats.lines_removed.min(u64::from(u32::MAX)) as u32,
+            files_changed: stats.files_changed.min(u64::from(u32::MAX)) as u32,
+        })
     })
+    .await
+    .map_err(|e| format!("git commit stats task failed: {}", e))?
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1700,96 +1780,101 @@ pub struct GitLogEntry {
 }
 
 #[tauri::command]
-pub fn git_log(state: State<'_, AppState>, count: Option<u32>) -> Result<Vec<GitLogEntry>, String> {
-    let repo = match open_repo(&state) {
-        Ok(r) => r,
-        Err(_) => return Ok(Vec::new()),
-    };
+pub async fn git_log(
+    _state: State<'_, AppState>,
+    count: Option<u32>,
+    app_handle: AppHandle,
+) -> Result<Vec<GitLogEntry>, String> {
+    tokio::task::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        let repo = match open_repo(&state) {
+            Ok(r) => r,
+            Err(_) => return Ok(Vec::new()),
+        };
 
-    let n = count.unwrap_or(50).min(500) as usize;
+        let n = count.unwrap_or(50).min(500) as usize;
+        let ref_map = build_ref_map(&repo);
 
-    // Build ref decoration map: commit_id -> Vec<decoration_string>
-    let ref_map = build_ref_map(&repo);
+        let head_id = match repo.head_id() {
+            Ok(id) => id,
+            Err(_) => return Ok(Vec::new()),
+        };
 
-    // Walk commits from HEAD
-    let head_id = match repo.head_id() {
-        Ok(id) => id,
-        Err(_) => return Ok(Vec::new()), // empty repo or unborn branch
-    };
+        let walk = head_id
+            .ancestors()
+            .all()
+            .map_err(|e| format!("Failed to walk commits: {}", e))?;
 
-    let walk = head_id
-        .ancestors()
-        .all()
-        .map_err(|e| format!("Failed to walk commits: {}", e))?;
+        let now = chrono::Utc::now();
+        let mut entries = Vec::with_capacity(n);
 
-    let now = chrono::Utc::now();
-    let mut entries = Vec::with_capacity(n);
+        for info in walk {
+            if entries.len() >= n {
+                break;
+            }
+            let info = info.map_err(|e| format!("Commit walk error: {}", e))?;
+            let commit = info
+                .id()
+                .object()
+                .map_err(|e| format!("Failed to read commit: {}", e))?;
+            let commit = commit.into_commit();
+            let commit_ref = commit
+                .decode()
+                .map_err(|e| format!("Failed to decode commit: {}", e))?;
 
-    for info in walk {
-        if entries.len() >= n {
-            break;
+            let hash = info.id().to_string();
+            let short_hash = hash[..7.min(hash.len())].to_string();
+
+            let author = commit_ref
+                .author()
+                .map_err(|e| format!("Failed to decode commit author: {}", e))?;
+            let author_name = author.name.to_string();
+            let author_email = author.email.to_string();
+
+            let (ts, offset_secs) = parse_signature_time(author.time);
+            let fixed_offset = chrono::FixedOffset::east_opt(offset_secs)
+                .unwrap_or_else(|| chrono::FixedOffset::east_opt(0).unwrap());
+            let dt = chrono::DateTime::from_timestamp(ts, 0)
+                .unwrap_or_default()
+                .with_timezone(&fixed_offset);
+            let date = dt.to_rfc3339();
+            let relative_date = format_relative_date(now, dt.with_timezone(&chrono::Utc));
+
+            let subject = commit_ref.message().summary().to_string();
+
+            let parents: Vec<String> = commit_ref
+                .parents()
+                .map(|id| {
+                    let s = id.to_string();
+                    s[..7.min(s.len())].to_string()
+                })
+                .collect();
+
+            let refs = ref_map
+                .get(&info.id().detach())
+                .cloned()
+                .unwrap_or_default();
+
+            entries.push(GitLogEntry {
+                hash,
+                short_hash,
+                author_name,
+                author_email,
+                date,
+                relative_date,
+                subject,
+                refs,
+                parents,
+                insertions: 0,
+                deletions: 0,
+                files_changed: 0,
+            });
         }
-        let info = info.map_err(|e| format!("Commit walk error: {}", e))?;
-        let commit = info
-            .id()
-            .object()
-            .map_err(|e| format!("Failed to read commit: {}", e))?;
-        let commit = commit.into_commit();
-        let commit_ref = commit
-            .decode()
-            .map_err(|e| format!("Failed to decode commit: {}", e))?;
 
-        let hash = info.id().to_string();
-        let short_hash = hash[..7.min(hash.len())].to_string();
-
-        let author = commit_ref
-            .author()
-            .map_err(|e| format!("Failed to decode commit author: {}", e))?;
-        let author_name = author.name.to_string();
-        let author_email = author.email.to_string();
-
-        // Convert git timestamp to ISO 8601 and relative date
-        let (ts, offset_secs) = parse_signature_time(author.time);
-        let fixed_offset = chrono::FixedOffset::east_opt(offset_secs)
-            .unwrap_or_else(|| chrono::FixedOffset::east_opt(0).unwrap());
-        let dt = chrono::DateTime::from_timestamp(ts, 0)
-            .unwrap_or_default()
-            .with_timezone(&fixed_offset);
-        let date = dt.to_rfc3339();
-        let relative_date = format_relative_date(now, dt.with_timezone(&chrono::Utc));
-
-        let subject = commit_ref.message().summary().to_string();
-
-        let parents: Vec<String> = commit_ref
-            .parents()
-            .map(|id| {
-                let s = id.to_string();
-                s[..7.min(s.len())].to_string()
-            })
-            .collect();
-
-        let refs = ref_map
-            .get(&info.id().detach())
-            .cloned()
-            .unwrap_or_default();
-
-        entries.push(GitLogEntry {
-            hash,
-            short_hash,
-            author_name,
-            author_email,
-            date,
-            relative_date,
-            subject,
-            refs,
-            parents,
-            insertions: 0,
-            deletions: 0,
-            files_changed: 0,
-        });
-    }
-
-    Ok(entries)
+        Ok(entries)
+    })
+    .await
+    .map_err(|e| format!("git log task failed: {}", e))?
 }
 
 fn build_ref_map(repo: &gix::Repository) -> std::collections::HashMap<gix::ObjectId, Vec<String>> {
@@ -1928,25 +2013,33 @@ fn format_relative_date(
 }
 
 #[tauri::command]
-pub fn git_remote_url(state: State<'_, AppState>) -> Result<Option<String>, String> {
-    let repo = match open_repo(&state) {
-        Ok(r) => r,
-        Err(_) => return Ok(None),
-    };
+pub async fn git_remote_url(
+    _state: State<'_, AppState>,
+    app_handle: AppHandle,
+) -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        let repo = match open_repo(&state) {
+            Ok(r) => r,
+            Err(_) => return Ok(None),
+        };
 
-    let remote = match repo.find_remote("origin") {
-        Ok(r) => r,
-        Err(_) => return Ok(None),
-    };
+        let remote = match repo.find_remote("origin") {
+            Ok(r) => r,
+            Err(_) => return Ok(None),
+        };
 
-    let url = match remote.url(gix::remote::Direction::Fetch) {
-        Some(u) => u.to_bstring().to_string(),
-        None => return Ok(None),
-    };
+        let url = match remote.url(gix::remote::Direction::Fetch) {
+            Some(u) => u.to_bstring().to_string(),
+            None => return Ok(None),
+        };
 
-    if url.is_empty() {
-        return Ok(None);
-    }
+        if url.is_empty() {
+            return Ok(None);
+        }
 
-    Ok(Some(normalize_remote_url(&url)))
+        Ok(Some(normalize_remote_url(&url)))
+    })
+    .await
+    .map_err(|e| format!("git remote url task failed: {}", e))?
 }

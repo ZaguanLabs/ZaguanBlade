@@ -577,7 +577,7 @@ impl AiWorkflow {
                                     }
 
                                     let abs_path_str = full_path.to_string_lossy().to_string();
-                                    let _ = app.emit("refresh-explorer", ());
+                                    crate::blade_event_scheduler::queue_refresh_explorer(app);
                                     // Emit open-file to open the file in editor
                                     let _ = app.emit("open-file", &abs_path_str);
                                     let _ = app.emit(
@@ -667,7 +667,7 @@ impl AiWorkflow {
                         match fs::remove_file(&full_path) {
                             Ok(_) => {
                                 if let Some(app) = &context.app_handle {
-                                    let _ = app.emit("refresh-explorer", ());
+                                    crate::blade_event_scheduler::queue_refresh_explorer(app);
                                     let _ = app.emit(
                                         crate::events::event_names::CHANGE_APPLIED,
                                         crate::events::ChangeAppliedPayload {

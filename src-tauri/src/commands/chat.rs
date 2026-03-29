@@ -2,7 +2,7 @@ use crate::app_state::AppState;
 use crate::chat_orchestrator::handle_send_message;
 use crate::conversation::ConversationHistory;
 use crate::conversation_store;
-use tauri::{AppHandle, Emitter, Runtime, State, Window};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State, Window};
 
 #[tauri::command]
 pub async fn send_message<R: Runtime>(
@@ -53,15 +53,31 @@ pub fn get_conversation(state: State<'_, AppState>) -> Vec<crate::protocol::Chat
 }
 
 #[tauri::command]
-pub fn list_conversations(
-    state: State<'_, AppState>,
+pub async fn list_conversations(
+    _state: State<'_, AppState>,
+    app: AppHandle,
 ) -> Result<Vec<conversation_store::ConversationMetadata>, String> {
-    state.with_conversation_store(|store| Ok(store.list_conversations()))
+    tokio::task::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        state.with_conversation_store(|store| Ok(store.list_conversations()))
+    })
+    .await
+    .map_err(|e| format!("list conversations task failed: {}", e))?
 }
 
 #[tauri::command]
-pub fn load_conversation(id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let stored = state.with_conversation_store(|store| store.load_conversation(&id))?;
+pub async fn load_conversation(
+    id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let blocking_id = id.clone();
+    let stored = tokio::task::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        state.with_conversation_store(|store| store.load_conversation(&blocking_id))
+    })
+    .await
+    .map_err(|e| format!("load conversation task failed: {}", e))??;
 
     let mut conversation = state.conversation.lock().unwrap();
     *conversation = ConversationHistory::from_stored(stored.clone());
@@ -85,21 +101,36 @@ pub fn load_conversation(id: String, state: State<'_, AppState>) -> Result<(), S
 }
 
 #[tauri::command]
-pub fn new_conversation(model_id: String, state: State<'_, AppState>) -> Result<String, String> {
+pub async fn new_conversation(
+    model_id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<String, String> {
     // Save current conversation if it has messages
-    {
+    let stored_to_save = {
         let conversation = state.conversation.lock().unwrap();
         if conversation.len() > 0 {
-            let stored = conversation.to_stored();
+            Some(conversation.to_stored())
             // Note: session_id is auto-saved by background loop, but we should make sure
             // we don't lose the current session ID if we switch away.
             // However, conversation.to_stored() uses ConversationMetadata which we don't hold in ConversationHistory.
             // This logic relies on `store` having the correct metadata already or creating new.
             // The background loop in chat_orchestrator handles continuous saving with session_id.
+        } else {
+            None
+        }
+    };
 
+    let blocking_model_id = model_id.clone();
+    let metadata = tokio::task::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        if let Some(stored) = stored_to_save {
             state.with_conversation_store(|store| store.save_conversation(&stored))?;
         }
-    }
+        state.with_conversation_store(|store| Ok(store.create_new_conversation(blocking_model_id)))
+    })
+    .await
+    .map_err(|e| format!("new conversation task failed: {}", e))??;
 
     // Clear session ID in ChatManager for the new conversation
     {
@@ -110,9 +141,6 @@ pub fn new_conversation(model_id: String, state: State<'_, AppState>) -> Result<
         mgr.mode_source = None;
     }
 
-    // Create new conversation
-    let metadata =
-        state.with_conversation_store(|store| Ok(store.create_new_conversation(model_id)))?;
     let id = metadata.id.clone();
 
     let mut conversation = state.conversation.lock().unwrap();
@@ -125,15 +153,34 @@ pub fn new_conversation(model_id: String, state: State<'_, AppState>) -> Result<
 }
 
 #[tauri::command]
-pub fn delete_conversation(id: String, state: State<'_, AppState>) -> Result<(), String> {
-    state.with_conversation_store(|store| store.delete_conversation(&id))
+pub async fn delete_conversation(
+    id: String,
+    _state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        state.with_conversation_store(|store| store.delete_conversation(&id))
+    })
+    .await
+    .map_err(|e| format!("delete conversation task failed: {}", e))?
 }
 
 #[tauri::command]
-pub fn save_conversation(state: State<'_, AppState>) -> Result<(), String> {
-    let conversation = state.conversation.lock().unwrap();
-    let stored = conversation.to_stored();
-    state.with_conversation_store(|store| store.save_conversation(&stored))
+pub async fn save_conversation(
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let stored = {
+        let conversation = state.conversation.lock().unwrap();
+        conversation.to_stored()
+    };
+    tokio::task::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        state.with_conversation_store(|store| store.save_conversation(&stored))
+    })
+    .await
+    .map_err(|e| format!("save conversation task failed: {}", e))?
 }
 
 #[tauri::command]

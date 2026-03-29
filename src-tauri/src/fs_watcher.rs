@@ -126,8 +126,9 @@ pub fn restart_fs_watcher<R: Runtime>(app_handle: &tauri::AppHandle<R>) {
 
                             let _ =
                                 app_handle_clone.emit("file-changes-detected", file_change_event);
-                            let _ = app_handle_clone
-                                .emit(crate::events::event_names::REFRESH_EXPLORER, ());
+                            crate::blade_event_scheduler::queue_refresh_explorer(
+                                &app_handle_clone,
+                            );
                         }
                         Err(e) => eprintln!("[WATCHER] error: {}", e),
                     }

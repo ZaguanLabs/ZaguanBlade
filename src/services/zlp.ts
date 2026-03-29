@@ -1,7 +1,6 @@
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { v4 as uuidv4 } from 'uuid';
 import { BladeDispatcher } from './blade';
-import type { BladeEventEnvelope } from '../types/blade';
+import { subscribeBladeEventType } from './bladeEvents';
 import type { ZLPCapabilitiesResult, ZLPStructureResponse, ZLPValidationError, ZLPValidationResponse, ZLPGraphResponse, StructureNode } from '../types/zlp';
 
 export class ZLPService {
@@ -81,47 +80,37 @@ export class ZLPService {
      */
     static async send<T = any>(method: string, params: any): Promise<T> {
         const id = uuidv4();
-        let unlisten: UnlistenFn | undefined;
+        let unsubscribe: (() => void) | undefined;
 
         // Create the promise that will resolve when the event arrives
         const responsePromise = new Promise<T>((resolve, reject) => {
             // 1. Setup Timeout
             const timeoutId = setTimeout(() => {
-                if (unlisten) unlisten();
+                if (unsubscribe) unsubscribe();
                 reject(new Error(`ZLP Request '${method}' timed out after ${ZLPService.TIMEOUT_MS}ms`));
             }, ZLPService.TIMEOUT_MS);
 
             // 2. Setup Listener
-            listen<BladeEventEnvelope>('blade-event', (event) => {
-                const envelope = event.payload;
+            unsubscribe = subscribeBladeEventType('Language', (event) => {
+                const langEvent = event.event.payload as any;
 
-                // Filter for Language events
-                if (envelope.event.type === 'Language') {
-                    const langEvent = envelope.event.payload as any;
+                // Filter for ZlpResponse matching our ID
+                if (langEvent.type === 'ZlpResponse' &&
+                    langEvent.payload.original_request_id === id) {
 
-                    // Filter for ZlpResponse matching our ID
-                    if (langEvent.type === 'ZlpResponse' &&
-                        langEvent.payload.original_request_id === id) {
+                    clearTimeout(timeoutId);
+                    if (unsubscribe) unsubscribe();
 
-                        clearTimeout(timeoutId);
-                        if (unlisten) unlisten();
-
-                        const zlpResult = langEvent.payload.result as any;
-                        if (zlpResult?.error) {
-                            reject(new Error(zlpResult.error.message || 'ZLP error'));
-                            return;
-                        }
-
-                        const normalized = zlpResult?.result ?? zlpResult;
-                        // Resolve with the normalized result
-                        resolve(normalized as T);
+                    const zlpResult = langEvent.payload.result as any;
+                    if (zlpResult?.error) {
+                        reject(new Error(zlpResult.error.message || 'ZLP error'));
+                        return;
                     }
+
+                    const normalized = zlpResult?.result ?? zlpResult;
+                    // Resolve with the normalized result
+                    resolve(normalized as T);
                 }
-            }).then((u) => {
-                unlisten = u;
-            }).catch((err) => {
-                clearTimeout(timeoutId);
-                reject(new Error(`Failed to setup listener: ${err}`));
             });
         });
 
@@ -133,7 +122,7 @@ export class ZLPService {
             }, id);
         } catch (e) {
             // If dispatch fails, cleanup and throw
-            if (unlisten) unlisten();
+            if (unsubscribe) unsubscribe();
             throw e;
         }
 

@@ -1,31 +1,18 @@
 use crate::app_state::AppState;
+use crate::blade_event_scheduler;
 use crate::blade_protocol::{self, BladeError, BladeIntent, SystemEvent, Version};
 use crate::chat_orchestrator::handle_send_message;
 use crate::commands::{chat, files, tools};
 use std::sync::atomic::Ordering;
-use tauri::{Emitter, State};
-
-fn current_timestamp_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
+use tauri::{Manager, State};
+use tokio::fs;
 
 fn emit_blade_event(
     window: &tauri::Window,
     causality_id: Option<String>,
     event: blade_protocol::BladeEvent,
 ) {
-    let _ = window.emit(
-        "blade-event",
-        blade_protocol::BladeEventEnvelope {
-            id: uuid::Uuid::new_v4(),
-            timestamp: current_timestamp_ms(),
-            causality_id,
-            event,
-        },
-    );
+    blade_event_scheduler::emit_blade_event(&window.app_handle(), causality_id, event);
 }
 
 fn emit_system_event(window: &tauri::Window, intent_id: uuid::Uuid, event: SystemEvent) {
@@ -107,17 +94,10 @@ pub async fn dispatch(
             supported: vec![Version::CURRENT],
             current: Version::CURRENT,
         };
-        let _ = window.emit(
-            "blade-event",
-            blade_protocol::BladeEventEnvelope {
-                id: uuid::Uuid::new_v4(),
-                timestamp: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64,
-                causality_id: None,
-                event: blade_protocol::BladeEvent::System(protocol_version_event),
-            },
+        blade_event_scheduler::emit_blade_event(
+            &window.app_handle(),
+            None,
+            blade_protocol::BladeEvent::System(protocol_version_event),
         );
     }
 
@@ -206,7 +186,8 @@ pub async fn dispatch(
                     Ok(())
                 }
                 blade_protocol::ChatIntent::NewConversation { model } => {
-                    chat::new_conversation(model, state.clone())
+                    chat::new_conversation(model, state.clone(), app_handle.clone())
+                        .await
                         .map(|_| ())
                         .map_err(|e| blade_protocol::BladeError::Internal {
                             trace_id: intent_id.to_string(),
@@ -225,7 +206,14 @@ pub async fn dispatch(
         }
         BladeIntent::File(file_intent) => match file_intent {
             blade_protocol::FileIntent::Read { path } => {
-                match files::read_file_content_logic(path.clone(), &*state) {
+                let requested_path = std::path::PathBuf::from(&path);
+                let resolved_path = files::resolve_path_under_workspace_async(&*state, requested_path)
+                    .await
+                    .map_err(|e| BladeError::ResourceNotFound {
+                        id: path.clone() + " (" + &e + ")",
+                    })?;
+
+                match fs::read_to_string(&resolved_path).await {
                     Ok(content) => {
                         emit_blade_event(
                             &window,
@@ -237,13 +225,32 @@ pub async fn dispatch(
                         );
                         Ok(())
                     }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        emit_blade_event(
+                            &window,
+                            Some(intent_id.to_string()),
+                            blade_protocol::BladeEvent::File(blade_protocol::FileEvent::Content {
+                                path: path,
+                                data: String::new(),
+                            }),
+                        );
+                        Ok(())
+                    }
                     Err(e) => Err(blade_protocol::BladeError::ResourceNotFound {
-                        id: path + " (" + &e + ")",
+                        id: path + " (" + &e.to_string() + ")",
                     }),
                 }
             }
             blade_protocol::FileIntent::Write { path, content } => {
-                match files::write_file_content_logic(path.clone(), content, &*state) {
+                let requested_path = std::path::PathBuf::from(&path);
+                let resolved_path = files::resolve_path_under_workspace_async(&*state, requested_path)
+                    .await
+                    .map_err(|e| blade_protocol::BladeError::Internal {
+                        trace_id: intent_id.to_string(),
+                        message: e,
+                    })?;
+
+                match fs::write(&resolved_path, content).await {
                     Ok(_) => {
                         emit_blade_event(
                             &window,
@@ -256,12 +263,22 @@ pub async fn dispatch(
                     }
                     Err(e) => Err(blade_protocol::BladeError::Internal {
                         trace_id: intent_id.to_string(),
-                        message: e,
+                        message: e.to_string(),
                     }),
                 }
             }
             blade_protocol::FileIntent::List { path } => {
-                match files::list_files_logic(path.clone(), &*state) {
+                let blocking_app_handle = app_handle.clone();
+                let blocking_path = path.clone();
+                match tokio::task::spawn_blocking(move || {
+                    let state = blocking_app_handle.state::<AppState>();
+                    files::list_files_logic(blocking_path, &*state)
+                })
+                .await
+                .map_err(|e| blade_protocol::BladeError::Internal {
+                    trace_id: intent_id.to_string(),
+                    message: format!("directory listing task failed: {}", e),
+                })? {
                     Ok(entries) => {
                         let protocol_entries = entries
                             .into_iter()
@@ -290,25 +307,33 @@ pub async fn dispatch(
                 }
             }
             blade_protocol::FileIntent::Create { path, is_dir } => {
-                let resolved_path =
-                    files::resolve_path_under_workspace(&*state, std::path::Path::new(&path))
-                        .map_err(|e| blade_protocol::BladeError::Internal {
-                            trace_id: intent_id.to_string(),
-                            message: e,
-                        })?;
+                let resolved_path = files::resolve_path_under_workspace_async(
+                    &*state,
+                    std::path::PathBuf::from(&path),
+                )
+                .await
+                .map_err(|e| blade_protocol::BladeError::Internal {
+                    trace_id: intent_id.to_string(),
+                    message: e,
+                })?;
 
                 let result = if is_dir {
-                    std::fs::create_dir_all(&resolved_path)
+                    tokio::fs::create_dir_all(&resolved_path)
+                        .await
+                        .map_err(|e| e.to_string())
                 } else {
                     if let Some(parent) = resolved_path.parent() {
-                        if let Err(e) = std::fs::create_dir_all(parent) {
+                        if let Err(e) = tokio::fs::create_dir_all(parent).await {
                             return Err(blade_protocol::BladeError::Internal {
                                 trace_id: intent_id.to_string(),
                                 message: format!("Failed to create parent directories: {}", e),
                             });
                         }
                     }
-                    std::fs::File::create(&resolved_path).map(|_| ())
+                    tokio::fs::File::create(&resolved_path)
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| e.to_string())
                 };
 
                 match result {
@@ -321,7 +346,7 @@ pub async fn dispatch(
                                 is_dir,
                             }),
                         );
-                        let _ = window.emit("refresh-explorer", ());
+                        blade_event_scheduler::queue_refresh_explorer(&window.app_handle());
                         Ok(())
                     }
                     Err(e) => Err(blade_protocol::BladeError::Internal {
@@ -331,17 +356,24 @@ pub async fn dispatch(
                 }
             }
             blade_protocol::FileIntent::Delete { path } => {
-                let resolved_path =
-                    files::resolve_path_under_workspace(&*state, std::path::Path::new(&path))
-                        .map_err(|e| blade_protocol::BladeError::Internal {
-                            trace_id: intent_id.to_string(),
-                            message: e,
-                        })?;
+                let resolved_path = files::resolve_path_under_workspace_async(
+                    &*state,
+                    std::path::PathBuf::from(&path),
+                )
+                .await
+                .map_err(|e| blade_protocol::BladeError::Internal {
+                    trace_id: intent_id.to_string(),
+                    message: e,
+                })?;
 
                 let result = if resolved_path.is_dir() {
-                    std::fs::remove_dir_all(&resolved_path)
+                    tokio::fs::remove_dir_all(&resolved_path)
+                        .await
+                        .map_err(|e| e.to_string())
                 } else {
-                    std::fs::remove_file(&resolved_path)
+                    tokio::fs::remove_file(&resolved_path)
+                        .await
+                        .map_err(|e| e.to_string())
                 };
 
                 match result {
@@ -353,7 +385,7 @@ pub async fn dispatch(
                                 path: path.clone(),
                             }),
                         );
-                        let _ = window.emit("refresh-explorer", ());
+                        blade_event_scheduler::queue_refresh_explorer(&window.app_handle());
                         Ok(())
                     }
                     Err(e) => Err(blade_protocol::BladeError::Internal {
@@ -363,20 +395,26 @@ pub async fn dispatch(
                 }
             }
             blade_protocol::FileIntent::Rename { old_path, new_path } => {
-                let resolved_old =
-                    files::resolve_path_under_workspace(&*state, std::path::Path::new(&old_path))
-                        .map_err(|e| blade_protocol::BladeError::Internal {
-                        trace_id: intent_id.to_string(),
-                        message: e,
-                    })?;
-                let resolved_new =
-                    files::resolve_path_under_workspace(&*state, std::path::Path::new(&new_path))
-                        .map_err(|e| blade_protocol::BladeError::Internal {
-                        trace_id: intent_id.to_string(),
-                        message: e,
-                    })?;
+                let resolved_old = files::resolve_path_under_workspace_async(
+                    &*state,
+                    std::path::PathBuf::from(&old_path),
+                )
+                .await
+                .map_err(|e| blade_protocol::BladeError::Internal {
+                    trace_id: intent_id.to_string(),
+                    message: e,
+                })?;
+                let resolved_new = files::resolve_path_under_workspace_async(
+                    &*state,
+                    std::path::PathBuf::from(&new_path),
+                )
+                .await
+                .map_err(|e| blade_protocol::BladeError::Internal {
+                    trace_id: intent_id.to_string(),
+                    message: e,
+                })?;
 
-                match std::fs::rename(&resolved_old, &resolved_new) {
+                match tokio::fs::rename(&resolved_old, &resolved_new).await {
                     Ok(_) => {
                         emit_blade_event(
                             &window,
@@ -386,7 +424,7 @@ pub async fn dispatch(
                                 new_path: new_path.clone(),
                             }),
                         );
-                        let _ = window.emit("refresh-explorer", ());
+                        blade_event_scheduler::queue_refresh_explorer(&window.app_handle());
                         Ok(())
                     }
                     Err(e) => Err(blade_protocol::BladeError::Internal {
@@ -416,19 +454,12 @@ pub async fn dispatch(
                         }
 
                         // Emit FileOpened event
-                        let _ = window.emit(
-                            "blade-event",
-                            blade_protocol::BladeEventEnvelope {
-                                id: uuid::Uuid::new_v4(),
-                                timestamp: std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_millis() as u64,
-                                causality_id: Some(intent_id.to_string()),
-                                event: blade_protocol::BladeEvent::Editor(
-                                    blade_protocol::EditorEvent::FileOpened { path },
-                                ),
-                            },
+                        emit_blade_event(
+                            &window,
+                            Some(intent_id.to_string()),
+                            blade_protocol::BladeEvent::Editor(
+                                blade_protocol::EditorEvent::FileOpened { path },
+                            ),
                         );
                     } else {
                         // Legacy: just log, frontend handles state
@@ -450,19 +481,12 @@ pub async fn dispatch(
                             }
                         }
 
-                        let _ = window.emit(
-                            "blade-event",
-                            blade_protocol::BladeEventEnvelope {
-                                id: uuid::Uuid::new_v4(),
-                                timestamp: std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_millis() as u64,
-                                causality_id: Some(intent_id.to_string()),
-                                event: blade_protocol::BladeEvent::Editor(
-                                    blade_protocol::EditorEvent::FileClosed { path },
-                                ),
-                            },
+                        emit_blade_event(
+                            &window,
+                            Some(intent_id.to_string()),
+                            blade_protocol::BladeEvent::Editor(
+                                blade_protocol::EditorEvent::FileClosed { path },
+                            ),
                         );
                     }
                     Ok(())
@@ -474,19 +498,12 @@ pub async fn dispatch(
                             *active = path.clone();
                         }
 
-                        let _ = window.emit(
-                            "blade-event",
-                            blade_protocol::BladeEventEnvelope {
-                                id: uuid::Uuid::new_v4(),
-                                timestamp: std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_millis() as u64,
-                                causality_id: Some(intent_id.to_string()),
-                                event: blade_protocol::BladeEvent::Editor(
-                                    blade_protocol::EditorEvent::ActiveFileChanged { path },
-                                ),
-                            },
+                        emit_blade_event(
+                            &window,
+                            Some(intent_id.to_string()),
+                            blade_protocol::BladeEvent::Editor(
+                                blade_protocol::EditorEvent::ActiveFileChanged { path },
+                            ),
                         );
                     }
                     Ok(())
@@ -496,46 +513,60 @@ pub async fn dispatch(
                     content,
                     version,
                 } => {
-                    match state.language_service() {
-                        Ok(service) => {
-                            let result = if version <= 1 {
-                                service.did_open(&path, &content)
-                            } else {
-                                service.did_change(&path, version as i32, &content)
-                            };
-
-                            if let Err(error) = result {
-                                eprintln!(
-                                    "[Editor] Live document sync skipped for {}: {}",
-                                    path, error
-                                );
-                            }
+                    let blocking_app_handle = app_handle.clone();
+                    let sync_path = path.clone();
+                    let sync_content = content.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        let state = blocking_app_handle.state::<AppState>();
+                        let service = state.language_service()?;
+                        if version <= 1 {
+                            service.did_open(&sync_path, &sync_content)
+                        } else {
+                            service.did_change(&sync_path, version as i32, &sync_content)
                         }
-                        Err(error) => {
+                        .map_err(|error| error.to_string())
+                    })
+                    .await
+                    {
+                        Ok(Err(error)) => {
                             eprintln!(
-                                "[Editor] Failed to initialize language service for {}: {}",
+                                "[Editor] Live document sync skipped for {}: {}",
                                 path, error
                             );
                         }
+                        Err(error) => {
+                            eprintln!(
+                                "[Editor] Live document sync task failed for {}: {}",
+                                path, error
+                            );
+                        }
+                        Ok(Ok(())) => {}
                     }
                     Ok(())
                 }
                 blade_protocol::EditorIntent::CloseDocument { path } => {
-                    match state.language_service() {
-                        Ok(service) => {
-                            if let Err(error) = service.did_close(&path) {
-                                eprintln!(
-                                    "[Editor] Failed to close live document {}: {}",
-                                    path, error
-                                );
-                            }
-                        }
-                        Err(error) => {
+                    let blocking_app_handle = app_handle.clone();
+                    let close_path = path.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        let state = blocking_app_handle.state::<AppState>();
+                        let service = state.language_service()?;
+                        service.did_close(&close_path).map_err(|error| error.to_string())
+                    })
+                    .await
+                    {
+                        Ok(Err(error)) => {
                             eprintln!(
-                                "[Editor] Failed to initialize language service for close {}: {}",
+                                "[Editor] Failed to close live document {}: {}",
                                 path, error
                             );
                         }
+                        Err(error) => {
+                            eprintln!(
+                                "[Editor] Live document close task failed for {}: {}",
+                                path, error
+                            );
+                        }
+                        Ok(Ok(())) => {}
                     }
                     Ok(())
                 }
@@ -580,17 +611,10 @@ pub async fn dispatch(
                         }
                     };
 
-                    let _ = window.emit(
-                        "blade-event",
-                        blade_protocol::BladeEventEnvelope {
-                            id: uuid::Uuid::new_v4(),
-                            timestamp: std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_millis() as u64,
-                            causality_id: Some(intent_id.to_string()),
-                            event: blade_protocol::BladeEvent::Editor(snapshot),
-                        },
+                    emit_blade_event(
+                        &window,
+                        Some(intent_id.to_string()),
+                        blade_protocol::BladeEvent::Editor(snapshot),
                     );
                     Ok(())
                 }
@@ -636,19 +660,12 @@ pub async fn dispatch(
                             *active_file = Some(p.clone());
                         }
 
-                        let _ = window.emit(
-                            "blade-event",
-                            blade_protocol::BladeEventEnvelope {
-                                id: uuid::Uuid::new_v4(),
-                                timestamp: std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_millis() as u64,
-                                causality_id: Some(intent_id.to_string()),
-                                event: blade_protocol::BladeEvent::Editor(
-                                    blade_protocol::EditorEvent::TabOpened { tab: tab_info },
-                                ),
-                            },
+                        emit_blade_event(
+                            &window,
+                            Some(intent_id.to_string()),
+                            blade_protocol::BladeEvent::Editor(
+                                blade_protocol::EditorEvent::TabOpened { tab: tab_info },
+                            ),
                         );
                     } else {
                         println!("[Editor] OpenTab (frontend authority): {}", id);
@@ -670,19 +687,12 @@ pub async fn dispatch(
                             }
                         }
 
-                        let _ = window.emit(
-                            "blade-event",
-                            blade_protocol::BladeEventEnvelope {
-                                id: uuid::Uuid::new_v4(),
-                                timestamp: std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_millis() as u64,
-                                causality_id: Some(intent_id.to_string()),
-                                event: blade_protocol::BladeEvent::Editor(
-                                    blade_protocol::EditorEvent::TabClosed { tab_id },
-                                ),
-                            },
+                        emit_blade_event(
+                            &window,
+                            Some(intent_id.to_string()),
+                            blade_protocol::BladeEvent::Editor(
+                                blade_protocol::EditorEvent::TabClosed { tab_id },
+                            ),
                         );
                     }
                     Ok(())
@@ -711,19 +721,12 @@ pub async fn dispatch(
                             *active_file = tab_path;
                         }
 
-                        let _ = window.emit(
-                            "blade-event",
-                            blade_protocol::BladeEventEnvelope {
-                                id: uuid::Uuid::new_v4(),
-                                timestamp: std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_millis() as u64,
-                                causality_id: Some(intent_id.to_string()),
-                                event: blade_protocol::BladeEvent::Editor(
-                                    blade_protocol::EditorEvent::ActiveTabChanged { tab_id },
-                                ),
-                            },
+                        emit_blade_event(
+                            &window,
+                            Some(intent_id.to_string()),
+                            blade_protocol::BladeEvent::Editor(
+                                blade_protocol::EditorEvent::ActiveTabChanged { tab_id },
+                            ),
                         );
                     }
                     Ok(())
@@ -744,19 +747,12 @@ pub async fn dispatch(
                             *tabs = reordered;
                         }
 
-                        let _ = window.emit(
-                            "blade-event",
-                            blade_protocol::BladeEventEnvelope {
-                                id: uuid::Uuid::new_v4(),
-                                timestamp: std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_millis() as u64,
-                                causality_id: Some(intent_id.to_string()),
-                                event: blade_protocol::BladeEvent::Editor(
-                                    blade_protocol::EditorEvent::TabsReordered { tab_ids },
-                                ),
-                            },
+                        emit_blade_event(
+                            &window,
+                            Some(intent_id.to_string()),
+                            blade_protocol::BladeEvent::Editor(
+                                blade_protocol::EditorEvent::TabsReordered { tab_ids },
+                            ),
                         );
                     }
                     Ok(())
@@ -772,17 +768,10 @@ pub async fn dispatch(
                         }
                     };
 
-                    let _ = window.emit(
-                        "blade-event",
-                        blade_protocol::BladeEventEnvelope {
-                            id: uuid::Uuid::new_v4(),
-                            timestamp: std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_millis() as u64,
-                            causality_id: Some(intent_id.to_string()),
-                            event: blade_protocol::BladeEvent::Editor(snapshot),
-                        },
+                    emit_blade_event(
+                        &window,
+                        Some(intent_id.to_string()),
+                        blade_protocol::BladeEvent::Editor(snapshot),
                     );
                     Ok(())
                 }
@@ -812,11 +801,19 @@ pub async fn dispatch(
             }
             blade_protocol::WorkflowIntent::RejectAll { batch_id: _ } => Ok(()),
             blade_protocol::WorkflowIntent::ApproveTool { approved } => {
-                tools::approve_tool(approved, window.clone(), state.clone());
+                tools::approve_tool_decision(
+                    if approved {
+                        "approve_once".to_string()
+                    } else {
+                        "reject".to_string()
+                    },
+                    app_handle.clone(),
+                )
+                .await;
                 Ok(())
             }
             blade_protocol::WorkflowIntent::ApproveToolDecision { decision } => {
-                tools::approve_tool_decision(decision, window.clone(), state.clone());
+                tools::approve_tool_decision(decision, app_handle.clone()).await;
                 Ok(())
             }
         },
@@ -828,40 +825,56 @@ pub async fn dispatch(
                 owner,
                 interactive,
             } => {
-                if interactive {
-                    crate::terminal::create_terminal(
-                        id,
-                        cwd,
-                        command,
-                        owner,
-                        app_handle.clone(),
-                        terminal_manager.clone(),
-                    )
-                    .map_err(|e| blade_protocol::BladeError::Internal {
-                        trace_id: intent_id.to_string(),
-                        message: e,
-                    })
-                } else {
-                    match command {
-                        Some(cmd) => crate::terminal::execute_command_in_terminal(
+                let blocking_app_handle = app_handle.clone();
+                let missing_command_for_non_interactive = !interactive && command.is_none();
+                tokio::task::spawn_blocking(move || {
+                    if interactive {
+                        let terminal_app_handle = blocking_app_handle.clone();
+                        let terminal_manager =
+                            blocking_app_handle.state::<crate::terminal::TerminalManager>();
+                        crate::terminal::create_terminal(
                             id,
-                            cmd,
                             cwd,
-                            app_handle.clone(),
-                            state.clone(),
+                            command,
+                            owner,
+                            terminal_app_handle,
+                            terminal_manager,
                         )
-                        .map_err(|e| {
-                            blade_protocol::BladeError::Internal {
-                                trace_id: intent_id.to_string(),
-                                message: e,
+                    } else {
+                        match command {
+                            Some(cmd) => {
+                                let terminal_app_handle = blocking_app_handle.clone();
+                                let state = blocking_app_handle.state::<AppState>();
+                                crate::terminal::execute_command_in_terminal(
+                                    id,
+                                    cmd,
+                                    cwd,
+                                    terminal_app_handle,
+                                    state,
+                                )
                             }
-                        }),
-                        None => Err(blade_protocol::BladeError::ValidationError {
-                            field: "command".into(),
-                            message: "Command required for non-interactive spawn".into(),
-                        }),
+                            None => Err("Command required for non-interactive spawn".to_string()),
+                        }
                     }
-                }
+                })
+                .await
+                .map_err(|e| blade_protocol::BladeError::Internal {
+                    trace_id: intent_id.to_string(),
+                    message: format!("terminal spawn task failed: {}", e),
+                })?
+                .map_err(|e| {
+                    if missing_command_for_non_interactive {
+                        blade_protocol::BladeError::ValidationError {
+                            field: "command".into(),
+                            message: e,
+                        }
+                    } else {
+                        blade_protocol::BladeError::Internal {
+                            trace_id: intent_id.to_string(),
+                            message: e,
+                        }
+                    }
+                })
             }
             blade_protocol::TerminalIntent::Input { id, data } => {
                 crate::terminal::write_to_terminal(id, data, terminal_manager.clone()).map_err(
@@ -923,22 +936,14 @@ pub async fn dispatch(
                                     Vec::new()
                                 };
 
-                            let _ = window.emit(
-                                "blade-event",
-                                blade_protocol::BladeEventEnvelope {
-                                    id: uuid::Uuid::new_v4(),
-                                    timestamp: std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_millis()
-                                        as u64,
-                                    causality_id: Some(intent_id.to_string()),
-                                    event: blade_protocol::BladeEvent::History(
-                                        blade_protocol::HistoryEvent::ConversationList {
-                                            conversations,
-                                        },
-                                    ),
-                                },
+                            emit_blade_event(
+                                &window,
+                                Some(intent_id.to_string()),
+                                blade_protocol::BladeEvent::History(
+                                    blade_protocol::HistoryEvent::ConversationList {
+                                        conversations,
+                                    },
+                                ),
                             );
 
                             Ok(())
@@ -948,22 +953,12 @@ pub async fn dispatch(
                                 trace_id: intent_id.to_string(),
                                 message: format!("{:?}", e),
                             };
-                            let _ = window.emit(
-                                "blade-event",
-                                blade_protocol::BladeEventEnvelope {
-                                    id: uuid::Uuid::new_v4(),
-                                    timestamp: std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_millis()
-                                        as u64,
-                                    causality_id: Some(intent_id.to_string()),
-                                    event: blade_protocol::BladeEvent::System(
-                                        blade_protocol::SystemEvent::IntentFailed {
-                                            intent_id,
-                                            error: error.clone(),
-                                        },
-                                    ),
+                            emit_system_event(
+                                &window,
+                                intent_id,
+                                blade_protocol::SystemEvent::IntentFailed {
+                                    intent_id,
+                                    error: error.clone(),
                                 },
                             );
                             Err(error)
@@ -1061,22 +1056,14 @@ pub async fn dispatch(
                                         );
                                     }
 
-                                    let _ = window.emit(
-                                        "blade-event",
-                                        blade_protocol::BladeEventEnvelope {
-                                            id: uuid::Uuid::new_v4(),
-                                            timestamp: std::time::SystemTime::now()
-                                                .duration_since(std::time::UNIX_EPOCH)
-                                                .unwrap_or_default()
-                                                .as_millis()
-                                                as u64,
-                                            causality_id: Some(intent_id.to_string()),
-                                            event: blade_protocol::BladeEvent::History(
-                                                blade_protocol::HistoryEvent::ConversationLoaded(
-                                                    full_conversation,
-                                                ),
+                                    emit_blade_event(
+                                        &window,
+                                        Some(intent_id.to_string()),
+                                        blade_protocol::BladeEvent::History(
+                                            blade_protocol::HistoryEvent::ConversationLoaded(
+                                                full_conversation,
                                             ),
-                                        },
+                                        ),
                                     );
                                     Ok(())
                                 }
@@ -1134,24 +1121,15 @@ pub async fn dispatch(
                         while let Some(event) = rx.recv().await {
                             match event {
                                 crate::blade_client::BladeEvent::ZlpResponse(val) => {
-                                    let _ = window_clone.emit(
-                                        "blade-event",
-                                        blade_protocol::BladeEventEnvelope {
-                                            id: uuid::Uuid::new_v4(),
-                                            timestamp: std::time::SystemTime::now()
-                                                .duration_since(std::time::UNIX_EPOCH)
-                                                .unwrap_or_default()
-                                                .as_millis()
-                                                as u64,
-                                            causality_id: Some(intent_id_clone.to_string()),
-                                            event: blade_protocol::BladeEvent::Language(
-                                                blade_protocol::LanguageEvent::ZlpResponse {
-                                                    original_request_id: intent_id_clone
-                                                        .to_string(),
-                                                    result: val,
-                                                },
-                                            ),
-                                        },
+                                    emit_blade_event(
+                                        &window_clone,
+                                        Some(intent_id_clone.to_string()),
+                                        blade_protocol::BladeEvent::Language(
+                                            blade_protocol::LanguageEvent::ZlpResponse {
+                                                original_request_id: intent_id_clone.to_string(),
+                                                result: val,
+                                            },
+                                        ),
                                     );
                                 }
                                 crate::blade_client::BladeEvent::Error {
@@ -1192,11 +1170,19 @@ pub async fn dispatch(
                 }
                 other => {
                     eprintln!("[Language] Intent received: {:?}", other);
-                    let handler = state.language_handler().map_err(|e| {
-                        blade_protocol::BladeError::Internal {
-                            trace_id: intent_id.to_string(),
-                            message: e,
-                        }
+                    let blocking_app_handle = app_handle.clone();
+                    let handler = tokio::task::spawn_blocking(move || {
+                        let state = blocking_app_handle.state::<AppState>();
+                        state.language_handler()
+                    })
+                    .await
+                    .map_err(|e| blade_protocol::BladeError::Internal {
+                        trace_id: intent_id.to_string(),
+                        message: format!("language handler task failed: {}", e),
+                    })?
+                    .map_err(|e| blade_protocol::BladeError::Internal {
+                        trace_id: intent_id.to_string(),
+                        message: e,
                     })?;
                     let maybe_event = handler
                         .handle(other, intent_id, Some(&state))
@@ -1207,7 +1193,7 @@ pub async fn dispatch(
                         })?;
 
                     if let Some(event) = maybe_event {
-                        let _ = window.emit("blade-event", event);
+                        blade_event_scheduler::emit_envelope(&window.app_handle(), event);
                     }
                     Ok(())
                 }

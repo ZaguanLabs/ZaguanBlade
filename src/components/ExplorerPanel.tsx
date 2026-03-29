@@ -1,10 +1,11 @@
 'use client';
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { useTranslation } from 'react-i18next';
 import { BladeDispatcher } from '../services/blade';
-import { BladeEventEnvelope, FileEntry, FileEvent } from '../types/blade';
-import { listen } from '@tauri-apps/api/event';
+import { subscribeBladeEventType } from '../services/bladeEvents';
+import { FileEntry, FileEvent } from '../types/blade';
 import { FileExplorer } from './FileExplorer';
 import { ErrorBoundary } from './ErrorBoundary';
 import { ChevronRight } from 'lucide-react';
@@ -40,20 +41,13 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
 
     // Root Listener
     useEffect(() => {
-        let unlisten: (() => void) | undefined;
-        const setupListener = async () => {
-            unlisten = await listen<BladeEventEnvelope>('blade-event', (event) => {
-                const bladeEvent = event.payload.event;
-                if (bladeEvent.type === 'File') {
-                    const fileEvent = bladeEvent.payload as FileEvent;
-                    if (fileEvent.type === 'Listing' && fileEvent.payload.path === null) {
-                        setRoots(fileEvent.payload.entries);
-                    }
-                }
-            });
-        };
-        setupListener();
-        return () => { if (unlisten) unlisten(); };
+        const unsubscribe = subscribeBladeEventType('File', (event) => {
+            const fileEvent = event.event.payload as FileEvent;
+            if (fileEvent.type === 'Listing' && fileEvent.payload.path === null) {
+                setRoots(fileEvent.payload.entries);
+            }
+        });
+        return () => { unsubscribe(); };
     }, []);
 
     useEffect(() => {

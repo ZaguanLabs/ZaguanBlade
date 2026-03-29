@@ -369,7 +369,12 @@ impl BladeWsClient {
 
         tokio::spawn(async move {
             // Collect environment information for the system prompt
-            let mut environment = EnvironmentInfo::collect();
+            let mut environment = tokio::task::spawn_blocking(EnvironmentInfo::collect)
+                .await
+                .unwrap_or_else(|error| {
+                    eprintln!("[BLADE WS] Environment collection task failed: {}", error);
+                    EnvironmentInfo::default()
+                });
             // Override working_dir with the actual workspace path if available.
             // env::current_dir() returns the AppImage mount point, not the user's workspace.
             if let Some(ref ws_path) = workspace_path {
