@@ -469,13 +469,9 @@ impl ContextAssembler {
     // =========================================================================
 
     fn get_cursor_context(&self, file_path: &str, line: u32) -> Result<String, ContextError> {
-        // Read file and extract lines around cursor
-        let full_path = self.language_service.resolve_path(file_path);
-        let content = std::fs::read_to_string(full_path)
-            .or_else(|_| {
-                // Try relative to workspace
-                Ok::<String, std::io::Error>(String::new())
-            })
+        let content = self
+            .language_service
+            .get_file_content(file_path)
             .unwrap_or_default();
 
         if content.is_empty() {
@@ -504,22 +500,17 @@ impl ContextAssembler {
     }
 
     fn get_symbol_context(&self, symbol: &Symbol) -> Result<String, ContextError> {
-        // Read file and extract symbol's range
-        let full_path = self.language_service.resolve_path(&symbol.file_path);
-        let content = std::fs::read_to_string(full_path).unwrap_or_default();
+        let excerpt = self
+            .language_service
+            .get_symbol_excerpt(symbol, &symbol.file_path)
+            .unwrap_or_default();
 
-        if content.is_empty() {
+        if excerpt.is_empty() {
             return Ok(format!(
                 "// {} {} in {}\n// (content not available)",
                 symbol.symbol_type, symbol.name, symbol.file_path
             ));
         }
-
-        let lines: Vec<&str> = content.lines().collect();
-        let start = symbol.range.start.line as usize;
-        let end = (symbol.range.end.line as usize + 1).min(lines.len());
-
-        let excerpt: String = lines[start..end].join("\n");
 
         Ok(format!(
             "// {} '{}' from {}\n{}",
@@ -590,22 +581,14 @@ impl ContextAssembler {
     }
 
     fn extract_reference_names(&self, symbol: &Symbol) -> Result<Vec<String>, ContextError> {
-        let full_path = self.language_service.resolve_path(&symbol.file_path);
-        let content = std::fs::read_to_string(full_path).unwrap_or_default();
+        let excerpt = self
+            .language_service
+            .get_symbol_excerpt(symbol, &symbol.file_path)
+            .unwrap_or_default();
 
-        if content.is_empty() {
+        if excerpt.is_empty() {
             return Ok(Vec::new());
         }
-
-        let lines: Vec<&str> = content.lines().collect();
-        let start = symbol.range.start.line as usize;
-        let end = (symbol.range.end.line as usize + 1).min(lines.len());
-
-        if start >= end || start >= lines.len() {
-            return Ok(Vec::new());
-        }
-
-        let excerpt = lines[start..end].join("\n");
         Ok(self.collect_reference_candidates(&excerpt, &symbol.name))
     }
 

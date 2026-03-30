@@ -271,9 +271,12 @@ export function useLayoutEvents({
         }));
 
         // Listen for change-applied events to convert ephemeral tabs to file tabs
-        unlistenPromises.push(listen<{ change_id: string; file_path: string }>('change-applied', (event) => {
+        unlistenPromises.push(listen<{ change_id: string; file_path: string; file_paths?: string[] }>('change-applied', (event) => {
             console.debug('[LAYOUT] Change applied:', event.payload);
             const { change_id, file_path } = event.payload;
+            const affectedPaths = event.payload.file_paths?.length
+                ? event.payload.file_paths
+                : [file_path];
 
             const filename = file_path.split('/').pop() || file_path;
 
@@ -307,6 +310,10 @@ export function useLayoutEvents({
             });
 
             setActiveTabId(prev => prev ?? `file-${file_path}`);
+
+            for (const additionalPath of affectedPaths.slice(1)) {
+                handleOpenFile(additionalPath, 'change-applied');
+            }
 
             setTimeout(() => {
                 processingFilesRef.current.delete(file_path);

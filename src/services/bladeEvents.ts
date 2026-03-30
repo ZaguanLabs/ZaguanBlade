@@ -1,8 +1,23 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { BladeEvent, BladeEventEnvelope } from '../types/blade';
+import type { BladeEvent, BladeEventEnvelope, BladeEventTransport } from '../types/blade';
 
 type BladeEventListener = (envelope: BladeEventEnvelope) => void;
 type Unsubscribe = () => void;
+type BladeEventOf<TType extends BladeEvent['type']> = Extract<BladeEvent, { type: TType }>;
+type BladeEventPayloadOf<TType extends BladeEvent['type']> = BladeEventOf<TType>['payload'];
+type NestedBladeEventType<TType extends BladeEvent['type']> = BladeEventPayloadOf<TType> extends {
+    type: infer TEventType extends string;
+}
+    ? TEventType
+    : never;
+type NestedBladeEventPayload<
+    TType extends BladeEvent['type'],
+    TEventType extends NestedBladeEventType<TType>,
+> = Extract<BladeEventPayloadOf<TType>, { type: TEventType }> extends {
+    payload: infer TPayload;
+}
+    ? TPayload
+    : never;
 
 const subscribers = new Map<number, BladeEventListener>();
 let nextSubscriberId = 1;
@@ -11,6 +26,10 @@ let listenerSetupPromise: Promise<void> | null = null;
 
 function isTauriRuntime(): boolean {
     return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
+function normalizeBladeEventTransport(transport: BladeEventTransport): BladeEventEnvelope[] {
+    return transport.transport === 'Batch' ? transport.payload : [transport.payload];
 }
 
 async function ensureBladeEventListener(): Promise<void> {
@@ -26,13 +45,15 @@ async function ensureBladeEventListener(): Promise<void> {
         return listenerSetupPromise;
     }
 
-    listenerSetupPromise = listen<BladeEventEnvelope>('blade-event', (event) => {
-        const envelope = event.payload;
-        for (const subscriber of subscribers.values()) {
-            try {
-                subscriber(envelope);
-            } catch (error) {
-                console.error('[bladeEvents] Subscriber failed:', error);
+    listenerSetupPromise = listen<BladeEventTransport>('blade-event', (event) => {
+        const envelopes = normalizeBladeEventTransport(event.payload);
+        for (const envelope of envelopes) {
+            for (const subscriber of subscribers.values()) {
+                try {
+                    subscriber(envelope);
+                } catch (error) {
+                    console.error('[bladeEvents] Subscriber failed:', error);
+                }
             }
         }
     }).then((unlisten) => {
@@ -81,14 +102,38 @@ export function subscribeBladeEvents(listener: BladeEventListener): Unsubscribe 
 
 export function subscribeBladeEventType<TType extends BladeEvent['type']>(
     type: TType,
-    listener: (envelope: BladeEventEnvelope & { event: Extract<BladeEvent, { type: TType }> }) => void,
+    listener: (envelope: BladeEventEnvelope & { event: BladeEventOf<TType> }) => void,
 ): Unsubscribe {
     return subscribeBladeEvents((envelope) => {
         if (envelope.event.type !== type) {
             return;
         }
 
-        listener(envelope as BladeEventEnvelope & { event: Extract<BladeEvent, { type: TType }> });
+        listener(envelope as BladeEventEnvelope & { event: BladeEventOf<TType> });
+    });
+}
+
+export function subscribeBladeNestedEventType<
+    TType extends BladeEvent['type'],
+    TEventType extends NestedBladeEventType<TType>,
+>(
+    type: TType,
+    eventType: TEventType,
+    listener: (
+        payload: NestedBladeEventPayload<TType, TEventType>,
+        envelope: BladeEventEnvelope & { event: BladeEventOf<TType> },
+    ) => void,
+): Unsubscribe {
+    return subscribeBladeEventType(type, (envelope) => {
+        const nestedEvent = envelope.event.payload;
+        if (nestedEvent.type !== eventType) {
+            return;
+        }
+
+        listener(
+            nestedEvent.payload as NestedBladeEventPayload<TType, TEventType>,
+            envelope,
+        );
     });
 }
 

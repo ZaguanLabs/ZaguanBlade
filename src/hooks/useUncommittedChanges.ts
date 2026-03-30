@@ -62,20 +62,26 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
   useEffect(() => {
     refresh();
 
-    const unlistenPromise = listen<{ change_id: string; file_path: string }>('change-applied', (event) => {
+    const unlistenPromise = listen<{ change_id: string; file_path: string; file_paths?: string[] }>('change-applied', (event) => {
       void (async () => {
+        const affectedPaths = event.payload.file_paths?.length
+          ? event.payload.file_paths
+          : [event.payload.file_path];
+
         try {
-          const nextChange = await invoke<UncommittedChange | null>('get_uncommitted_change_for_file', {
-            filePath: event.payload.file_path,
-          });
-          upsertChange(nextChange);
+          const nextChanges = await Promise.all(
+            affectedPaths.map(filePath => invoke<UncommittedChange | null>('get_uncommitted_change_for_file', {
+              filePath,
+            }))
+          );
+          nextChanges.forEach(upsertChange);
         } catch (error) {
           console.error('Failed to get uncommitted change for file:', error);
           void refresh();
         }
 
-        if (options?.onFileChanged && event.payload?.file_path) {
-          options.onFileChanged(event.payload.file_path);
+        if (options?.onFileChanged) {
+          affectedPaths.forEach(filePath => options.onFileChanged?.(filePath));
         }
       })();
     });

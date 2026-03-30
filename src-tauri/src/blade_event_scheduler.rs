@@ -1,4 +1,4 @@
-use crate::blade_protocol::{BladeEvent, BladeEventEnvelope, ChatEvent, TerminalEvent};
+use crate::blade_protocol::{BladeEvent, BladeEventEnvelope, BladeEventTransport, ChatEvent, TerminalEvent};
 use crate::protocol::ToolCall;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{mpsc, Arc, OnceLock};
@@ -10,7 +10,7 @@ const CHAT_FLUSH_BYTES: usize = 8 * 1024;
 const TERMINAL_FLUSH_BYTES: usize = 32 * 1024;
 const METRIC_SAMPLE_CAP: usize = 512;
 
-type EmitFn = Arc<dyn Fn(BladeEventEnvelope) + Send + Sync + 'static>;
+type EmitFn = Arc<dyn Fn(BladeEventTransport) + Send + Sync + 'static>;
 type RefreshEmitFn = Arc<dyn Fn() + Send + Sync + 'static>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -239,6 +239,12 @@ struct PendingExplorerRefresh {
     queued_at: Instant,
 }
 
+struct PendingTransportEnvelope {
+    class: EmitClass,
+    envelope: BladeEventEnvelope,
+    queued_at: Instant,
+}
+
 enum SchedulerCommand {
     EmitEnvelope {
         emit: EmitFn,
@@ -325,8 +331,8 @@ fn build_envelope(causality_id: Option<String>, event: BladeEvent) -> BladeEvent
 
 fn emitter_for<R: Runtime>(app: &tauri::AppHandle<R>) -> EmitFn {
     let app = app.clone();
-    Arc::new(move |envelope| {
-        let _ = app.emit("blade-event", envelope);
+    Arc::new(move |transport| {
+        let _ = app.emit("blade-event", transport);
     })
 }
 
@@ -337,8 +343,8 @@ fn refresh_emitter_for<R: Runtime>(app: &tauri::AppHandle<R>) -> RefreshEmitFn {
     })
 }
 
-fn emit_now(emit: &EmitFn, envelope: BladeEventEnvelope) {
-    emit(envelope);
+fn emit_now(emit: &EmitFn, transport: BladeEventTransport) {
+    emit(transport);
 }
 
 fn emit_refresh_now(emit: &RefreshEmitFn) {
@@ -366,7 +372,33 @@ fn emit_tracked(
     state
         .metrics
         .record_emitted(class, payload_bytes, delay_ms(queued_at));
-    emit_now(emit, envelope);
+    emit_now(emit, BladeEventTransport::Single(envelope));
+}
+
+fn emit_batch_tracked(
+    state: &mut SchedulerState,
+    emit: &EmitFn,
+    batch: Vec<PendingTransportEnvelope>,
+) {
+    if batch.is_empty() {
+        return;
+    }
+
+    for pending in &batch {
+        state.metrics.record_emitted(
+            pending.class,
+            estimate_envelope_bytes(&pending.envelope),
+            delay_ms(pending.queued_at),
+        );
+    }
+
+    let transport = if batch.len() == 1 {
+        BladeEventTransport::Single(batch.into_iter().next().expect("single batch item").envelope)
+    } else {
+        BladeEventTransport::Batch(batch.into_iter().map(|pending| pending.envelope).collect())
+    };
+
+    emit_now(emit, transport);
 }
 
 fn emit_refresh_tracked(
@@ -621,6 +653,8 @@ fn flush(state: &mut SchedulerState, reason: FlushReason) {
     }
 
     state.metrics.record_flush(reason);
+    let mut flush_emit: Option<EmitFn> = None;
+    let mut batch = Vec::new();
 
     while let Some(pending) = state.pending_chat.pop_front() {
         let seq = state.chat_seq;
@@ -644,13 +678,14 @@ fn flush(state: &mut SchedulerState, reason: FlushReason) {
             ChatDeltaKind::Content => EmitClass::ChatMessageDelta,
             ChatDeltaKind::Reasoning => EmitClass::ChatReasoningDelta,
         };
-        emit_tracked(
-            state,
-            &pending.emit,
+        if flush_emit.is_none() {
+            flush_emit = Some(pending.emit.clone());
+        }
+        batch.push(PendingTransportEnvelope {
             class,
-            build_envelope(pending.causality_id, event),
-            pending.queued_at,
-        );
+            envelope: build_envelope(pending.causality_id, event),
+            queued_at: pending.queued_at,
+        });
     }
 
     let drained_terminal: Vec<_> = state.pending_terminal.drain().map(|(_, pending)| pending).collect();
@@ -662,13 +697,14 @@ fn flush(state: &mut SchedulerState, reason: FlushReason) {
             data: pending.data,
         });
         *seq += 1;
-        emit_tracked(
-            state,
-            &pending.emit,
-            EmitClass::TerminalOutput,
-            build_envelope(None, event),
-            pending.queued_at,
-        );
+        if flush_emit.is_none() {
+            flush_emit = Some(pending.emit.clone());
+        }
+        batch.push(PendingTransportEnvelope {
+            class: EmitClass::TerminalOutput,
+            envelope: build_envelope(None, event),
+            queued_at: pending.queued_at,
+        });
     }
 
     let drained_tool_updates: Vec<_> = state
@@ -677,11 +713,12 @@ fn flush(state: &mut SchedulerState, reason: FlushReason) {
         .map(|(_, pending)| pending)
         .collect();
     for pending in drained_tool_updates {
-        emit_tracked(
-            state,
-            &pending.emit,
-            EmitClass::ToolUpdate,
-            build_envelope(
+        if flush_emit.is_none() {
+            flush_emit = Some(pending.emit.clone());
+        }
+        batch.push(PendingTransportEnvelope {
+            class: EmitClass::ToolUpdate,
+            envelope: build_envelope(
                 pending.causality_id,
                 BladeEvent::Chat(ChatEvent::ToolUpdate {
                     message_id: pending.message_id,
@@ -691,8 +728,8 @@ fn flush(state: &mut SchedulerState, reason: FlushReason) {
                     tool_call: pending.tool_call,
                 }),
             ),
-            pending.queued_at,
-        );
+            queued_at: pending.queued_at,
+        });
     }
 
     let drained_tool_activity: Vec<_> = state
@@ -701,11 +738,12 @@ fn flush(state: &mut SchedulerState, reason: FlushReason) {
         .map(|(_, pending)| pending)
         .collect();
     for pending in drained_tool_activity {
-        emit_tracked(
-            state,
-            &pending.emit,
-            EmitClass::ToolActivity,
-            build_envelope(
+        if flush_emit.is_none() {
+            flush_emit = Some(pending.emit.clone());
+        }
+        batch.push(PendingTransportEnvelope {
+            class: EmitClass::ToolActivity,
+            envelope: build_envelope(
                 None,
                 BladeEvent::Chat(ChatEvent::ToolActivity {
                     tool_name: pending.tool_name,
@@ -714,8 +752,12 @@ fn flush(state: &mut SchedulerState, reason: FlushReason) {
                     tool_call_id: pending.tool_call_id,
                 }),
             ),
-            pending.queued_at,
-        );
+            queued_at: pending.queued_at,
+        });
+    }
+
+    if let Some(emit) = flush_emit {
+        emit_batch_tracked(state, &emit, batch);
     }
 
     if let Some(pending) = state.pending_explorer_refresh.take() {

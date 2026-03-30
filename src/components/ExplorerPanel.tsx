@@ -4,8 +4,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useTranslation } from 'react-i18next';
 import { BladeDispatcher } from '../services/blade';
-import { subscribeBladeEventType } from '../services/bladeEvents';
-import { FileEntry, FileEvent } from '../types/blade';
+import { subscribeBladeNestedEventType } from '../services/bladeEvents';
+import { FileEntry } from '../types/blade';
 import { FileExplorer } from './FileExplorer';
 import { ErrorBoundary } from './ErrorBoundary';
 import { ChevronRight } from 'lucide-react';
@@ -41,10 +41,9 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
 
     // Root Listener
     useEffect(() => {
-        const unsubscribe = subscribeBladeEventType('File', (event) => {
-            const fileEvent = event.event.payload as FileEvent;
-            if (fileEvent.type === 'Listing' && fileEvent.payload.path === null) {
-                setRoots(fileEvent.payload.entries);
+        const unsubscribe = subscribeBladeNestedEventType('File', 'Listing', (payload) => {
+            if (payload.path === null) {
+                setRoots(payload.entries);
             }
         });
         return () => { unsubscribe(); };

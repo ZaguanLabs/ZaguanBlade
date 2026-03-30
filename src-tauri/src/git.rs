@@ -1,8 +1,8 @@
 use serde::Serialize;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
-use std::process::Command;
 use tauri::{AppHandle, Manager, State};
+use tokio::process::Command as TokioCommand;
 
 use crate::{
     app_state::AppState,
@@ -597,8 +597,35 @@ fn collect_git_status_snapshot(state: &State<'_, AppState>) -> Result<GitStatusS
     }
 }
 
+async fn run_git_async_output(
+    root: &str,
+    args: &[&str],
+    context: &str,
+) -> Result<std::process::Output, String> {
+    let output = TokioCommand::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run git {}: {}", context, e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(format!("git {} failed: {}", context, stderr.trim()));
+    }
+
+    Ok(output)
+}
+
+async fn run_git_async(root: &str, args: &[&str], context: &str) -> Result<String, String> {
+    let output = run_git_async_output(root, args, context).await?;
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+#[allow(clippy::disallowed_methods, clippy::disallowed_types)]
 fn git_status_output(root: &str) -> Result<Option<String>, String> {
-    let output = Command::new("git")
+    let output = std::process::Command::new("git")
         .arg("-C")
         .arg(root)
         .arg("status")
@@ -619,8 +646,9 @@ fn git_status_output(root: &str) -> Result<Option<String>, String> {
     Ok(Some(String::from_utf8_lossy(&output.stdout).to_string()))
 }
 
+#[allow(clippy::disallowed_methods, clippy::disallowed_types)]
 fn run_git(root: &str, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
+    let output = std::process::Command::new("git")
         .arg("-C")
         .arg(root)
         .args(args)
@@ -1159,25 +1187,8 @@ pub async fn git_stage_file(state: State<'_, AppState>, path: String) -> Result<
         return Ok(());
     }
 
-    tokio::task::spawn_blocking(move || {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(&root)
-            .arg("add")
-            .arg("--")
-            .arg(&path)
-            .output()
-            .map_err(|e| format!("failed to run git add: {}", e))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            return Err(format!("git add failed: {}", stderr.trim()));
-        }
-
-        Ok(())
-    })
-    .await
-    .map_err(|e| format!("git stage file task failed: {}", e))?
+    run_git_async(&root, &["add", "--", &path][..], "add").await?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -1186,26 +1197,8 @@ pub async fn git_unstage_file(state: State<'_, AppState>, path: String) -> Resul
         return Err("No workspace open".to_string());
     };
 
-    tokio::task::spawn_blocking(move || {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(&root)
-            .arg("restore")
-            .arg("--staged")
-            .arg("--")
-            .arg(&path)
-            .output()
-            .map_err(|e| format!("failed to run git restore: {}", e))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            return Err(format!("git restore failed: {}", stderr.trim()));
-        }
-
-        Ok(())
-    })
-    .await
-    .map_err(|e| format!("git unstage file task failed: {}", e))?
+    run_git_async(&root, &["restore", "--staged", "--", &path][..], "restore").await?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -1214,35 +1207,21 @@ pub async fn git_stage_all(state: State<'_, AppState>) -> Result<(), String> {
         return Err("No workspace open".to_string());
     };
 
-    tokio::task::spawn_blocking(move || {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(&root)
-            .arg("add")
-            .arg("-A")
-            .output()
-            .map_err(|e| format!("failed to run git add -A: {}", e))?;
+    run_git_async(&root, &["add", "-A"][..], "add -A").await?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            return Err(format!("git add -A failed: {}", stderr.trim()));
-        }
+    let _ = TokioCommand::new("git")
+        .arg("-C")
+        .arg(&root)
+        .arg("rm")
+        .arg("-r")
+        .arg("--cached")
+        .arg("--ignore-unmatch")
+        .arg("--")
+        .arg(".zblade")
+        .output()
+        .await;
 
-        let _ = Command::new("git")
-            .arg("-C")
-            .arg(&root)
-            .arg("rm")
-            .arg("-r")
-            .arg("--cached")
-            .arg("--ignore-unmatch")
-            .arg("--")
-            .arg(".zblade")
-            .output();
-
-        Ok(())
-    })
-    .await
-    .map_err(|e| format!("git stage all task failed: {}", e))?
+    Ok(())
 }
 
 #[tauri::command]
@@ -1251,25 +1230,8 @@ pub async fn git_unstage_all(state: State<'_, AppState>) -> Result<(), String> {
         return Err("No workspace open".to_string());
     };
 
-    tokio::task::spawn_blocking(move || {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(&root)
-            .arg("restore")
-            .arg("--staged")
-            .arg(".")
-            .output()
-            .map_err(|e| format!("failed to run git restore --staged: {}", e))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            return Err(format!("git restore --staged failed: {}", stderr.trim()));
-        }
-
-        Ok(())
-    })
-    .await
-    .map_err(|e| format!("git unstage all task failed: {}", e))?
+    run_git_async(&root, &["restore", "--staged", "."][..], "restore --staged").await?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -1283,25 +1245,7 @@ pub async fn git_commit(state: State<'_, AppState>, message: String) -> Result<S
         return Err("Commit message is required".to_string());
     }
 
-    tokio::task::spawn_blocking(move || {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(&root)
-            .arg("commit")
-            .arg("-m")
-            .arg(message)
-            .output()
-            .map_err(|e| format!("failed to run git commit: {}", e))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            return Err(format!("git commit failed: {}", stderr.trim()));
-        }
-
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    })
-    .await
-    .map_err(|e| format!("git commit task failed: {}", e))?
+    run_git_async(&root, &["commit", "-m", &message][..], "commit").await
 }
 
 #[tauri::command]
@@ -1398,23 +1342,7 @@ pub async fn git_push(state: State<'_, AppState>) -> Result<String, String> {
         return Err("No workspace open".to_string());
     };
 
-    tokio::task::spawn_blocking(move || {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(&root)
-            .arg("push")
-            .output()
-            .map_err(|e| format!("failed to run git push: {}", e))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            return Err(format!("git push failed: {}", stderr.trim()));
-        }
-
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    })
-    .await
-    .map_err(|e| format!("git push task failed: {}", e))?
+    run_git_async(&root, &["push"][..], "push").await
 }
 
 #[tauri::command]
@@ -1422,36 +1350,32 @@ pub async fn git_diff(
     state: State<'_, AppState>,
     path: String,
     staged: bool,
-    app_handle: AppHandle,
+    _app_handle: AppHandle,
 ) -> Result<String, String> {
     let Some(root) = workspace_root(&state) else {
         return Err("No workspace open".to_string());
     };
 
-    tokio::task::spawn_blocking(move || {
-        let _state = app_handle.state::<AppState>();
-        let mut cmd = Command::new("git");
-        cmd.arg("-C").arg(&root).arg("diff").arg("--no-color");
+    let mut cmd = TokioCommand::new("git");
+    cmd.arg("-C").arg(&root).arg("diff").arg("--no-color");
 
-        if staged {
-            cmd.arg("--staged");
-        }
+    if staged {
+        cmd.arg("--staged");
+    }
 
-        let output = cmd
-            .arg("--")
-            .arg(&path)
-            .output()
-            .map_err(|e| format!("failed to run git diff: {}", e))?;
+    let output = cmd
+        .arg("--")
+        .arg(&path)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run git diff: {}", e))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            return Err(format!("git diff failed: {}", stderr.trim()));
-        }
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(format!("git diff failed: {}", stderr.trim()));
+    }
 
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    })
-    .await
-    .map_err(|e| format!("git diff task failed: {}", e))?
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 #[tauri::command]

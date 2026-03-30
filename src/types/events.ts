@@ -249,6 +249,7 @@ export interface ModelChangedPayload {
 export interface ChangeAppliedPayload {
   change_id: string;
   file_path: string;
+  file_paths?: string[];
 }
 
 /**

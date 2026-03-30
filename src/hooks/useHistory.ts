@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { BladeDispatcher } from '../services/blade';
-import { subscribeBladeEventType, waitForBladeEvent } from '../services/bladeEvents';
+import { subscribeBladeNestedEventType, waitForBladeEvent } from '../services/bladeEvents';
 import type { ConversationSummary, HistoryMessage } from '../types/blade';
 import type { ChatMessage } from '../types/chat';
 import { ensureMessagesHaveBlocks } from '../utils/messageBlocks';
@@ -51,31 +51,34 @@ export function useHistory() {
         }
 
         console.debug('[useHistory] Setting up blade-event listener');
-        const unsubscribeHistory = subscribeBladeEventType('History', (event) => {
-            const historyEvent = event.event.payload;
-            console.debug('[useHistory] Received blade-event:', event.event.type);
-            console.debug('[useHistory] History event type:', historyEvent.type);
-
-            if (historyEvent.type === 'ConversationList') {
-                console.debug('[useHistory] ConversationList received with', historyEvent.payload.conversations.length, 'conversations');
-                if (historyEvent.payload.conversations.length > 0) {
-                    const sample = historyEvent.payload.conversations[0];
+        const unsubscribeConversationList = subscribeBladeNestedEventType(
+            'History',
+            'ConversationList',
+            (payload) => {
+                console.debug('[useHistory] ConversationList received with', payload.conversations.length, 'conversations');
+                if (payload.conversations.length > 0) {
+                    const sample = payload.conversations[0];
                     void invoke('log_frontend', {
                         message: `[useHistory] Sample conversation: id=${sample.id}, created_at=${sample.created_at}, last_active_at=${sample.last_active_at}`
                     });
                 }
-                setConversations(historyEvent.payload.conversations);
-                setLoading(false);
-            } else if (historyEvent.type === 'ConversationLoaded') {
-                // This will be handled by the callback promise resolution
+                setConversations(payload.conversations);
                 setLoading(false);
             }
-        });
+        );
+        const unsubscribeConversationLoaded = subscribeBladeNestedEventType(
+            'History',
+            'ConversationLoaded',
+            () => {
+                setLoading(false);
+            },
+        );
         console.debug('[useHistory] blade-event listener set up successfully');
 
         return () => {
             console.debug('[useHistory] Cleaning up blade-event listener');
-            unsubscribeHistory();
+            unsubscribeConversationList();
+            unsubscribeConversationLoaded();
         };
     }, []);
 

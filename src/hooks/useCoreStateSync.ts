@@ -10,10 +10,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useOptionalStartupBootstrap } from '../contexts/StartupBootstrapContext';
-import { subscribeBladeEventType } from '../services/bladeEvents';
+import { subscribeBladeNestedEventType } from '../services/bladeEvents';
 import type { BootstrapState } from '../types/bootstrap';
 import type { CoreStateSnapshot, FeatureFlagsSnapshot } from '../types/coreState';
-import type { EditorEvent } from '../types/blade';
 
 export interface CoreStateSyncResult {
     /** Whether initial state recovery is in progress */
@@ -99,57 +98,58 @@ export function useCoreStateSync(): CoreStateSyncResult {
 
     // Listen for editor state events to keep cache updated
     useEffect(() => {
-        const unsubscribe = subscribeBladeEventType('Editor', (event) => {
-            const editorEvent = event.event.payload as EditorEvent;
-
-            // Update local cache based on event type
-            if (editorEvent.type === 'StateSnapshot') {
-                setCoreState(prev => prev ? {
-                    ...prev,
-                    editor: {
-                        active_file: editorEvent.payload.active_file,
-                        open_files: editorEvent.payload.open_files,
-                        cursor_line: editorEvent.payload.cursor_line,
-                        cursor_column: editorEvent.payload.cursor_column,
-                        selection_start: editorEvent.payload.selection_start,
-                        selection_end: editorEvent.payload.selection_end,
-                    }
-                } : null);
-            } else if (editorEvent.type === 'ActiveFileChanged') {
-                setCoreState(prev => prev ? {
-                    ...prev,
-                    editor: {
-                        ...prev.editor,
-                        active_file: editorEvent.payload.path,
-                    }
-                } : null);
-            } else if (editorEvent.type === 'FileOpened') {
-                setCoreState(prev => {
-                    if (!prev) return null;
-                    const openFiles = prev.editor.open_files.includes(editorEvent.payload.path)
-                        ? prev.editor.open_files
-                        : [...prev.editor.open_files, editorEvent.payload.path];
-                    return {
-                        ...prev,
-                        editor: {
-                            ...prev.editor,
-                            open_files: openFiles,
-                        }
-                    };
-                });
-            } else if (editorEvent.type === 'FileClosed') {
-                setCoreState(prev => prev ? {
+        const unsubscribeStateSnapshot = subscribeBladeNestedEventType('Editor', 'StateSnapshot', (payload) => {
+            setCoreState(prev => prev ? {
+                ...prev,
+                editor: {
+                    active_file: payload.active_file,
+                    open_files: payload.open_files,
+                    cursor_line: payload.cursor_line,
+                    cursor_column: payload.cursor_column,
+                    selection_start: payload.selection_start,
+                    selection_end: payload.selection_end,
+                }
+            } : null);
+        });
+        const unsubscribeActiveFileChanged = subscribeBladeNestedEventType('Editor', 'ActiveFileChanged', (payload) => {
+            setCoreState(prev => prev ? {
+                ...prev,
+                editor: {
+                    ...prev.editor,
+                    active_file: payload.path,
+                }
+            } : null);
+        });
+        const unsubscribeFileOpened = subscribeBladeNestedEventType('Editor', 'FileOpened', (payload) => {
+            setCoreState(prev => {
+                if (!prev) return null;
+                const openFiles = prev.editor.open_files.includes(payload.path)
+                    ? prev.editor.open_files
+                    : [...prev.editor.open_files, payload.path];
+                return {
                     ...prev,
                     editor: {
                         ...prev.editor,
-                        open_files: prev.editor.open_files.filter(f => f !== editorEvent.payload.path),
+                        open_files: openFiles,
                     }
-                } : null);
-            }
+                };
+            });
+        });
+        const unsubscribeFileClosed = subscribeBladeNestedEventType('Editor', 'FileClosed', (payload) => {
+            setCoreState(prev => prev ? {
+                ...prev,
+                editor: {
+                    ...prev.editor,
+                    open_files: prev.editor.open_files.filter(f => f !== payload.path),
+                }
+            } : null);
         });
 
         return () => {
-            unsubscribe();
+            unsubscribeStateSnapshot();
+            unsubscribeActiveFileChanged();
+            unsubscribeFileOpened();
+            unsubscribeFileClosed();
         };
     }, []);
 

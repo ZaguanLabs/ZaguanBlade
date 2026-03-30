@@ -7,7 +7,6 @@ use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 // use eframe::egui; // Removed for Tauri migration
 
@@ -585,6 +584,7 @@ impl AiWorkflow {
                                         crate::events::ChangeAppliedPayload {
                                             change_id: call.id.clone(),
                                             file_path: abs_path_str.clone(),
+                                            file_paths: vec![abs_path_str.clone()],
                                         },
                                     );
                                 }
@@ -673,6 +673,7 @@ impl AiWorkflow {
                                         crate::events::ChangeAppliedPayload {
                                             change_id: call.id.clone(),
                                             file_path: change.path.clone(),
+                                            file_paths: vec![change.path.clone()],
                                         },
                                     );
                                 }
@@ -1071,6 +1072,7 @@ pub fn run_command_in_workspace(
     run_command_spec_in_workspace(workspace_root, &legacy_spec, cwd)
 }
 
+#[allow(clippy::disallowed_methods, clippy::disallowed_types)]
 pub fn run_command_spec_in_workspace(
     workspace_root: &Path,
     command_spec: &CommandSpec,
@@ -1130,7 +1132,7 @@ pub fn run_command_spec_in_workspace(
 
     let output = if !command_spec.shell {
         if let Some(program) = &command_spec.program {
-            let mut cmd = Command::new(program);
+            let mut cmd = std::process::Command::new(program);
             cmd.args(&command_spec.args)
                 .current_dir(&dir)
                 .env_remove("ARGV0")
@@ -1147,7 +1149,7 @@ pub fn run_command_spec_in_workspace(
             };
         }
     } else if let Some(command_line) = &command_spec.command_line {
-        Command::new("sh")
+        std::process::Command::new("sh")
             .arg("-lc")
             .arg(command_line)
             .current_dir(&dir)
@@ -1157,7 +1159,7 @@ pub fn run_command_spec_in_workspace(
             .env_remove("OWD")
             .output()
     } else if let Some(program) = &command_spec.program {
-        let mut cmd = Command::new(program);
+        let mut cmd = std::process::Command::new(program);
         cmd.args(&command_spec.args)
             .current_dir(&dir)
             .env_remove("ARGV0")

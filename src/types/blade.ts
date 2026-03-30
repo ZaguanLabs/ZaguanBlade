@@ -1,4 +1,4 @@
-// v1.4: Semantic versioning
+// v1.5: Semantic versioning + event transport wrapper
 import type { ChatMode } from './chat';
 
 export type Version = {
@@ -27,6 +27,10 @@ export type BladeEventEnvelope = {
     causality_id: string | null;
     event: BladeEvent;
 };
+
+export type BladeEventTransport =
+    | { transport: "Single"; payload: BladeEventEnvelope }
+    | { transport: "Batch"; payload: BladeEventEnvelope[] };
 
 // ===================================
 // Intents (Writes)

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // ==============================================================================
-// 0. Version (v1.4) - Added Language domain for ZLP (tree-sitter based)
+// 0. Version (v1.5) - Added versioned event transport for batched blade-event delivery
 // ==============================================================================
 
 /// Semantic version for protocol compatibility checking
@@ -16,7 +16,7 @@ pub struct Version {
 impl Version {
     pub const CURRENT: Version = Version {
         major: 1,
-        minor: 4,
+        minor: 6,
         patch: 0,
     };
 
@@ -61,6 +61,13 @@ pub struct BladeEventEnvelope {
     pub timestamp: u64,               // Server-side timestamp
     pub causality_id: Option<String>, // ID of the Intent that caused this (String to support non-UUID legacy IDs)
     pub event: BladeEvent,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "transport", content = "payload")]
+pub enum BladeEventTransport {
+    Single(BladeEventEnvelope),
+    Batch(Vec<BladeEventEnvelope>),
 }
 
 // ==============================================================================

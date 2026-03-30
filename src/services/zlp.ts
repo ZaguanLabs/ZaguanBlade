@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { BladeDispatcher } from './blade';
-import { subscribeBladeEventType } from './bladeEvents';
+import { subscribeBladeNestedEventType } from './bladeEvents';
 import type { ZLPCapabilitiesResult, ZLPStructureResponse, ZLPValidationError, ZLPValidationResponse, ZLPGraphResponse, StructureNode } from '../types/zlp';
 
 export class ZLPService {
@@ -91,24 +91,18 @@ export class ZLPService {
             }, ZLPService.TIMEOUT_MS);
 
             // 2. Setup Listener
-            unsubscribe = subscribeBladeEventType('Language', (event) => {
-                const langEvent = event.event.payload as any;
-
-                // Filter for ZlpResponse matching our ID
-                if (langEvent.type === 'ZlpResponse' &&
-                    langEvent.payload.original_request_id === id) {
-
+            unsubscribe = subscribeBladeNestedEventType('Language', 'ZlpResponse', (payload) => {
+                if (payload.original_request_id === id) {
                     clearTimeout(timeoutId);
                     if (unsubscribe) unsubscribe();
 
-                    const zlpResult = langEvent.payload.result as any;
+                    const zlpResult = payload.result as any;
                     if (zlpResult?.error) {
                         reject(new Error(zlpResult.error.message || 'ZLP error'));
                         return;
                     }
 
                     const normalized = zlpResult?.result ?? zlpResult;
-                    // Resolve with the normalized result
                     resolve(normalized as T);
                 }
             });

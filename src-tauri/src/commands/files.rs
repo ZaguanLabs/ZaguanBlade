@@ -1,56 +1,13 @@
 use crate::app_state::AppState;
-use crate::gitignore_filter::GitignoreFilter;
 use serde::Serialize;
 use tauri::{Emitter, Manager};
 use tokio::fs;
-use walkdir::WalkDir;
-
-fn normalize_path(path: &std::path::Path) -> std::path::PathBuf {
-    use std::path::Component;
-
-    let mut normalized = std::path::PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Prefix(p) => normalized.push(p.as_os_str()),
-            Component::RootDir => normalized.push("/"),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normalized.pop();
-            }
-            Component::Normal(c) => normalized.push(c),
-        }
-    }
-    normalized
-}
 
 pub(crate) fn resolve_path_under_workspace_root(
     workspace_root: &std::path::Path,
     path: &std::path::Path,
 ) -> Result<std::path::PathBuf, String> {
-    let ws = std::fs::canonicalize(workspace_root).map_err(|e| {
-        format!(
-            "Failed to canonicalize workspace root '{}': {}",
-            workspace_root.display(),
-            e
-        )
-    })?;
-
-    let candidate = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        ws.join(path)
-    };
-    let normalized = normalize_path(&candidate);
-
-    if !normalized.starts_with(&ws) {
-        return Err(format!(
-            "Path is outside workspace (workspace: {}, path: {})",
-            ws.display(),
-            normalized.display()
-        ));
-    }
-
-    Ok(normalized)
+    crate::worktree::resolve_path_under_workspace_root(workspace_root, path)
 }
 
 pub(crate) fn resolve_path_under_workspace(
@@ -89,110 +46,19 @@ pub struct WorkspacePathMatch {
     pub is_dir: bool,
 }
 
-fn create_gitignore_filter(workspace_root: &std::path::Path) -> Option<GitignoreFilter> {
-    let settings = crate::project_settings::load_project_settings_or_default(workspace_root);
-    if settings.allow_gitignored_files {
-        return None;
-    }
-    Some(GitignoreFilter::new(workspace_root))
-}
-
-fn normalize_rel_path(path: &std::path::Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
-}
-
-fn path_match_rank(query: &str, rel_path: &str) -> Option<(u8, usize, usize)> {
-    if query.is_empty() {
-        return Some((3, rel_path.len(), rel_path.matches('/').count()));
-    }
-
-    let query_lower = query.to_lowercase();
-    let path_lower = rel_path.to_lowercase();
-    let file_name = rel_path
-        .rsplit('/')
-        .next()
-        .unwrap_or(rel_path)
-        .to_lowercase();
-
-    if file_name.starts_with(&query_lower) {
-        return Some((0, rel_path.len(), rel_path.matches('/').count()));
-    }
-    if path_lower.starts_with(&query_lower) {
-        return Some((1, rel_path.len(), rel_path.matches('/').count()));
-    }
-    if path_lower.contains(&query_lower) {
-        return Some((2, rel_path.len(), rel_path.matches('/').count()));
-    }
-
-    None
-}
-
 pub fn search_workspace_paths_logic(
     query: String,
     limit: Option<usize>,
     state: &AppState,
 ) -> Result<Vec<WorkspacePathMatch>, String> {
-    let workspace_root = {
-        let ws = state.workspace.lock().unwrap();
-        ws.workspace
-            .clone()
-            .ok_or_else(|| "No workspace open".to_string())?
-    };
-    let workspace_root = std::fs::canonicalize(&workspace_root).map_err(|e| e.to_string())?;
-    let gitignore_filter = create_gitignore_filter(&workspace_root);
-    let query = query.trim().replace('\\', "/");
-    let max_results = limit.unwrap_or(12).min(50);
-
-    let mut matches = Vec::new();
-    for entry in WalkDir::new(&workspace_root)
-        .follow_links(false)
+    let store = state.worktree()?;
+    Ok(store
+        .search_paths(&query, limit)
         .into_iter()
-        .filter_entry(|entry| {
-            let name = entry.file_name().to_string_lossy();
-            !matches!(
-                name.as_ref(),
-                ".git" | "node_modules" | "target" | "dist" | "build" | ".zblade"
-            )
+        .map(|path_match| WorkspacePathMatch {
+            path: path_match.path,
+            is_dir: path_match.is_dir,
         })
-        .filter_map(Result::ok)
-    {
-        let path = entry.path();
-        if path == workspace_root {
-            continue;
-        }
-        if let Some(ref filter) = gitignore_filter {
-            if filter.should_ignore(path) {
-                continue;
-            }
-        }
-
-        let Ok(rel_path) = path.strip_prefix(&workspace_root) else {
-            continue;
-        };
-        let rel = normalize_rel_path(rel_path);
-        let Some(rank) = path_match_rank(&query, &rel) else {
-            continue;
-        };
-
-        matches.push((
-            rank,
-            WorkspacePathMatch {
-                path: rel,
-                is_dir: entry.file_type().is_dir(),
-            },
-        ));
-    }
-
-    matches.sort_by(|(left_rank, left_match), (right_rank, right_match)| {
-        left_rank
-            .cmp(right_rank)
-            .then_with(|| left_match.path.cmp(&right_match.path))
-    });
-    matches.truncate(max_results);
-
-    Ok(matches
-        .into_iter()
-        .map(|(_, path_match)| path_match)
         .collect())
 }
 
@@ -228,6 +94,7 @@ pub async fn open_workspace_logic(
         let workspace_root = std::path::PathBuf::from(&blocking_path);
         crate::project_settings::init_zblade_dir(&workspace_root)?;
         state.reset_project_services()?;
+        let _ = state.worktree()?;
         Ok(())
     })
     .await
@@ -265,16 +132,9 @@ pub fn list_files_logic(
     path: Option<String>,
     state: &AppState,
 ) -> Result<Vec<crate::explorer::FileEntry>, String> {
-    let ws = state.workspace.lock().unwrap();
-    let root = if let Some(p) = path {
-        std::path::PathBuf::from(p)
-    } else if let Some(w) = &ws.workspace {
-        w.clone()
-    } else {
-        return Err("No workspace open".to_string());
-    };
-
-    Ok(crate::explorer::list_directory(&root))
+    let store = state.worktree()?;
+    let requested = path.as_ref().map(std::path::Path::new);
+    store.list_directory(requested)
 }
 
 #[tauri::command]

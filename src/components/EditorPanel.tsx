@@ -247,8 +247,11 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             // Also listen for change-applied events from tool edits (apply_patch, edit_file, etc.)
             // The fs_watcher has a 250ms debounce that can drop events during rapid multi-edit sequences,
             // so this provides a reliable, direct notification when a tool modifies a file.
-            const unlistenChangeAppliedPromise = listen<{ change_id: string; file_path: string }>('change-applied', (event) => {
-                if (activeFile && pathsMatch(event.payload.file_path, activeFile)) {
+            const unlistenChangeAppliedPromise = listen<{ change_id: string; file_path: string; file_paths?: string[] }>('change-applied', (event) => {
+                const affectedPaths = event.payload.file_paths?.length
+                    ? event.payload.file_paths
+                    : [event.payload.file_path];
+                if (activeFile && affectedPaths.some(path => pathsMatch(path, activeFile))) {
                     console.debug('[EDITOR] Tool change applied to active file, reloading:', activeFile);
                     setReloadTrigger(prev => prev + 1);
                 }

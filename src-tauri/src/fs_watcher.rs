@@ -122,6 +122,11 @@ pub fn restart_fs_watcher<R: Runtime>(app_handle: &tauri::AppHandle<R>) {
                             };
 
                             let state = app_handle_clone.state::<AppState>();
+                            if let Ok(store) = state.worktree() {
+                                if let Err(error) = store.refresh() {
+                                    eprintln!("[WATCHER] Failed to refresh worktree snapshot: {}", error);
+                                }
+                            }
                             reindex_changed_paths(&state, &callback_root, &event);
 
                             let _ =

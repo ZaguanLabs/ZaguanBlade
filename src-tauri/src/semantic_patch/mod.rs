@@ -16,4 +16,4 @@ mod patch;
 
 pub use applier::{ApplyError, ApplyResult, PatchApplier};
 pub use diff::{generate_diff, DiffHunk};
-pub use patch::{PatchOperation, PatchTarget, SemanticPatch};
+pub use patch::{InsertPosition, PatchOperation, PatchTarget, SemanticPatch};

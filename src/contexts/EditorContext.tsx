@@ -1,8 +1,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useOptionalStartupBootstrap } from './StartupBootstrapContext';
 import { EditorFacade, initEditorFacade, isBackendAuthoritative } from '../services/editorFacade';
-import { subscribeBladeEventType } from '../services/bladeEvents';
-import type { EditorEvent } from '../types/blade';
+import { subscribeBladeNestedEventType } from '../services/bladeEvents';
 
 interface EditorState {
     activeFile: string | null;
@@ -50,40 +49,42 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     // Listen for backend EditorEvent updates when backend authority is enabled
     useEffect(() => {
-        const unsubscribe = subscribeBladeEventType('Editor', (event) => {
-            const editorEvent = event.event.payload as EditorEvent;
-
-            if (editorEvent.type === 'ActiveFileChanged') {
-                setEditorState(prev => ({
-                    ...prev,
-                    activeFile: editorEvent.payload.path ?? null
-                }));
-            } else if (editorEvent.type === 'CursorMoved') {
-                setEditorState(prev => ({
-                    ...prev,
-                    cursorLine: editorEvent.payload.line,
-                    cursorColumn: editorEvent.payload.column
-                }));
-            } else if (editorEvent.type === 'SelectionChanged') {
-                setEditorState(prev => ({
-                    ...prev,
-                    selectionStartLine: editorEvent.payload.start,
-                    selectionEndLine: editorEvent.payload.end
-                }));
-            } else if (editorEvent.type === 'StateSnapshot') {
-                setEditorState(prev => ({
-                    activeFile: editorEvent.payload.active_file ?? null,
-                    openFiles: editorEvent.payload.open_files ?? prev.openFiles,
-                    cursorLine: editorEvent.payload.cursor_line ?? null,
-                    cursorColumn: editorEvent.payload.cursor_column ?? null,
-                    selectionStartLine: editorEvent.payload.selection_start ?? null,
-                    selectionEndLine: editorEvent.payload.selection_end ?? null,
-                }));
-            }
+        const unsubscribeActiveFileChanged = subscribeBladeNestedEventType('Editor', 'ActiveFileChanged', (payload) => {
+            setEditorState(prev => ({
+                ...prev,
+                activeFile: payload.path ?? null
+            }));
+        });
+        const unsubscribeCursorMoved = subscribeBladeNestedEventType('Editor', 'CursorMoved', (payload) => {
+            setEditorState(prev => ({
+                ...prev,
+                cursorLine: payload.line,
+                cursorColumn: payload.column
+            }));
+        });
+        const unsubscribeSelectionChanged = subscribeBladeNestedEventType('Editor', 'SelectionChanged', (payload) => {
+            setEditorState(prev => ({
+                ...prev,
+                selectionStartLine: payload.start,
+                selectionEndLine: payload.end
+            }));
+        });
+        const unsubscribeStateSnapshot = subscribeBladeNestedEventType('Editor', 'StateSnapshot', (payload) => {
+            setEditorState(prev => ({
+                activeFile: payload.active_file ?? null,
+                openFiles: payload.open_files ?? prev.openFiles,
+                cursorLine: payload.cursor_line ?? null,
+                cursorColumn: payload.cursor_column ?? null,
+                selectionStartLine: payload.selection_start ?? null,
+                selectionEndLine: payload.selection_end ?? null,
+            }));
         });
 
         return () => {
-            unsubscribe();
+            unsubscribeActiveFileChanged();
+            unsubscribeCursorMoved();
+            unsubscribeSelectionChanged();
+            unsubscribeStateSnapshot();
         };
     }, []);
 

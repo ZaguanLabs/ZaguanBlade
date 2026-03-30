@@ -225,6 +225,17 @@ fn strip_blade_sentinels(input: &str) -> SentinelStripResult {
     result
 }
 
+fn take_active_command_exit(
+    active_cmd: &mut Option<String>,
+    cmd_output_buffer: &mut String,
+    exit_code: i32,
+) -> Option<(String, i32, String)> {
+    active_cmd.take().map(|call_id| {
+        let output = std::mem::take(cmd_output_buffer);
+        (call_id, exit_code, output)
+    })
+}
+
 // Commands to be exposed to Tauri
 
 // #[tauri::command]
@@ -551,6 +562,20 @@ pub fn create_terminal<R: Runtime>(
             }
         };
 
+        if let Some((call_id, exit_code, output)) =
+            take_active_command_exit(&mut active_cmd, &mut cmd_output_buffer, exit_code)
+        {
+            let _ = app_handle_clone.emit(
+                "blade-cmd-exited",
+                BladeCmdExited {
+                    terminal_id: id_clone.clone(),
+                    call_id,
+                    exit_code,
+                    output,
+                },
+            );
+        }
+
         emit_terminal_exit(&app_handle_clone, id_clone, exit_code);
 
         // Refresh explorer to show changes from command
@@ -724,7 +749,7 @@ fn parse_osc7_path(raw: &str) -> Option<String> {
 mod tests {
     use super::{
         has_recent_sentinel_echo_prefix, has_recent_sentinel_echo_prefix_fragment,
-        strip_ansi_escapes, strip_blade_sentinels,
+        strip_ansi_escapes, strip_blade_sentinels, take_active_command_exit,
     };
 
     #[test]
@@ -761,8 +786,26 @@ mod tests {
     }
 
     #[test]
-    fn strips_basic_ansi_escape_codes() {
-        assert_eq!(strip_ansi_escapes("\u{1b}[31mhello\u{1b}[0m"), "hello");
+    fn take_active_command_exit_returns_buffered_output() {
+        let mut active_cmd = Some("call-1".to_string());
+        let mut output = "done\n1.1.10\n".to_string();
+
+        let exited = take_active_command_exit(&mut active_cmd, &mut output, 0)
+            .expect("expected active command exit");
+        assert_eq!(exited.0, "call-1");
+        assert_eq!(exited.1, 0);
+        assert_eq!(exited.2, "done\n1.1.10\n");
+        assert!(active_cmd.is_none());
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn take_active_command_exit_is_none_without_active_command() {
+        let mut active_cmd = None;
+        let mut output = "ignored".to_string();
+
+        assert!(take_active_command_exit(&mut active_cmd, &mut output, 1).is_none());
+        assert_eq!(output, "ignored");
     }
 
     #[test]

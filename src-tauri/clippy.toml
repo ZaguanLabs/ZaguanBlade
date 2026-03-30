@@ -1,0 +1,8 @@
+disallowed-types = [
+  { path = "std::process::Command", reason = "Use tokio::process::Command in async/runtime-sensitive paths; add an explicit allow only for intentional blocking probes or spawn_blocking-only code." }
+]
+
+disallowed-methods = [
+  { path = "std::process::Command::new", reason = "Use tokio::process::Command in async/runtime-sensitive paths; add an explicit allow only for intentional blocking probes or spawn_blocking-only code." },
+  { path = "serde_json::from_reader", reason = "Avoid blocking JSON reader APIs in runtime-sensitive code; prefer async reads or read-to-bytes/string first with explicit execution context." }
+]

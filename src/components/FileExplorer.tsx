@@ -10,8 +10,8 @@ import {
     dragAndDropFeature
 } from '@headless-tree/core';
 import { BladeDispatcher } from '../services/blade';
-import { subscribeBladeEventType } from '../services/bladeEvents';
-import { FileEntry, FileEvent } from '../types/blade';
+import { subscribeBladeNestedEventType } from '../services/bladeEvents';
+import { FileEntry } from '../types/blade';
 import { Folder, ChevronRight, FileCode, FileText, FileBox, Search, FilePlus, FolderPlus, Pencil, Trash2, Copy, Scissors, Clipboard, Terminal, Loader2 } from 'lucide-react';
 import { useContextMenu, ContextMenuItem } from './ui/ContextMenu';
 import { ConfirmModal } from './ui/Modal';
@@ -537,17 +537,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
 
     // Listen for file system events to update tree dynamically
     React.useEffect(() => {
-        const unsubscribe = subscribeBladeEventType('File', (event) => {
-            const filePayload = event.event.payload as FileEvent;
-            const pathsToInvalidate: string[] = [];
-
-            if (filePayload.type === 'Created' || filePayload.type === 'Deleted') {
-                pathsToInvalidate.push(filePayload.payload.path);
-            } else if (filePayload.type === 'Renamed') {
-                pathsToInvalidate.push(filePayload.payload.old_path);
-                pathsToInvalidate.push(filePayload.payload.new_path);
-            }
-
+        const invalidatePaths = (pathsToInvalidate: string[]) => {
             const currentTree = treeRef.current;
             pathsToInvalidate.forEach(path => {
                 const parentPath = path.substring(0, path.lastIndexOf('/'));
@@ -560,10 +550,22 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                     invalidateFolderChildren(currentTree, 'root');
                 }
             });
+        };
+
+        const unsubscribeCreated = subscribeBladeNestedEventType('File', 'Created', (payload) => {
+            invalidatePaths([payload.path]);
+        });
+        const unsubscribeDeleted = subscribeBladeNestedEventType('File', 'Deleted', (payload) => {
+            invalidatePaths([payload.path]);
+        });
+        const unsubscribeRenamed = subscribeBladeNestedEventType('File', 'Renamed', (payload) => {
+            invalidatePaths([payload.old_path, payload.new_path]);
         });
 
         return () => {
-            unsubscribe();
+            unsubscribeCreated();
+            unsubscribeDeleted();
+            unsubscribeRenamed();
         };
     }, [invalidateFolderChildren]);
 

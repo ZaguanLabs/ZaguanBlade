@@ -1,6 +1,5 @@
 use serde::Serialize;
 use std::env;
-use std::process::Command;
 
 /// Environment information sent to zcoderd during authentication
 #[derive(Debug, Clone, Serialize, Default)]
@@ -139,6 +138,7 @@ fn detect_arch() -> Option<String> {
 }
 
 /// Detect OS version
+#[allow(clippy::disallowed_methods, clippy::disallowed_types)]
 fn detect_os_version() -> Option<String> {
     #[cfg(target_os = "linux")]
     {
@@ -157,7 +157,7 @@ fn detect_os_version() -> Option<String> {
     #[cfg(target_os = "macos")]
     {
         // Use sw_vers to get macOS version
-        if let Ok(output) = Command::new("sw_vers").arg("-productVersion").output() {
+        if let Ok(output) = std::process::Command::new("sw_vers").arg("-productVersion").output() {
             if output.status.success() {
                 let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 return Some(format!("macOS {}", version));
@@ -168,7 +168,7 @@ fn detect_os_version() -> Option<String> {
     #[cfg(target_os = "windows")]
     {
         // Use systeminfo or registry
-        if let Ok(output) = Command::new("cmd").args(["/C", "ver"]).output() {
+        if let Ok(output) = std::process::Command::new("cmd").args(["/C", "ver"]).output() {
             if output.status.success() {
                 let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 return Some(version);
@@ -249,10 +249,11 @@ fn detect_package_manager() -> Option<String> {
 }
 
 /// Check if a command exists in PATH
+#[allow(clippy::disallowed_methods, clippy::disallowed_types)]
 fn check_command_exists(cmd: &str) -> bool {
     #[cfg(unix)]
     {
-        Command::new("which")
+        std::process::Command::new("which")
             .arg(cmd)
             .output()
             .map(|o| o.status.success())
@@ -260,7 +261,7 @@ fn check_command_exists(cmd: &str) -> bool {
     }
     #[cfg(windows)]
     {
-        Command::new("where")
+        std::process::Command::new("where")
             .arg(cmd)
             .output()
             .map(|o| o.status.success())
@@ -273,12 +274,13 @@ fn check_command_exists(cmd: &str) -> bool {
 }
 
 /// Get version string from a command
+#[allow(clippy::disallowed_methods, clippy::disallowed_types)]
 fn get_version<I, S>(cmd: &str, args: I) -> Option<String>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
 {
-    let output = Command::new(cmd).args(args).output().ok()?;
+    let output = std::process::Command::new(cmd).args(args).output().ok()?;
 
     if !output.status.success() {
         return None;

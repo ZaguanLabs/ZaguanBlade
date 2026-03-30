@@ -3,7 +3,6 @@ use image::GenericImageView;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::io::Cursor;
-use std::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowInfo {
@@ -80,8 +79,9 @@ fn encode_png(image: image::DynamicImage) -> Result<CaptureResult, String> {
 
 /// Get the current X11 desktop number via EWMH _NET_CURRENT_DESKTOP.
 /// Returns None on non-X11 or if xprop is unavailable (graceful fallback).
+#[allow(clippy::disallowed_methods, clippy::disallowed_types)]
 fn get_current_desktop() -> Option<u32> {
-    let output = Command::new("xprop")
+    let output = std::process::Command::new("xprop")
         .args(["-root", "_NET_CURRENT_DESKTOP"])
         .output()
         .ok()?;
@@ -97,11 +97,12 @@ fn get_current_desktop() -> Option<u32> {
 /// Queries _NET_CLIENT_LIST for all managed windows, then checks each
 /// window's _NET_WM_DESKTOP. Returns None if EWMH is unavailable
 /// (graceful fallback — all windows shown).
+#[allow(clippy::disallowed_methods, clippy::disallowed_types)]
 fn get_current_desktop_window_ids() -> Option<HashSet<u32>> {
     let current_desktop = get_current_desktop()?;
 
     // Get all managed window IDs from root
-    let output = Command::new("xprop")
+    let output = std::process::Command::new("xprop")
         .args(["-root", "-notype", "_NET_CLIENT_LIST"])
         .output()
         .ok()?;
@@ -119,7 +120,7 @@ fn get_current_desktop_window_ids() -> Option<HashSet<u32>> {
         let Some(wid) = wid else { continue };
 
         // Query this window's desktop
-        let prop = Command::new("xprop")
+        let prop = std::process::Command::new("xprop")
             .args(["-id", &format!("0x{:x}", wid), "-notype", "_NET_WM_DESKTOP"])
             .output()
             .ok();

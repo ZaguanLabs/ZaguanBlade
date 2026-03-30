@@ -271,6 +271,8 @@ pub struct CommandExecutedPayload {
 pub struct ChangeAppliedPayload {
     pub change_id: String,
     pub file_path: String,
+    #[serde(default)]
+    pub file_paths: Vec<String>,
 }
 
 /// Payload for edit-rejected event

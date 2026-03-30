@@ -7,6 +7,7 @@ use crate::ephemeral_documents;
 use crate::feature_flags::FeatureFlags;
 use crate::uncommitted_changes::UncommittedChangeTracker;
 use crate::warmup;
+use crate::worktree::WorktreeStore;
 use crate::workspace_manager::WorkspaceManager;
 use crate::ws_connection_manager::WsConnectionManager;
 use dotenvy::dotenv;
@@ -53,6 +54,7 @@ pub struct AppState {
     pub fs_watcher: Mutex<Option<RecommendedWatcher>>, // Workspace file watcher
     pub history_service: RwLock<Option<std::sync::Arc<crate::history::HistoryService>>>, // File history service
     pub language_service: RwLock<Option<std::sync::Arc<crate::language_service::LanguageService>>>, // v1.3: Unified Language Service
+    pub worktree: RwLock<Option<std::sync::Arc<WorktreeStore>>>, // Shared workspace snapshot/index
     pub uncommitted_changes: UncommittedChangeTracker, // Track AI changes pending accept/reject
     pub indexer_manager: Mutex<Option<crate::indexer::IndexerManager>>, // Project indexer
     pub feature_flags: FeatureFlags,                   // Headless migration feature flags
@@ -152,6 +154,7 @@ impl AppState {
             startup_services_started: AtomicBool::new(false),
             history_service: RwLock::new(None),
             language_service: RwLock::new(None),
+            worktree: RwLock::new(None),
             uncommitted_changes: UncommittedChangeTracker::new(),
             indexer_manager: Mutex::new(indexer_manager),
             feature_flags: FeatureFlags::new(),
@@ -231,6 +234,26 @@ impl AppState {
         Ok(guard.get_or_insert_with(|| service).clone())
     }
 
+    pub fn worktree(&self) -> Result<Arc<WorktreeStore>, String> {
+        if let Some(store) = self
+            .worktree
+            .read()
+            .map_err(|e| format!("Failed to lock worktree store: {}", e))?
+            .clone()
+        {
+            return Ok(store);
+        }
+
+        let workspace_root = self.workspace_root().ok_or_else(|| "No workspace open".to_string())?;
+        let store = Arc::new(WorktreeStore::new(workspace_root)?);
+
+        let mut guard = self
+            .worktree
+            .write()
+            .map_err(|e| format!("Failed to write worktree store: {}", e))?;
+        Ok(guard.get_or_insert_with(|| store).clone())
+    }
+
     pub fn language_service(
         &self,
     ) -> Result<Arc<crate::language_service::LanguageService>, String> {
@@ -258,6 +281,9 @@ impl AppState {
             crate::language_service::LanguageService::new(workspace_root, symbol_store)
                 .map_err(|e| format!("Failed to initialize LanguageService: {}", e))?,
         );
+        if let Ok(worktree) = self.worktree() {
+            service.set_worktree_store(worktree);
+        }
 
         let mut guard = self
             .language_service
@@ -285,6 +311,10 @@ impl AppState {
             .language_service
             .write()
             .map_err(|e| format!("Failed to write language service: {}", e))? = None;
+        *self
+            .worktree
+            .write()
+            .map_err(|e| format!("Failed to write worktree store: {}", e))? = None;
         *self
             .indexer_manager
             .lock()

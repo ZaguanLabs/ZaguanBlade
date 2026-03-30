@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
+use crate::buffer_snapshot::{BufferSnapshot, BufferSnapshotStore};
 use crate::gitignore_filter::GitignoreFilter;
 use crate::project_settings;
 use crate::symbol_index::{SearchQuery, SearchResult, SymbolReference, SymbolStore};
@@ -14,6 +15,7 @@ use crate::tree_sitter::{
     extract_symbol_relationships, extract_symbols, Language, Symbol, SymbolRelationship,
     SymbolRelationshipType, SymbolType, TreeSitterParser,
 };
+use crate::worktree::WorktreeStore;
 
 /// Unified language service
 pub struct LanguageService {
@@ -23,6 +25,9 @@ pub struct LanguageService {
     parser: Mutex<TreeSitterParser>,
     /// Symbol index for persistent storage
     symbol_store: Arc<SymbolStore>,
+    /// Shared in-memory worktree snapshot/index
+    worktree_store: RwLock<Option<Arc<WorktreeStore>>>,
+    buffer_snapshots: BufferSnapshotStore,
 
     /// In-memory cache of recently parsed files
     file_cache: RwLock<HashMap<String, CachedFile>>,
@@ -33,6 +38,7 @@ pub struct LanguageService {
 struct CachedFile {
     /// Content hash for change detection
     hash: String,
+    _snapshot: Arc<BufferSnapshot>,
     /// Extracted symbols
     symbols: Vec<Symbol>,
 }
@@ -544,9 +550,137 @@ impl LanguageService {
             workspace_root,
             parser: Mutex::new(parser),
             symbol_store,
+            worktree_store: RwLock::new(None),
+            buffer_snapshots: BufferSnapshotStore::new(),
 
             file_cache: RwLock::new(HashMap::new()),
         })
+    }
+
+    pub fn set_worktree_store(&self, store: Arc<WorktreeStore>) {
+        *self.worktree_store.write().unwrap() = Some(store);
+    }
+
+    pub fn get_buffer_snapshot(&self, file_path: &str) -> Result<Arc<BufferSnapshot>, LanguageError> {
+        self.load_buffer_snapshot(file_path)
+    }
+
+    pub fn get_file_content(&self, file_path: &str) -> Result<String, LanguageError> {
+        Ok(self.load_buffer_snapshot(file_path)?.to_string())
+    }
+
+    pub fn get_cursor_excerpt(
+        &self,
+        file_path: &str,
+        line: u32,
+        padding: usize,
+    ) -> Result<String, LanguageError> {
+        Ok(self
+            .load_buffer_snapshot(file_path)?
+            .excerpt_around_line(line, padding))
+    }
+
+    pub fn get_symbol_byte_range(
+        &self,
+        symbol: &Symbol,
+        file_path: &str,
+    ) -> Result<(usize, usize), LanguageError> {
+        self.load_buffer_snapshot(file_path)?
+            .symbol_byte_range(symbol)
+            .map_err(LanguageError::Index)
+    }
+
+    pub fn get_symbol_identifier_byte_range(
+        &self,
+        symbol: &Symbol,
+        file_path: &str,
+    ) -> Result<(usize, usize), LanguageError> {
+        let snapshot = self.load_buffer_snapshot(file_path)?;
+        let symbol_start = symbol.byte_offset;
+        let symbol_end = symbol
+            .byte_offset
+            .saturating_add(symbol.byte_length)
+            .min(snapshot.content().len());
+
+        if symbol_start >= symbol_end {
+            return self.get_symbol_byte_range(symbol, file_path);
+        }
+
+        let symbol_span = &snapshot.content()[symbol_start..symbol_end];
+        if let Some(relative_start) = symbol_span.find(&symbol.name) {
+            let start = symbol_start + relative_start;
+            let end = start + symbol.name.len();
+            return Ok((start, end));
+        }
+
+        self.get_symbol_byte_range(symbol, file_path)
+    }
+
+    pub fn get_symbol_excerpt(
+        &self,
+        symbol: &Symbol,
+        file_path: &str,
+    ) -> Result<String, LanguageError> {
+        let snapshot = self.load_buffer_snapshot(file_path)?;
+        let (start, end) = if symbol.byte_length > 0 {
+            let start = symbol.byte_offset.min(snapshot.content().len());
+            let end = symbol
+                .byte_offset
+                .saturating_add(symbol.byte_length)
+                .min(snapshot.content().len());
+            if start < end {
+                (start, end)
+            } else {
+                self.get_symbol_byte_range(symbol, file_path)?
+            }
+        } else {
+            self.get_symbol_byte_range(symbol, file_path)?
+        };
+
+        Ok(snapshot.content()[start..end].to_string())
+    }
+
+    pub fn get_symbol_inner_byte_range(
+        &self,
+        symbol: &Symbol,
+        file_path: &str,
+    ) -> Result<(usize, usize), LanguageError> {
+        let snapshot = self.load_buffer_snapshot(file_path)?;
+        let symbol_start = symbol.byte_offset.min(snapshot.content().len());
+        let symbol_end = symbol
+            .byte_offset
+            .saturating_add(symbol.byte_length)
+            .min(snapshot.content().len());
+
+        if symbol_start >= symbol_end {
+            return self.get_symbol_byte_range(symbol, file_path);
+        }
+
+        let symbol_span = &snapshot.content()[symbol_start..symbol_end];
+        let body_start = symbol_span
+            .find('{')
+            .map(|idx| symbol_start + idx + 1)
+            .or_else(|| symbol_span.find(':').map(|idx| symbol_start + idx + 1));
+        let body_end = symbol_span
+            .rfind('}')
+            .map(|idx| symbol_start + idx)
+            .or_else(|| symbol_span.rfind('\n').map(|idx| symbol_start + idx));
+
+        match (body_start, body_end) {
+            (Some(start), Some(end)) if start <= end => Ok((start, end)),
+            _ => self.get_symbol_byte_range(symbol, file_path),
+        }
+    }
+
+    pub fn get_line_byte_range(
+        &self,
+        file_path: &str,
+        start_line: u32,
+        end_line: u32,
+    ) -> Result<(usize, usize), LanguageError> {
+        self.load_buffer_snapshot(file_path)?
+            .line_byte_range(start_line, end_line)
+            .map_err(LanguageError::Index)
     }
 
     // =========================================================================
@@ -555,9 +689,9 @@ impl LanguageService {
 
     /// Index a single file
     pub fn index_file(&self, file_path: &str) -> Result<Vec<Symbol>, LanguageError> {
-        let full_path = self.resolve_path(file_path);
-        let content = std::fs::read_to_string(&full_path)?;
-        let hash = compute_hash(&content);
+        let snapshot = self.load_snapshot_for_indexing(file_path)?;
+        let content = snapshot.content();
+        let hash = snapshot.hash().to_string();
 
         // Check if reindexing is needed
         if !self.symbol_store.needs_reindex(file_path, &hash)? {
@@ -567,7 +701,7 @@ impl LanguageService {
         }
 
         // Detect language and parse
-        let language = Language::from_path(file_path).ok_or_else(|| {
+        let language = snapshot.language().or_else(|| Language::from_path(file_path)).ok_or_else(|| {
             LanguageError::NotSupported(format!("Unknown language for: {}", file_path))
         })?;
 
@@ -608,6 +742,7 @@ impl LanguageService {
                 file_path.to_string(),
                 CachedFile {
                     hash,
+                    _snapshot: snapshot,
                     symbols: symbols.clone(),
                 },
             );
@@ -618,14 +753,29 @@ impl LanguageService {
 
     /// Index an entire directory recursively
     pub fn index_directory(&self, dir_path: &str) -> Result<IndexStats, LanguageError> {
-        let full_path = self.resolve_path(dir_path);
         let mut stats = IndexStats::default();
         let start = std::time::Instant::now();
 
-        // Create gitignore filter if enabled
-        let gitignore_filter = self.create_gitignore_filter();
+        if let Some(store) = self.worktree_store.read().unwrap().clone() {
+            for relative_path in store.supported_language_files(dir_path) {
+                match self.index_file(&relative_path) {
+                    Ok(symbols) => {
+                        stats.files_indexed += 1;
+                        stats.symbols_extracted += symbols.len();
+                    }
+                    Err(_) => {
+                        stats.files_failed += 1;
+                    }
+                }
+            }
+        } else {
+            let full_path = self.resolve_path(dir_path);
 
-        self.index_directory_recursive(&full_path, "", &mut stats, gitignore_filter.as_ref())?;
+            // Create gitignore filter if enabled
+            let gitignore_filter = self.create_gitignore_filter();
+
+            self.index_directory_recursive(&full_path, "", &mut stats, gitignore_filter.as_ref())?;
+        }
 
         stats.duration_ms = start.elapsed().as_millis() as u64;
         Ok(stats)
@@ -885,12 +1035,15 @@ impl LanguageService {
 
     /// Notify that a document was opened
     pub fn did_open(&self, file_path: &str, content: &str) -> Result<(), LanguageError> {
+        let snapshot_key = self.snapshot_key(file_path);
+        self.buffer_snapshots.upsert_live(&snapshot_key, None, content);
+
         if should_allow_non_indexed_live_sync(file_path) {
             return Ok(());
         }
 
         // Index the file
-        let _ = self.index_file_content(file_path, content)?;
+        let _ = self.index_file_content(file_path, None, content)?;
 
         Ok(())
     }
@@ -899,15 +1052,19 @@ impl LanguageService {
     pub fn did_change(
         &self,
         file_path: &str,
-        _version: i32,
+        version: i32,
         content: &str,
     ) -> Result<(), LanguageError> {
+        let snapshot_key = self.snapshot_key(file_path);
+        self.buffer_snapshots
+            .upsert_live(&snapshot_key, Some(version), content);
+
         if should_allow_non_indexed_live_sync(file_path) {
             return Ok(());
         }
 
         // Re-index the file
-        let _ = self.index_file_content(file_path, content)?;
+        let _ = self.index_file_content(file_path, Some(version), content)?;
 
         Ok(())
     }
@@ -919,6 +1076,7 @@ impl LanguageService {
             let mut cache = self.file_cache.write().unwrap();
             cache.remove(file_path);
         }
+        self.buffer_snapshots.remove(&self.snapshot_key(file_path));
 
         Ok(())
     }
@@ -929,6 +1087,7 @@ impl LanguageService {
             let mut cache = self.file_cache.write().unwrap();
             cache.remove(file_path);
         }
+        self.buffer_snapshots.remove(&self.snapshot_key(file_path));
 
         self.symbol_store.delete_file_symbols(file_path)?;
         self.symbol_store.delete_indexed_file(file_path)?;
@@ -1038,6 +1197,10 @@ impl LanguageService {
     }
 
     fn ensure_file_fresh(&self, file_path: &str) -> Result<(), LanguageError> {
+        if self.buffer_snapshots.contains_live(&self.snapshot_key(file_path)) {
+            return Ok(());
+        }
+
         let resolved = self.resolve_path(file_path);
         if !resolved.exists() {
             self.remove_file(file_path)?;
@@ -1334,9 +1497,13 @@ impl LanguageService {
     fn index_file_content(
         &self,
         file_path: &str,
+        version: Option<i32>,
         content: &str,
     ) -> Result<Vec<Symbol>, LanguageError> {
-        let hash = compute_hash(content);
+        let snapshot = self
+            .buffer_snapshots
+            .upsert_live(&self.snapshot_key(file_path), version, content);
+        let hash = snapshot.hash().to_string();
 
         // Check cache first
         {
@@ -1349,26 +1516,26 @@ impl LanguageService {
         }
 
         // Detect language and parse
-        let language = Language::from_path(file_path).ok_or_else(|| {
+        let language = snapshot.language().or_else(|| Language::from_path(file_path)).ok_or_else(|| {
             LanguageError::NotSupported(format!("Unknown language for: {}", file_path))
         })?;
 
         let tree = {
             let mut parser = self.parser.lock().unwrap();
             parser
-                .parse(content, language)
+                .parse(snapshot.content(), language)
                 .map_err(|e| LanguageError::Parse(e.to_string()))?
         };
 
         // Extract symbols
-        let extracted_symbols = extract_symbols(&tree, content, language, file_path);
+        let extracted_symbols = extract_symbols(&tree, snapshot.content(), language, file_path);
         let mut relationships =
-            extract_symbol_relationships(&tree, content, language, file_path, &extracted_symbols);
-        let symbols = self.with_file_root_symbol(file_path, content, extracted_symbols);
+            extract_symbol_relationships(&tree, snapshot.content(), language, file_path, &extracted_symbols);
+        let symbols = self.with_file_root_symbol(file_path, snapshot.content(), extracted_symbols);
         self.canonicalize_import_relationships(file_path, &mut relationships);
         self.append_module_export_relationships(
             file_path,
-            content,
+            snapshot.content(),
             language,
             &symbols,
             &mut relationships,
@@ -1390,12 +1557,46 @@ impl LanguageService {
                 file_path.to_string(),
                 CachedFile {
                     hash,
+                    _snapshot: snapshot,
                     symbols: symbols.clone(),
                 },
             );
         }
 
         Ok(symbols)
+    }
+
+    fn snapshot_key(&self, file_path: &str) -> String {
+        let path = Path::new(file_path);
+        if path.is_absolute() {
+            self.path_to_workspace_relative(path)
+        } else {
+            file_path.replace('\\', "/")
+        }
+    }
+
+    fn load_snapshot_for_indexing(&self, file_path: &str) -> Result<Arc<BufferSnapshot>, LanguageError> {
+        let key = self.snapshot_key(file_path);
+        if let Some(snapshot) = self.buffer_snapshots.get(&key) {
+            if snapshot.is_live() {
+                return Ok(snapshot);
+            }
+        }
+
+        let full_path = self.resolve_path(file_path);
+        let content = std::fs::read_to_string(&full_path)?;
+        Ok(self.buffer_snapshots.upsert_disk(&key, &content))
+    }
+
+    fn load_buffer_snapshot(&self, file_path: &str) -> Result<Arc<BufferSnapshot>, LanguageError> {
+        let key = self.snapshot_key(file_path);
+        if let Some(snapshot) = self.buffer_snapshots.get(&key) {
+            return Ok(snapshot);
+        }
+
+        let full_path = self.resolve_path(file_path);
+        let content = std::fs::read_to_string(&full_path)?;
+        Ok(self.buffer_snapshots.upsert_disk(&key, &content))
     }
 
     /// Get statistics about the index

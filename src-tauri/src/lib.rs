@@ -1,6 +1,9 @@
+#![deny(clippy::disallowed_methods, clippy::disallowed_types)]
+
 pub mod agentic_loop;
 pub mod ai_workflow;
 pub mod app_state;
+pub mod buffer_snapshot;
 pub mod blade_event_scheduler;
 pub mod blade_client;
 pub mod blade_protocol;
@@ -50,6 +53,7 @@ pub mod uncommitted_changes;
 pub mod utils;
 pub mod warmup;
 pub mod workflow_controller;
+pub mod worktree;
 pub mod workspace_manager;
 pub mod ws_connection_manager;
 pub mod xml_parser;

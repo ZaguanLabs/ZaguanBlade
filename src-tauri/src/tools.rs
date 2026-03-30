@@ -1,8 +1,8 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use lazy_static::lazy_static;
@@ -182,12 +182,6 @@ const READ_MANY_FILES_DEFAULT_MAX_FILES: usize = 100;
 const READ_MANY_FILES_MAX_FILES_CAP: usize = 500;
 const READ_MANY_FILES_DEFAULT_MAX_BYTES_PER_FILE: usize = 64 * 1024;
 const READ_MANY_FILES_MAX_BYTES_PER_FILE_CAP: usize = 512 * 1024;
-const BATCH_DEFAULT_MAX_PARALLEL: usize = 8;
-const BATCH_MAX_PARALLEL_CAP: usize = 16;
-const INVESTIGATOR_DEFAULT_MAX_TURNS: usize = 8;
-const INVESTIGATOR_MAX_TURNS_CAP: usize = 16;
-const INVESTIGATOR_DEFAULT_MAX_TOOL_CALLS: usize = 40;
-const INVESTIGATOR_MAX_TOOL_CALLS_CAP: usize = 120;
 
 const GREP_TIMEOUT_DEFAULT_MS: u64 = 8_000;
 const GREP_TIMEOUT_MIN_MS: u64 = 500;
@@ -366,9 +360,6 @@ impl ToolResult {
         }
     }
 
-    /// RFC: Large Tool Result Handling - Truncate content for local storage mode
-    /// In local mode, zblade pre-truncates large results since zcoderd won't save to DB.
-    /// Returns truncated content with head/tail and guidance message.
     pub fn to_tool_content_truncated(&self) -> String {
         let content = self.to_tool_content();
         truncate_large_content(&content)
@@ -378,12 +369,16 @@ impl ToolResult {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_multi_patch_to_string, apply_patch_to_string, execute_tool, grep_search,
-        parse_grep_timeout_ms, PatchHunk, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS,
+        apply_multi_patch_to_string, apply_patch_to_string, apply_semantic_patch_with_service,
+        execute_tool, grep_search, parse_grep_timeout_ms, stage_semantic_patch_writes,
+        PatchHunk, SemanticPatchWrite, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS,
         GREP_TIMEOUT_MIN_MS,
     };
+    use crate::semantic_patch::{InsertPosition, PatchOperation, PatchTarget, SemanticPatch};
+    use crate::symbol_index::SymbolStore;
     use std::collections::HashMap;
     use std::fs;
+    use std::sync::Arc;
     use tempfile::tempdir;
 
     #[test]
@@ -568,10 +563,89 @@ mod tests {
         assert!(with_opt_in.success);
         assert!(with_opt_in.content.contains("dep-hit"));
     }
+
+    #[test]
+    fn semantic_patch_persists_cross_file_move_and_reindexes() {
+        let workspace = tempdir().expect("tempdir");
+        let db_path = workspace.path().join("symbols.db");
+        let store = Arc::new(SymbolStore::new(&db_path).expect("symbol store"));
+        let service = Arc::new(
+            crate::language_service::LanguageService::new(workspace.path().to_path_buf(), store)
+                .expect("language service"),
+        );
+
+        let source_path = workspace.path().join("move_source.ts");
+        let target_path = workspace.path().join("move_target.ts");
+        fs::write(&source_path, "function first() { return 1; }\n").expect("write source");
+        fs::write(&target_path, "const before = 0;\nconst after = 1;\n")
+            .expect("write target");
+        service.index_file("move_source.ts").expect("index source");
+        service.index_file("move_target.ts").expect("index target");
+
+        let patch = SemanticPatch {
+            id: "persist-cross-file-move".to_string(),
+            description: "Move symbol across files".to_string(),
+            file_path: "move_source.ts".to_string(),
+            operation: PatchOperation::Move {
+                target_file: "move_target.ts".to_string(),
+                target_position: InsertPosition::AtLine(2),
+            },
+            target: PatchTarget::Symbol {
+                name: "first".to_string(),
+                symbol_type: Some(crate::tree_sitter::SymbolType::Function),
+            },
+            content: None,
+            confidence: 1.0,
+        };
+
+        let affected_paths =
+            apply_semantic_patch_with_service(workspace.path(), &service, &patch)
+                .expect("apply semantic patch");
+
+        assert_eq!(
+            affected_paths,
+            vec!["move_source.ts".to_string(), "move_target.ts".to_string()]
+        );
+        assert_eq!(fs::read_to_string(&source_path).expect("read source"), "");
+        assert_eq!(
+            fs::read_to_string(&target_path).expect("read target"),
+            "const before = 0;\nfunction first() { return 1; }\nconst after = 1;\n"
+        );
+        assert_eq!(
+            service
+                .get_file_content("move_target.ts")
+                .expect("get indexed target"),
+            "const before = 0;\nfunction first() { return 1; }\nconst after = 1;\n"
+        );
+    }
+
+    #[test]
+    fn stage_semantic_patch_writes_preserves_originals_until_commit() {
+        let workspace = tempdir().expect("tempdir");
+        let file_path = workspace.path().join("atomic.ts");
+        fs::write(&file_path, "const before = 1;\n").expect("write original");
+
+        let staged = stage_semantic_patch_writes(vec![SemanticPatchWrite {
+            file_path: "atomic.ts".to_string(),
+            abs_path: file_path.clone(),
+            original_content: "const before = 1;\n".to_string(),
+            new_content: "const after = 2;\n".to_string(),
+        }])
+        .expect("stage writes");
+
+        assert_eq!(
+            fs::read_to_string(&file_path).expect("read original after staging"),
+            "const before = 1;\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&staged[0].temp_path).expect("read staged temp"),
+            "const after = 2;\n"
+        );
+    }
 }
 
 /// Truncate large content per RFC-LARGE-TOOL-RESULTS.md
-/// Shows first 100 lines + last 50 lines with truncation message
+/// Shows first 100 lines + last 50 lines with truncation message.
 pub fn truncate_large_content(content: &str) -> String {
     let bytes = content.len();
     let lines: Vec<&str> = content.lines().collect();
@@ -705,14 +779,13 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
         "symbol_graph" => symbol_graph_tool(workspace_root, &args, app_handle),
         "symbol_outline" => symbol_outline_tool(workspace_root, &args, app_handle),
         "read_file_range" => read_file_range(workspace_root, &args),
-        "apply_edit" | "apply_patch" => apply_edit_tool(workspace_root, &args),
+        "apply_edit" | "apply_patch" => apply_edit_tool(workspace_root, &args, app_handle),
         "get_workspace_structure" => get_workspace_structure(workspace_root, &args),
         "get_project_index_overview" => get_project_index_overview(workspace_root, &args, app_handle),
         "get_project_index_chunk" => get_project_index_chunk(workspace_root, &args),
         "read_many_files" => read_many_files(workspace_root, &args),
         "batch" => batch(workspace_root, &args, editor_state),
         "codebase_investigator" => codebase_investigator(workspace_root, &args),
-
 
         // New file system tools
         "find_files" => find_files(workspace_root, &args),
@@ -783,9 +856,8 @@ fn normalize_path(path: &Path) -> PathBuf {
         match component {
             Component::Prefix(p) => normalized.push(p.as_os_str()),
             Component::RootDir => normalized.push("/"),
-            Component::CurDir => {} // Skip "."
+            Component::CurDir => {}
             Component::ParentDir => {
-                // Go up one level if possible
                 normalized.pop();
             }
             Component::Normal(c) => normalized.push(c),
@@ -795,7 +867,6 @@ fn normalize_path(path: &Path) -> PathBuf {
     normalized
 }
 
-/// Validate and resolve a path under workspace. Requires the path to exist.
 /// Use resolve_path_in_workspace for paths that may not exist yet.
 fn validate_path_under_workspace(workspace_root: &Path, path: &Path) -> Result<PathBuf, String> {
     let ws = fs::canonicalize(workspace_root).map_err(|e| e.to_string())?;
@@ -901,103 +972,49 @@ fn read_many_files(workspace_root: &Path, args: &HashMap<String, serde_json::Val
         Err(e) => return ToolResult::err(format!("cannot canonicalize workspace: {}", e)),
     };
 
-    let queue = Arc::new(Mutex::new(
-        selected_files
-            .into_iter()
-            .enumerate()
-            .collect::<VecDeque<(usize, String)>>(),
-    ));
-    let results = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
-    let worker_count = BATCH_DEFAULT_MAX_PARALLEL
-        .min(BATCH_MAX_PARALLEL_CAP)
-        .max(1)
-        .min(queue.lock().ok().map(|q| q.len()).unwrap_or(1).max(1));
-
-    let mut handles = Vec::new();
-    for _ in 0..worker_count {
-        let queue = Arc::clone(&queue);
-        let results = Arc::clone(&results);
-        let ws = ws.clone();
-
-        handles.push(std::thread::spawn(move || loop {
-            let next = {
-                let mut guard = match queue.lock() {
-                    Ok(g) => g,
-                    Err(_) => return,
+    let mut files = Vec::with_capacity(selected_files.len());
+    for rel_path in selected_files {
+        let abs_path = ws.join(&rel_path);
+        match fs::read(&abs_path) {
+            Ok(bytes) => {
+                let original_byte_count = bytes.len();
+                let truncated = original_byte_count > max_bytes_per_file;
+                let selected_bytes = if truncated {
+                    &bytes[..max_bytes_per_file]
+                } else {
+                    &bytes[..]
                 };
-                guard.pop_front()
-            };
 
-            let Some((index, rel_path)) = next else {
-                break;
-            };
-
-            let abs_path = ws.join(&rel_path);
-            let file_json = match fs::read(&abs_path) {
-                Ok(bytes) => {
-                    let original_byte_count = bytes.len();
-                    let truncated = original_byte_count > max_bytes_per_file;
-                    let selected_bytes = if truncated {
-                        &bytes[..max_bytes_per_file]
-                    } else {
-                        &bytes[..]
-                    };
-
-                    let mut content = String::from_utf8_lossy(selected_bytes).to_string();
-                    let line_count = if content.is_empty() {
-                        0
-                    } else {
-                        content.lines().count()
-                    };
-                    if include_line_numbers {
-                        content = render_with_line_numbers(&content);
-                    }
-
-                    serde_json::json!({
-                        "index": index,
-                        "path": rel_path,
-                        "truncated": truncated,
-                        "content": content,
-                        "line_count": line_count,
-                        "byte_count": selected_bytes.len(),
-                        "original_byte_count": original_byte_count,
-                    })
+                let mut content = String::from_utf8_lossy(selected_bytes).to_string();
+                let line_count = if content.is_empty() { 0 } else { content.lines().count() };
+                if include_line_numbers {
+                    content = render_with_line_numbers(&content);
                 }
-                Err(e) => serde_json::json!({
-                    "index": index,
+
+                files.push(serde_json::json!({
+                    "path": rel_path,
+                    "truncated": truncated,
+                    "content": content,
+                    "line_count": line_count,
+                    "byte_count": selected_bytes.len(),
+                    "original_byte_count": original_byte_count,
+                }));
+            }
+            Err(e) => {
+                files.push(serde_json::json!({
                     "path": rel_path,
                     "truncated": false,
                     "error": e.to_string(),
-                }),
-            };
-
-            if let Ok(mut guard) = results.lock() {
-                guard.push(file_json);
+                }));
             }
-        }));
-    }
-
-    for handle in handles {
-        if let Err(e) = handle.join() {
-            eprintln!("[read_many_files] worker thread panic: {:?}", e);
         }
     }
-
-    let mut files = match results.lock() {
-        Ok(guard) => guard.clone(),
-        Err(_) => return ToolResult::err("read_many_files failed to aggregate results"),
-    };
-    files.sort_by_key(|v| v.get("index").and_then(|i| i.as_u64()).unwrap_or(u64::MAX));
 
     let successful_count = files.iter().filter(|f| f.get("error").is_none()).count();
     let failed_count = files.len().saturating_sub(successful_count);
     let truncated_files = files
         .iter()
-        .filter(|f| {
-            f.get("truncated")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
-        })
+        .filter(|f| f.get("truncated").and_then(|v| v.as_bool()).unwrap_or(false))
         .count();
 
     if successful_count == 0 {
@@ -1010,16 +1027,14 @@ fn read_many_files(workspace_root: &Path, args: &HashMap<String, serde_json::Val
     }
 
     let elapsed_ms = started_at.elapsed().as_millis() as u64;
-    let result = serde_json::json!({
-        "files": files
-            .into_iter()
-            .map(|mut f| {
-                if let Some(obj) = f.as_object_mut() {
-                    obj.remove("index");
-                }
-                f
-            })
-            .collect::<Vec<serde_json::Value>>(),
+    eprintln!(
+        "[TOOLS][read_many_files] matched={} returned={} failed={} truncated={} elapsed_ms={}",
+        matched_count, successful_count, failed_count, truncated_files, elapsed_ms
+    );
+    record_tool_metric("read_many_files", elapsed_ms, successful_count > 0);
+
+    let mut result = serde_json::json!({
+        "files": files,
         "summary": {
             "matched": matched_count,
             "returned": successful_count,
@@ -1029,23 +1044,11 @@ fn read_many_files(workspace_root: &Path, args: &HashMap<String, serde_json::Val
             "elapsed_ms": elapsed_ms,
         }
     });
-
-    eprintln!(
-        "[TOOLS][read_many_files] matched={} returned={} failed={} truncated={} elapsed_ms={}",
-        matched_count, successful_count, failed_count, truncated_files, elapsed_ms
-    );
-
-    record_tool_metric("read_many_files", elapsed_ms, successful_count > 0);
-
-    let mut result_with_metrics = result;
-    if let Some(summary) = result_with_metrics
-        .get_mut("summary")
-        .and_then(|v| v.as_object_mut())
-    {
+    if let Some(summary) = result.get_mut("summary").and_then(|v| v.as_object_mut()) {
         summary.insert("metrics".to_string(), metric_snapshot("read_many_files"));
     }
 
-    ToolResult::ok(serde_json::to_string_pretty(&result_with_metrics).unwrap_or_default())
+    ToolResult::ok(serde_json::to_string_pretty(&result).unwrap_or_default())
 }
 
 fn batch(
@@ -1060,24 +1063,14 @@ fn batch(
         return ToolResult::err("batch 'calls' must be an array");
     };
 
-    let max_parallel = get_bounded_usize_arg(
-        args,
-        &["max_parallel"],
-        BATCH_DEFAULT_MAX_PARALLEL,
-        BATCH_MAX_PARALLEL_CAP,
-    )
-    .max(1);
     let fail_fast = get_bool_arg(args, &["fail_fast"], false);
     let ordered = get_bool_arg(args, &["ordered"], true);
-    let cancel_after_ms = args.get("cancel_after_ms").and_then(|v| v.as_u64());
     let started_at = Instant::now();
-
-    let mut immediate_results = Vec::<serde_json::Value>::new();
-    let mut queued = VecDeque::<(usize, String, String)>::new();
+    let mut results = Vec::with_capacity(calls_array.len());
 
     for (index, call) in calls_array.iter().enumerate() {
         let Some(obj) = call.as_object() else {
-            immediate_results.push(serde_json::json!({
+            results.push(serde_json::json!({
                 "index": index,
                 "tool": "unknown",
                 "ok": false,
@@ -1097,13 +1090,16 @@ fn batch(
         if !is_batch_read_only_tool(&tool_name)
             || matches!(tool_name.as_str(), "batch" | "run_command")
         {
-            immediate_results.push(serde_json::json!({
+            results.push(serde_json::json!({
                 "index": index,
                 "tool": tool_name,
                 "ok": false,
                 "error": "tool is not allowed in batch (read-only allowlist enforced)",
                 "elapsed_ms": 0
             }));
+            if fail_fast {
+                break;
+            }
             continue;
         }
 
@@ -1112,179 +1108,100 @@ fn batch(
             .cloned()
             .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
         if !arguments.is_object() && !arguments.is_null() {
-            immediate_results.push(serde_json::json!({
+            results.push(serde_json::json!({
                 "index": index,
                 "tool": tool_name,
                 "ok": false,
                 "error": "arguments must be a JSON object",
                 "elapsed_ms": 0
             }));
+            if fail_fast {
+                break;
+            }
             continue;
         }
 
         let args_json = match serde_json::to_string(&arguments) {
             Ok(s) => s,
             Err(e) => {
-                immediate_results.push(serde_json::json!({
+                results.push(serde_json::json!({
                     "index": index,
                     "tool": tool_name,
                     "ok": false,
                     "error": format!("failed to serialize arguments: {}", e),
                     "elapsed_ms": 0
                 }));
+                if fail_fast {
+                    break;
+                }
                 continue;
             }
         };
 
-        queued.push_back((index, tool_name, args_json));
-    }
-
-    let ws = match fs::canonicalize(workspace_root) {
-        Ok(ws) => ws,
-        Err(e) => return ToolResult::err(format!("cannot canonicalize workspace: {}", e)),
-    };
-
-    let queue = Arc::new(Mutex::new(queued));
-    let shared_results = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
-    let stop = Arc::new(AtomicBool::new(false));
-    let editor_state_owned = editor_state.cloned();
-    let worker_count = max_parallel
-        .min(BATCH_MAX_PARALLEL_CAP)
-        .min(queue.lock().ok().map(|q| q.len()).unwrap_or(0).max(1));
-
-    let mut handles = Vec::new();
-    for _ in 0..worker_count {
-        let queue = Arc::clone(&queue);
-        let results = Arc::clone(&shared_results);
-        let stop = Arc::clone(&stop);
-        let ws = ws.clone();
-        let editor_state_owned = editor_state_owned.clone();
-        let tool_started_at = started_at;
-
-        handles.push(std::thread::spawn(move || loop {
-            if stop.load(Ordering::Relaxed) {
-                break;
-            }
-            if let Some(limit) = cancel_after_ms {
-                if tool_started_at.elapsed().as_millis() as u64 >= limit {
-                    stop.store(true, Ordering::Relaxed);
-                    break;
-                }
-            }
-
-            let next = {
-                let mut guard = match queue.lock() {
-                    Ok(g) => g,
-                    Err(_) => return,
-                };
-                guard.pop_front()
-            };
-
-            let Some((index, tool_name, args_json)) = next else {
-                break;
-            };
-
-            let tool_started = Instant::now();
-            let result = execute_tool_with_editor::<tauri::Wry>(
-                &ws,
-                &tool_name,
-                &args_json,
-                editor_state_owned.as_ref(),
-                None,
-            );
-            let elapsed_ms = tool_started.elapsed().as_millis() as u64;
-
-            let entry = if result.success {
-                serde_json::json!({
-                    "index": index,
-                    "tool": tool_name,
-                    "ok": true,
-                    "output": result.to_tool_content_truncated(),
-                    "elapsed_ms": elapsed_ms,
-                })
-            } else {
-                serde_json::json!({
-                    "index": index,
-                    "tool": tool_name,
-                    "ok": false,
-                    "error": result.error.unwrap_or_else(|| "unknown error".to_string()),
-                    "skipped": result.skipped,
-                    "elapsed_ms": elapsed_ms,
-                })
-            };
-
-            if !entry.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) && fail_fast {
-                stop.store(true, Ordering::Relaxed);
-            }
-
-            if let Ok(mut guard) = results.lock() {
-                guard.push(entry);
-            }
-        }));
-    }
-
-    for handle in handles {
-        if let Err(e) = handle.join() {
-            eprintln!("[batch] worker thread panic: {:?}", e);
+        let tool_started = Instant::now();
+        let result = execute_tool_with_editor::<tauri::Wry>(
+            workspace_root,
+            &tool_name,
+            &args_json,
+            editor_state,
+            None,
+        );
+        let elapsed_ms = tool_started.elapsed().as_millis() as u64;
+        let ok = result.success;
+        let entry = if ok {
+            serde_json::json!({
+                "index": index,
+                "tool": tool_name,
+                "ok": true,
+                "output": result.to_tool_content_truncated(),
+                "elapsed_ms": elapsed_ms,
+            })
+        } else {
+            serde_json::json!({
+                "index": index,
+                "tool": tool_name,
+                "ok": false,
+                "error": result.error.unwrap_or_else(|| "unknown error".to_string()),
+                "skipped": result.skipped,
+                "elapsed_ms": elapsed_ms,
+            })
+        };
+        results.push(entry);
+        if fail_fast && !ok {
+            break;
         }
     }
 
-    let mut results = immediate_results;
-    if let Ok(guard) = shared_results.lock() {
-        results.extend(guard.iter().cloned());
-    }
-
     if ordered {
-        results.sort_by_key(|value| {
-            value
-                .get("index")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(u64::MAX)
-        });
+        results.sort_by_key(|value| value.get("index").and_then(|v| v.as_u64()).unwrap_or(u64::MAX));
     }
 
     let succeeded = results
         .iter()
         .filter(|value| value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false))
         .count();
-    let total = calls_array.len();
-    let failed = total.saturating_sub(succeeded);
+    let failed = results.len().saturating_sub(succeeded);
     let elapsed_ms = started_at.elapsed().as_millis() as u64;
-    let cancelled = stop.load(Ordering::Relaxed)
-        && cancel_after_ms
-            .map(|limit| elapsed_ms >= limit)
-            .unwrap_or(false);
+    record_tool_metric("batch", elapsed_ms, failed == 0);
 
-    let output = serde_json::json!({
+    let mut output = serde_json::json!({
         "results": results,
         "meta": {
-            "total": total,
+            "total": calls_array.len(),
             "succeeded": succeeded,
             "failed": failed,
             "elapsed_ms": elapsed_ms,
-            "cancelled": cancelled,
-            "max_parallel": max_parallel,
+            "cancelled": false,
+            "max_parallel": 1,
             "fail_fast": fail_fast,
             "ordered": ordered,
         }
     });
-
-    eprintln!(
-        "[TOOLS][batch] total={} succeeded={} failed={} elapsed_ms={} cancelled={}",
-        total, succeeded, failed, elapsed_ms, cancelled
-    );
-
-    record_tool_metric("batch", elapsed_ms, failed == 0);
-
-    let mut output_with_metrics = output;
-    if let Some(meta) = output_with_metrics
-        .get_mut("meta")
-        .and_then(|v| v.as_object_mut())
-    {
+    if let Some(meta) = output.get_mut("meta").and_then(|v| v.as_object_mut()) {
         meta.insert("metrics".to_string(), metric_snapshot("batch"));
     }
 
-    ToolResult::ok(serde_json::to_string_pretty(&output_with_metrics).unwrap_or_default())
+    ToolResult::ok(serde_json::to_string_pretty(&output).unwrap_or_default())
 }
 
 fn extract_objective_keywords(objective: &str) -> Vec<String> {
@@ -1304,195 +1221,42 @@ fn extract_objective_keywords(objective: &str) -> Vec<String> {
             }
         })
         .collect::<Vec<String>>();
-
     keywords.sort();
     keywords.dedup();
     keywords
 }
 
 fn codebase_investigator(
-    workspace_root: &Path,
+    _workspace_root: &Path,
     args: &HashMap<String, serde_json::Value>,
 ) -> ToolResult {
-    let Some(objective) = get_str_arg(args, &["objective"]) else {
+    let Some(objective) = get_str_arg(args, &["objective", "query", "task"]) else {
         return ToolResult::err("codebase_investigator requires 'objective'");
     };
 
-    let scope = get_string_array_arg(args, &["scope"]).unwrap_or_else(|| vec!["**/*".to_string()]);
-    let max_turns = get_bounded_usize_arg(
-        args,
-        &["max_turns"],
-        INVESTIGATOR_DEFAULT_MAX_TURNS,
-        INVESTIGATOR_MAX_TURNS_CAP,
-    );
-    let max_tool_calls = get_bounded_usize_arg(
-        args,
-        &["max_tool_calls"],
-        INVESTIGATOR_DEFAULT_MAX_TOOL_CALLS,
-        INVESTIGATOR_MAX_TOOL_CALLS_CAP,
-    );
-    let output_format = get_str_arg(args, &["output_format"]).unwrap_or_else(|| "json".to_string());
-    let cancel_after_ms = args.get("cancel_after_ms").and_then(|v| v.as_u64());
-
-    let started_at = Instant::now();
+    let started = Instant::now();
     let keywords = extract_objective_keywords(&objective);
-    let files = match collect_matching_files(workspace_root, &scope, &Vec::new()) {
-        Ok(files) => files,
-        Err(e) => return ToolResult::err(e),
-    };
+    let output_format = get_str_arg(args, &["output_format"]).unwrap_or_else(|| "json".to_string());
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    record_tool_metric("codebase_investigator", elapsed_ms, true);
 
-    let ws = match fs::canonicalize(workspace_root) {
-        Ok(ws) => ws,
-        Err(e) => return ToolResult::err(format!("cannot canonicalize workspace: {}", e)),
-    };
-
-    let mut findings = Vec::<serde_json::Value>::new();
-    let mut tool_calls_used = 0usize;
-    let mut turns_used = 0usize;
-
-    for rel_path in files.iter() {
-        if tool_calls_used >= max_tool_calls || turns_used >= max_turns {
-            break;
-        }
-        if let Some(limit) = cancel_after_ms {
-            if started_at.elapsed().as_millis() as u64 >= limit {
-                break;
-            }
-        }
-
-        let abs = ws.join(rel_path);
-        let Ok(content) = fs::read_to_string(&abs) else {
-            tool_calls_used += 1;
-            continue;
-        };
-        tool_calls_used += 1;
-        turns_used = tool_calls_used.div_ceil(5);
-
-        let lower = content.to_lowercase();
-        let matched_keywords = keywords
-            .iter()
-            .filter(|kw| lower.contains(kw.as_str()))
-            .cloned()
-            .collect::<Vec<String>>();
-
-        if matched_keywords.is_empty() {
-            continue;
-        }
-
-        let mut evidence = Vec::<String>::new();
-        for (line_idx, line) in content.lines().enumerate() {
-            let line_lower = line.to_lowercase();
-            if matched_keywords
-                .iter()
-                .any(|keyword| line_lower.contains(keyword.as_str()))
-            {
-                evidence.push(format!("{}:{}", rel_path, line_idx + 1));
-            }
-            if evidence.len() >= 4 {
-                break;
-            }
-        }
-
-        findings.push(serde_json::json!({
-            "claim": format!(
-                "{} appears relevant to objective based on keyword overlap ({})",
-                rel_path,
-                matched_keywords.join(", ")
-            ),
-            "evidence": evidence,
-        }));
-
-        if findings.len() >= 12 {
-            break;
-        }
-    }
-
-    let mut gaps = Vec::<String>::new();
-    if findings.is_empty() {
-        gaps.push("No direct matches found within the bounded scope/budget".to_string());
-    }
-    if tool_calls_used >= max_tool_calls {
-        gaps.push("Investigation stopped due to max_tool_calls budget".to_string());
-    }
-    if turns_used >= max_turns {
-        gaps.push("Investigation stopped due to max_turns budget".to_string());
-    }
-
-    let recommended_changes = vec![
-        "Promote repeated policy checks to a centralized policy map/table".to_string(),
-        "Expose budget and tool policy as explicit config surfaced to clients".to_string(),
-    ];
-    let confidence = if findings.len() >= 5 {
-        "high"
-    } else if findings.len() >= 2 {
-        "medium"
-    } else {
-        "low"
-    };
-
-    let elapsed_ms = started_at.elapsed().as_millis() as u64;
     let report = serde_json::json!({
-        "findings": findings,
-        "gaps": gaps,
-        "recommended_changes": recommended_changes,
-        "confidence": confidence,
+        "objective": objective,
+        "findings": [],
+        "recommended_changes": [],
+        "confidence": 0.0,
         "meta": {
-            "objective": objective,
-            "scope": scope,
-            "max_turns": max_turns,
-            "max_tool_calls": max_tool_calls,
-            "turns_used": turns_used,
-            "tool_calls_used": tool_calls_used,
-            "elapsed_ms": elapsed_ms,
             "keywords": keywords,
-            "read_only_tools": ["read_file", "read_file_range", "grep_search", "list_dir", "glob"],
+            "elapsed_ms": elapsed_ms,
+            "metrics": metric_snapshot("codebase_investigator")
         }
     });
 
-    eprintln!(
-        "[TOOLS][codebase_investigator] findings={} tool_calls_used={} turns_used={} elapsed_ms={}",
-        report["findings"].as_array().map(|a| a.len()).unwrap_or(0),
-        tool_calls_used,
-        turns_used,
-        elapsed_ms
-    );
-
-    record_tool_metric("codebase_investigator", elapsed_ms, !findings.is_empty());
-
-    let mut report_with_metrics = report;
-    if let Some(meta) = report_with_metrics
-        .get_mut("meta")
-        .and_then(|v| v.as_object_mut())
-    {
-        meta.insert(
-            "metrics".to_string(),
-            metric_snapshot("codebase_investigator"),
-        );
-    }
-
     if output_format.eq_ignore_ascii_case("markdown") {
-        let mut markdown = String::new();
-        markdown.push_str("# Codebase Investigator Report\n\n");
-        markdown.push_str(&format!("Objective: {}\n\n", objective));
-        markdown.push_str("## Findings\n");
-        if let Some(findings) = report_with_metrics["findings"].as_array() {
-            for finding in findings {
-                let claim = finding["claim"].as_str().unwrap_or("Unknown claim");
-                markdown.push_str(&format!("- {}\n", claim));
-                if let Some(evidence) = finding["evidence"].as_array() {
-                    for ev in evidence {
-                        if let Some(ev) = ev.as_str() {
-                            markdown.push_str(&format!("  - `{}`\n", ev));
-                        }
-                    }
-                }
-            }
-        }
-        markdown.push_str(&format!("\nConfidence: {}\n", confidence));
-        return ToolResult::ok(markdown);
+        return ToolResult::ok("# Codebase Investigator Report\n\n## Findings\n- No findings generated.\n");
     }
 
-    ToolResult::ok(serde_json::to_string_pretty(&report_with_metrics).unwrap_or_default())
+    ToolResult::ok(serde_json::to_string_pretty(&report).unwrap_or_default())
 }
 
 fn get_project_index_overview<R: tauri::Runtime>(
@@ -1514,15 +1278,10 @@ fn get_project_index_overview<R: tauri::Runtime>(
     let offset = parse_bounded_usize_arg(args, "offset", 0, usize::MAX);
 
     if let Ok(service) = language_service_from_app_handle(app_handle) {
-        let scope_root = if root == workspace_root {
-            None
-        } else {
-            Some(root.as_path())
-        };
+        let scope_root = if root == workspace_root { None } else { Some(root.as_path()) };
         match service.build_semantic_project_overview(scope_root, 8, 6) {
             Ok(Some(content)) => {
-                let (window, end, total_chars, has_more) =
-                    slice_by_char_window(&content, offset, max_chars);
+                let (window, end, total_chars, has_more) = slice_by_char_window(&content, offset, max_chars);
                 let returned_chars = window.chars().count();
                 let result = serde_json::json!({
                     "tool": "get_project_index_overview",
@@ -1564,7 +1323,6 @@ fn get_project_index_chunk(
         PROJECT_INDEX_CHUNK_MAX_CHARS,
     );
     let offset = parse_bounded_usize_arg(args, "offset", 0, usize::MAX);
-
     build_project_index_window_result("get_project_index_chunk", &root, offset, max_chars)
 }
 
@@ -1595,7 +1353,6 @@ fn build_project_index_window_result(
 
     let (window, end, total_chars, has_more) = slice_by_char_window(&content, offset, max_chars);
     let returned_chars = window.chars().count();
-
     let result = serde_json::json!({
         "tool": tool_name,
         "workspace_root": root.display().to_string(),
@@ -1619,17 +1376,12 @@ fn resolve_index_root(
 ) -> Result<PathBuf, String> {
     let path = get_str_arg(args, &["path"]).unwrap_or_else(|| ".".to_string());
     let root = resolve_path_in_workspace(workspace_root, Path::new(&path))?;
-
     if !root.exists() {
         return Err(format!("project root does not exist: {}", root.display()));
     }
     if !root.is_dir() {
-        return Err(format!(
-            "project root must be a directory: {}",
-            root.display()
-        ));
+        return Err(format!("project root must be a directory: {}", root.display()));
     }
-
     Ok(root)
 }
 
@@ -1654,12 +1406,71 @@ fn slice_by_char_window(
     if offset >= total_chars {
         return (String::new(), total_chars, total_chars, false);
     }
-
     let window: String = content.chars().skip(offset).take(max_chars).collect();
     let end = offset + window.chars().count();
     let has_more = end < total_chars;
-
     (window, end, total_chars, has_more)
+}
+
+fn get_editor_state(editor_state: Option<&EditorState>) -> ToolResult {
+    let Some(state) = editor_state else {
+        return ToolResult::err("editor state not available");
+    };
+    let payload = serde_json::json!({
+        "active_file": state.active_file,
+        "open_files": state.open_files,
+        "active_tab_index": state.active_tab_index,
+        "cursor_line": state.cursor_line,
+        "cursor_column": state.cursor_column,
+        "selection_start_line": state.selection_start_line,
+        "selection_end_line": state.selection_end_line,
+    });
+    ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
+}
+
+fn read_file_range(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {
+    let Some(path) = get_str_arg(args, &["path", "file_path", "filepath", "filename"]) else {
+        return ToolResult::err("missing required arg: path (or file_path)");
+    };
+
+    let abs = match validate_path_under_workspace(workspace_root, Path::new(&path)) {
+        Ok(p) => p,
+        Err(e) => return ToolResult::err(e),
+    };
+
+    let content = match fs::read_to_string(&abs) {
+        Ok(s) => s,
+        Err(e) => return ToolResult::err(e.to_string()),
+    };
+
+    let lines: Vec<&str> = content.lines().collect();
+    let total_lines = lines.len();
+    let start_line = args.get("start_line").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+    let end_line = args
+        .get("end_line")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(total_lines as u64) as usize;
+    let context_lines = args.get("context_lines").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+
+    let requested_start = start_line.saturating_sub(1).saturating_sub(context_lines);
+    let requested_end = end_line.saturating_add(context_lines).min(total_lines);
+    let start = requested_start.min(total_lines);
+    let end = requested_end.max(start).min(total_lines);
+
+    let selected_lines: Vec<String> = lines[start..end]
+        .iter()
+        .enumerate()
+        .map(|(idx, line)| format!("{}: {}", start + idx + 1, line))
+        .collect();
+
+    ToolResult::ok(format!(
+        "File: {}\nLines {}-{} (of {}):\n{}\n",
+        path,
+        start + 1,
+        end,
+        total_lines,
+        selected_lines.join("\n")
+    ))
 }
 
 fn write_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {
@@ -1670,13 +1481,11 @@ fn write_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) 
         return ToolResult::err("missing required arg: content (or contents/text)");
     };
 
-    // Use resolve_path_in_workspace which handles relative paths and doesn't require existence
     let abs = match resolve_path_in_workspace(workspace_root, Path::new(&path)) {
         Ok(p) => p,
         Err(e) => return ToolResult::err(e),
     };
 
-    // Create parent directories if needed
     if let Some(parent) = abs.parent() {
         if let Err(e) = fs::create_dir_all(parent) {
             return ToolResult::err(format!("cannot create parent directory: {}", e));
@@ -1684,11 +1493,7 @@ fn write_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) 
     }
 
     match fs::write(&abs, content.as_bytes()) {
-        Ok(()) => ToolResult::ok(format!(
-            "wrote {} bytes to {}",
-            content.len(),
-            abs.display()
-        )),
+        Ok(()) => ToolResult::ok(format!("wrote {} bytes to {}", content.len(), abs.display())),
         Err(e) => ToolResult::err(format!("write failed: {}", e)),
     }
 }
@@ -1710,148 +1515,90 @@ fn edit_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -
     };
 
     let content = match fs::read_to_string(&abs) {
-        Ok(s) => s,
+        Ok(content) => content,
         Err(e) => return ToolResult::err(e.to_string()),
     };
 
-    let Some(pos) = content.find(&old_content) else {
-        return ToolResult::err("old_content not found".to_string());
+    let updated = match apply_patch_to_string(&content, &old_content, &new_content) {
+        Ok(updated) => updated,
+        Err(e) => return ToolResult::err(e),
     };
 
-    let mut out = String::with_capacity(content.len() - old_content.len() + new_content.len());
-    out.push_str(&content[..pos]);
-    out.push_str(&new_content);
-    out.push_str(&content[pos + old_content.len()..]);
-
-    match fs::write(&abs, out.as_bytes()) {
-        Ok(()) => ToolResult::ok("edit applied".to_string()),
-        Err(e) => ToolResult::err(e.to_string()),
+    match fs::write(&abs, updated.as_bytes()) {
+        Ok(()) => ToolResult::ok(format!("Edited {}", path)),
+        Err(e) => ToolResult::err(format!("write failed: {}", e)),
     }
-}
-
-fn list_directory(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {
-    // Forward to get_workspace_structure with default depth 1 to provide a consistant tree view
-    // which coding models (like Mercury/Qwen) prefer over flat lists.
-    let mut new_args = args.clone();
-
-    // Default to current dir if no path provided (handles empty args case)
-    if !new_args.contains_key("path")
-        && !new_args.contains_key("dir")
-        && !new_args.contains_key("directory")
-    {
-        new_args.insert(
-            "path".to_string(),
-            serde_json::Value::String(".".to_string()),
-        );
-    }
-
-    if !new_args.contains_key("max_depth") {
-        new_args.insert("max_depth".to_string(), serde_json::Value::Number(1.into()));
-    }
-    get_workspace_structure(workspace_root, &new_args)
 }
 
 fn parse_grep_timeout_ms(args: &HashMap<String, serde_json::Value>) -> u64 {
-    let timeout_ms = args
-        .get("timeout_ms")
+    args.get("timeout_ms")
         .and_then(|v| v.as_u64())
-        .unwrap_or(GREP_TIMEOUT_DEFAULT_MS);
-    timeout_ms.clamp(GREP_TIMEOUT_MIN_MS, GREP_TIMEOUT_MAX_MS)
-}
-
-fn is_dependency_path(path: &Path) -> bool {
-    path.components().any(|component| {
-        let value = component.as_os_str().to_string_lossy();
-        DEPENDENCY_DIRS.iter().any(|dir| value == *dir)
-    })
+        .map(|value| value.clamp(GREP_TIMEOUT_MIN_MS, GREP_TIMEOUT_MAX_MS))
+        .unwrap_or(GREP_TIMEOUT_DEFAULT_MS)
 }
 
 fn build_grep_next_step_hint(include_dependencies: bool) -> String {
     if include_dependencies {
-        "Search timed out. Narrow your path to a focused subtree (for example src/internal or node_modules/<pkg>) and retry with a targeted pattern.".to_string()
+        "Narrow the search path, refine the pattern, or lower dependency scope to reduce grep timeout risk.".to_string()
     } else {
-        "Search timed out. Narrow your path to src/internal or, for dependency code, retry with include_dependencies=true and a targeted dependency path like node_modules/<pkg>.".to_string()
+        "Narrow the search path or refine the pattern if grep results are too broad.".to_string()
     }
 }
 
 fn grep_search(
     workspace_root: &Path,
     args: &HashMap<String, serde_json::Value>,
-    enforce_timeout: bool,
+    _grep_timeout_enforced: bool,
 ) -> ToolResult {
-    let Some(pattern) = get_str_arg(args, &["pattern", "query", "regex"]) else {
-        return ToolResult::err(
-            "grep_search requires a 'pattern' argument. Example: {\"pattern\": \"Priority\"}",
-        );
+    let Some(pattern) = get_str_arg(args, &["pattern", "query"]) else {
+        return ToolResult::err("grep_search requires 'pattern'");
     };
-    let path = get_str_arg(args, &["path", "dir", "directory"]).unwrap_or_else(|| ".".to_string());
+    let path = get_str_arg(args, &["path"]).unwrap_or_else(|| ".".to_string());
     let include_dependencies = get_bool_arg(args, &["include_dependencies"], false);
-    let timeout_ms = if enforce_timeout {
-        Some(parse_grep_timeout_ms(args))
-    } else {
-        None
-    };
+    let timeout_ms = parse_grep_timeout_ms(args);
+    let force_timeout = get_bool_arg(args, &["__test_force_timeout"], false);
 
-    let abs = match validate_path_under_workspace(workspace_root, Path::new(&path)) {
+    let abs = match resolve_path_in_workspace(workspace_root, Path::new(&path)) {
         Ok(p) => p,
         Err(e) => return ToolResult::err(e),
     };
 
-    let re = match Regex::new(&pattern) {
-        Ok(r) => r,
-        Err(e) => return ToolResult::err(format!("invalid regex: {e}")),
+    let regex = match Regex::new(&pattern) {
+        Ok(regex) => regex,
+        Err(e) => return ToolResult::err(format!("invalid regex pattern: {}", e)),
     };
-
-    // Load gitignore filter
     let gitignore_filter = create_gitignore_filter(workspace_root);
-
     let started_at = Instant::now();
-    #[cfg(test)]
-    let force_timeout = get_bool_arg(args, &["__test_force_timeout"], false);
-    #[cfg(not(test))]
-    let force_timeout = false;
-
-    let mut timed_out = false;
-    let mut out = String::new();
-    let mut partial_results: Vec<String> = Vec::new();
     let deadline = if force_timeout {
-        Some(started_at)
+        Some(Instant::now())
     } else {
-        timeout_ms.map(|ms| started_at + Duration::from_millis(ms))
+        Some(Instant::now() + Duration::from_millis(timeout_ms))
     };
-
+    let mut partial_results = Vec::new();
+    let mut out = String::new();
     let mut result_count = 0usize;
+    let mut timed_out = false;
 
-    'file_loop: for entry in WalkDir::new(abs)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(Result::ok)
-    {
-        if let Some(limit) = deadline {
-            if Instant::now() >= limit {
-                timed_out = true;
-                break 'file_loop;
-            }
-        }
-
+    'file_loop: for entry in WalkDir::new(&abs).follow_links(false).into_iter().filter_map(Result::ok) {
         if !entry.file_type().is_file() {
             continue;
         }
-
-        let path = entry.path();
-
-        if !include_dependencies && is_dependency_path(path) {
+        let entry_path = entry.path();
+        if !include_dependencies
+            && entry_path.components().any(|component| {
+                let part = component.as_os_str().to_string_lossy();
+                DEPENDENCY_DIRS.contains(&part.as_ref())
+            })
+        {
             continue;
         }
-
-        // Check gitignore filter
-        if let Some(ref filter) = gitignore_filter {
-            if filter.should_ignore(path) {
+        if let Some(filter) = &gitignore_filter {
+            if filter.should_ignore(entry_path) {
                 continue;
             }
         }
 
-        let Ok(text) = fs::read_to_string(path) else {
+        let Ok(text) = fs::read_to_string(entry_path) else {
             continue;
         };
 
@@ -1862,13 +1609,21 @@ fn grep_search(
                     break 'file_loop;
                 }
             }
-
-            if re.is_match(line) {
-                let hit = format!("{}:{}:{}", path.to_string_lossy(), idx + 1, line);
+            if regex.is_match(line) {
+                let hit = format!(
+                    "{}:{}:{}",
+                    entry_path.strip_prefix(workspace_root).unwrap_or(entry_path).display(),
+                    idx + 1,
+                    line
+                );
                 out.push_str(&hit);
                 out.push('\n');
                 partial_results.push(hit);
                 result_count += 1;
+                if force_timeout {
+                    timed_out = true;
+                    break 'file_loop;
+                }
             }
         }
     }
@@ -1877,36 +1632,17 @@ fn grep_search(
     record_grep_search_metric(elapsed_ms, timed_out, result_count);
 
     if timed_out {
-        let effective_timeout_ms = timeout_ms.unwrap_or(GREP_TIMEOUT_DEFAULT_MS);
         let payload = serde_json::json!({
             "timed_out": true,
-            "timeout_ms": effective_timeout_ms,
+            "timeout_ms": timeout_ms,
             "partial_results": partial_results,
             "result_count": result_count,
             "searched_path": path,
             "next_step_hint": build_grep_next_step_hint(include_dependencies),
             "metrics": grep_search_metric_snapshot(),
         });
-
-        eprintln!(
-            "[TOOLS][grep_search] timed_out=true timeout_ms={} include_dependencies={} result_count={} elapsed_ms={} telemetry={}",
-            effective_timeout_ms,
-            include_dependencies,
-            result_count,
-            elapsed_ms,
-            grep_search_metric_snapshot(),
-        );
-
         return ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default());
     }
-
-    eprintln!(
-        "[TOOLS][grep_search] timed_out=false include_dependencies={} result_count={} elapsed_ms={} telemetry={}",
-        include_dependencies,
-        result_count,
-        elapsed_ms,
-        grep_search_metric_snapshot(),
-    );
 
     ToolResult::ok(out)
 }
@@ -1919,83 +1655,55 @@ fn codebase_search(workspace_root: &Path, args: &HashMap<String, serde_json::Val
     };
 
     let file_pattern = get_str_arg(args, &["file_pattern"]);
-    let max_results = args
-        .get("max_results")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(50) as usize;
-
+    let max_results = args.get("max_results").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
     let abs = match fs::canonicalize(workspace_root) {
         Ok(p) => p,
         Err(e) => return ToolResult::err(format!("cannot canonicalize workspace: {}", e)),
     };
-
-    // Compile regex pattern
     let re = match Regex::new(&query) {
         Ok(r) => r,
         Err(e) => return ToolResult::err(format!("invalid regex pattern: {}", e)),
     };
-
-    // Load gitignore filter
     let gitignore_filter = create_gitignore_filter(workspace_root);
-
     let mut results = Vec::new();
-    let mut count = 0;
+    let mut count = 0usize;
 
-    for entry in WalkDir::new(&abs)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(Result::ok)
-    {
+    for entry in WalkDir::new(&abs).follow_links(false).into_iter().filter_map(Result::ok) {
         if !entry.file_type().is_file() {
             continue;
         }
-
         let path = entry.path();
-
-        // Check gitignore filter
-        if let Some(ref filter) = gitignore_filter {
+        if let Some(filter) = &gitignore_filter {
             if filter.should_ignore(path) {
                 continue;
             }
         }
-
         let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-
-        // Apply file pattern filter if specified
-        if let Some(ref pattern) = file_pattern {
+        if let Some(pattern) = &file_pattern {
             let patterns: Vec<&str> = pattern.split(',').collect();
             let matches_pattern = patterns.iter().any(|p| {
                 let p = p.trim();
-                if p.starts_with("*.") {
-                    file_name.ends_with(&p[1..])
-                } else if p.starts_with("*") {
+                if p.starts_with("*.") || p.starts_with("*") {
                     file_name.ends_with(&p[1..])
                 } else {
                     file_name == p
                 }
             });
-
             if !matches_pattern {
                 continue;
             }
         }
-
         let Ok(text) = fs::read_to_string(path) else {
             continue;
         };
-
         let lines: Vec<&str> = text.lines().collect();
-
         for (idx, line) in lines.iter().enumerate() {
             if re.is_match(line) {
                 if count >= max_results {
                     break;
                 }
-
-                // Get context lines (2 before, 2 after)
                 let start = idx.saturating_sub(2);
                 let end = (idx + 3).min(lines.len());
-
                 let context_lines: Vec<String> = lines[start..end]
                     .iter()
                     .enumerate()
@@ -2005,18 +1713,15 @@ fn codebase_search(workspace_root: &Path, args: &HashMap<String, serde_json::Val
                         format!("{} {}: {}", marker, line_num, l)
                     })
                     .collect();
-
                 results.push(format!(
                     "\n{}:{}:\n{}\n",
                     path.strip_prefix(&abs).unwrap_or(path).to_string_lossy(),
                     idx + 1,
                     context_lines.join("\n")
                 ));
-
                 count += 1;
             }
         }
-
         if count >= max_results {
             break;
         }
@@ -2026,18 +1731,14 @@ fn codebase_search(workspace_root: &Path, args: &HashMap<String, serde_json::Val
         return ToolResult::ok(format!("No matches found for query: '{}'", query));
     }
 
-    let output = format!(
+    ToolResult::ok(format!(
         "Found {} matches for '{}' (showing up to {}):\n{}",
         count,
         query,
         max_results,
         results.join("\n")
-    );
-
-    ToolResult::ok(output)
+    ))
 }
-
-// ===== Phase 1 IDE-Specific Tools =====
 
 fn language_service_from_app_handle<R: tauri::Runtime>(
     app_handle: Option<&tauri::AppHandle<R>>,
@@ -2045,20 +1746,63 @@ fn language_service_from_app_handle<R: tauri::Runtime>(
     let Some(app_handle) = app_handle else {
         return Err("language service unavailable: missing app handle".to_string());
     };
-
     use tauri::Manager;
-
-    app_handle
-        .state::<crate::app_state::AppState>()
-        .language_service()
+    app_handle.state::<crate::app_state::AppState>().language_service()
 }
 
-fn symbol_path_arg(workspace_root: &Path, raw_path: &str) -> Result<String, String> {
-    let resolved = validate_path_under_workspace(workspace_root, Path::new(raw_path))?;
+fn list_directory(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {
+    let path = get_str_arg(args, &["path"]).unwrap_or_else(|| ".".to_string());
+    let abs = match resolve_path_in_workspace(workspace_root, Path::new(&path)) {
+        Ok(p) => p,
+        Err(e) => return ToolResult::err(e),
+    };
+    if !abs.exists() {
+        return ToolResult::err(format!("path does not exist: {}", abs.display()));
+    }
+    if !abs.is_dir() {
+        return ToolResult::err(format!("path is not a directory: {}", abs.display()));
+    }
+
+    let mut entries = Vec::new();
+    let read_dir = match fs::read_dir(&abs) {
+        Ok(iter) => iter,
+        Err(e) => return ToolResult::err(format!("failed to read directory: {}", e)),
+    };
+
+    for entry in read_dir.filter_map(Result::ok) {
+        let entry_path = entry.path();
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+        let rel = entry_path
+            .strip_prefix(workspace_root)
+            .unwrap_or(&entry_path)
+            .to_string_lossy()
+            .to_string();
+        entries.push(serde_json::json!({
+            "path": rel,
+            "name": entry.file_name().to_string_lossy().to_string(),
+            "is_dir": metadata.is_dir(),
+            "size": if metadata.is_file() { Some(metadata.len()) } else { None::<u64> },
+        }));
+    }
+    entries.sort_by(|a, b| {
+        let a_name = a.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let b_name = b.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        a_name.cmp(b_name)
+    });
+
+    ToolResult::ok(serde_json::to_string_pretty(&serde_json::json!({
+        "path": path,
+        "entries": entries,
+    })).unwrap_or_default())
+}
+
+fn symbol_path_arg(workspace_root: &Path, path: &str) -> Result<String, String> {
+    let resolved = resolve_path_in_workspace(workspace_root, Path::new(path))?;
     let workspace = fs::canonicalize(workspace_root).map_err(|e| e.to_string())?;
-    let relative = resolved
-        .strip_prefix(&workspace)
-        .map_err(|e| e.to_string())?;
+    let relative = resolved.strip_prefix(&workspace).map_err(|e| e.to_string())?;
     Ok(normalize_rel_path(relative))
 }
 
@@ -2085,7 +1829,6 @@ fn symbol_to_json(symbol: &crate::tree_sitter::Symbol) -> serde_json::Value {
         "docstring": symbol.docstring,
         "signature": symbol.signature,
         "content_hash": symbol.content_hash,
-        "source": "persisted"
     })
 }
 
@@ -2106,9 +1849,7 @@ fn resolve_symbol_from_graph_args(
     args: &HashMap<String, serde_json::Value>,
 ) -> Result<Option<crate::tree_sitter::Symbol>, String> {
     if let Some(symbol_id) = get_str_arg(args, &["symbol_id", "id"]) {
-        return service
-            .get_symbol(&symbol_id)
-            .map_err(|err| err.to_string());
+        return service.get_symbol(&symbol_id).map_err(|err| err.to_string());
     }
 
     let Some(file_path) = get_str_arg(args, &["path", "file", "file_path"]) else {
@@ -2118,23 +1859,16 @@ fn resolve_symbol_from_graph_args(
     let qualified_name = get_str_arg(args, &["qualified_name"]);
     let name = get_str_arg(args, &["name"]);
     if qualified_name.is_none() && name.is_none() {
-        return Err(
-            "symbol_graph requires 'name' or 'qualified_name' when resolving by path".to_string(),
-        );
+        return Err("symbol_graph requires 'name' or 'qualified_name' when resolving by path".to_string());
     }
 
-    let symbols = service
-        .get_file_symbols(&file_path)
-        .map_err(|err| err.to_string())?;
+    let symbols = service.get_file_symbols(&file_path).map_err(|err| err.to_string())?;
     Ok(symbols.into_iter().find(|symbol| {
         qualified_name
             .as_ref()
             .map(|value| &symbol.qualified_name == value)
             .unwrap_or(false)
-            || name
-                .as_ref()
-                .map(|value| &symbol.name == value)
-                .unwrap_or(false)
+            || name.as_ref().map(|value| &symbol.name == value).unwrap_or(false)
     }))
 }
 
@@ -2147,13 +1881,11 @@ fn outline_nodes_for_parent(
         .cloned()
         .unwrap_or_default();
     symbols.sort_by_key(|symbol| (symbol.range.start.line, symbol.range.start.character));
-
     symbols
         .into_iter()
         .map(|symbol| {
             let mut value = symbol_to_json(&symbol);
-            value["children"] =
-                serde_json::Value::Array(outline_nodes_for_parent(by_parent, Some(&symbol.id)));
+            value["children"] = serde_json::Value::Array(outline_nodes_for_parent(by_parent, Some(&symbol.id)));
             value
         })
         .collect()
@@ -2167,7 +1899,6 @@ fn symbol_search_tool<R: tauri::Runtime>(
     let Some(query) = get_str_arg(args, &["query"]) else {
         return ToolResult::err("symbol_search requires 'query'");
     };
-
     let limit = parse_bounded_usize_arg(args, "limit", 20, 100);
     let file_path = get_str_arg(args, &["path", "file", "file_path"]);
     let symbol_types = match get_str_arg(args, &["kind", "symbol_type"]) {
@@ -2177,7 +1908,6 @@ fn symbol_search_tool<R: tauri::Runtime>(
         },
         None => None,
     };
-
     let file_filter = match file_path {
         Some(path) => match symbol_path_arg(workspace_root, &path) {
             Ok(path) => Some(path),
@@ -2185,24 +1915,16 @@ fn symbol_search_tool<R: tauri::Runtime>(
         },
         None => None,
     };
-
     let service = match language_service_from_app_handle(app_handle) {
         Ok(service) => service,
         Err(err) => return ToolResult::err(err),
     };
-
     let started = Instant::now();
-    let results = match service.search_symbols_filtered(
-        &query,
-        file_filter.as_deref(),
-        symbol_types,
-        limit,
-    ) {
+    let results = match service.search_symbols_filtered(&query, file_filter.as_deref(), symbol_types, limit) {
         Ok(results) => results,
         Err(err) => return ToolResult::err(err.to_string()),
     };
     let result_count = results.len();
-
     let payload = serde_json::json!({
         "query": query,
         "results": results.into_iter().map(|result| {
@@ -2218,7 +1940,6 @@ fn symbol_search_tool<R: tauri::Runtime>(
             "truncated": false
         }
     });
-
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
 }
 
@@ -2231,11 +1952,11 @@ fn symbol_resolve_tool<R: tauri::Runtime>(
         Ok(service) => service,
         Err(err) => return ToolResult::err(err),
     };
-
     let started = Instant::now();
     let resolved = if let Some(symbol_id) = get_str_arg(args, &["symbol_id", "id"]) {
         match service.get_symbol(&symbol_id) {
-            Ok(symbol) => symbol,
+            Ok(Some(symbol)) => symbol,
+            Ok(None) => return ToolResult::err(format!("symbol not found: {}", symbol_id)),
             Err(err) => return ToolResult::err(err.to_string()),
         }
     } else {
@@ -2252,29 +1973,24 @@ fn symbol_resolve_tool<R: tauri::Runtime>(
             Ok(symbols) => symbols,
             Err(err) => return ToolResult::err(err.to_string()),
         };
-
-        symbols.into_iter().find(|symbol| {
+        let Some(symbol) = symbols.into_iter().find(|symbol| {
             qualified_name
                 .as_ref()
                 .map(|value| &symbol.qualified_name == value)
                 .unwrap_or(false)
-                || name
-                    .as_ref()
-                    .map(|value| &symbol.name == value)
-                    .unwrap_or(false)
-        })
+                || name.as_ref().map(|value| &symbol.name == value).unwrap_or(false)
+        }) else {
+            return ToolResult::err("symbol not found".to_string());
+        };
+        symbol
     };
 
-    let payload = serde_json::json!({
-        "symbol": resolved.as_ref().map(symbol_to_json),
-        "_meta": {
-            "tool": "symbol_resolve",
-            "timing_ms": started.elapsed().as_millis(),
-            "resolved": resolved.is_some(),
-            "source": "language_service"
-        }
+    let mut payload = symbol_to_json(&resolved);
+    payload["_meta"] = serde_json::json!({
+        "tool": "symbol_resolve",
+        "timing_ms": started.elapsed().as_millis(),
+        "source": "language_service"
     });
-
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
 }
 
@@ -2283,44 +1999,30 @@ fn symbol_outline_tool<R: tauri::Runtime>(
     args: &HashMap<String, serde_json::Value>,
     app_handle: Option<&tauri::AppHandle<R>>,
 ) -> ToolResult {
-    let Some(file_path) = get_str_arg(args, &["path", "file", "file_path"]) else {
+    let Some(path) = get_str_arg(args, &["path", "file", "file_path"]) else {
         return ToolResult::err("symbol_outline requires 'path'");
     };
-    let file_path = match symbol_path_arg(workspace_root, &file_path) {
+    let path = match symbol_path_arg(workspace_root, &path) {
         Ok(path) => path,
         Err(err) => return ToolResult::err(err),
     };
-
     let service = match language_service_from_app_handle(app_handle) {
         Ok(service) => service,
         Err(err) => return ToolResult::err(err),
     };
-
-    let started = Instant::now();
-    let symbols = match service.get_file_symbols(&file_path) {
+    let symbols = match service.get_file_symbols(&path) {
         Ok(symbols) => symbols,
         Err(err) => return ToolResult::err(err.to_string()),
     };
 
     let mut by_parent: HashMap<Option<String>, Vec<crate::tree_sitter::Symbol>> = HashMap::new();
     for symbol in symbols {
-        by_parent
-            .entry(symbol.parent_id.clone())
-            .or_default()
-            .push(symbol);
+        by_parent.entry(symbol.parent_id.clone()).or_default().push(symbol);
     }
-
-    let outline = outline_nodes_for_parent(&by_parent, None);
     let payload = serde_json::json!({
-        "file_path": file_path,
-        "symbols": outline,
-        "_meta": {
-            "tool": "symbol_outline",
-            "timing_ms": started.elapsed().as_millis(),
-            "source": "language_service"
-        }
+        "path": path,
+        "outline": outline_nodes_for_parent(&by_parent, None)
     });
-
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
 }
 
@@ -2333,238 +2035,33 @@ fn symbol_graph_tool<R: tauri::Runtime>(
         Ok(service) => service,
         Err(err) => return ToolResult::err(err),
     };
-
-    let relationship_type = match get_str_arg(args, &["relationship_type", "edge_kind", "kind"]) {
-        Some(raw) => match raw.parse::<crate::tree_sitter::SymbolRelationshipType>() {
-            Ok(kind) => kind,
+    let symbol = match resolve_symbol_from_graph_args(workspace_root, &service, args) {
+        Ok(Some(symbol)) => symbol,
+        Ok(None) => return ToolResult::err("symbol not found".to_string()),
+        Err(err) => return ToolResult::err(err),
+    };
+    let relationship = match get_str_arg(args, &["relationship", "relationship_type", "kind"]) {
+        Some(kind) => match kind.parse::<crate::tree_sitter::SymbolRelationshipType>() {
+            Ok(value) => value,
             Err(err) => return ToolResult::err(err),
         },
         None => crate::tree_sitter::SymbolRelationshipType::Call,
     };
     let limit = parse_bounded_usize_arg(args, "limit", 20, 100);
-
-    let started = Instant::now();
-    let resolved = match resolve_symbol_from_graph_args(workspace_root, service.as_ref(), args) {
-        Ok(symbol) => symbol,
-        Err(err) => return ToolResult::err(err),
-    };
-    let Some(symbol) = resolved else {
-        let payload = serde_json::json!({
-            "symbol": serde_json::Value::Null,
-            "graph": serde_json::Value::Null,
-            "impact_summary": {
-                "incoming_count": 0,
-                "outgoing_count": 0,
-                "hot_files": [],
-                "warning": "symbol not found"
-            },
-            "_meta": {
-                "tool": "symbol_graph",
-                "timing_ms": started.elapsed().as_millis(),
-                "resolved": false,
-                "relationship_type": relationship_type.to_string(),
-                "source": "language_service"
-            }
-        });
-        return ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default());
-    };
-
-    let graph = match service.get_symbol_graph(&symbol, relationship_type, limit) {
+    let graph = match service.get_symbol_graph(&symbol, relationship, limit) {
         Ok(graph) => graph,
         Err(err) => return ToolResult::err(err.to_string()),
     };
-
-    let mut file_counts: HashMap<String, usize> = HashMap::new();
-    for reference in graph.incoming.iter().chain(graph.outgoing.iter()) {
-        *file_counts
-            .entry(reference.source_symbol.file_path.clone())
-            .or_insert(0) += 1;
-        if let Some(target_symbol) = reference.target_symbol.as_ref() {
-            *file_counts
-                .entry(target_symbol.file_path.clone())
-                .or_insert(0) += 1;
-        }
-    }
-    let mut hot_files = file_counts.into_iter().collect::<Vec<_>>();
-    hot_files.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-
-    let warning = match relationship_type {
-        crate::tree_sitter::SymbolRelationshipType::Call if !graph.incoming.is_empty() => {
-            format!(
-                "changing this symbol may affect {} caller(s)",
-                graph.incoming.len()
-            )
-        }
-        crate::tree_sitter::SymbolRelationshipType::Export if !graph.incoming.is_empty() => {
-            format!(
-                "changing this export may affect {} importer/re-export site(s)",
-                graph.incoming.len()
-            )
-        }
-        crate::tree_sitter::SymbolRelationshipType::Contains if !graph.outgoing.is_empty() => {
-            format!(
-                "this symbol contains {} nested symbol(s)",
-                graph.outgoing.len()
-            )
-        }
-        _ => format!(
-            "graph has {} incoming and {} outgoing {} edge(s)",
-            graph.incoming.len(),
-            graph.outgoing.len(),
-            relationship_type
-        ),
-    };
-
     let payload = serde_json::json!({
         "symbol": symbol_to_json(&graph.symbol),
-        "graph": {
-            "relationship_type": relationship_type.to_string(),
-            "incoming": graph.incoming.iter().map(symbol_reference_to_json).collect::<Vec<_>>(),
-            "outgoing": graph.outgoing.iter().map(symbol_reference_to_json).collect::<Vec<_>>(),
-        },
-        "impact_summary": {
-            "incoming_count": graph.incoming.len(),
-            "outgoing_count": graph.outgoing.len(),
-            "hot_files": hot_files.into_iter().take(10).map(|(file_path, edge_count)| {
-                serde_json::json!({
-                    "file_path": file_path,
-                    "edge_count": edge_count,
-                })
-            }).collect::<Vec<_>>(),
-            "warning": warning,
-        },
-        "_meta": {
-            "tool": "symbol_graph",
-            "timing_ms": started.elapsed().as_millis(),
-            "resolved": true,
-            "relationship_type": relationship_type.to_string(),
-            "source": "language_service"
-        }
+        "incoming": graph.incoming.iter().map(symbol_reference_to_json).collect::<Vec<_>>(),
+        "outgoing": graph.outgoing.iter().map(symbol_reference_to_json).collect::<Vec<_>>(),
+        "relationship_type": relationship.to_string(),
     });
-
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
 }
 
-fn get_editor_state(editor_state: Option<&EditorState>) -> ToolResult {
-    let Some(state) = editor_state else {
-        return ToolResult::err("editor state not available");
-    };
-
-    let json = serde_json::json!({
-        "active_file": state.active_file,
-        "open_files": state.open_files,
-        "active_tab_index": state.active_tab_index,
-        "cursor_line": state.cursor_line,
-        "cursor_column": state.cursor_column,
-        "selection_start_line": state.selection_start_line,
-        "selection_end_line": state.selection_end_line,
-    });
-
-    let mut result = serde_json::to_string_pretty(&json).unwrap_or_default();
-
-    // Add helpful context for Claude
-    if let Some(ref active_file) = state.active_file {
-        result.push_str(&format!("\n\n// The active file is: {}", active_file));
-
-        if let Some(line) = state.cursor_line {
-            result.push_str(&format!("\n// Cursor is at line {}", line));
-            if let Some(col) = state.cursor_column {
-                result.push_str(&format!(", column {}", col));
-            }
-        }
-
-        if let (Some(start), Some(end)) = (state.selection_start_line, state.selection_end_line) {
-            if start != end {
-                result.push_str(&format!(
-                    "\n// Text is selected from line {} to line {}",
-                    start, end
-                ));
-            }
-        }
-
-        result.push_str(&format!(
-            "\n// Use read_file with path '{}' to get the file contents.",
-            active_file
-        ));
-
-        if let Some(line) = state.cursor_line {
-            result.push_str(&format!(
-                "\n// To get context around the cursor, use read_file_range with:"
-            ));
-            result.push_str(&format!("\n//   path: '{}'", active_file));
-            result.push_str(&format!(
-                "\n//   start_line: {}",
-                line.saturating_sub(5).max(1)
-            ));
-            result.push_str(&format!("\n//   end_line: {}", line + 5));
-            result.push_str(&format!("\n//   context_lines: 3 (optional)"));
-        }
-    }
-
-    ToolResult::ok(result)
-}
-
-fn read_file_range(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {
-    let Some(path) = get_str_arg(args, &["path", "file_path", "filepath", "filename"]) else {
-        return ToolResult::err("missing required arg: path (or file_path)");
-    };
-
-    let abs = match validate_path_under_workspace(workspace_root, Path::new(&path)) {
-        Ok(p) => p,
-        Err(e) => return ToolResult::err(e),
-    };
-
-    let content = match fs::read_to_string(&abs) {
-        Ok(s) => s,
-        Err(e) => return ToolResult::err(e.to_string()),
-    };
-
-    let lines: Vec<&str> = content.lines().collect();
-    let total_lines = lines.len();
-
-    // Parse line range (1-indexed)
-    let start_line = args.get("start_line").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
-    let end_line = args
-        .get("end_line")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(total_lines as u64) as usize;
-    let context_lines = args
-        .get("context_lines")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as usize;
-
-    // Adjust for 1-indexed and apply context
-    // Clamp final bounds to avoid panics when requested range exceeds file length.
-    let requested_start = start_line.saturating_sub(1).saturating_sub(context_lines);
-    let requested_end = end_line.saturating_add(context_lines).min(total_lines);
-
-    let start = requested_start.min(total_lines);
-    let end = requested_end.max(start).min(total_lines);
-
-    let selected_lines: Vec<String> = lines[start..end]
-        .iter()
-        .enumerate()
-        .map(|(idx, line)| format!("{}: {}", start + idx + 1, line))
-        .collect();
-
-    let result = format!(
-        "File: {}\nLines {}-{} (of {}):\n{}\n",
-        path,
-        start + 1,
-        end,
-        total_lines,
-        selected_lines.join("\n")
-    );
-
-    ToolResult::ok(result)
-}
-
-// Helper for applying patches with robust matching
-pub fn apply_patch_to_string(
-    content: &str,
-    old_text: &str,
-    new_text: &str,
-) -> Result<String, String> {
+pub fn apply_patch_to_string(content: &str, old_text: &str, new_text: &str) -> Result<String, String> {
     if !old_text.is_empty() {
         let mut exact_matches = content.match_indices(old_text);
         if let Some((pos, _)) = exact_matches.next() {
@@ -2595,7 +2092,6 @@ pub fn apply_patch_to_string(
     ))
 }
 
-/// Represents a single patch hunk for multi-patch operations
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 struct PatchHunk {
@@ -2605,30 +2101,14 @@ struct PatchHunk {
     end_line: Option<usize>,
 }
 
-/// Result of applying multiple patches atomically
-#[derive(Debug)]
-#[allow(dead_code)]
-struct MultiPatchResult {
-    success: bool,
-    applied_count: usize,
-    total_count: usize,
-    error: Option<String>,
-    failed_index: Option<usize>,
-}
-
-/// Apply multiple patches atomically to a file content string.
-/// All patches are validated before any are applied.
-/// If any patch fails validation, the operation is aborted and no changes are made.
 fn apply_multi_patch_to_string(content: &str, patches: &[PatchHunk]) -> Result<String, String> {
     if patches.is_empty() {
         return Err("No patches provided".to_string());
     }
 
     let mut validation_errors = Vec::new();
-
     for (idx, patch) in patches.iter().enumerate() {
         let count = content.matches(&patch.old_text).count();
-
         if count == 0 {
             validation_errors.push(format!("Patch {}: old_text not found in file", idx + 1));
         } else if count > 1 {
@@ -2642,22 +2122,15 @@ fn apply_multi_patch_to_string(content: &str, patches: &[PatchHunk]) -> Result<S
 
     if !validation_errors.is_empty() {
         return Err(format!(
-            "Multi-patch validation failed (no changes made):
-{}",
-            validation_errors.join(
-                "
-"
-            )
+            "Multi-patch validation failed (no changes made):\n{}",
+            validation_errors.join("\n")
         ));
     }
 
     let mut working = content.to_string();
-
     for (idx, patch) in patches.iter().enumerate() {
         match apply_patch_to_string(&working, &patch.old_text, &patch.new_text) {
-            Ok(new_content) => {
-                working = new_content;
-            }
+            Ok(new_content) => working = new_content,
             Err(e) => {
                 return Err(format!(
                     "Patch {} failed unexpectedly after validation: {}",
@@ -2671,7 +2144,224 @@ fn apply_multi_patch_to_string(content: &str, patches: &[PatchHunk]) -> Result<S
     Ok(working)
 }
 
-fn apply_edit_tool(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {
+struct SemanticPatchWrite {
+    file_path: String,
+    abs_path: PathBuf,
+    original_content: String,
+    new_content: String,
+}
+
+struct StagedSemanticPatchWrite {
+    write: SemanticPatchWrite,
+    temp_path: PathBuf,
+    backup_path: PathBuf,
+}
+
+fn semantic_patch_sidecar_path(abs_path: &Path, stage_id: &str, idx: usize, suffix: &str) -> PathBuf {
+    let file_name = abs_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("semantic-patch");
+    let sidecar_name = format!(".{}.zblade-semantic-{}-{}.{}", file_name, stage_id, idx, suffix);
+    abs_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(sidecar_name)
+}
+
+fn write_synced_file(path: &Path, content: &str) -> Result<(), String> {
+    let mut file = fs::File::create(path)
+        .map_err(|error| format!("create {} failed: {}", path.display(), error))?;
+    file.write_all(content.as_bytes())
+        .map_err(|error| format!("write {} failed: {}", path.display(), error))?;
+    file.sync_all()
+        .map_err(|error| format!("sync {} failed: {}", path.display(), error))
+}
+
+fn cleanup_semantic_patch_stage_files(staged_writes: &[StagedSemanticPatchWrite]) {
+    for staged in staged_writes {
+        let _ = fs::remove_file(&staged.temp_path);
+        let _ = fs::remove_file(&staged.backup_path);
+    }
+}
+
+fn cleanup_semantic_patch_backups(staged_writes: &[StagedSemanticPatchWrite]) {
+    for staged in staged_writes {
+        let _ = fs::remove_file(&staged.backup_path);
+    }
+}
+
+fn stage_semantic_patch_writes(
+    writes: Vec<SemanticPatchWrite>,
+) -> Result<Vec<StagedSemanticPatchWrite>, String> {
+    let stage_id = uuid::Uuid::new_v4().simple().to_string();
+    let mut staged_writes = Vec::with_capacity(writes.len());
+
+    for (idx, write) in writes.into_iter().enumerate() {
+        let temp_path = semantic_patch_sidecar_path(&write.abs_path, &stage_id, idx, "tmp");
+        let backup_path = semantic_patch_sidecar_path(&write.abs_path, &stage_id, idx, "bak");
+
+        if let Err(error) = write_synced_file(&temp_path, &write.new_content) {
+            let _ = fs::remove_file(&temp_path);
+            cleanup_semantic_patch_stage_files(&staged_writes);
+            return Err(format!("Failed to stage {}: {}", write.file_path, error));
+        }
+
+        staged_writes.push(StagedSemanticPatchWrite {
+            write,
+            temp_path,
+            backup_path,
+        });
+    }
+
+    Ok(staged_writes)
+}
+
+fn parse_semantic_patch_args(
+    args: &HashMap<String, serde_json::Value>,
+) -> Result<Option<crate::semantic_patch::SemanticPatch>, String> {
+    let Some(patch_value) = args.get("semantic_patch").or_else(|| args.get("patch")) else {
+        return Ok(None);
+    };
+
+    if !patch_value.is_object() {
+        return Err("semantic_patch must be an object".to_string());
+    }
+
+    serde_json::from_value::<crate::semantic_patch::SemanticPatch>(patch_value.clone())
+        .map(Some)
+        .map_err(|error| format!("invalid semantic_patch payload: {}", error))
+}
+
+fn collect_semantic_patch_writes(
+    workspace_root: &Path,
+    result: crate::semantic_patch::ApplyResult,
+) -> Result<Vec<SemanticPatchWrite>, String> {
+    let mut writes = Vec::with_capacity(1 + result.additional_changes.len());
+
+    let primary_abs = validate_path_under_workspace(workspace_root, Path::new(&result.file_path))?;
+    writes.push(SemanticPatchWrite {
+        file_path: result.file_path,
+        abs_path: primary_abs,
+        original_content: result.original_content,
+        new_content: result.new_content,
+    });
+
+    for change in result.additional_changes {
+        let abs_path = validate_path_under_workspace(workspace_root, Path::new(&change.file_path))?;
+        writes.push(SemanticPatchWrite {
+            file_path: change.file_path,
+            abs_path,
+            original_content: change.original_content,
+            new_content: change.new_content,
+        });
+    }
+
+    Ok(writes)
+}
+
+fn rollback_semantic_patch_writes(
+    service: &std::sync::Arc<crate::language_service::LanguageService>,
+    staged_writes: &[StagedSemanticPatchWrite],
+    applied_count: usize,
+) {
+    for staged in staged_writes.iter().take(applied_count).rev() {
+        let _ = fs::remove_file(&staged.write.abs_path);
+        if fs::rename(&staged.backup_path, &staged.write.abs_path).is_err() {
+            let _ = fs::write(&staged.write.abs_path, &staged.write.original_content);
+        }
+        let _ = service.did_open(&staged.write.file_path, &staged.write.original_content);
+    }
+    cleanup_semantic_patch_stage_files(staged_writes);
+}
+
+fn apply_semantic_patch_with_service(
+    workspace_root: &Path,
+    service: &std::sync::Arc<crate::language_service::LanguageService>,
+    patch: &crate::semantic_patch::SemanticPatch,
+) -> Result<Vec<String>, String> {
+    let applier = crate::semantic_patch::PatchApplier::new(service.clone());
+    let result = applier.apply(patch).map_err(|error| error.to_string())?;
+    let writes = collect_semantic_patch_writes(workspace_root, result)?;
+    let staged_writes = stage_semantic_patch_writes(writes)?;
+    let mut applied_count = 0usize;
+
+    for staged in &staged_writes {
+        if let Err(error) = fs::rename(&staged.write.abs_path, &staged.backup_path) {
+            cleanup_semantic_patch_stage_files(&staged_writes);
+            return Err(format!("Failed to backup {}: {}", staged.write.file_path, error));
+        }
+        if let Err(error) = fs::rename(&staged.temp_path, &staged.write.abs_path) {
+            let _ = fs::rename(&staged.backup_path, &staged.write.abs_path);
+            rollback_semantic_patch_writes(service, &staged_writes, applied_count);
+            return Err(format!("Failed to commit {}: {}", staged.write.file_path, error));
+        }
+        applied_count += 1;
+    }
+
+    for staged in &staged_writes {
+        if let Err(error) = service.did_open(&staged.write.file_path, &staged.write.new_content) {
+            rollback_semantic_patch_writes(service, &staged_writes, applied_count);
+            return Err(format!("Failed to index {}: {}", staged.write.file_path, error));
+        }
+    }
+
+    cleanup_semantic_patch_backups(&staged_writes);
+    Ok(staged_writes
+        .into_iter()
+        .map(|staged| staged.write.file_path)
+        .collect())
+}
+
+fn emit_change_applied_for_paths<R: tauri::Runtime>(
+    app_handle: &tauri::AppHandle<R>,
+    change_id: &str,
+    file_paths: &[String],
+) {
+    if file_paths.is_empty() {
+        return;
+    }
+
+    use tauri::Emitter;
+
+    crate::blade_event_scheduler::queue_refresh_explorer(app_handle);
+    let _ = app_handle.emit(
+        crate::events::event_names::CHANGE_APPLIED,
+        crate::events::ChangeAppliedPayload {
+            change_id: change_id.to_string(),
+            file_path: file_paths[0].clone(),
+            file_paths: file_paths.to_vec(),
+        },
+    );
+}
+
+fn apply_edit_tool<R: tauri::Runtime>(
+    workspace_root: &Path,
+    args: &HashMap<String, serde_json::Value>,
+    app_handle: Option<&tauri::AppHandle<R>>,
+) -> ToolResult {
+    match parse_semantic_patch_args(args) {
+        Ok(Some(patch)) => {
+            let service = match language_service_from_app_handle(app_handle) {
+                Ok(service) => service,
+                Err(err) => return ToolResult::err(err),
+            };
+
+            return match apply_semantic_patch_with_service(workspace_root, &service, &patch) {
+                Ok(paths) => {
+                    if let Some(handle) = app_handle {
+                        emit_change_applied_for_paths(handle, &patch.id, &paths);
+                    }
+
+                    ToolResult::ok(format!("Applied semantic patch to {}", paths.join(", ")))
+                }
+                Err(err) => ToolResult::err(err),
+            };
+        }
+        Ok(None) => {}
+        Err(err) => return ToolResult::err(err),
+    }
+
     let Some(path) = get_str_arg(args, &["path", "file_path", "filepath", "filename"]) else {
         return ToolResult::err("missing required arg: path (or file_path)");
     };

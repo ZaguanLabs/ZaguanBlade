@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { EditorFacade, isTabsBackendAuthoritative } from '../services/editorFacade';
-import { subscribeBladeEventType } from '../services/bladeEvents';
-import type { EditorEvent, TabInfo } from '../types/blade';
+import { subscribeBladeNestedEventType } from '../services/bladeEvents';
+import type { TabInfo } from '../types/blade';
 import type { UncommittedChange } from '../types/uncommitted';
 
 export interface Tab {
@@ -78,42 +78,45 @@ export function useTabManager(uncommittedChanges: UncommittedChange[]) {
 
     // Listen for backend tab events when tabs_backend_authority is enabled
     useEffect(() => {
-        const unsubscribe = subscribeBladeEventType('Editor', (event) => {
-            const editorEvent = event.event.payload as EditorEvent;
-
-            if (editorEvent.type === 'TabOpened') {
-                const newTab = tabInfoToTab(editorEvent.payload.tab);
-                setTabs(prev => {
-                    if (prev.find(t => t.id === newTab.id)) return prev;
-                    return [...prev, newTab];
+        const unsubscribeTabOpened = subscribeBladeNestedEventType('Editor', 'TabOpened', (payload) => {
+            const newTab = tabInfoToTab(payload.tab);
+            setTabs(prev => {
+                if (prev.find(t => t.id === newTab.id)) return prev;
+                return [...prev, newTab];
+            });
+        });
+        const unsubscribeTabClosed = subscribeBladeNestedEventType('Editor', 'TabClosed', (payload) => {
+            const closedId = payload.tab_id;
+            setTabs(prev => {
+                const remaining = prev.filter(t => t.id !== closedId);
+                setActiveTabId(prevActive => {
+                    if (prevActive !== closedId) return prevActive;
+                    return popTabHistory(closedId, prev);
                 });
-            } else if (editorEvent.type === 'TabClosed') {
-                const closedId = editorEvent.payload.tab_id;
-                setTabs(prev => {
-                    const remaining = prev.filter(t => t.id !== closedId);
-                    setActiveTabId(prevActive => {
-                        if (prevActive !== closedId) return prevActive;
-                        return popTabHistory(closedId, prev);
-                    });
-                    return remaining;
-                });
-            } else if (editorEvent.type === 'ActiveTabChanged') {
-                setActiveTabId(editorEvent.payload.tab_id);
-            } else if (editorEvent.type === 'TabsReordered') {
-                const orderedIds = editorEvent.payload.tab_ids;
-                setTabs(prev => {
-                    const tabMap = new Map(prev.map(t => [t.id, t]));
-                    return orderedIds.map(id => tabMap.get(id)).filter((t): t is Tab => !!t);
-                });
-            } else if (editorEvent.type === 'TabStateSnapshot') {
-                const { tabs: backendTabs, active_tab_id } = editorEvent.payload;
-                setTabs(backendTabs.map(tabInfoToTab));
-                setActiveTabId(active_tab_id);
-            }
+                return remaining;
+            });
+        });
+        const unsubscribeActiveTabChanged = subscribeBladeNestedEventType('Editor', 'ActiveTabChanged', (payload) => {
+            setActiveTabId(payload.tab_id);
+        });
+        const unsubscribeTabsReordered = subscribeBladeNestedEventType('Editor', 'TabsReordered', (payload) => {
+            const orderedIds = payload.tab_ids;
+            setTabs(prev => {
+                const tabMap = new Map(prev.map(t => [t.id, t]));
+                return orderedIds.map(id => tabMap.get(id)).filter((t): t is Tab => !!t);
+            });
+        });
+        const unsubscribeTabStateSnapshot = subscribeBladeNestedEventType('Editor', 'TabStateSnapshot', (payload) => {
+            setTabs(payload.tabs.map(tabInfoToTab));
+            setActiveTabId(payload.active_tab_id);
         });
 
         return () => {
-            unsubscribe();
+            unsubscribeTabOpened();
+            unsubscribeTabClosed();
+            unsubscribeActiveTabChanged();
+            unsubscribeTabsReordered();
+            unsubscribeTabStateSnapshot();
         };
     }, [popTabHistory]);
 

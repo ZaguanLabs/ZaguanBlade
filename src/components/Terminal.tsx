@@ -5,9 +5,9 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { invoke } from "@tauri-apps/api/core";
-import { emit } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { BladeDispatcher } from "../services/blade";
-import { subscribeBladeEventType } from "../services/bladeEvents";
+import { subscribeBladeNestedEventType } from "../services/bladeEvents";
 import { TerminalBuffer } from "../utils/eventBuffer";
 import { useTheme } from "../contexts/ThemeContext";
 import { useContextMenu, ContextMenuItem } from "./ui/ContextMenu";
@@ -326,23 +326,34 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
             );
         }
 
-        const unsubscribeBladeEvent = subscribeBladeEventType('Terminal', (envelope) => {
-            const terminalEvent = envelope.event.payload;
-
-            if (terminalEvent.type === 'Output') {
-                const { id: termId, seq, data } = terminalEvent.payload;
-                if (terminalBufferRef.current) {
-                    terminalBufferRef.current.addOutput(termId, seq, data);
-                }
-            } else if (terminalEvent.type === 'Spawned') {
-                const { id: termId, owner } = terminalEvent.payload;
-                console.debug(`[v1.1 Terminal] Spawned: id=${termId}, owner=${owner.type}`);
-            } else if (terminalEvent.type === 'Exit') {
-                const { id: termId, code } = terminalEvent.payload;
-                if (termId === id && xtermRef.current) {
-                    xtermRef.current.write(`\r\n\x1b[33mProcess exited with code ${code}\x1b[0m\r\n`);
-                }
+        const unsubscribeOutput = subscribeBladeNestedEventType('Terminal', 'Output', (payload) => {
+            const { id: termId, seq, data } = payload;
+            if (terminalBufferRef.current) {
+                terminalBufferRef.current.addOutput(termId, seq, data);
             }
+        });
+        const unsubscribeSpawned = subscribeBladeNestedEventType('Terminal', 'Spawned', (payload) => {
+            const { id: termId, owner } = payload;
+            console.debug(`[v1.1 Terminal] Spawned: id=${termId}, owner=${owner.type}`);
+        });
+        const unsubscribeExit = subscribeBladeNestedEventType('Terminal', 'Exit', (payload) => {
+            const { id: termId, code } = payload;
+            if (termId === id && xtermRef.current) {
+                xtermRef.current.write(`\r\n\x1b[33mProcess exited with code ${code}\x1b[0m\r\n`);
+            }
+        });
+        let unlistenCommandDisplay: (() => void) | null = null;
+        void listen<{ terminalId: string; callId: string; command: string }>('blade-cmd-display', (event) => {
+            const { terminalId, command } = event.payload;
+            if (terminalId !== id || !xtermRef.current) {
+                return;
+            }
+
+            xtermRef.current.write(`${command}\r\n`);
+        }).then((unlisten) => {
+            unlistenCommandDisplay = unlisten;
+        }).catch((error) => {
+            console.error('[Terminal] Failed to listen for blade command display:', error);
         });
 
         // 2. Setup backend PTY
@@ -397,19 +408,16 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
         resizeObserver.observe(terminalRef.current);
 
         return () => {
-            // Clear the fit interval if still running
+            term.dispose();
+            terminalBufferRef.current?.clear(id);
             if (fitIntervalRef.current) {
                 clearInterval(fitIntervalRef.current);
                 fitIntervalRef.current = null;
             }
-            unsubscribeBladeEvent();
-            if (resizeFrameRef.current !== null) {
-                cancelAnimationFrame(resizeFrameRef.current);
-                resizeFrameRef.current = null;
-            }
-            disposed = true;
-
-            resizeObserver.disconnect();
+            unsubscribeOutput();
+            unsubscribeSpawned();
+            unsubscribeExit();
+            if (unlistenCommandDisplay) unlistenCommandDisplay();
     
             BladeDispatcher.terminal({
                 type: "Kill",
