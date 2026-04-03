@@ -49,12 +49,14 @@ pub struct PtyState {
 pub struct TerminalManager {
     // Map of Terminal ID -> PtyState
     pub ptys: Arc<Mutex<HashMap<String, PtyState>>>,
+    pub pending_writes: Arc<Mutex<HashMap<String, Vec<String>>>>,
 }
 
 impl TerminalManager {
     pub fn new() -> Self {
         Self {
             ptys: Arc::new(Mutex::new(HashMap::new())),
+            pending_writes: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -123,6 +125,26 @@ fn take_terminal_state(
     ptys: &Arc<Mutex<HashMap<String, PtyState>>>,
 ) -> Option<PtyState> {
     ptys.lock().unwrap().remove(terminal_id)
+}
+
+fn take_pending_writes(
+    terminal_id: &str,
+    pending_writes: &Arc<Mutex<HashMap<String, Vec<String>>>>,
+) -> Vec<String> {
+    pending_writes
+        .lock()
+        .unwrap()
+        .remove(terminal_id)
+        .unwrap_or_default()
+}
+
+fn queue_pending_write(
+    terminal_id: String,
+    data: String,
+    pending_writes: &Arc<Mutex<HashMap<String, Vec<String>>>>,
+) {
+    let mut pending = pending_writes.lock().unwrap();
+    pending.entry(terminal_id).or_default().push(data);
 }
 
 fn terminate_pty_state(mut pty: PtyState) {
@@ -311,7 +333,14 @@ pub fn create_terminal<R: Runtime>(
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
 
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+    let mut writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+
+    for pending_data in take_pending_writes(&id, &state.pending_writes) {
+        writer
+            .write_all(pending_data.as_bytes())
+            .map_err(|e| e.to_string())?;
+    }
+    writer.flush().map_err(|e| e.to_string())?;
 
     // Store state
     let seq_counter = Arc::new(Mutex::new(0u64));
@@ -935,9 +964,11 @@ pub fn write_to_terminal(
     state: tauri::State<'_, TerminalManager>,
 ) -> Result<(), String> {
     let mut ptys = state.ptys.lock().map_err(|e| e.to_string())?;
-    let pty = ptys
-        .get_mut(&id)
-        .ok_or_else(|| format!("terminal not found: {id}"))?;
+    let Some(pty) = ptys.get_mut(&id) else {
+        drop(ptys);
+        queue_pending_write(id, data, &state.pending_writes);
+        return Ok(());
+    };
     pty.writer
         .write_all(data.as_bytes())
         .map_err(|e| e.to_string())?;
@@ -965,6 +996,7 @@ pub fn resize_terminal(
 }
 
 pub fn kill_terminal(id: String, state: tauri::State<'_, TerminalManager>) -> Result<(), String> {
+    state.pending_writes.lock().map_err(|e| e.to_string())?.remove(&id);
     let mut ptys = state.ptys.lock().map_err(|e| e.to_string())?;
     let pty = ptys
         .get_mut(&id)

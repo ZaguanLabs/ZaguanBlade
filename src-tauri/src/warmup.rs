@@ -84,6 +84,18 @@ impl WarmupClient {
         trigger: WarmupTrigger,
     ) -> Result<WarmupResponse, String> {
         let provider = detect_provider(model).to_lowercase();
+        if is_local_provider(&provider) {
+            return Ok(WarmupResponse {
+                response_type: "warmup_skipped".to_string(),
+                session_id: session_id.to_string(),
+                provider,
+                cache_supported: false,
+                artifacts_loaded: 0,
+                cache_ready: false,
+                duration_ms: 0,
+                message: Some("Skipped remote warmup for local model".to_string()),
+            });
+        }
         let (cache_strategy, preferred_artifacts) = if provider_requires_explicit_minimal(&provider)
         {
             (
@@ -149,6 +161,10 @@ impl WarmupClient {
 /// Extract provider from model string (e.g., "anthropic/claude-sonnet-4" -> "anthropic")
 pub fn detect_provider(model: &str) -> &str {
     model.split('/').next().unwrap_or("unknown")
+}
+
+pub fn is_local_provider(provider: &str) -> bool {
+    matches!(provider.to_lowercase().as_str(), "ollama" | "openai-compat")
 }
 
 /// Providers where zcoderd should explicitly warm only the compact deterministic index.

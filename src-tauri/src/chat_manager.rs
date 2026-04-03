@@ -72,6 +72,81 @@ fn remember_model_disables_tools(cache_key: &str) {
     }
 }
 
+const GEMMA4_THINK_TOKEN: &str = "<|think|>";
+const GEMMA4_TEMPERATURE: f32 = 1.0;
+const GEMMA4_TOP_P: f32 = 0.95;
+const GEMMA4_TOP_K: u32 = 64;
+
+fn is_gemma4_model(model_id: &str) -> bool {
+    let model_lower = model_id.trim().to_ascii_lowercase();
+    model_lower.contains("gemma4") || model_lower.contains("gemma-4")
+}
+
+fn contains_reasoning_marker(content: &str) -> bool {
+    content.contains("<think>")
+        || content.to_ascii_lowercase().contains("<thinking>")
+        || content.contains("<|channel|>thought")
+        || content.contains("<|channel>thought")
+}
+
+fn maybe_prefix_gemma4_think_token(model_id: &str, prompt: String) -> String {
+    if !is_gemma4_model(model_id) {
+        return prompt;
+    }
+
+    if prompt.trim_start().starts_with(GEMMA4_THINK_TOKEN) {
+        prompt
+    } else if prompt.trim().is_empty() {
+        GEMMA4_THINK_TOKEN.to_string()
+    } else {
+        format!("{}\n{}", GEMMA4_THINK_TOKEN, prompt)
+    }
+}
+
+fn load_local_system_prompt(
+    model_id: &str,
+    workspace_root: &str,
+    active_file_value: &str,
+    os_value: &str,
+    shell_value: &str,
+    date_value: &str,
+    time_value: &str,
+) -> Option<String> {
+    let rendered = crate::config::read_prompt_for_model(model_id)
+        .ok()
+        .flatten()
+        .map(|prompt| {
+            prompt
+                .replace("{{WORKSPACE_ROOT}}", workspace_root)
+                .replace("{{ACTIVE_FILE}}", active_file_value)
+                .replace("{{OS}}", os_value)
+                .replace("{{SHELL}}", shell_value)
+                .replace("{{DATE}}", date_value)
+                .replace("{{TIME}}", time_value)
+        })
+        .filter(|prompt| !prompt.trim().is_empty());
+
+    if let Some(prompt) = rendered {
+        Some(maybe_prefix_gemma4_think_token(model_id, prompt))
+    } else if is_gemma4_model(model_id) {
+        Some(GEMMA4_THINK_TOKEN.to_string())
+    } else {
+        None
+    }
+}
+
+fn gemma4_temperature(model_id: &str) -> Option<f32> {
+    is_gemma4_model(model_id).then_some(GEMMA4_TEMPERATURE)
+}
+
+fn gemma4_top_p(model_id: &str) -> Option<f32> {
+    is_gemma4_model(model_id).then_some(GEMMA4_TOP_P)
+}
+
+fn gemma4_top_k(model_id: &str) -> Option<u32> {
+    is_gemma4_model(model_id).then_some(GEMMA4_TOP_K)
+}
+
 fn is_tools_unsupported_error(status: reqwest::StatusCode, body: &str) -> bool {
     if !(status.as_u16() == 400 || status.as_u16() == 404 || status.as_u16() == 422) {
         return false;
@@ -203,12 +278,24 @@ struct OllamaToolFunction {
 }
 
 #[derive(Serialize, Clone)]
+struct OllamaOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_k: Option<u32>,
+}
+
+#[derive(Serialize, Clone)]
 struct OllamaChatRequest {
     model: String,
     messages: Vec<OllamaMessage>,
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    options: Option<OllamaOptions>,
 }
 
 #[derive(Deserialize)]
@@ -258,6 +345,7 @@ fn supports_reasoning_tags(model_id: &str) -> bool {
         || model_lower.contains("minimax")
         || model_lower.contains("kimi")
         || model_lower.contains("r1")
+        || is_gemma4_model(&model_lower)
 }
 
 impl ChatManager {
@@ -428,7 +516,8 @@ impl ChatManager {
 
         // Local runtimes already emit clean Chunk / ReasoningChunk segments.
         // Zaguan and known OpenAI text models should bypass XML tool fallback parsing.
-        self.stream_plain_text = matches!(provider, ProviderId::OpenAiCompat | ProviderId::Zaguan)
+        self.stream_plain_text = matches!(provider, ProviderId::Zaguan)
+            || (matches!(provider, ProviderId::OpenAiCompat) && !is_gemma4_model(&model_id))
             || model_id.contains("openai")
             || model_id.contains("gpt-5.2")
             || model_id.contains("codex");
@@ -693,12 +782,10 @@ impl ChatManager {
                                 phase,
                             } => {
                                 if let Some(idx) = output_index {
-                                    match accepted_output_index {
-                                        None => accepted_output_index = Some(idx),
-                                        Some(accepted) if idx != accepted => {
+                                    if accepted_output_index.is_none() {
+                                        accepted_output_index = Some(idx);
+                                    } else if accepted_output_index != Some(idx) {
                                             continue;
-                                        }
-                                        _ => {}
                                     }
                                 }
                                 if phase.as_deref() == Some("commentary") {
@@ -721,12 +808,10 @@ impl ChatManager {
                                 phase: _,
                             } => {
                                 if let Some(idx) = output_index {
-                                    match accepted_output_index {
-                                        None => accepted_output_index = Some(idx),
-                                        Some(accepted) if idx != accepted => {
+                                    if accepted_output_index.is_none() {
+                                        accepted_output_index = Some(idx);
+                                    } else if accepted_output_index != Some(idx) {
                                             continue;
-                                        }
-                                        _ => {}
                                     }
                                 }
                                 last_reasoning_chunk = Some(text.clone());
@@ -1009,24 +1094,23 @@ impl ChatManager {
         let time_value = chrono::Local::now().format("%H:%M:%S %z").to_string();
 
         let mut messages: Vec<OllamaMessage> = Vec::new();
-        if let Ok(Some(prompt)) = crate::config::read_prompt_for_model(&model_name) {
-            let rendered_prompt = prompt
-                .replace("{{WORKSPACE_ROOT}}", &workspace_root)
-                .replace("{{ACTIVE_FILE}}", &active_file_value)
-                .replace("{{OS}}", &os_value)
-                .replace("{{SHELL}}", &shell_value)
-                .replace("{{DATE}}", &date_value)
-                .replace("{{TIME}}", &time_value);
-            if !rendered_prompt.trim().is_empty() {
-                messages.push(OllamaMessage {
-                    role: "system".to_string(),
-                    content: Some(rendered_prompt),
-                    images: None,
-                    tool_calls: None,
-                    tool_call_id: None,
-                    tool_name: None,
-                });
-            }
+        if let Some(rendered_prompt) = load_local_system_prompt(
+            &model_name,
+            &workspace_root,
+            &active_file_value,
+            &os_value,
+            &shell_value,
+            &date_value,
+            &time_value,
+        ) {
+            messages.push(OllamaMessage {
+                role: "system".to_string(),
+                content: Some(rendered_prompt),
+                images: None,
+                tool_calls: None,
+                tool_call_id: None,
+                tool_name: None,
+            });
         }
 
         let mut tool_name_by_id: HashMap<String, String> = HashMap::new();
@@ -1139,6 +1223,14 @@ impl ChatManager {
             stream: true,
             tools: include_tools
                 .then(|| get_tool_definitions_for_model(&model_name, composite_tools_enabled)),
+            options: Some(OllamaOptions {
+                temperature: gemma4_temperature(&model_name),
+                top_p: gemma4_top_p(&model_name),
+                top_k: gemma4_top_k(&model_name),
+            })
+            .filter(|options| {
+                options.temperature.is_some() || options.top_p.is_some() || options.top_k.is_some()
+            }),
         };
 
         let (tx, rx) = mpsc::channel();
@@ -1295,11 +1387,7 @@ impl ChatManager {
                     if let Some(msg) = parsed.message {
                         if let Some(content) = msg.content {
                             if !content.is_empty() {
-                                // Dynamically enable reasoning parsing if <think>/<thinking> tags appear
-                                if reasoning_parser.is_none()
-                                    && (content.contains("<think>")
-                                        || content.to_lowercase().contains("<thinking>"))
-                                {
+                                if reasoning_parser.is_none() && contains_reasoning_marker(&content) {
                                     reasoning_parser = Some(ReasoningParser::new());
                                 }
 
@@ -1473,27 +1561,33 @@ impl ChatManager {
             stream: bool,
             #[serde(skip_serializing_if = "Option::is_none")]
             tools: Option<Vec<serde_json::Value>>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            temperature: Option<f32>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            top_p: Option<f32>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            top_k: Option<u32>,
         }
 
         let mut messages: Vec<OpenAIMessage> = Vec::new();
+        let gemma4_model = is_gemma4_model(&model_name);
 
         // Load and apply per-model system prompt
-        if let Ok(Some(prompt)) = crate::config::read_prompt_for_model(&model_name) {
-            let rendered_prompt = prompt
-                .replace("{{WORKSPACE_ROOT}}", &workspace_root)
-                .replace("{{ACTIVE_FILE}}", &active_file_value)
-                .replace("{{OS}}", &os_value)
-                .replace("{{SHELL}}", &shell_value)
-                .replace("{{DATE}}", &date_value)
-                .replace("{{TIME}}", &time_value);
-            if !rendered_prompt.trim().is_empty() {
-                messages.push(OpenAIMessage {
-                    role: "system".to_string(),
-                    content: Some(OpenAIContent::Text(rendered_prompt)),
-                    tool_calls: None,
-                    tool_call_id: None,
-                });
-            }
+        if let Some(rendered_prompt) = load_local_system_prompt(
+            &model_name,
+            &workspace_root,
+            &active_file_value,
+            &os_value,
+            &shell_value,
+            &date_value,
+            &time_value,
+        ) {
+            messages.push(OpenAIMessage {
+                role: "system".to_string(),
+                content: Some(OpenAIContent::Text(rendered_prompt)),
+                tool_calls: None,
+                tool_call_id: None,
+            });
         }
 
         // Convert conversation history to OpenAI format
@@ -1505,18 +1599,35 @@ impl ChatManager {
                 ChatRole::User => {
                     let effective_content = msg.backend_content.as_deref().unwrap_or(&msg.content);
                     let mut parts: Vec<OpenAIContentPart> = Vec::new();
-                    if !effective_content.trim().is_empty() {
-                        parts.push(OpenAIContentPart::Text {
-                            text: effective_content.to_string(),
-                        });
-                    }
-                    if let Some(images) = &msg.images {
-                        for image in images {
-                            parts.push(OpenAIContentPart::ImageUrl {
-                                image_url: OpenAIImageUrl {
-                                    url: format!("data:{};base64,{}", image.mime_type, image.data),
-                                },
+                    if gemma4_model {
+                        if let Some(images) = &msg.images {
+                            for image in images {
+                                parts.push(OpenAIContentPart::ImageUrl {
+                                    image_url: OpenAIImageUrl {
+                                        url: format!("data:{};base64,{}", image.mime_type, image.data),
+                                    },
+                                });
+                            }
+                        }
+                        if !effective_content.trim().is_empty() {
+                            parts.push(OpenAIContentPart::Text {
+                                text: effective_content.to_string(),
                             });
+                        }
+                    } else {
+                        if !effective_content.trim().is_empty() {
+                            parts.push(OpenAIContentPart::Text {
+                                text: effective_content.to_string(),
+                            });
+                        }
+                        if let Some(images) = &msg.images {
+                            for image in images {
+                                parts.push(OpenAIContentPart::ImageUrl {
+                                    image_url: OpenAIImageUrl {
+                                        url: format!("data:{};base64,{}", image.mime_type, image.data),
+                                    },
+                                });
+                            }
                         }
                     }
 
@@ -1576,6 +1687,9 @@ impl ChatManager {
             stream: true,
             tools: include_tools
                 .then(|| get_tool_definitions_for_model(&model_name, composite_tools_enabled)),
+            temperature: gemma4_temperature(&model_name),
+            top_p: gemma4_top_p(&model_name),
+            top_k: gemma4_top_k(&model_name),
         };
 
         let openai_compat_base_url = normalize_openai_compat_url(&api_config.openai_compat_url);
@@ -1591,13 +1705,24 @@ impl ChatManager {
             }
 
             #[derive(Deserialize)]
+            struct StreamMessage {
+                #[serde(default)]
+                content: Option<String>,
+                #[serde(default)]
+                tool_calls: Option<Vec<crate::protocol::ToolCall>>,
+            }
+
+            #[derive(Deserialize)]
             struct StreamChoice {
+                #[serde(default)]
                 delta: StreamDelta,
+                #[serde(default)]
+                message: Option<StreamMessage>,
                 #[serde(default)]
                 finish_reason: Option<String>,
             }
 
-            #[derive(Deserialize)]
+            #[derive(Default, Deserialize)]
             struct StreamDelta {
                 #[serde(default)]
                 content: Option<String>,
@@ -1673,8 +1798,10 @@ impl ChatManager {
             // decoded only after the full SSE line is assembled.
             let mut buffer: Vec<u8> = Vec::new();
             let mut tool_call_deltas_buf: Vec<ToolCall> = Vec::new();
+            let mut emitted_final_tool_calls = false;
+            let mut emitted_done = false;
 
-            while let Some(chunk_result) = stream.next().await {
+            'stream_loop: while let Some(chunk_result) = stream.next().await {
                 let chunk = match chunk_result {
                     Ok(c) => c,
                     Err(e) => {
@@ -1710,13 +1837,22 @@ impl ChatManager {
                     if let Some(json_str) = line.strip_prefix("data: ") {
                         if let Ok(parsed) = serde_json::from_str::<StreamChunk>(json_str) {
                             if let Some(choice) = parsed.choices.first() {
+                                let content = choice
+                                    .delta
+                                    .content
+                                    .as_ref()
+                                    .or_else(|| {
+                                        choice
+                                            .message
+                                            .as_ref()
+                                            .and_then(|message| message.content.as_ref())
+                                    });
+
                                 // Handle text / reasoning deltas
-                                if let Some(content) = &choice.delta.content {
+                                if let Some(content) = content {
                                     if !content.is_empty() {
-                                        // Dynamically enable reasoning parsing if tags appear mid-stream
                                         if reasoning_parser.is_none()
-                                            && (content.contains("<think>")
-                                                || content.to_lowercase().contains("<thinking>"))
+                                            && contains_reasoning_marker(content)
                                         {
                                             reasoning_parser = Some(ReasoningParser::new());
                                         }
@@ -1748,12 +1884,18 @@ impl ChatManager {
                                         &mut tool_call_deltas_buf,
                                         &choice.delta.tool_calls,
                                     );
-
-                                    let calls: Vec<ToolCall> = tool_call_deltas_buf
+                                } else if let Some(message_tool_calls) = choice
+                                    .message
+                                    .as_ref()
+                                    .and_then(|message| message.tool_calls.as_ref())
+                                {
+                                    tool_call_deltas_buf = message_tool_calls
                                         .iter()
-                                        .filter(|call| !call.function.name.trim().is_empty())
                                         .map(|call| {
                                             let mut merged = call.clone();
+                                            if merged.id.is_empty() {
+                                                merged.id = uuid::Uuid::new_v4().to_string();
+                                            }
                                             if merged.typ.is_empty() {
                                                 merged.typ = "function".to_string();
                                             }
@@ -1761,10 +1903,6 @@ impl ChatManager {
                                             merged
                                         })
                                         .collect();
-
-                                    if !calls.is_empty() {
-                                        let _ = tx.send(ChatEvent::ToolCalls(calls));
-                                    }
                                 }
 
                                 if choice.finish_reason.is_some() {
@@ -1785,8 +1923,28 @@ impl ChatManager {
                                             }
                                         }
                                     }
+
+                                    let calls: Vec<ToolCall> = tool_call_deltas_buf
+                                        .iter()
+                                        .filter(|call| !call.function.name.trim().is_empty())
+                                        .map(|call| {
+                                            let mut merged = call.clone();
+                                            if merged.typ.is_empty() {
+                                                merged.typ = "function".to_string();
+                                            }
+                                            merged.status = Some("executing".to_string());
+                                            merged
+                                        })
+                                        .collect();
+
+                                    if !calls.is_empty() {
+                                        let _ = tx.send(ChatEvent::ToolCalls(calls));
+                                        emitted_final_tool_calls = true;
+                                    }
+
                                     let _ = tx.send(ChatEvent::Done);
-                                    break;
+                                    emitted_done = true;
+                                    break 'stream_loop;
                                 }
                             }
                         }
@@ -1812,7 +1970,28 @@ impl ChatManager {
                 }
             }
 
-            let _ = tx.send(ChatEvent::Done);
+            if !emitted_final_tool_calls {
+                let calls: Vec<ToolCall> = tool_call_deltas_buf
+                    .iter()
+                    .filter(|call| !call.function.name.trim().is_empty())
+                    .map(|call| {
+                        let mut merged = call.clone();
+                        if merged.typ.is_empty() {
+                            merged.typ = "function".to_string();
+                        }
+                        merged.status = Some("executing".to_string());
+                        merged
+                    })
+                    .collect();
+
+                if !calls.is_empty() {
+                    let _ = tx.send(ChatEvent::ToolCalls(calls));
+                }
+            }
+
+            if !emitted_done {
+                let _ = tx.send(ChatEvent::Done);
+            }
         });
 
         Self::ensure_assistant_placeholder(conversation);
@@ -1884,9 +2063,15 @@ impl ChatManager {
 
         // Update tool call status in the assistant message and store for emission
         // RFC: Large Tool Result Handling - truncate in local mode
-        let updated_assistant = conversation
-            .update_tool_call_status_with_truncation(&batch.file_results, is_local_mode);
-        self.updated_assistant_message = updated_assistant;
+        if let Some(updated_assistant) = conversation
+            .update_tool_call_status_with_truncation(&batch.file_results, is_local_mode)
+        {
+            self.pending_results
+                .push_back(DrainResult::ToolStatusUpdate(updated_assistant));
+            self.updated_assistant_message = None;
+        } else {
+            self.updated_assistant_message = None;
+        }
         self.sync_ws_conversation_messages(conversation);
 
         let selected = resolve_model_selection(models, selected_model);

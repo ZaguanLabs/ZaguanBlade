@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { BladeDispatcher } from '../services/blade';
 import { subscribeBladeEventType, waitForBladeEvent } from '../services/bladeEvents';
 import { EditorFacade } from '../services/editorFacade';
-import { useEditorState } from '../contexts/EditorContext';
+import { useEditorActions } from '../contexts/EditorContext';
 import { MessageBuffer } from '../utils/eventBuffer';
 import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertToolCallBlockPreservingOrder, moveExistingContentAfterTools, upsertSplitTextBlocks } from '../utils/messageBlocks';
 import { EventNames, type ChatErrorPayload, type ContextLengthExceededPayload, type MessageTooLargePayload, type RequestConfirmationPayload, type StructuredAction, type ToolExecutionCompletedPayload, type TodoItem } from '../types/events';
@@ -434,10 +434,10 @@ function reconcileMessageImagePreviews(previousMessages: ChatMessage[], nextMess
 }
 
 export function useChatV2() {
-    const editorState = useEditorState();
+    const { getEditorSnapshot } = useEditorActions();
     const [state, dispatch] = useReducer(chatReducer, initialState);
 
-    const editorStateRef = useRef(editorState);
+    const getEditorSnapshotRef = useRef(getEditorSnapshot);
     const firstDispatchRef = useRef(true);
     const messagesRef = useRef<ChatMessage[]>([]);
     const messageByIdRef = useRef<Map<string, ChatMessage>>(new Map());
@@ -567,8 +567,8 @@ export function useChatV2() {
     }, []);
 
     useEffect(() => {
-        editorStateRef.current = editorState;
-    }, [editorState]);
+        getEditorSnapshotRef.current = getEditorSnapshot;
+    }, [getEditorSnapshot]);
 
     useEffect(() => {
         messagesRef.current = state.messages;
@@ -637,7 +637,7 @@ export function useChatV2() {
 
     const requestFreshEditorContext = useCallback(async () => {
         if (!firstDispatchRef.current) {
-            return buildEditorContext(editorStateRef.current);
+            return buildEditorContext(getEditorSnapshotRef.current());
         }
 
         try {
@@ -669,7 +669,7 @@ export function useChatV2() {
                 selectionEndLine: snapshot.selection_end,
             });
         } catch {
-            return buildEditorContext(editorStateRef.current);
+            return buildEditorContext(getEditorSnapshotRef.current());
         }
     }, [buildEditorContext]);
 

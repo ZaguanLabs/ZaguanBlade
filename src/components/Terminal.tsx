@@ -14,14 +14,44 @@ import { useContextMenu, ContextMenuItem } from "./ui/ContextMenu";
 import { Copy, ClipboardPaste, Trash2, MessageSquare } from "lucide-react";
 import { BLADE_TERMINAL_ID } from "../constants/terminal";
 
+function stripAnsiEscapes(data: string): string {
+    return data.replace(/\u001b\[[0-?]*[ -\/]*[@-~]/g, '').replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '');
+}
+
 /**
  * Strip any remaining BLADE sentinel artifacts from terminal output.
  * The Rust terminal reader thread handles the primary sentinel stripping,
  * but the v1.1 blade-event path bypasses that, so we catch stragglers here.
  */
 function sanitizeTerminalOutput(data: string): string {
-    // Strip lines containing BLADE sentinel markers
-    return data.replace(/^.*##BLADE_CMD_(?:START|EXIT):.*##.*$/gm, '');
+    return data
+        .split(/(\r?\n)/)
+        .reduce<string[]>((parts, segment, index, source) => {
+            if (segment === '\n' || segment === '\r\n') {
+                const previous = source[index - 1];
+                if (previous && previous.length > 0) {
+                    parts.push(segment);
+                }
+                return parts;
+            }
+
+            const line = segment;
+            const plainLine = stripAnsiEscapes(line);
+            const trimmed = plainLine.trim();
+            const isBladeWrapperLine = trimmed.includes('##BLADE_CMD_')
+                || trimmed.includes('__blade_ec')
+                || trimmed.includes('__blade_pid')
+                || trimmed.includes('unset __blade_ec __blade_pid')
+                || trimmed.includes('[run_command] detached pid=')
+                || /(?:^|\s)(?:[%#$][ ]*)?(?:\(?\s*)?(?:echo|printf)\s+'/.test(trimmed);
+
+            if (!isBladeWrapperLine) {
+                parts.push(line);
+            }
+
+            return parts;
+        }, [])
+        .join('');
 }
 
 function getTerminalTheme() {
@@ -56,10 +86,11 @@ interface TerminalProps {
     id?: string;
     cwd?: string;
     command?: string;
+    displayCommand?: string;
     interactive?: boolean;
 }
 
-export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, command, interactive = true }) => {
+export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, command, displayCommand, interactive = true }) => {
     const { t } = useTranslation();
     const { themeId } = useTheme();
     const terminalRef = useRef<HTMLDivElement>(null);
@@ -71,6 +102,7 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
     const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null);
     const initialCwdRef = useRef(cwd);
     const initialCommandRef = useRef(command);
+    const initialDisplayCommandRef = useRef(displayCommand);
     const initialInteractiveRef = useRef(interactive);
     const { showMenu } = useContextMenu();
 
@@ -342,19 +374,6 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
                 xtermRef.current.write(`\r\n\x1b[33mProcess exited with code ${code}\x1b[0m\r\n`);
             }
         });
-        let unlistenCommandDisplay: (() => void) | null = null;
-        void listen<{ terminalId: string; callId: string; command: string }>('blade-cmd-display', (event) => {
-            const { terminalId, command } = event.payload;
-            if (terminalId !== id || !xtermRef.current) {
-                return;
-            }
-
-            xtermRef.current.write(`${command}\r\n`);
-        }).then((unlisten) => {
-            unlistenCommandDisplay = unlisten;
-        }).catch((error) => {
-            console.error('[Terminal] Failed to listen for blade command display:', error);
-        });
 
         // 2. Setup backend PTY
         const initBackend = async () => {
@@ -375,6 +394,10 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
                         interactive: initialInteractiveRef.current,
                     }
                 });
+
+                if (!initialInteractiveRef.current && initialDisplayCommandRef.current) {
+                    term.write(`$ ${initialDisplayCommandRef.current}\r\n`);
+                }
 
                 emit('terminal-ready', { id }).catch(console.error);
                 if (id === BLADE_TERMINAL_ID) {
@@ -417,8 +440,7 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
             unsubscribeOutput();
             unsubscribeSpawned();
             unsubscribeExit();
-            if (unlistenCommandDisplay) unlistenCommandDisplay();
-    
+
             BladeDispatcher.terminal({
                 type: "Kill",
                 payload: { id }

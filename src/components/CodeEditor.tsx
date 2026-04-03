@@ -5,7 +5,7 @@ import { EditorState, Compartment, Prec } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightActiveLine, drawSelection, dropCursor, rectangularSelection, crosshairCursor, placeholder, highlightSpecialChars } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { bracketMatching, indentOnInput, foldGutter, foldKeymap } from "@codemirror/language";
-import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
+import { searchKeymap } from "@codemirror/search";
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from "@codemirror/autocomplete";
 import { lintGutter } from "@codemirror/lint";
 
@@ -18,9 +18,6 @@ import {
     clearLineHighlight,
     virtualBufferField,
     setBaseContent,
-    indentGuides,
-    rainbowBrackets,
-    smoothCursor,
     scrollPastEnd,
     diffDecorations,
     diffStateField,
@@ -92,6 +89,13 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     // Track whether a content change was user-initiated (to avoid update loops)
     const isUserEditRef = useRef(false);
     const languageRequestIdRef = useRef(0);
+    const selectionSyncFrameRef = useRef<number | null>(null);
+    const pendingSelectionSyncRef = useRef<{
+        line: number;
+        column: number;
+        selectionStartLine: number | null;
+        selectionEndLine: number | null;
+    } | null>(null);
 
     // Ref to capture the latest onSave callback (avoids stale closure in keymap)
     const onSaveRef = useRef(onSave);
@@ -102,6 +106,15 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     useEffect(() => {
         onChangeRef.current = onChange;
     }, [onChange]);
+
+    useEffect(() => {
+        return () => {
+            if (selectionSyncFrameRef.current !== null) {
+                cancelAnimationFrame(selectionSyncFrameRef.current);
+                selectionSyncFrameRef.current = null;
+            }
+        };
+    }, []);
 
     // Expose methods to parent via ref
     useImperativeHandle(ref, () => ({
@@ -167,7 +180,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 history(),
                 // Bracket matching/closing only for code files
                 ...(isMarkdown ? [] : [bracketMatching(), closeBrackets()]),
-                ...(isMarkdown ? [] : [autocompletion(), highlightSelectionMatches()]),
+                ...(isMarkdown ? [] : [autocompletion()]),
                 indentOnInput(),
 
                 themeConf.current.of(getZaguanTheme(currentTheme.appearance === 'dark')),
@@ -183,8 +196,6 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
 
                 // Custom extensions for enhanced UX
                 // Disable heavy extensions for markdown (rainbow brackets, indent guides)
-                ...(isMarkdown ? [] : [indentGuides, rainbowBrackets]),
-                smoothCursor,
                 scrollPastEnd,
 
                 // Editor state extensions
@@ -250,16 +261,28 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
 
                         const { main } = update.state.selection;
                         const line = update.state.doc.lineAt(main.head);
-                        
-                        setCursorPosition(line.number, main.head - line.from);
+                        pendingSelectionSyncRef.current = {
+                            line: line.number,
+                            column: main.head - line.from,
+                            selectionStartLine: main.from !== main.to ? update.state.doc.lineAt(main.from).number : null,
+                            selectionEndLine: main.from !== main.to ? update.state.doc.lineAt(main.to).number : null,
+                        };
 
-                        if (main.from !== main.to) {
-                            setSelection(
-                                update.state.doc.lineAt(main.from).number,
-                                update.state.doc.lineAt(main.to).number
-                            );
-                        } else {
-                            clearSelection();
+                        if (selectionSyncFrameRef.current === null) {
+                            selectionSyncFrameRef.current = requestAnimationFrame(() => {
+                                selectionSyncFrameRef.current = null;
+                                const pending = pendingSelectionSyncRef.current;
+                                if (!pending) {
+                                    return;
+                                }
+
+                                setCursorPosition(pending.line, pending.column);
+                                if (pending.selectionStartLine !== null && pending.selectionEndLine !== null) {
+                                    setSelection(pending.selectionStartLine, pending.selectionEndLine);
+                                } else {
+                                    clearSelection();
+                                }
+                            });
                         }
                     }
                 })

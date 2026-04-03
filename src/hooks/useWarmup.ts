@@ -16,6 +16,14 @@ export type WarmupTrigger = 'launch' | 'model_change' | 'workspace_change' | 'se
 
 const INACTIVITY_THRESHOLD = 5 * 60 * 1000; // 5 minutes
 
+function isLocalModel(modelId: string | null): boolean {
+    if (!modelId) {
+        return false;
+    }
+
+    return modelId.startsWith('ollama/') || modelId.startsWith('openai-compat/');
+}
+
 /**
  * Generate a session ID from workspace path
  * This creates a stable session ID for a given workspace
@@ -51,7 +59,7 @@ export function useWarmup(workspacePath: string | null, modelId: string | null, 
     const sessionId = generateSessionId(workspacePath);
 
     const warmup = useCallback(async (trigger: WarmupTrigger): Promise<WarmupResponse | null> => {
-        if (!modelId) {
+        if (!modelId || isLocalModel(modelId)) {
             return null;
         }
 

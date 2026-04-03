@@ -10,16 +10,18 @@ pub(crate) fn resolve_path_under_workspace_root(
     crate::worktree::resolve_path_under_workspace_root(workspace_root, path)
 }
 
+ fn workspace_root_path(state: &AppState) -> Result<std::path::PathBuf, String> {
+     let ws = state.workspace.lock().unwrap();
+     ws.workspace
+         .clone()
+         .ok_or_else(|| "No workspace open".to_string())
+ }
+
 pub(crate) fn resolve_path_under_workspace(
     state: &AppState,
     path: &std::path::Path,
 ) -> Result<std::path::PathBuf, String> {
-    let workspace_root = {
-        let ws = state.workspace.lock().unwrap();
-        ws.workspace
-            .clone()
-            .ok_or_else(|| "No workspace open".to_string())?
-    };
+    let workspace_root = workspace_root_path(state)?;
 
     resolve_path_under_workspace_root(&workspace_root, path)
 }
@@ -28,12 +30,7 @@ pub(crate) async fn resolve_path_under_workspace_async(
     state: &AppState,
     path: std::path::PathBuf,
 ) -> Result<std::path::PathBuf, String> {
-    let workspace_root = {
-        let ws = state.workspace.lock().unwrap();
-        ws.workspace
-            .clone()
-            .ok_or_else(|| "No workspace open".to_string())?
-    };
+    let workspace_root = workspace_root_path(state)?;
 
     tokio::task::spawn_blocking(move || resolve_path_under_workspace_root(&workspace_root, &path))
         .await
@@ -132,9 +129,13 @@ pub fn list_files_logic(
     path: Option<String>,
     state: &AppState,
 ) -> Result<Vec<crate::explorer::FileEntry>, String> {
-    let store = state.worktree()?;
-    let requested = path.as_ref().map(std::path::Path::new);
-    store.list_directory(requested)
+    let workspace_root = workspace_root_path(state)?;
+    let resolved_path = match path.as_ref() {
+        Some(path) => resolve_path_under_workspace_root(&workspace_root, std::path::Path::new(path))?,
+        None => workspace_root,
+    };
+
+    Ok(crate::explorer::list_directory(&resolved_path))
 }
 
 #[tauri::command]

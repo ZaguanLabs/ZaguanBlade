@@ -18,33 +18,39 @@ pub enum ReasoningFormat {
     Think,
     /// `<thinking>...</thinking>` - Alternative format
     Thinking,
+    GemmaThought,
 }
 
 impl ReasoningFormat {
-    /// Returns the opening tag for this format
+    pub fn open_tags(&self) -> Vec<&'static str> {
+        match self {
+            ReasoningFormat::Think => vec!["<think>"],
+            ReasoningFormat::Thinking => vec!["<thinking>"],
+            ReasoningFormat::GemmaThought => vec![
+                "<|channel|>thought\n",
+                "<|channel|>thought\r\n",
+                "<|channel>thought\n",
+                "<|channel>thought\r\n",
+            ],
+        }
+    }
+
+    pub fn close_tags(&self) -> Vec<&'static str> {
+        match self {
+            ReasoningFormat::Think => vec!["</think>"],
+            ReasoningFormat::Thinking => vec!["</thinking>"],
+            ReasoningFormat::GemmaThought => {
+                vec!["<|/channel|>", "<channel|>", "</channel>"]
+            }
+        }
+    }
+
     pub fn open_tag(&self) -> &'static str {
-        match self {
-            ReasoningFormat::Think => "<think>",
-            ReasoningFormat::Thinking => "<thinking>",
-        }
+        self.open_tags()[0]
     }
 
-    /// Returns the closing tag for this format
     pub fn close_tag(&self) -> &'static str {
-        match self {
-            ReasoningFormat::Think => "</think>",
-            ReasoningFormat::Thinking => "</thinking>",
-        }
-    }
-
-    /// Returns the length of the opening tag
-    pub fn open_len(&self) -> usize {
-        self.open_tag().len()
-    }
-
-    /// Returns the length of the closing tag
-    pub fn close_len(&self) -> usize {
-        self.close_tag().len()
+        self.close_tags()[0]
     }
 }
 
@@ -105,7 +111,11 @@ impl ReasoningParser {
     /// Create a new reasoning parser with default formats
     pub fn new() -> Self {
         Self {
-            formats: vec![ReasoningFormat::Think, ReasoningFormat::Thinking],
+            formats: vec![
+                ReasoningFormat::Think,
+                ReasoningFormat::Thinking,
+                ReasoningFormat::GemmaThought,
+            ],
             current_format: None,
             tag_buffer: String::new(),
             in_reasoning: false,
@@ -201,19 +211,16 @@ impl ReasoningParser {
             }
 
             if !self.in_reasoning {
-                // Look for opening tags
-                if let Some((format, idx)) = self.find_opening_tag(remaining) {
+                if let Some((format, idx, open_tag)) = self.find_opening_tag(remaining) {
                     let before = &remaining[..idx];
                     if !before.is_empty() {
                         segments.push(ReasoningSegment::Text(before.to_string()));
                     }
 
-                    // Enter reasoning mode
                     self.in_reasoning = true;
                     self.current_format = Some(format);
 
-                    // Skip past the opening tag
-                    remaining = &remaining[idx + format.open_len()..];
+                    remaining = &remaining[idx + open_tag.len()..];
                 } else if let Some(partial_idx) = self.find_partial_opening(remaining) {
                     let before = &remaining[..partial_idx];
                     if !before.is_empty() {
@@ -228,18 +235,16 @@ impl ReasoningParser {
             } else {
                 let format = self.current_format.expect("in_reasoning but no format");
 
-                if let Some(idx) = remaining.find(format.close_tag()) {
+                if let Some((idx, close_tag)) = self.find_closing_tag(remaining, format) {
                     let reasoning_content = &remaining[..idx];
                     if !reasoning_content.is_empty() {
                         segments.push(ReasoningSegment::Reasoning(reasoning_content.to_string()));
                     }
 
-                    // Exit reasoning mode
                     self.in_reasoning = false;
                     self.current_format = None;
 
-                    // Skip past the closing tag
-                    remaining = &remaining[idx + format.close_len()..];
+                    remaining = &remaining[idx + close_tag.len()..];
                 } else if let Some(partial_idx) = self.find_partial_closing(remaining, format) {
                     let reasoning_before = &remaining[..partial_idx];
                     if !reasoning_before.is_empty() {
@@ -264,16 +269,19 @@ impl ReasoningParser {
         segments
     }
 
-    /// Find the first opening tag in the text
-    fn find_opening_tag(&self, text: &str) -> Option<(ReasoningFormat, usize)> {
-        let mut best: Option<(ReasoningFormat, usize)> = None;
+    fn find_opening_tag(&self, text: &str) -> Option<(ReasoningFormat, usize, &'static str)> {
+        let mut best: Option<(ReasoningFormat, usize, &'static str)> = None;
 
         for format in &self.formats {
-            if let Some(idx) = text.find(format.open_tag()) {
-                match best {
-                    None => best = Some((*format, idx)),
-                    Some((_, best_idx)) if idx < best_idx => best = Some((*format, idx)),
-                    _ => {}
+            for tag in format.open_tags() {
+                if let Some(idx) = text.find(tag) {
+                    let should_replace = best
+                        .as_ref()
+                        .map(|(_, best_idx, _)| idx < *best_idx)
+                        .unwrap_or(true);
+                    if should_replace {
+                        best = Some((*format, idx, tag));
+                    }
                 }
             }
         }
@@ -281,28 +289,45 @@ impl ReasoningParser {
         best
     }
 
-    /// Check if the end of text contains a partial opening tag
     fn find_partial_opening(&self, text: &str) -> Option<usize> {
-        // Check last N characters for partial matches
         for format in &self.formats {
-            let tag = format.open_tag();
-            for i in 1..tag.len() {
-                let suffix = &tag[..i];
-                if text.ends_with(suffix) {
-                    return Some(text.len() - i);
+            for tag in format.open_tags() {
+                for i in 1..tag.len() {
+                    let suffix = &tag[..i];
+                    if text.ends_with(suffix) {
+                        return Some(text.len() - i);
+                    }
                 }
             }
         }
         None
     }
 
-    /// Check if the end of text contains a partial closing tag
+    fn find_closing_tag(&self, text: &str, format: ReasoningFormat) -> Option<(usize, &'static str)> {
+        let mut best: Option<(usize, &'static str)> = None;
+
+        for tag in format.close_tags() {
+            if let Some(idx) = text.find(tag) {
+                let should_replace = best
+                    .as_ref()
+                    .map(|(best_idx, _)| idx < *best_idx)
+                    .unwrap_or(true);
+                if should_replace {
+                    best = Some((idx, tag));
+                }
+            }
+        }
+
+        best
+    }
+
     fn find_partial_closing(&self, text: &str, format: ReasoningFormat) -> Option<usize> {
-        let tag = format.close_tag();
-        for i in 1..tag.len() {
-            let suffix = &tag[..i];
-            if text.ends_with(suffix) {
-                return Some(text.len() - i);
+        for tag in format.close_tags() {
+            for i in 1..tag.len() {
+                let suffix = &tag[..i];
+                if text.ends_with(suffix) {
+                    return Some(text.len() - i);
+                }
             }
         }
         None
@@ -355,6 +380,32 @@ mod tests {
 
         assert_eq!(result.reasoning, "Deep thought");
         assert_eq!(result.text, "Answer");
+    }
+
+    #[test]
+    fn test_gemma_thought_channel() {
+        let mut parser = ReasoningParser::new();
+        let result = parser.process("<|channel|>thought\nDeep thought<|/channel|>Answer");
+
+        assert_eq!(result.reasoning, "Deep thought");
+        assert_eq!(result.text, "Answer");
+    }
+
+    #[test]
+    fn test_gemma_thought_channel_streaming_chunks() {
+        let mut parser = ReasoningParser::new();
+
+        let r1 = parser.process("Before <|channel|>thou");
+        assert_eq!(r1.text, "Before ");
+        assert_eq!(r1.reasoning, "");
+
+        let r2 = parser.process("ght\nThinking");
+        assert_eq!(r2.text, "");
+        assert_eq!(r2.reasoning, "Thinking");
+
+        let r3 = parser.process(" done<|/channel|>After");
+        assert_eq!(r3.reasoning, " done");
+        assert_eq!(r3.text, "After");
     }
 
     #[test]

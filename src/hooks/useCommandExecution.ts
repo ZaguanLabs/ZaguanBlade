@@ -3,8 +3,7 @@ import { listen, emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { BladeDispatcher } from '../services/blade';
 import { subscribeBladeNestedEventType } from '../services/bladeEvents';
-
-import { BLADE_TERMINAL_ID, BLADE_TERMINAL_TITLE } from '../constants/terminal';
+import { BLADE_TERMINAL_ID } from '../constants/terminal';
 
 export interface CommandExecution {
     commandId: string;
@@ -43,9 +42,6 @@ type ManagedTerminal = {
     primary: boolean;
 };
 
-const SENTINEL_START = '##BLADE_CMD_START:';
-const SENTINEL_EXIT = '##BLADE_CMD_EXIT:';
-const SENTINEL_END = '##';
 const DETACHED_MARKER = '[run_command] detached pid=';
 const TERMINAL_READY_TIMEOUT_MS = 15000;
 
@@ -56,17 +52,7 @@ export function useCommandExecution() {
     const pendingCommandsRef = useRef<Map<string, PendingCommand>>(new Map());
     const commandOutputBuffersRef = useRef<Map<string, string>>(new Map());
     const activeTerminalCommandRef = useRef<Map<string, string>>(new Map());
-    const terminalsRef = useRef<Map<string, ManagedTerminal>>(new Map([
-        [BLADE_TERMINAL_ID, {
-            id: BLADE_TERMINAL_ID,
-            title: BLADE_TERMINAL_TITLE,
-            ready: false,
-            opening: false,
-            activeCallId: null,
-            backgroundLocked: false,
-            primary: true,
-        }],
-    ]));
+    const terminalsRef = useRef<Map<string, ManagedTerminal>>(new Map());
     const terminalReadyWaitersRef = useRef<Map<string, Array<() => void>>>(new Map());
     const terminalExitFallbackTimersRef = useRef<Map<string, number>>(new Map());
     const extraTerminalCounterRef = useRef(2);
@@ -166,6 +152,8 @@ export function useCommandExecution() {
         cwd?: string,
         command?: string,
         interactive = true,
+        waitForReady = true,
+        displayCommand?: string,
     ) => {
         const existing = terminalsRef.current.get(terminalId);
         if (existing?.ready) {
@@ -176,6 +164,7 @@ export function useCommandExecution() {
                 interactive,
                 focus: true,
                 transient: terminalId !== BLADE_TERMINAL_ID,
+                displayCommand,
             });
             return;
         }
@@ -200,10 +189,13 @@ export function useCommandExecution() {
                 interactive,
                 focus: true,
                 transient: terminalId !== BLADE_TERMINAL_ID,
+                displayCommand,
             });
         }
 
-        await waitForTerminalReady(terminalId);
+        if (waitForReady) {
+            await waitForTerminalReady(terminalId);
+        }
     }, [updateTerminal, waitForTerminalReady]);
 
     const createCommandTerminal = useCallback((callId: string, cwd?: string): ManagedTerminal => {
@@ -223,20 +215,6 @@ export function useCommandExecution() {
     }, []);
 
     const reserveTerminalForCommand = useCallback((callId: string, cwd?: string) => {
-        const primary = terminalsRef.current.get(BLADE_TERMINAL_ID);
-        if (primary && !primary.activeCallId && !primary.backgroundLocked) {
-            updateTerminal(primary.id, current => {
-                const base = current ?? primary;
-                return {
-                    ...base,
-                    cwd: cwd ?? base.cwd,
-                    activeCallId: callId,
-                };
-            });
-
-            return terminalsRef.current.get(primary.id) ?? primary;
-        }
-
         const terminal = createCommandTerminal(callId, cwd);
 
         updateTerminal(terminal.id, current => {
@@ -270,37 +248,25 @@ export function useCommandExecution() {
         return buffered;
     }, []);
 
-    const buildInteractiveCommandPayload = useCallback((pending: PendingCommand) => {
-        const { callId, cwd, blocking, waitMsBeforeAsync } = pending;
+    const buildTerminalSpawnCommand = useCallback((pending: PendingCommand) => {
         const commandToRun = buildCommandForExecution(pending);
 
-        const parts: string[] = [];
-        parts.push(`__blade_tty_state=$(stty -g 2>/dev/null || true)`);
-        parts.push(`if [ -n "$__blade_tty_state" ]; then stty -echo 2>/dev/null || true; fi`);
-        parts.push(`echo '${SENTINEL_START}${callId}${SENTINEL_END}'`);
-        parts.push('__blade_ec=0');
-
-        if (cwd) {
-            parts.push(`cd ${escapeShellArg(cwd)} || __blade_ec=$?`);
+        if (pending.blocking) {
+            return commandToRun;
         }
 
-        if (blocking) {
-            parts.push(`if [ "$__blade_ec" -eq 0 ]; then ${commandToRun}; __blade_ec=$?; fi`);
-        } else {
-            const waitMs = typeof waitMsBeforeAsync === 'number' ? Math.max(0, waitMsBeforeAsync) : 1000;
-            const waitSeconds = (waitMs / 1000).toString();
-            parts.push(
-                `if [ "$__blade_ec" -eq 0 ]; then ( ${commandToRun} ) & __blade_pid=$!; ${waitMs > 0 ? `sleep ${waitSeconds}; ` : ''}if kill -0 "$__blade_pid" 2>/dev/null; then disown "$__blade_pid" 2>/dev/null || true; echo '[run_command] detached pid='"$__blade_pid"; __blade_ec=0; else wait "$__blade_pid"; __blade_ec=$?; fi; fi`
-            );
-        }
+        const waitMs = typeof pending.waitMsBeforeAsync === 'number'
+            ? Math.max(0, pending.waitMsBeforeAsync)
+            : 1000;
+        const waitSeconds = (waitMs / 1000).toString();
 
-        parts.push(`echo '${SENTINEL_EXIT}${callId}:'"$__blade_ec"'${SENTINEL_END}'`);
-        parts.push(`if [ -n "$__blade_tty_state" ]; then stty "$__blade_tty_state" 2>/dev/null || stty echo 2>/dev/null || true; fi`);
-        parts.push('unset __blade_ec __blade_pid');
-        parts.push('unset __blade_tty_state');
-
-        return `${parts.join('; ')}\n`;
-    }, [buildCommandForExecution, escapeShellArg]);
+        return [
+            `( ${commandToRun} ) & __blade_pid=$!`,
+            waitMs > 0 ? `sleep ${waitSeconds}` : null,
+            `if kill -0 "$__blade_pid" 2>/dev/null; then disown "$__blade_pid" 2>/dev/null || true; echo '${DETACHED_MARKER}'"$__blade_pid"; exit 0; fi`,
+            'wait "$__blade_pid"',
+        ].filter(Boolean).join('; ');
+    }, [buildCommandForExecution]);
 
     const releaseTerminalReservation = useCallback((pending: PendingCommand, backgroundLocked: boolean) => {
         updateTerminal(pending.terminalId, terminal => {
@@ -358,25 +324,23 @@ export function useCommandExecution() {
     }, [handleCommandComplete]);
 
     const sendCommandToBlade = useCallback(async (pending: PendingCommand) => {
-        const payload = buildInteractiveCommandPayload(pending);
+        const command = buildTerminalSpawnCommand(pending);
 
         try {
+            commandOutputBuffersRef.current.delete(pending.callId);
+            activeTerminalCommandRef.current.set(pending.terminalId, pending.callId);
+
             await openManagedTerminal(
                 pending.terminalId,
                 pending.terminalTitle,
                 pending.cwd,
-                undefined,
-                true,
+                command,
+                false,
+                false,
+                pending.command,
             );
-            await BladeDispatcher.terminal({
-                type: 'Input',
-                payload: {
-                    id: pending.terminalId,
-                    data: payload,
-                },
-            });
-            updateTerminal(pending.terminalId, terminal => terminal ? { ...terminal, ready: true, opening: false } : terminal);
         } catch (err) {
+            activeTerminalCommandRef.current.delete(pending.terminalId);
             invalidateTerminal(pending.terminalId);
             releaseTerminalReservation(pending, false);
 
@@ -393,7 +357,7 @@ export function useCommandExecution() {
             pendingCommandsRef.current.delete(pending.callId);
             await handleCommandComplete(pending.callId, `Failed to execute command in Blade terminal: ${String(err)}`, 1);
         }
-    }, [buildInteractiveCommandPayload, createCommandTerminal, handleCommandComplete, invalidateTerminal, openManagedTerminal, releaseTerminalReservation, updateTerminal]);
+    }, [buildTerminalSpawnCommand, createCommandTerminal, handleCommandComplete, invalidateTerminal, openManagedTerminal, releaseTerminalReservation]);
 
     const stopCommandExecution = useCallback(async (callId: string) => {
         const pending = pendingCommandsRef.current.get(callId);
@@ -411,10 +375,9 @@ export function useCommandExecution() {
                 });
             } else {
                 await BladeDispatcher.terminal({
-                    type: 'Input',
+                    type: 'Kill',
                     payload: {
                         id: pending.terminalId,
-                        data: '\u0003',
                     },
                 });
             }
@@ -432,8 +395,6 @@ export function useCommandExecution() {
         let unlistenStart: (() => void) | undefined;
         let unlistenTerminalReady: (() => void) | undefined;
         let unlistenExit: (() => void) | undefined;
-        let unlistenCmdDetected: (() => void) | undefined;
-        let unlistenCmdExitDetected: (() => void) | undefined;
         let unsubscribeTerminalOutput: (() => void) | undefined;
 
         const setupListeners = async () => {
@@ -450,16 +411,7 @@ export function useCommandExecution() {
             }>('command-execution-started', (event) => {
                 console.debug('[CMD EXEC] Started:', event.payload);
 
-                const isNative = event.payload.shell === false
-                    && typeof event.payload.program === 'string'
-                    && event.payload.program.length > 0
-                    && (event.payload.blocking ?? true);
-                const reservedTerminal = isNative
-                    ? {
-                        id: event.payload.call_id,
-                        title: event.payload.program || 'Command',
-                    }
-                    : reserveTerminalForCommand(event.payload.call_id, event.payload.cwd);
+                const reservedTerminal = reserveTerminalForCommand(event.payload.call_id, event.payload.cwd);
                 const pending: PendingCommand = {
                     callId: event.payload.call_id,
                     terminalId: reservedTerminal.id,
@@ -467,7 +419,7 @@ export function useCommandExecution() {
                     command: event.payload.command,
                     program: event.payload.program,
                     args: event.payload.args,
-                    native: isNative,
+                    native: false,
                     shell: event.payload.shell,
                     cwd: event.payload.cwd,
                     blocking: event.payload.blocking ?? true,
@@ -476,7 +428,6 @@ export function useCommandExecution() {
                     fallbackAttempted: false,
                 };
                 commandOutputBuffersRef.current.delete(event.payload.call_id);
-                activeTerminalCommandRef.current.delete(reservedTerminal.id);
                 pendingCommandsRef.current.set(event.payload.call_id, pending);
 
                 setExecutions(prev => {
@@ -512,39 +463,20 @@ export function useCommandExecution() {
                 }
 
                 const existing = commandOutputBuffersRef.current.get(callId) ?? '';
-                commandOutputBuffersRef.current.set(callId, existing + payload.data);
-            });
+                const nextOutput = existing + payload.data;
+                commandOutputBuffersRef.current.set(callId, nextOutput);
 
-            unlistenCmdDetected = await listen<{ terminal_id: string; call_id: string }>('blade-cmd-started', (event) => {
-                const { terminal_id: terminalId, call_id: callId } = event.payload;
                 const pending = pendingCommandsRef.current.get(callId);
-                if (!pending) {
+                if (!pending || pending.native || pending.blocking || !nextOutput.includes(DETACHED_MARKER)) {
                     return;
                 }
 
-                commandOutputBuffersRef.current.delete(callId);
-                activeTerminalCommandRef.current.set(terminalId, callId);
-                void emit('blade-cmd-display', {
-                    terminalId,
-                    callId,
-                    command: pending.command,
-                }).catch((error) => {
-                    console.error('[CMD EXEC] Failed to emit blade command display:', error);
-                });
-            });
-
-            unlistenCmdExitDetected = await listen<{ terminal_id: string; call_id: string; exit_code: number; output: string }>('blade-cmd-exited', (event) => {
-                const { terminal_id: terminalId, call_id: callId, exit_code: exitCode, output } = event.payload;
-                const pending = pendingCommandsRef.current.get(callId);
-                if (!pending) return;
                 clearTerminalExitFallback(callId);
                 pendingCommandsRef.current.delete(callId);
-                activeTerminalCommandRef.current.delete(terminalId);
-                if (!pending.native) {
-                    releaseTerminalReservation(pending, output.includes(DETACHED_MARKER));
-                }
-                const finalOutput = takeCommandOutputBuffer(callId, output);
-                handleCommandComplete(callId, finalOutput, exitCode);
+                activeTerminalCommandRef.current.delete(payload.id);
+                releaseTerminalReservation(pending, true);
+                const finalOutput = takeCommandOutputBuffer(callId, nextOutput);
+                void handleCommandComplete(callId, finalOutput, 0);
             });
 
             unlistenExit = subscribeBladeNestedEventType('Terminal', 'Exit', (payload) => {
@@ -572,7 +504,7 @@ export function useCommandExecution() {
                             latestPending.callId,
                             fallbackOutput.trim().length > 0
                                 ? fallbackOutput
-                                : `Command terminal exited before sentinel completion (exit ${exitCode}).`,
+                                : `Command terminal exited before completion (exit ${exitCode}).`,
                             exitCode,
                         );
                     }, 150);
@@ -591,8 +523,6 @@ export function useCommandExecution() {
             if (unlistenStart) unlistenStart();
             if (unlistenTerminalReady) unlistenTerminalReady();
             if (unlistenExit) unlistenExit();
-            if (unlistenCmdDetected) unlistenCmdDetected();
-            if (unlistenCmdExitDetected) unlistenCmdExitDetected();
             if (unsubscribeTerminalOutput) unsubscribeTerminalOutput();
             activeTerminalCommandRef.current.clear();
             commandOutputBuffersRef.current.clear();

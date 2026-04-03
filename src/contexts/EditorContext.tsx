@@ -6,6 +6,9 @@ import { subscribeBladeNestedEventType } from '../services/bladeEvents';
 interface EditorState {
     activeFile: string | null;
     openFiles: string[];
+}
+
+interface EditorSnapshot extends EditorState {
     cursorLine: number | null;
     cursorColumn: number | null;
     selectionStartLine: number | null;
@@ -18,6 +21,7 @@ interface EditorActionsType {
     setCursorPosition: (line: number, column: number) => void;
     setSelection: (startLine: number, endLine: number) => void;
     clearSelection: () => void;
+    getEditorSnapshot: () => EditorSnapshot;
 }
 
 interface EditorContextType extends EditorActionsType {
@@ -30,6 +34,10 @@ const EditorActionsContext = createContext<EditorActionsType | undefined>(undefi
 export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const bootstrapContext = useOptionalStartupBootstrap();
     const [editorState, setEditorState] = useState<EditorState>({
+        activeFile: null,
+        openFiles: [],
+    });
+    const snapshotRef = useRef<EditorSnapshot>({
         activeFile: null,
         openFiles: [],
         cursorLine: null,
@@ -50,33 +58,42 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     // Listen for backend EditorEvent updates when backend authority is enabled
     useEffect(() => {
         const unsubscribeActiveFileChanged = subscribeBladeNestedEventType('Editor', 'ActiveFileChanged', (payload) => {
+            snapshotRef.current = {
+                ...snapshotRef.current,
+                activeFile: payload.path ?? null,
+            };
             setEditorState(prev => ({
                 ...prev,
                 activeFile: payload.path ?? null
             }));
         });
         const unsubscribeCursorMoved = subscribeBladeNestedEventType('Editor', 'CursorMoved', (payload) => {
-            setEditorState(prev => ({
-                ...prev,
+            snapshotRef.current = {
+                ...snapshotRef.current,
                 cursorLine: payload.line,
                 cursorColumn: payload.column
-            }));
+            };
         });
         const unsubscribeSelectionChanged = subscribeBladeNestedEventType('Editor', 'SelectionChanged', (payload) => {
-            setEditorState(prev => ({
-                ...prev,
+            snapshotRef.current = {
+                ...snapshotRef.current,
                 selectionStartLine: payload.start,
                 selectionEndLine: payload.end
-            }));
+            };
         });
         const unsubscribeStateSnapshot = subscribeBladeNestedEventType('Editor', 'StateSnapshot', (payload) => {
-            setEditorState(prev => ({
+            const nextOpenFiles = payload.open_files ?? snapshotRef.current.openFiles;
+            snapshotRef.current = {
                 activeFile: payload.active_file ?? null,
-                openFiles: payload.open_files ?? prev.openFiles,
+                openFiles: nextOpenFiles,
                 cursorLine: payload.cursor_line ?? null,
                 cursorColumn: payload.cursor_column ?? null,
                 selectionStartLine: payload.selection_start ?? null,
                 selectionEndLine: payload.selection_end ?? null,
+            };
+            setEditorState(prev => ({
+                activeFile: payload.active_file ?? null,
+                openFiles: payload.open_files ?? prev.openFiles,
             }));
         });
 
@@ -103,6 +120,10 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }, []);
 
     const setActiveFile = useCallback((file: string | null) => {
+        snapshotRef.current = {
+            ...snapshotRef.current,
+            activeFile: file,
+        };
         // Always update local state for immediate UI feedback
         setEditorState(prev => ({ ...prev, activeFile: file }));
 
@@ -113,11 +134,11 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }, []);
 
     const setCursorPosition = useCallback((line: number, column: number) => {
-        setEditorState(prev => ({
-            ...prev,
+        snapshotRef.current = {
+            ...snapshotRef.current,
             cursorLine: line,
             cursorColumn: column
-        }));
+        };
 
         // Debounced sync to backend (100ms) - always syncs for AI context
         if (cursorDebounceRef.current) {
@@ -129,11 +150,11 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }, []);
 
     const setSelection = useCallback((startLine: number, endLine: number) => {
-        setEditorState(prev => ({
-            ...prev,
+        snapshotRef.current = {
+            ...snapshotRef.current,
             selectionStartLine: startLine,
             selectionEndLine: endLine
-        }));
+        };
 
         // Debounced sync to backend (100ms) - always syncs for AI context
         if (selectionDebounceRef.current) {
@@ -145,16 +166,22 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }, []);
 
     const setOpenFiles = useCallback((files: string[]) => {
+        snapshotRef.current = {
+            ...snapshotRef.current,
+            openFiles: files,
+        };
         setEditorState(prev => ({ ...prev, openFiles: files }));
     }, []);
 
     const clearSelection = useCallback(() => {
-        setEditorState(prev => ({
-            ...prev,
+        snapshotRef.current = {
+            ...snapshotRef.current,
             selectionStartLine: null,
             selectionEndLine: null
-        }));
+        };
     }, []);
+
+    const getEditorSnapshot = useCallback(() => snapshotRef.current, []);
 
 
 
@@ -164,7 +191,8 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setCursorPosition,
         setSelection,
         clearSelection,
-    }), [setActiveFile, setOpenFiles, setCursorPosition, setSelection, clearSelection]);
+        getEditorSnapshot,
+    }), [setActiveFile, setOpenFiles, setCursorPosition, setSelection, clearSelection, getEditorSnapshot]);
 
     return (
         <EditorActionsContext.Provider value={actions}>
