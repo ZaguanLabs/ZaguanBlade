@@ -28,6 +28,8 @@ export function useResizeHandlers({
     const [isChatDragging, setIsChatDragging] = useState(false);
     const terminalDragFrameRef = useRef<number | null>(null);
     const pendingTerminalHeightRef = useRef<number | null>(null);
+    const chatDragFrameRef = useRef<number | null>(null);
+    const pendingChatWidthRef = useRef<number | null>(null);
 
     // Terminal panel resize handler
     const handleTerminalMouseDown = useCallback((e: React.MouseEvent) => {
@@ -102,11 +104,31 @@ export function useResizeHandlers({
             if (!isChatDragging) return;
             const newWidth = window.innerWidth - e.clientX;
             if (newWidth >= 280 && newWidth <= 800) {
-                setChatPanelWidth(newWidth);
+                pendingChatWidthRef.current = newWidth;
+
+                if (chatDragFrameRef.current !== null) {
+                    return;
+                }
+
+                chatDragFrameRef.current = requestAnimationFrame(() => {
+                    chatDragFrameRef.current = null;
+                    const nextWidth = pendingChatWidthRef.current;
+                    if (typeof nextWidth === 'number') {
+                        setChatPanelWidth(nextWidth);
+                    }
+                });
             }
         };
 
         const handleChatMouseUp = () => {
+            if (chatDragFrameRef.current !== null) {
+                cancelAnimationFrame(chatDragFrameRef.current);
+                chatDragFrameRef.current = null;
+            }
+            const nextWidth = pendingChatWidthRef.current;
+            if (typeof nextWidth === 'number') {
+                setChatPanelWidth(nextWidth);
+            }
             setIsChatDragging(false);
         };
 
@@ -117,6 +139,10 @@ export function useResizeHandlers({
         }
 
         return () => {
+            if (chatDragFrameRef.current !== null) {
+                cancelAnimationFrame(chatDragFrameRef.current);
+                chatDragFrameRef.current = null;
+            }
             document.removeEventListener('mousemove', handleChatMouseMove);
             document.removeEventListener('mouseup', handleChatMouseUp);
             document.body.classList.remove('resize-x-cursor');

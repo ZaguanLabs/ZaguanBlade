@@ -778,7 +778,7 @@ fn parse_osc7_path(raw: &str) -> Option<String> {
 mod tests {
     use super::{
         has_recent_sentinel_echo_prefix, has_recent_sentinel_echo_prefix_fragment,
-        strip_ansi_escapes, strip_blade_sentinels, take_active_command_exit,
+        strip_blade_sentinels, take_active_command_exit,
     };
 
     #[test]

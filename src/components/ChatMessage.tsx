@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { ChatMessage as ChatMessageType, ChatImage, ImageAttachment } from '../types/chat';
+import type { ChatMessage as ChatMessageType, ChatImage, HookApprovalRequest, ImageAttachment } from '../types/chat';
 import { User, Bot, Terminal, Brain, ChevronDown, ChevronRight, Loader2, Copy, RotateCcw, Pencil, MessageSquare, Check, FileText, Folder } from 'lucide-react';
 import { ToolCallDisplay } from './ToolCallDisplay';
 import { CommandOutputDisplay } from './CommandOutputDisplay';
 import { CommandApprovalCard } from './CommandApprovalCard';
+import { HookApprovalCard } from './HookApprovalCard';
 import { useContextMenu, ContextMenuItem } from './ui/ContextMenu';
 import { MarkdownRenderer, StreamingMarkdownRenderer } from './MarkdownRenderer';
 import { deriveMessageRenderSegments, type DerivedActivityGroupItem } from '../utils/chatTimeline';
@@ -266,21 +267,25 @@ function getApprovalActivityTargetKey(actionId: string): string {
 const ActivityGroupDisplay: React.FC<{
     items: ActivityGroupItem[];
     pendingActions?: import('../types/events').StructuredAction[] | null;
+    pendingApprovalRequest?: HookApprovalRequest | null;
     onApproveCommand?: () => void;
     onSkipCommand?: () => void;
+    onApproveApprovalRequest?: () => void;
+    onDenyApprovalRequest?: () => void;
     onApproveSingleCommand?: (callId: string) => void;
     onSkipSingleCommand?: (callId: string) => void;
     onUndoTool?: (toolCallId: string) => void;
     onStopCommand?: (callId: string) => void;
     onOpenFile?: (path: string) => void;
     registerActivityTarget?: (targetKey: string, element: HTMLDivElement | null) => void;
-}> = ({ items, pendingActions, onApproveCommand, onSkipCommand, onApproveSingleCommand, onSkipSingleCommand, onUndoTool, onStopCommand, onOpenFile, registerActivityTarget }) => {
+}> = ({ items, pendingActions, pendingApprovalRequest, onApproveCommand, onSkipCommand, onApproveApprovalRequest, onDenyApprovalRequest, onApproveSingleCommand, onSkipSingleCommand, onUndoTool, onStopCommand, onOpenFile, registerActivityTarget }) => {
     return (
         <div className="mb-2 space-y-1.5">
             {items.map((item) => {
                 if (item.kind === 'tool_call') {
                     const toolCall = item.toolCall;
                     const matchingPendingAction = pendingActions?.find((action) => action.id === toolCall.id);
+                    const matchingApprovalRequest = pendingApprovalRequest?.toolCallId === toolCall.id ? pendingApprovalRequest : null;
                     if (toolCall.function.name === 'run_command' && matchingPendingAction && onApproveCommand && onSkipCommand) {
                         return (
                             <div
@@ -293,6 +298,20 @@ const ActivityGroupDisplay: React.FC<{
                                     onSkip={onSkipCommand}
                                     onRunSingle={onApproveSingleCommand}
                                     onSkipSingle={onSkipSingleCommand}
+                                />
+                            </div>
+                        );
+                    }
+                    if (matchingApprovalRequest && onApproveApprovalRequest && onDenyApprovalRequest) {
+                        return (
+                            <div
+                                key={item.id}
+                                ref={(element) => registerActivityTarget?.(getApprovalActivityTargetKey(matchingApprovalRequest.toolCallId), element)}
+                            >
+                                <HookApprovalCard
+                                    request={matchingApprovalRequest}
+                                    onApprove={onApproveApprovalRequest}
+                                    onDeny={onDenyApprovalRequest}
                                 />
                             </div>
                         );
@@ -340,8 +359,11 @@ const ActivityGroupDisplay: React.FC<{
 interface ChatMessageProps {
     message: ChatMessageType;
     pendingActions?: import('../types/events').StructuredAction[];
+    pendingApprovalRequest?: HookApprovalRequest;
     onApproveCommand?: () => void;
     onSkipCommand?: () => void;
+    onApproveApprovalRequest?: () => void;
+    onDenyApprovalRequest?: () => void;
     onApproveSingleCommand?: (callId: string) => void;
     onSkipSingleCommand?: (callId: string) => void;
     isContinued?: boolean; // For visual grouping
@@ -355,8 +377,11 @@ interface ChatMessageProps {
 const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     message,
     pendingActions,
+    pendingApprovalRequest,
     onApproveCommand,
     onSkipCommand,
+    onApproveApprovalRequest,
+    onDenyApprovalRequest,
     onApproveSingleCommand,
     onSkipSingleCommand,
     isContinued = false,
@@ -677,8 +702,11 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                             key={segment.id}
                                             items={segment.items}
                                             pendingActions={pendingActions}
+                                            pendingApprovalRequest={pendingApprovalRequest}
                                             onApproveCommand={onApproveCommand}
                                             onSkipCommand={onSkipCommand}
+                                            onApproveApprovalRequest={onApproveApprovalRequest}
+                                            onDenyApprovalRequest={onDenyApprovalRequest}
                                             onApproveSingleCommand={onApproveSingleCommand}
                                             onSkipSingleCommand={onSkipSingleCommand}
                                             onUndoTool={onUndoTool}
@@ -803,6 +831,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                         {toolCalls
                                             .map((call, idx) => {
                                                 const matchingPendingAction = pendingActions?.find((action) => action.id === call.id);
+                                                const matchingApprovalRequest = pendingApprovalRequest?.toolCallId === call.id ? pendingApprovalRequest : null;
                                                 if (call.function.name === 'run_command' && matchingPendingAction && onApproveCommand && onSkipCommand) {
                                                     return (
                                                         <div
@@ -815,6 +844,20 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                                                 onSkip={onSkipCommand}
                                                                 onRunSingle={onApproveSingleCommand}
                                                                 onSkipSingle={onSkipSingleCommand}
+                                                            />
+                                                        </div>
+                                                    );
+                                                }
+                                                if (matchingApprovalRequest && onApproveApprovalRequest && onDenyApprovalRequest) {
+                                                    return (
+                                                        <div
+                                                            key={`${call.id}-${idx}`}
+                                                            ref={(element) => registerActivityTarget?.(getApprovalActivityTargetKey(matchingApprovalRequest.toolCallId), element)}
+                                                        >
+                                                            <HookApprovalCard
+                                                                request={matchingApprovalRequest}
+                                                                onApprove={onApproveApprovalRequest}
+                                                                onDeny={onDenyApprovalRequest}
                                                             />
                                                         </div>
                                                     );
@@ -929,6 +972,7 @@ export const ChatMessage = React.memo(ChatMessageComponent, (prevProps, nextProp
     const nextHasPending = nextProps.pendingActions && nextProps.pendingActions.length > 0;
     if (prevHasPending !== nextHasPending) return false;
     if (prevProps.pendingActions !== nextProps.pendingActions) return false;
+    if (prevProps.pendingApprovalRequest?.toolCallId !== nextProps.pendingApprovalRequest?.toolCallId) return false;
     
     // Callbacks - check presence change (undefined vs function)
     const prevHasApprove = !!prevProps.onApproveCommand;

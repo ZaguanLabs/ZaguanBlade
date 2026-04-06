@@ -397,7 +397,16 @@ impl AiWorkflow {
                 }
             } else if matches!(
                 call.function.name.as_str(),
-                "edit_file" | "apply_edit" | "apply_patch" | "write_file" | "create_file"
+                "edit_file"
+                    | "apply_edit"
+                    | "apply_patch"
+                    | "apply_patch_validated"
+                    | "replace_file_content"
+                    | "multi_replace_file_content"
+                    | "write_file_validated"
+                    | "write_file"
+                    | "create_file"
+                    | "write_to_file"
             ) {
                 match parse_change_args(
                     &call.function.arguments,

@@ -117,17 +117,32 @@ const AppLayoutInner: React.FC = () => {
 
     // Sync active tab and open file paths to EditorContext
     const { setActiveFile, setOpenFiles } = useEditorActions();
-    useEffect(() => {
-        const tab = tabs.find(t => t.id === activeTabId);
-        setActiveFile(tab?.path || null);
-    }, [activeTabId, tabs, setActiveFile]);
+    const activeFilePath = activeTab?.path ?? null;
+    const openFilePathsJson = useMemo(
+        () => JSON.stringify(
+            tabs
+                .filter(t => t.type === 'file' && t.path)
+                .map(t => t.path!),
+        ),
+        [tabs],
+    );
+    const pendingTabContentStateRef = useRef<{
+        tabId: string;
+        state: {
+            savedContent?: string;
+            draftContent?: string;
+            isDirty: boolean;
+        };
+    } | null>(null);
+    const pendingTabContentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
-        const filePaths = tabs
-            .filter(t => t.type === 'file' && t.path)
-            .map(t => t.path!);
-        setOpenFiles(filePaths);
-    }, [tabs, setOpenFiles]);
+        setActiveFile(activeFilePath);
+    }, [activeFilePath, setActiveFile]);
+
+    useEffect(() => {
+        setOpenFiles(JSON.parse(openFilePathsJson) as string[]);
+    }, [openFilePathsJson, setOpenFiles]);
 
     const handleOpenChatFile = useCallback((path: string) => {
         const highlightLines = findMatchingChangeRange(path, uncommittedChanges);
@@ -153,6 +168,54 @@ const AppLayoutInner: React.FC = () => {
         );
     }, [chat]);
 
+    const flushPendingTabContentState = useCallback((tabId?: string | null) => {
+        const pending = pendingTabContentStateRef.current;
+        if (!pending) {
+            return;
+        }
+        if (tabId && pending.tabId !== tabId) {
+            return;
+        }
+
+        if (pendingTabContentTimerRef.current) {
+            clearTimeout(pendingTabContentTimerRef.current);
+            pendingTabContentTimerRef.current = null;
+        }
+
+        pendingTabContentStateRef.current = null;
+
+        setTabs(prev => prev.map(tab => {
+            if (tab.id !== pending.tabId) {
+                return tab;
+            }
+
+            const nextSavedContent = pending.state.savedContent ?? tab.savedContent;
+            const nextDraftContent = pending.state.isDirty && pending.state.draftContent === undefined
+                ? tab.draftContent
+                : pending.state.draftContent;
+            if (
+                tab.savedContent === nextSavedContent
+                && tab.draftContent === nextDraftContent
+                && Boolean(tab.isDirty) === pending.state.isDirty
+            ) {
+                return tab;
+            }
+
+            return {
+                ...tab,
+                savedContent: nextSavedContent,
+                draftContent: nextDraftContent,
+                isDirty: pending.state.isDirty,
+            };
+        }));
+    }, [setTabs]);
+
+    useEffect(() => {
+        return () => {
+            flushPendingTabContentState(activeTabId);
+        };
+    }, [activeTabId, flushPendingTabContentState]);
+
     const handleActiveTabContentStateChange = useCallback((state: {
         savedContent?: string;
         draftContent?: string;
@@ -160,19 +223,24 @@ const AppLayoutInner: React.FC = () => {
     }) => {
         if (!activeTabId) return;
 
-        setTabs(prev => prev.map(tab => {
-            if (tab.id !== activeTabId) {
-                return tab;
-            }
+        pendingTabContentStateRef.current = {
+            tabId: activeTabId,
+            state,
+        };
 
-            return {
-                ...tab,
-                savedContent: state.savedContent ?? tab.savedContent,
-                draftContent: state.draftContent,
-                isDirty: state.isDirty,
-            };
-        }));
-    }, [activeTabId, setTabs]);
+        if (pendingTabContentTimerRef.current) {
+            clearTimeout(pendingTabContentTimerRef.current);
+        }
+
+        if (!state.isDirty || state.draftContent === undefined) {
+            flushPendingTabContentState(activeTabId);
+            return;
+        }
+
+        pendingTabContentTimerRef.current = setTimeout(() => {
+            flushPendingTabContentState(activeTabId);
+        }, 120);
+    }, [activeTabId, flushPendingTabContentState]);
 
     // Tauri event listeners (file open, research progress, change-applied, etc.)
     const { researchProgress, finalizeResearchActivities } = useLayoutEvents({
@@ -661,7 +729,10 @@ const AppLayoutInner: React.FC = () => {
                                 chatMode={chat.chatMode}
                                 setChatMode={chat.setChatMode}
                                 pendingActions={chat.pendingActions}
+                                pendingApprovalRequest={chat.pendingApprovalRequest}
+                                waitingForApproval={chat.waitingForApproval}
                                 approveToolDecision={chat.approveToolDecision}
+                                respondToApprovalRequest={chat.respondToApprovalRequest}
                                 approveSingleCommand={chat.approveSingleCommand}
                                 skipSingleCommand={chat.skipSingleCommand}
 

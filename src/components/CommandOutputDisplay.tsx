@@ -1,12 +1,27 @@
 'use client';
 import React, { useState } from 'react';
 import { Terminal, ChevronDown, ChevronRight, CheckCircle2, XCircle, Clock } from 'lucide-react';
+
+const ORPHANED_ANSI_FINAL_BYTES = new Set(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'S', 'T', 'f', 'h', 'l', 'm', 'n', 'r', 's', 'u']);
+
+function shouldStripOrphanedAnsi(params: string, letter: string): boolean {
+    if (!ORPHANED_ANSI_FINAL_BYTES.has(letter)) {
+        return false;
+    }
+
+    if (params.length === 0) {
+        return ['m', 'J', 'K', 'H', 'f'].includes(letter);
+    }
+
+    return /^[0-9;?]*$/.test(params);
+}
+
 /**
  * Aggressively strip ALL ANSI escape sequences and artifacts from terminal output.
  * This handles both complete sequences (\x1b[...m) AND orphaned bracket sequences
  * where the ESC byte was already stripped upstream (e.g. "[38;5;4m", "[1m", "[0m").
  */
-function stripAllAnsi(output: string): string {
+export function stripAllAnsi(output: string): string {
     let result = output;
     // 1. Strip complete ANSI escape sequences (ESC + bracket/other sequences)
     //    CSI: \x1b[ ... letter
@@ -19,9 +34,7 @@ function stripAllAnsi(output: string): string {
     // 2. Strip orphaned CSI bracket sequences where ESC byte is already gone
     //    These look like: [0m, [1m, [38;5;4m, [0;1m, [38;5;2m, [39;49m etc.
     result = result.replace(/\[([0-9;?]*)([A-Za-z])/g, (match, params, letter) => {
-        // Only strip if it looks like an ANSI CSI parameter sequence
-        // (digits, semicolons, question marks followed by a single letter)
-        if (/^[0-9;?]*$/.test(params)) return '';
+        if (shouldStripOrphanedAnsi(params, letter)) return '';
         return match;
     });
     // 3. Strip any remaining bare ESC bytes

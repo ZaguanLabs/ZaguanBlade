@@ -948,6 +948,20 @@ pub async fn approve_tool_decision<R: Runtime>(
     }
 }
 
+#[tauri::command]
+pub async fn send_approval_response(
+    session_id: String,
+    approval_id: String,
+    tool_call_id: String,
+    approved: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .ws_connection
+        .send_approval_response(session_id, approval_id, tool_call_id, approved)
+        .await
+}
+
 /// Approve or skip a single command by its call_id
 /// This allows individual command approval instead of batch-only
 #[tauri::command]

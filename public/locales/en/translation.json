@@ -281,9 +281,13 @@
     "pendingAction": "Pending action",
     "run": "Run",
     "skip": "Skip",
+    "approve": "Approve",
+    "deny": "Deny",
     "waiting": "Waiting",
     "skipping": "Skipping",
-    "runCommandDescription": "Run command: {{command}}"
+    "runCommandDescription": "Run command: {{command}}",
+    "hookApproval": "Tool approval",
+    "hookApprovalDetail": "Review this tool action before the run can continue."
   },
   "settings": {
     "title": "Settings",

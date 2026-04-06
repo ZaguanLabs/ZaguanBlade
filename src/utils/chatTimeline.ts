@@ -1,4 +1,4 @@
-import type { ChatMessage as ChatMessageType, CommandExecution, MessageBlock, ToolCall } from '../types/chat';
+import type { ChatMessage as ChatMessageType, CommandExecution, HookApprovalRequest, MessageBlock, ToolCall } from '../types/chat';
 import type { StructuredAction } from '../types/events';
 
 const ALWAYS_UNVIRTUALIZED_TAIL_ROWS = 10;
@@ -10,6 +10,7 @@ export interface DerivedChatMessageRow {
     isContinued: boolean;
     isActive: boolean;
     pendingActions?: StructuredAction[];
+    pendingApprovalRequest?: HookApprovalRequest;
 }
 
 export type DerivedChatRow = DerivedChatMessageRow;
@@ -65,7 +66,7 @@ export function estimateChatRowHeight(
     layout: ChatRowHeightLayout = {},
 ): number {
     const message = row.message;
-    const pendingApprovalHeight = row.pendingActions && row.pendingActions.length > 0 ? 128 : 0;
+    const pendingApprovalHeight = (row.pendingActions && row.pendingActions.length > 0) || row.pendingApprovalRequest ? 128 : 0;
     const continuedAdjustment = row.isContinued ? -16 : 0;
 
     if (message.role === 'User') {
@@ -121,6 +122,33 @@ function findPendingActionTargetIndex(
             continue;
         }
         if (message.tool_calls?.some((toolCall) => pendingIds.has(toolCall.id))) {
+            return index;
+        }
+    }
+
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+        if (messages[index]?.role === 'Assistant') {
+            return index;
+        }
+    }
+
+    return -1;
+}
+
+function findPendingApprovalTargetIndex(
+    messages: ChatMessageType[],
+    pendingApprovalRequest: HookApprovalRequest | null | undefined,
+): number {
+    if (!pendingApprovalRequest) {
+        return -1;
+    }
+
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index];
+        if (message?.role !== 'Assistant') {
+            continue;
+        }
+        if (message.tool_calls?.some((toolCall) => toolCall.id === pendingApprovalRequest.toolCallId)) {
             return index;
         }
     }
@@ -201,8 +229,10 @@ export function deriveChatRows(
     messages: ChatMessageType[],
     loading: boolean,
     pendingActions: StructuredAction[] | null,
+    pendingApprovalRequest?: HookApprovalRequest | null,
 ): DerivedChatRow[] {
     const pendingActionTargetIndex = findPendingActionTargetIndex(messages, pendingActions);
+    const pendingApprovalTargetIndex = findPendingApprovalTargetIndex(messages, pendingApprovalRequest);
 
     return messages.map((message, index) => {
         const isLast = index === messages.length - 1;
@@ -210,6 +240,7 @@ export function deriveChatRows(
         const prevMessage = index > 0 ? messages[index - 1] : null;
         const isContinued = isAssistant && prevMessage?.role === 'Assistant';
         const showPendingActions = index === pendingActionTargetIndex && !!pendingActions && pendingActions.length > 0;
+        const showPendingApprovalRequest = index === pendingApprovalTargetIndex && !!pendingApprovalRequest;
 
         return {
             kind: 'message',
@@ -218,6 +249,7 @@ export function deriveChatRows(
             isContinued,
             isActive: isLast && loading,
             ...(showPendingActions ? { pendingActions } : {}),
+            ...(showPendingApprovalRequest ? { pendingApprovalRequest } : {}),
         };
     });
 }

@@ -19,6 +19,9 @@ export const EventNames = {
   
   /** AI chat response completed */
   CHAT_DONE: 'chat-done',
+
+  /** Hook-driven tool approval request */
+  APPROVAL_REQUEST: 'approval-request',
   
   /** Error occurred during chat */
   CHAT_ERROR: 'chat-error',
@@ -112,6 +115,10 @@ export interface ChatUpdatePayload {
   content: string;
 }
 
+export interface ChatDonePayload {
+  finish_reason: string;
+}
+
 /**
  * Payload for command-executed event
  */
@@ -167,6 +174,18 @@ export interface MessageTooLargePayload {
  */
 export interface RequestConfirmationPayload {
   actions: StructuredAction[];
+}
+
+export interface ApprovalRequestPayload {
+  session_id: string;
+  approval_id: string;
+  tool_call_id: string;
+  tool_name: string;
+  arguments: unknown;
+  source?: string | null;
+  rule_name?: string | null;
+  message?: string | null;
+  decision?: string | null;
 }
 
 export interface StructuredAction {

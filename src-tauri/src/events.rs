@@ -13,6 +13,9 @@ pub mod event_names {
     /// AI chat response completed
     pub const CHAT_DONE: &str = "chat-done";
 
+    /// Hook-driven tool approval request from server
+    pub const APPROVAL_REQUEST: &str = "approval-request";
+
     /// Error occurred during chat
     pub const CHAT_ERROR: &str = "chat-error";
 
@@ -120,6 +123,12 @@ pub struct ChatUpdatePayload {
     pub content: String,
 }
 
+/// Payload for chat-done event
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatDonePayload {
+    pub finish_reason: String,
+}
+
 /// Payload for chat-error event
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatErrorPayload {
@@ -165,6 +174,20 @@ pub struct MessageTooLargePayload {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestConfirmationPayload {
     pub actions: Vec<StructuredAction>,
+}
+
+/// Payload for approval-request event
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalRequestPayload {
+    pub session_id: String,
+    pub approval_id: String,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub arguments: serde_json::Value,
+    pub source: Option<String>,
+    pub rule_name: Option<String>,
+    pub message: Option<String>,
+    pub decision: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useEffect, useRef, Suspense } from 'react';
+import React, { useState, useEffect, useRef, Suspense, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -173,10 +173,21 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     const editorRef = useRef<CodeEditorHandle>(null);
     const pendingNavigation = useRef<{ path: string, line: number, col: number } | null>(null);
     const baseContentRef = useRef(savedContent ?? '');
+    const liveContentRef = useRef(draftContent ?? savedContent ?? '');
     const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const contentStateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const pendingContentStateRef = useRef<{
+        savedContent?: string;
+        draftContent?: string;
+        isDirty: boolean;
+    } | null>(null);
+    const externalContentVersionRef = useRef(0);
     const documentVersionRef = useRef(0);
     const awaitingInitialSyncRef = useRef(false);
     const syncedDocumentPathRef = useRef<string | null>(null);
+    const loadingRef = useRef(loading);
+    const onContentStateChangeRef = useRef(onContentStateChange);
+    const lastPropagatedDirtyRef = useRef(isDirty);
 
     const pathsMatch = (a: string, b: string): boolean => {
         if (a === b) return true;
@@ -185,21 +196,131 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         return normA.endsWith(normB) || normB.endsWith(normA);
     };
 
-    // useEffect(() => {
-    //     // Update editor context when active file changes
-    //     setActiveFile(activeFile);
-    // }, [activeFile, setActiveFile]);
+    useEffect(() => {
+        loadingRef.current = loading;
+    }, [loading]);
+
+    useEffect(() => {
+        onContentStateChangeRef.current = onContentStateChange;
+    }, [onContentStateChange]);
+
+    const isMarkdownFile = activeFile?.endsWith('.md') || activeFile?.endsWith('.markdown') || false;
+    const isPdfFile = activeFile?.endsWith('.pdf') || false;
+
+    const scheduleDocumentSync = useCallback(() => {
+        if (!activeFile || isPdfFile) {
+            return;
+        }
+
+        if (awaitingInitialSyncRef.current) {
+            return;
+        }
+
+        if (syncTimerRef.current) {
+            clearTimeout(syncTimerRef.current);
+        }
+
+        syncTimerRef.current = setTimeout(() => {
+            documentVersionRef.current += 1;
+            syncedDocumentPathRef.current = activeFile;
+            void EditorFacade.syncDocument(activeFile, liveContentRef.current, documentVersionRef.current);
+            syncTimerRef.current = null;
+        }, 180);
+    }, [activeFile, isPdfFile]);
+
+    const flushPendingContentState = useCallback(() => {
+        if (contentStateTimerRef.current) {
+            clearTimeout(contentStateTimerRef.current);
+            contentStateTimerRef.current = null;
+        }
+
+        const pendingState = pendingContentStateRef.current;
+        if (!pendingState) {
+            return;
+        }
+
+        pendingContentStateRef.current = null;
+        lastPropagatedDirtyRef.current = pendingState.isDirty;
+        onContentStateChangeRef.current?.(pendingState);
+    }, []);
+
+    const emitContentStateChange = useCallback((state: {
+        savedContent?: string;
+        draftContent?: string;
+        isDirty: boolean;
+    }) => {
+        if (isMarkdownFile) {
+            lastPropagatedDirtyRef.current = state.isDirty;
+            onContentStateChangeRef.current?.(state);
+            return;
+        }
+
+        const isFirstDirtyTransition = state.isDirty && !lastPropagatedDirtyRef.current;
+
+        if (!state.isDirty) {
+            pendingContentStateRef.current = state;
+            flushPendingContentState();
+            return;
+        }
+
+        if (isFirstDirtyTransition) {
+            pendingContentStateRef.current = {
+                savedContent: state.savedContent,
+                draftContent: undefined,
+                isDirty: true,
+            };
+            flushPendingContentState();
+        }
+
+        pendingContentStateRef.current = state;
+
+        if (contentStateTimerRef.current) {
+            clearTimeout(contentStateTimerRef.current);
+        }
+
+        contentStateTimerRef.current = setTimeout(() => {
+            flushPendingContentState();
+        }, 120);
+    }, [flushPendingContentState, isMarkdownFile]);
 
     useEffect(() => {
         if (!activeFile) {
             setContent('');
             baseContentRef.current = '';
+            liveContentRef.current = '';
+            externalContentVersionRef.current += 1;
             awaitingInitialSyncRef.current = false;
+            pendingContentStateRef.current = null;
+            lastPropagatedDirtyRef.current = false;
+            return;
+        }
+
+        if (!isMarkdownFile) {
+            if (savedContent != null) {
+                baseContentRef.current = savedContent;
+            }
+
+            if (isDirty) {
+                awaitingInitialSyncRef.current = false;
+                return;
+            }
+
+            if (savedContent != null) {
+                setContent(savedContent);
+                liveContentRef.current = savedContent;
+                externalContentVersionRef.current += 1;
+                awaitingInitialSyncRef.current = false;
+                return;
+            }
+
+            awaitingInitialSyncRef.current = true;
             return;
         }
 
         if (isDirty && draftContent != null) {
             setContent(draftContent);
+            liveContentRef.current = draftContent;
+            externalContentVersionRef.current += 1;
             if (savedContent != null) {
                 baseContentRef.current = savedContent;
             }
@@ -209,13 +330,15 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 
         if (savedContent != null) {
             setContent(savedContent);
+            liveContentRef.current = savedContent;
             baseContentRef.current = savedContent;
+            externalContentVersionRef.current += 1;
             awaitingInitialSyncRef.current = false;
             return;
         }
 
         awaitingInitialSyncRef.current = true;
-    }, [activeFile, draftContent, isDirty, savedContent]);
+    }, [activeFile, draftContent, isDirty, savedContent, isMarkdownFile]);
 
     useEffect(() => {
         documentVersionRef.current = 0;
@@ -234,41 +357,6 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     }, [activeFile]);
 
     useEffect(() => {
-        if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
-
-        const unlistenFileChangesPromise = listen<{ count: number, paths: string[] }>('file-changes-detected', (event) => {
-                // If the active file is in the changed paths, reload it
-                if (activeFile && event.payload.paths.some(p => pathsMatch(p, activeFile))) {
-                    console.debug('[EDITOR] File changed on disk, reloading:', activeFile);
-                    setReloadTrigger(prev => prev + 1);
-                }
-            });
-
-            // Also listen for change-applied events from tool edits (apply_patch, edit_file, etc.)
-            // The fs_watcher has a 250ms debounce that can drop events during rapid multi-edit sequences,
-            // so this provides a reliable, direct notification when a tool modifies a file.
-            const unlistenChangeAppliedPromise = listen<{ change_id: string; file_path: string; file_paths?: string[] }>('change-applied', (event) => {
-                const affectedPaths = event.payload.file_paths?.length
-                    ? event.payload.file_paths
-                    : [event.payload.file_path];
-                if (activeFile && affectedPaths.some(path => pathsMatch(path, activeFile))) {
-                    console.debug('[EDITOR] Tool change applied to active file, reloading:', activeFile);
-                    setReloadTrigger(prev => prev + 1);
-                }
-            });
-
-        return () => {
-            unlistenFileChangesPromise
-                .then(unlisten => unlisten())
-                .catch(console.error);
-            unlistenChangeAppliedPromise
-                .then(unlisten => unlisten())
-                .catch(console.error);
-        };
-    }, [activeFile]);
-
-    // File Content Listener (Blade Protocol)
-    useEffect(() => {
         if (!activeFile) return;
 
         const unsubscribe = subscribeBladeEvents((envelope) => {
@@ -279,8 +367,10 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     console.debug('[EDITOR] Received content for:', activeFile);
                     awaitingInitialSyncRef.current = false;
                     setContent(fileEvent.payload.data);
+                    liveContentRef.current = fileEvent.payload.data;
                     baseContentRef.current = fileEvent.payload.data;
-                    onContentStateChange?.({
+                    externalContentVersionRef.current += 1;
+                    emitContentStateChange({
                         savedContent: fileEvent.payload.data,
                         draftContent: undefined,
                         isDirty: false,
@@ -293,7 +383,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             } else if (bladeEvent.type === 'System') {
                 const sysEvent = bladeEvent.payload;
                 if (sysEvent.type === 'IntentFailed') {
-                    if (loading) {
+                    if (loadingRef.current) {
                         const err = sysEvent.payload.error;
                         if ('details' in err && (err.details as any).id?.includes(activeFile)) {
                             setError(`${t('editor.loadFailed')}: ${formatBladeError(err)}`);
@@ -307,16 +397,17 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         return () => {
             unsubscribe();
         };
-    }, [activeFile, loading, onContentStateChange]);
+    }, [activeFile, t]);
 
     useEffect(() => {
         async function loadFile() {
             if (!activeFile) {
                 setContent('');
+                liveContentRef.current = '';
                 return;
             }
 
-            if (isDirty && draftContent != null && reloadTrigger === 0) {
+            if (isDirty && reloadTrigger === 0) {
                 setLoading(false);
                 return;
             }
@@ -340,10 +431,10 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             }
         }
         loadFile();
-    }, [activeFile, draftContent, isDirty, reloadTrigger]);
+    }, [activeFile, isDirty, reloadTrigger]);
 
     useEffect(() => {
-        if (!activeFile || activeFile.endsWith('.pdf')) {
+        if (!activeFile || isPdfFile) {
             return;
         }
 
@@ -352,20 +443,12 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         }
 
         const immediateContent = isDirty && draftContent != null ? draftContent : savedContent;
-        if (documentVersionRef.current === 0 && immediateContent != null && content !== immediateContent) {
+        const syncSourceContent = isMarkdownFile ? content : liveContentRef.current;
+        if (documentVersionRef.current === 0 && immediateContent != null && syncSourceContent !== immediateContent) {
             return;
         }
 
-        if (syncTimerRef.current) {
-            clearTimeout(syncTimerRef.current);
-        }
-
-        syncTimerRef.current = setTimeout(() => {
-            documentVersionRef.current += 1;
-            syncedDocumentPathRef.current = activeFile;
-            void EditorFacade.syncDocument(activeFile, content, documentVersionRef.current);
-            syncTimerRef.current = null;
-        }, 180);
+        scheduleDocumentSync();
 
         return () => {
             if (syncTimerRef.current) {
@@ -373,7 +456,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 syncTimerRef.current = null;
             }
         };
-    }, [activeFile, content, draftContent, isDirty, savedContent]);
+    }, [activeFile, content, draftContent, isDirty, savedContent, isMarkdownFile, isPdfFile, scheduleDocumentSync]);
 
     // Handle pending navigation after content load
     useEffect(() => {
@@ -387,7 +470,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 }
             }, 150);
         }
-    }, [content, loading, activeFile]);
+    }, [loading, activeFile]);
 
     // Handle save (Ctrl+S)
     const handleSave = async (text: string) => {
@@ -398,7 +481,8 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     payload: { path: activeFile, content: text }
                 });
                 baseContentRef.current = text;
-                onContentStateChange?.({
+                liveContentRef.current = text;
+                emitContentStateChange({
                     savedContent: text,
                     draftContent: undefined,
                     isDirty: false,
@@ -412,10 +496,16 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     };
 
     const handleContentChange = (nextContent: string) => {
-        setContent(nextContent);
+        liveContentRef.current = nextContent;
+
+        if (isMarkdownFile) {
+            setContent(nextContent);
+        } else {
+            scheduleDocumentSync();
+        }
 
         const nextIsDirty = nextContent !== baseContentRef.current;
-        onContentStateChange?.({
+        emitContentStateChange({
             savedContent: nextIsDirty ? baseContentRef.current : nextContent,
             draftContent: nextIsDirty ? nextContent : undefined,
             isDirty: nextIsDirty,
@@ -431,10 +521,6 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     if (!activeFile) {
         return <WelcomePage hasRemoteApiKey={hasRemoteApiKey} onOpenSettings={onOpenSettings} />;
     }
-
-    // Check file type
-    const isMarkdownFile = activeFile.endsWith('.md') || activeFile.endsWith('.markdown');
-    const isPdfFile = activeFile.endsWith('.pdf');
 
     return (
         <div className="h-full flex flex-col relative bg-[var(--bg-app)]">
@@ -469,6 +555,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     <EditorWithChangeBar
                         editorRef={editorRef}
                         content={content}
+                        externalContentVersion={externalContentVersionRef.current}
                         setContent={handleContentChange}
                         handleSave={handleSave}
                         activeFile={activeFile}
@@ -485,6 +572,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 interface EditorWithChangeBarProps {
     editorRef: React.RefObject<CodeEditorHandle | null>;
     content: string;
+    externalContentVersion: number;
     setContent: (content: string) => void;
     handleSave: (text: string) => void;
     activeFile: string;
@@ -495,6 +583,7 @@ interface EditorWithChangeBarProps {
 const EditorWithChangeBar: React.FC<EditorWithChangeBarProps> = ({
     editorRef,
     content,
+    externalContentVersion,
     setContent,
     handleSave,
     activeFile,
@@ -522,6 +611,7 @@ const EditorWithChangeBar: React.FC<EditorWithChangeBarProps> = ({
                 <CodeEditor
                     ref={editorRef}
                     content={content}
+                    externalContentVersion={externalContentVersion}
                     onChange={setContent}
                     onSave={handleSave}
                     filename={activeFile}

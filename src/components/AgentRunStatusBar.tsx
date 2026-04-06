@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Bot, Clock3, ListChecks, Loader2, PauseCircle, ShieldAlert, Sparkles, Square, Wand2 } from 'lucide-react';
 import type { StructuredAction, TodoItem } from '../types/events';
-import type { QueuedRequest, ToolActivityState } from '../types/chat';
+import type { HookApprovalRequest, QueuedRequest, ToolActivityState } from '../types/chat';
 
 interface AgentRunStatusBarProps {
     loading: boolean;
     pendingActions: StructuredAction[] | null;
+    pendingApprovalRequest: HookApprovalRequest | null;
+    waitingForApproval: boolean;
     toolActivity?: ToolActivityState | null;
     activeTodos: TodoItem[];
     queuedRequests: QueuedRequest[];
@@ -64,6 +66,8 @@ function friendlyToolName(name: string): string {
 export const AgentRunStatusBar: React.FC<AgentRunStatusBarProps> = ({
     loading,
     pendingActions,
+    pendingApprovalRequest,
+    waitingForApproval,
     toolActivity,
     activeTodos,
     queuedRequests,
@@ -89,18 +93,20 @@ export const AgentRunStatusBar: React.FC<AgentRunStatusBarProps> = ({
         [activeTodos],
     );
 
-    const pendingApprovalCount = pendingActions?.length ?? 0;
+    const pendingApprovalCount = pendingActions && pendingActions.length > 0
+        ? pendingActions.length
+        : (pendingApprovalRequest ? 1 : 0);
     const queuedCount = queuedRequests.length;
-    const hasVisibleState = loading || !!toolActivity || pendingApprovalCount > 0 || !!inProgressTodo || queuedCount > 0;
+    const hasVisibleState = loading || waitingForApproval || !!toolActivity || pendingApprovalCount > 0 || !!inProgressTodo || queuedCount > 0;
 
     const statusModel = useMemo(() => {
-        if (pendingApprovalCount > 0) {
+        if (waitingForApproval || pendingApprovalCount > 0) {
             return {
                 phase: 'approval' as RunPhaseKey,
                 tone: 'amber' as const,
                 icon: ShieldAlert,
                 title: pendingApprovalCount === 1 ? 'Waiting for approval' : `Waiting on ${pendingApprovalCount} approvals`,
-                detail: 'Review the pending command actions to let the run continue.',
+                detail: pendingApprovalRequest?.message || 'Review the pending tool action to let the run continue.',
             };
         }
         if (toolActivity) {
@@ -142,7 +148,7 @@ export const AgentRunStatusBar: React.FC<AgentRunStatusBarProps> = ({
             };
         }
         return null;
-    }, [inProgressTodo, loading, pendingApprovalCount, queuedCount, toolActivity]);
+    }, [inProgressTodo, loading, pendingApprovalCount, pendingApprovalRequest?.message, queuedCount, toolActivity, waitingForApproval]);
 
     const toolElapsed = toolActivity ? formatDuration(now - toolActivity.startedAt) : null;
 
@@ -201,7 +207,7 @@ export const AgentRunStatusBar: React.FC<AgentRunStatusBarProps> = ({
     const tone = toneClasses[statusModel.tone];
     const StatusIcon = statusModel.icon;
     const canJumpToActiveStep = (!!toolActivity || loading) && !!onJumpToActiveStep;
-    const canJumpToApproval = pendingApprovalCount > 0 && !!onJumpToApproval;
+    const canJumpToApproval = (waitingForApproval || pendingApprovalCount > 0) && !!onJumpToApproval;
     const canJumpToTasks = !!inProgressTodo && !!onJumpToTaskPanel;
     const canJumpToQueue = queuedCount > 0 && !!onJumpToQueue;
     const phaseItems = [
@@ -225,7 +231,7 @@ export const AgentRunStatusBar: React.FC<AgentRunStatusBarProps> = ({
             key: 'approval' as RunPhaseKey,
             label: phaseLabel('approval'),
             icon: ShieldAlert,
-            isPresent: pendingApprovalCount > 0,
+            isPresent: waitingForApproval || pendingApprovalCount > 0,
             isActive: statusModel.phase === 'approval',
             onClick: canJumpToApproval ? onJumpToApproval : undefined,
         },
@@ -252,7 +258,7 @@ export const AgentRunStatusBar: React.FC<AgentRunStatusBarProps> = ({
         <div className={`border-t ${tone.border} ${tone.bg} backdrop-blur-sm`}>
             <div className="flex items-start gap-3 px-3 py-2.5">
                 <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border ${tone.border} ${tone.bg}`}>
-                    {loading && !toolActivity && pendingApprovalCount === 0 ? (
+                    {loading && !toolActivity && pendingApprovalCount === 0 && !waitingForApproval ? (
                         <Loader2 className={`h-4 w-4 animate-spin ${tone.icon}`} />
                     ) : (
                         <StatusIcon className={`h-4 w-4 ${tone.icon}`} />
@@ -272,13 +278,13 @@ export const AgentRunStatusBar: React.FC<AgentRunStatusBarProps> = ({
                                 {toolElapsed}
                             </span>
                         )}
-                        {!toolElapsed && loading && (
+                        {!toolElapsed && loading && !waitingForApproval && (
                             <span className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${tone.badge}`}>
                                 <Bot className="h-3 w-3" />
                                 Live
                             </span>
                         )}
-                        {pendingApprovalCount > 0 && (
+                        {(waitingForApproval || pendingApprovalCount > 0) && (
                             <span className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${tone.badge}`}>
                                 {pendingApprovalCount} pending
                             </span>
@@ -323,7 +329,7 @@ export const AgentRunStatusBar: React.FC<AgentRunStatusBarProps> = ({
                         </div>
                     )}
                 </div>
-                {onStop && (loading || !!toolActivity) && pendingApprovalCount === 0 && (
+                {onStop && (loading || !!toolActivity) && pendingApprovalCount === 0 && !waitingForApproval && (
                     <button
                         type="button"
                         onClick={onStop}

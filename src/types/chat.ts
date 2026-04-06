@@ -68,6 +68,18 @@ export interface ToolActivityState {
     lastChunkAt: number;
 }
 
+export interface HookApprovalRequest {
+    sessionId: string;
+    approvalId: string;
+    toolCallId: string;
+    toolName: string;
+    arguments: unknown;
+    source?: string | null;
+    ruleName?: string | null;
+    message?: string | null;
+    decision?: string | null;
+}
+
 export interface ResearchActivity {
     id: string;
     message: string;

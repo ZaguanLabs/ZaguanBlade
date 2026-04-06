@@ -2,6 +2,7 @@ use crate::app_state::AppState;
 use crate::blade_event_scheduler;
 use crate::blade_protocol::ChatMention;
 use crate::chat_manager::DrainResult;
+use crate::post_edit_validation;
 use crate::project_settings;
 use crate::utils::{extract_root_command, is_cwd_outside_workspace, parse_command};
 use crate::{blade_protocol, local_artifacts};
@@ -584,6 +585,7 @@ pub async fn handle_send_message<R: Runtime>(
                 has_rx,
                 has_pending,
                 has_pending_done_without_tools,
+                finish_reason,
             ) = {
                 let mut mgr = state.chat_manager.lock().unwrap();
                 let mut conversation = state.conversation.lock().unwrap();
@@ -595,6 +597,7 @@ pub async fn handle_send_message<R: Runtime>(
                     mgr.rx.is_some(),
                     !mgr.pending_results.is_empty(),
                     mgr.has_pending_done_without_tools(),
+                    mgr.last_finish_reason.clone(),
                 )
             };
 
@@ -693,7 +696,14 @@ pub async fn handle_send_message<R: Runtime>(
                             eprintln!("Failed to run auto-save conversation task: {}", e);
                         }
                     }
-                    window.emit("chat-done", ()).unwrap_or_default();
+                    window
+                        .emit(
+                            crate::events::event_names::CHAT_DONE,
+                            crate::events::ChatDonePayload {
+                                finish_reason: finish_reason.unwrap_or_else(|| "stop".to_string()),
+                            },
+                        )
+                        .unwrap_or_default();
                     break;
                 }
 
@@ -803,6 +813,23 @@ pub async fn handle_send_message<R: Runtime>(
                     action,
                     tool_call_id,
                 );
+            } else if let DrainResult::ApprovalRequest(payload) = result {
+                window
+                    .emit(
+                        crate::events::event_names::APPROVAL_REQUEST,
+                        crate::events::ApprovalRequestPayload {
+                            session_id: payload.session_id,
+                            approval_id: payload.approval_id,
+                            tool_call_id: payload.tool_call_id,
+                            tool_name: payload.tool_name,
+                            arguments: payload.arguments,
+                            source: payload.source,
+                            rule_name: payload.rule_name,
+                            message: payload.message,
+                            decision: payload.decision,
+                        },
+                    )
+                    .unwrap_or_default();
             } else if let DrainResult::ToolStatusUpdate(msg) = result {
                 // v1.1: Emit ToolUpdate events via blade-event
                 if let Some(tool_calls) = &msg.tool_calls {
@@ -1199,7 +1226,13 @@ pub async fn handle_send_message<R: Runtime>(
                     }
                 }
 
-                if let Some(batch) = batch_to_run {
+                if let Some(mut batch) = batch_to_run {
+                    post_edit_validation::augment_batch_with_validation_feedback(
+                        &app_handle,
+                        &mut batch,
+                    )
+                    .await;
+
                     // Auto-open files in editor when file-modifying tools are called
                     // (read_file operations don't auto-open to avoid disruptive UX)
                     for (call, result) in &batch.file_results {
@@ -1211,10 +1244,12 @@ pub async fn handle_send_message<R: Runtime>(
                         let is_file_modifying_tool = matches!(
                             call.function.name.as_str(),
                             "write_file"
+                                | "write_file_validated"
                                 | "create_file"
                                 | "replace_file_content"
                                 | "apply_edit"
                                 | "apply_patch"
+                                | "apply_patch_validated"
                                 | "edit_file"
                                 | "multi_replace_file_content"
                         );

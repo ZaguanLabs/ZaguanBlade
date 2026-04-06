@@ -5,7 +5,7 @@ use crate::chat_manager::ChatManager;
 use crate::config::ApiConfig;
 use crate::conversation::ConversationHistory;
 use crate::models::registry::ModelInfo;
-use crate::protocol::{ChatEvent, TodoItem, ToolActivityPayload, ToolCall};
+use crate::protocol::{ApprovalRequest, ChatEvent, TodoItem, ToolActivityPayload, ToolCall};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderId {
@@ -46,7 +46,10 @@ pub enum ProviderEvent {
         percent: i32,
     },
     ToolActivity(ToolActivityPayload),
-    Done,
+    ApprovalRequest(ApprovalRequest),
+    Done {
+        finish_reason: String,
+    },
     Error(String),
     ContextLengthExceeded {
         message: String,
@@ -99,7 +102,8 @@ impl From<ChatEvent> for ProviderEvent {
                 percent,
             },
             ChatEvent::ToolActivity(payload) => Self::ToolActivity(payload),
-            ChatEvent::Done => Self::Done,
+            ChatEvent::ApprovalRequest(payload) => Self::ApprovalRequest(payload),
+            ChatEvent::Done { finish_reason } => Self::Done { finish_reason },
             ChatEvent::Error(message) => Self::Error(message),
             ChatEvent::ContextLengthExceeded {
                 message,
@@ -164,7 +168,8 @@ impl From<ProviderEvent> for ChatEvent {
                 percent,
             },
             ProviderEvent::ToolActivity(payload) => ChatEvent::ToolActivity(payload),
-            ProviderEvent::Done => ChatEvent::Done,
+            ProviderEvent::ApprovalRequest(payload) => ChatEvent::ApprovalRequest(payload),
+            ProviderEvent::Done { finish_reason } => ChatEvent::Done { finish_reason },
             ProviderEvent::Error(message) => ChatEvent::Error(message),
             ProviderEvent::ContextLengthExceeded {
                 message,

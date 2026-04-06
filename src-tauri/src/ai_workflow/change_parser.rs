@@ -22,6 +22,8 @@ pub fn parse_change_args(
         .or_else(|| obj.get("file_path"))
         .or_else(|| obj.get("filepath"))
         .or_else(|| obj.get("filename"))
+        .or_else(|| obj.get("TargetFile"))
+        .or_else(|| obj.get("target_file"))
         .and_then(|v| v.as_str())
         .ok_or_else(|| "missing required arg: path".to_string())?
         .to_string();
@@ -50,18 +52,25 @@ pub fn parse_change_args(
     // Determine change type based on tool name and file existence
     let change_type = match tool_name {
         "delete_file" => ChangeType::DeleteFile { old_content: None },
-        "write_file" | "create_file" => {
+        "write_file" | "write_file_validated" | "create_file" | "write_to_file" => {
             // Always a new file for these tools
             let content = obj
                 .get("content")
                 .or_else(|| obj.get("contents"))
                 .or_else(|| obj.get("text"))
+                .or_else(|| obj.get("data"))
+                .or_else(|| obj.get("CodeContent"))
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "missing required arg: content".to_string())?
                 .to_string();
             ChangeType::NewFile { content }
         }
-        "edit_file" | "apply_edit" | "apply_patch" => {
+        "edit_file"
+        | "apply_edit"
+        | "apply_patch"
+        | "apply_patch_validated"
+        | "replace_file_content"
+        | "multi_replace_file_content" => {
             // Check for new multi-patch format FIRST
             if let Some(patches_value) = obj.get("patches") {
                 if let Some(patches_arr) = patches_value.as_array() {
@@ -157,3 +166,114 @@ pub fn parse_change_args(
         error: None,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_change_args;
+    use crate::ai_workflow::ChangeType;
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    #[test]
+    fn parse_change_args_supports_write_to_file_aliases() {
+        let workspace = tempdir().expect("tempdir");
+        let raw_args = json!({
+            "TargetFile": "nested/example.txt",
+            "CodeContent": "hello"
+        })
+        .to_string();
+
+        let change = parse_change_args(&raw_args, workspace.path(), "write_to_file")
+            .expect("write_to_file alias should parse");
+     
+         assert_eq!(change.path, "nested/example.txt");
+         match change.change_type {
+             ChangeType::NewFile { content } => assert_eq!(content, "hello"),
+             _ => panic!("expected NewFile change type"),
+         }
+     }
+ 
+     #[test]
+     fn parse_change_args_supports_replace_file_content_aliases() {
+        let workspace = tempdir().expect("tempdir");
+        let file_path = workspace.path().join("example.txt");
+        std::fs::write(&file_path, "before").expect("seed file");
+
+        let raw_args = json!({
+            "path": "example.txt",
+            "old_content": "before",
+            "new_content": "after"
+        })
+        .to_string();
+
+        let change = parse_change_args(&raw_args, workspace.path(), "replace_file_content")
+            .expect("replace_file_content alias should parse");
+
+        assert_eq!(change.path, "example.txt");
+        match change.change_type {
+            ChangeType::Patch {
+                old_content,
+                new_content,
+             } => {
+                 assert_eq!(old_content, "before");
+                 assert_eq!(new_content, "after");
+             }
+             _ => panic!("expected Patch change type"),
+         }
+     }
+ 
+     #[test]
+     fn parse_change_args_supports_multi_replace_file_content_alias() {
+        let workspace = tempdir().expect("tempdir");
+        let raw_args = json!({
+            "path": "example.txt",
+            "patches": [
+                {
+                    "old_text": "alpha",
+                    "new_text": "beta"
+                }
+            ]
+        })
+        .to_string();
+
+        let change = parse_change_args(&raw_args, workspace.path(), "multi_replace_file_content")
+            .expect("multi_replace_file_content alias should parse");
+
+         match change.change_type {
+             ChangeType::MultiPatch { patches } => {
+                 assert_eq!(patches.len(), 1);
+                 assert_eq!(patches[0].old_text, "alpha");
+                 assert_eq!(patches[0].new_text, "beta");
+             }
+             _ => panic!("expected MultiPatch change type"),
+         }
+     }
+
+    #[test]
+    fn parse_change_args_supports_apply_patch_validated_alias() {
+        let workspace = tempdir().expect("tempdir");
+        let file_path = workspace.path().join("example.txt");
+        std::fs::write(&file_path, "before").expect("seed file");
+
+        let raw_args = json!({
+            "path": "example.txt",
+            "old_text": "before",
+            "new_text": "after"
+        })
+        .to_string();
+
+        let change = parse_change_args(&raw_args, workspace.path(), "apply_patch_validated")
+            .expect("apply_patch_validated alias should parse");
+
+        match change.change_type {
+            ChangeType::Patch {
+                old_content,
+                new_content,
+            } => {
+                assert_eq!(old_content, "before");
+                assert_eq!(new_content, "after");
+            }
+            _ => panic!("expected Patch change type"),
+        }
+    }
+ }

@@ -184,6 +184,7 @@ pub enum DrainResult {
         action: String,
         tool_call_id: Option<String>,
     },
+    ApprovalRequest(crate::protocol::ApprovalRequest),
     TodoUpdated(Vec<crate::protocol::TodoItem>),
     MessageCompleted(String), // Message ID for completed message
     Error(String),
@@ -334,6 +335,7 @@ pub struct ChatManager {
     stream_xml_tool_fallback: bool,
     stream_auto_start_loop_on_tools: bool,
     pending_done_without_tools: bool,
+    pub last_finish_reason: Option<String>,
     composite_tools_enabled: bool,
     ws_conversation_messages: Arc<Mutex<Vec<serde_json::Value>>>,
 }
@@ -376,6 +378,7 @@ impl ChatManager {
             stream_xml_tool_fallback: false,
             stream_auto_start_loop_on_tools: false,
             pending_done_without_tools: false,
+            last_finish_reason: None,
             composite_tools_enabled: true,
             ws_conversation_messages: Arc::new(Mutex::new(Vec::new())),
         }
@@ -553,6 +556,7 @@ impl ChatManager {
         self.updated_assistant_message = None;
         self.message_seq = 0; // v1.1: reset sequence counter for new message
         self.pending_done_without_tools = false;
+        self.last_finish_reason = None;
         self.composite_tools_enabled = composite_tools_enabled;
 
         let selected = resolve_model_selection(models, selected_model);
@@ -861,6 +865,31 @@ impl ChatManager {
                                     .collect();
                                 let _ = tx.send(ChatEvent::TodoUpdated(protocol_todos));
                             }
+                            crate::blade_ws_client::BladeWsEvent::ApprovalRequest {
+                                session_id,
+                                approval_id,
+                                tool_call_id,
+                                tool_name,
+                                arguments,
+                                source,
+                                rule_name,
+                                message,
+                                decision,
+                            } => {
+                                let _ = tx.send(ChatEvent::ApprovalRequest(
+                                    crate::protocol::ApprovalRequest {
+                                        session_id,
+                                        approval_id,
+                                        tool_call_id,
+                                        tool_name,
+                                        arguments,
+                                        source,
+                                        rule_name,
+                                        message,
+                                        decision,
+                                    },
+                                ));
+                            }
                             crate::blade_ws_client::BladeWsEvent::ChatDone {
                                 finish_reason,
                                 recoverable,
@@ -881,7 +910,9 @@ impl ChatManager {
                                     });
                                 }
 
-                                let _ = tx.send(ChatEvent::Done);
+                                let _ = tx.send(ChatEvent::Done {
+                                    finish_reason,
+                                });
                                 // Don't break - keep connection alive for tool results
                                 // The connection will close when the user sends a new message
                             }
@@ -941,7 +972,9 @@ impl ChatManager {
                                     _ => {
                                         // Unknown error type - use recoverable flag
                                         if authenticated && (saw_chat_done || saw_content) {
-                                            let _ = tx.send(ChatEvent::Done);
+                                            let _ = tx.send(ChatEvent::Done {
+                                                finish_reason: "stop".to_string(),
+                                            });
                                             break;
                                         } else if recoverable.unwrap_or(false) {
                                             let _ = tx.send(ChatEvent::Error(message));
@@ -956,7 +989,9 @@ impl ChatManager {
                             crate::blade_ws_client::BladeWsEvent::Disconnected => {
                                 // eprintln!("[CHAT MGR] Disconnected - session will be restored from database on reconnect");
                                 if authenticated && (saw_chat_done || saw_content) {
-                                    let _ = tx.send(ChatEvent::Done);
+                                    let _ = tx.send(ChatEvent::Done {
+                                        finish_reason: "stop".to_string(),
+                                    });
                                 } else {
                                     let _ = tx.send(ChatEvent::Error(
                                         "Server disconnected - reconnecting will restore session"
@@ -1462,7 +1497,9 @@ impl ChatManager {
                                 }
                             }
                         }
-                        let _ = tx.send(ChatEvent::Done);
+                        let _ = tx.send(ChatEvent::Done {
+                            finish_reason: "stop".to_string(),
+                        });
                         return;
                     }
                 }
@@ -1487,7 +1524,9 @@ impl ChatManager {
             }
 
             if !saw_done {
-                let _ = tx.send(ChatEvent::Done);
+                let _ = tx.send(ChatEvent::Done {
+                    finish_reason: "stop".to_string(),
+                });
             }
         });
 
@@ -1745,7 +1784,9 @@ impl ChatManager {
                         "Failed to connect to OpenAI-compatible server: {}",
                         e
                     )));
-                    let _ = tx.send(ChatEvent::Done);
+                    let _ = tx.send(ChatEvent::Done {
+                        finish_reason: "stop".to_string(),
+                    });
                     return;
                 }
             };
@@ -1768,7 +1809,9 @@ impl ChatManager {
                                 "Retry without tools failed for OpenAI-compatible server: {}",
                                 e
                             )));
-                            let _ = tx.send(ChatEvent::Done);
+                            let _ = tx.send(ChatEvent::Done {
+                                finish_reason: "stop".to_string(),
+                            });
                             return;
                         }
                     };
@@ -1777,7 +1820,9 @@ impl ChatManager {
                         "OpenAI-compatible server returned {}: {}",
                         status, text
                     )));
-                    let _ = tx.send(ChatEvent::Done);
+                    let _ = tx.send(ChatEvent::Done {
+                        finish_reason: "stop".to_string(),
+                    });
                     return;
                 }
             }
@@ -1789,7 +1834,9 @@ impl ChatManager {
                     "OpenAI-compatible server returned {}: {}",
                     status, text
                 )));
-                let _ = tx.send(ChatEvent::Done);
+                let _ = tx.send(ChatEvent::Done {
+                    finish_reason: "stop".to_string(),
+                });
                 return;
             }
 
@@ -1942,7 +1989,9 @@ impl ChatManager {
                                         emitted_final_tool_calls = true;
                                     }
 
-                                    let _ = tx.send(ChatEvent::Done);
+                                    let _ = tx.send(ChatEvent::Done {
+                                        finish_reason: "stop".to_string(),
+                                    });
                                     emitted_done = true;
                                     break 'stream_loop;
                                 }
@@ -1990,7 +2039,9 @@ impl ChatManager {
             }
 
             if !emitted_done {
-                let _ = tx.send(ChatEvent::Done);
+                let _ = tx.send(ChatEvent::Done {
+                    finish_reason: "stop".to_string(),
+                });
             }
         });
 
@@ -2366,7 +2417,7 @@ impl ChatManager {
         }
 
         for provider_event in events {
-            let is_done_event = matches!(&provider_event, ProviderEvent::Done);
+            let is_done_event = matches!(&provider_event, ProviderEvent::Done { .. });
             if !is_done_event {
                 self.pending_done_without_tools = false;
             }
@@ -2406,6 +2457,11 @@ impl ChatManager {
                         action: payload.action,
                         tool_call_id: payload.tool_call_id,
                     });
+                }
+                ProviderEvent::ApprovalRequest(payload) => {
+                    flush_batch!();
+                    self.pending_results
+                        .push_back(DrainResult::ApprovalRequest(payload));
                 }
                 ProviderEvent::ReasoningChunk(s) => {
                     // Set streaming=true when we receive first reasoning content
@@ -2535,7 +2591,7 @@ impl ChatManager {
                     self.pending_results
                         .push_back(DrainResult::TodoUpdated(todos));
                 }
-                ProviderEvent::Done => {
+                ProviderEvent::Done { finish_reason } => {
                     flush_batch!();
                     // NOTE: Do NOT clear rx here.
                     // Done can mean either:
@@ -2595,6 +2651,7 @@ impl ChatManager {
                     }
 
                     // eprintln!("[DRAIN] chat_done received");
+                    self.last_finish_reason = Some(finish_reason);
                     done = true;
                 }
                 ProviderEvent::Error(e) => {

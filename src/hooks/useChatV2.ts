@@ -7,9 +7,9 @@ import { EditorFacade } from '../services/editorFacade';
 import { useEditorActions } from '../contexts/EditorContext';
 import { MessageBuffer } from '../utils/eventBuffer';
 import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertToolCallBlockPreservingOrder, moveExistingContentAfterTools, upsertSplitTextBlocks } from '../utils/messageBlocks';
-import { EventNames, type ChatErrorPayload, type ContextLengthExceededPayload, type MessageTooLargePayload, type RequestConfirmationPayload, type StructuredAction, type ToolExecutionCompletedPayload, type TodoItem } from '../types/events';
+import { EventNames, type ApprovalRequestPayload, type ChatDonePayload, type ChatErrorPayload, type ContextLengthExceededPayload, type MessageTooLargePayload, type RequestConfirmationPayload, type StructuredAction, type ToolExecutionCompletedPayload, type TodoItem } from '../types/events';
 import type { ChatMention } from '../types/blade';
-import type { ChatImage, ChatMessage, ChatMode, ComposerMention, CommandExecution, ImageAttachment, MessageBlock, ModelInfo, QueuedRequest, StreamingState, ToolActivityState, ToolCall } from '../types/chat';
+import type { ChatImage, ChatMessage, ChatMode, ComposerMention, CommandExecution, HookApprovalRequest, ImageAttachment, MessageBlock, ModelInfo, QueuedRequest, StreamingState, ToolActivityState, ToolCall } from '../types/chat';
 import { buildContextLengthSystemMessage, buildMessageTooLargeSystemMessage, formatChatErrorPayload } from '../utils/localizedEvents';
 
 const FLUSH_INTERVAL_MS = 80;
@@ -244,6 +244,8 @@ type ChatState = {
     selectedModelId: string;
     chatMode: ChatMode;
     pendingActions: StructuredAction[] | null;
+    pendingApprovalRequest: HookApprovalRequest | null;
+    waitingForApproval: boolean;
     toolActivity: ToolActivityState | null;
     activeTodos: TodoItem[];
     messageQueue: QueuedRequest[];
@@ -258,6 +260,8 @@ type ChatAction =
     | { type: 'model/set'; modelId: string }
     | { type: 'mode/set'; mode: ChatMode }
     | { type: 'pending-actions/set'; actions: StructuredAction[] | null }
+    | { type: 'pending-approval-request/set'; request: HookApprovalRequest | null }
+    | { type: 'waiting-for-approval/set'; waiting: boolean }
     | { type: 'tool-activity/set'; activity: ToolActivityState | null }
     | { type: 'todos/set'; todos: TodoItem[] }
     | { type: 'queue/enqueue'; request: QueuedRequest }
@@ -273,6 +277,8 @@ const initialState: ChatState = {
     selectedModelId: 'anthropic/claude-sonnet-4-5-20250929',
     chatMode: 'code',
     pendingActions: null,
+    pendingApprovalRequest: null,
+    waitingForApproval: false,
     toolActivity: null,
     activeTodos: [],
     messageQueue: [],
@@ -296,6 +302,10 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
             return { ...state, chatMode: action.mode };
         case 'pending-actions/set':
             return { ...state, pendingActions: action.actions };
+        case 'pending-approval-request/set':
+            return { ...state, pendingApprovalRequest: action.request };
+        case 'waiting-for-approval/set':
+            return { ...state, waitingForApproval: action.waiting };
         case 'tool-activity/set':
             if (areToolActivitiesEqual(state.toolActivity, action.activity)) {
                 return state;
@@ -444,6 +454,7 @@ export function useChatV2() {
     const messageIndexByIdRef = useRef<Map<string, number>>(new Map());
     const toolCallOwnerMessageIdRef = useRef<Map<string, string>>(new Map());
     const pendingActionsRef = useRef<StructuredAction[] | null>(null);
+    const pendingApprovalRequestRef = useRef<HookApprovalRequest | null>(null);
     const selectedModelIdRef = useRef(state.selectedModelId);
     const chatModeRef = useRef(state.chatMode);
     const activeTodosRef = useRef<TodoItem[]>(state.activeTodos);
@@ -594,6 +605,10 @@ export function useChatV2() {
     useEffect(() => {
         pendingActionsRef.current = state.pendingActions;
     }, [state.pendingActions]);
+
+    useEffect(() => {
+        pendingApprovalRequestRef.current = state.pendingApprovalRequest;
+    }, [state.pendingApprovalRequest]);
 
     useEffect(() => {
         selectedModelIdRef.current = state.selectedModelId;
@@ -1138,16 +1153,26 @@ export function useChatV2() {
         let unlistenContextLength: (() => void) | undefined;
         let unlistenMessageTooLarge: (() => void) | undefined;
         let unlistenPermission: (() => void) | undefined;
+        let unlistenApprovalRequest: (() => void) | undefined;
         let unlistenCommand: (() => void) | undefined;
         let unlistenToolCompleted: (() => void) | undefined;
         let unlistenTodoUpdated: (() => void) | undefined;
         let unlistenBladeEvent: (() => void) | undefined;
 
         const setupListeners = async () => {
-            unlistenDone = await listen('chat-done', () => {
+            unlistenDone = await listen<ChatDonePayload>('chat-done', (event) => {
+                const finishReason = event.payload?.finish_reason || 'stop';
                 dispatchInFlightRef.current = false;
                 dispatch({ type: 'loading/set', loading: false });
-                dispatch({ type: 'pending-actions/set', actions: null });
+                dispatch({ type: 'waiting-for-approval/set', waiting: finishReason === 'approval_required' });
+                if (finishReason !== 'approval_required') {
+                    dispatch({ type: 'pending-actions/set', actions: null });
+                    dispatch({ type: 'pending-approval-request/set', request: null });
+                }
+
+                if (finishReason === 'approval_required') {
+                    return;
+                }
 
                 const settleTodosTimer = window.setTimeout(() => {
                     const currentTodos = activeTodosRef.current;
@@ -1178,6 +1203,8 @@ export function useChatV2() {
                 dispatchInFlightRef.current = false;
                 dispatch({ type: 'loading/set', loading: false });
                 dispatch({ type: 'pending-actions/set', actions: null });
+                dispatch({ type: 'pending-approval-request/set', request: null });
+                dispatch({ type: 'waiting-for-approval/set', waiting: false });
                 dispatch({ type: 'error/set', error: errorText });
             });
 
@@ -1185,6 +1212,8 @@ export function useChatV2() {
                 dispatchInFlightRef.current = false;
                 dispatch({ type: 'loading/set', loading: false });
                 dispatch({ type: 'pending-actions/set', actions: null });
+                dispatch({ type: 'pending-approval-request/set', request: null });
+                dispatch({ type: 'waiting-for-approval/set', waiting: false });
                 updateMessages((messages) => [
                     ...messages,
                     buildSystemAssistantMessage(
@@ -1197,6 +1226,8 @@ export function useChatV2() {
             unlistenMessageTooLarge = await listen<MessageTooLargePayload>('message-too-large', (event) => {
                 dispatchInFlightRef.current = false;
                 dispatch({ type: 'loading/set', loading: false });
+                dispatch({ type: 'pending-approval-request/set', request: null });
+                dispatch({ type: 'waiting-for-approval/set', waiting: false });
                 updateMessages((messages) => [
                     ...messages,
                     buildSystemAssistantMessage(
@@ -1208,6 +1239,35 @@ export function useChatV2() {
 
             unlistenPermission = await listen<RequestConfirmationPayload>('request-confirmation', (event) => {
                 dispatch({ type: 'pending-actions/set', actions: event.payload.actions });
+            });
+
+            const normalizeApprovalRequest = (payload: ApprovalRequestPayload): HookApprovalRequest => ({
+                sessionId: payload.session_id,
+                approvalId: payload.approval_id,
+                toolCallId: payload.tool_call_id,
+                toolName: payload.tool_name,
+                arguments: payload.arguments,
+                source: payload.source,
+                ruleName: payload.rule_name,
+                message: payload.message,
+                decision: payload.decision,
+            });
+
+            unlistenApprovalRequest = await listen<ApprovalRequestPayload>(EventNames.APPROVAL_REQUEST, (event) => {
+                const request = normalizeApprovalRequest(event.payload);
+                dispatch({ type: 'pending-approval-request/set', request });
+                dispatch({ type: 'waiting-for-approval/set', waiting: true });
+                updateMessages((messages) => messages.map((message) => {
+                    if (!message.tool_calls?.some((toolCall) => toolCall.id === request.toolCallId)) {
+                        return message;
+                    }
+                    return {
+                        ...message,
+                        tool_calls: (message.tool_calls || []).map((toolCall) => toolCall.id === request.toolCallId
+                            ? { ...toolCall, status: 'pending', result: undefined }
+                            : toolCall),
+                    };
+                }));
             });
 
             unlistenCommand = await listen<{
@@ -1570,6 +1630,7 @@ export function useChatV2() {
             unlistenContextLength?.();
             unlistenMessageTooLarge?.();
             unlistenPermission?.();
+            unlistenApprovalRequest?.();
             unlistenCommand?.();
             unlistenToolCompleted?.();
             unlistenTodoUpdated?.();
@@ -1660,6 +1721,8 @@ export function useChatV2() {
         toolChunkCountsRef.current.clear();
         setToolActivity(null);
         dispatch({ type: 'pending-actions/set', actions: null });
+        dispatch({ type: 'pending-approval-request/set', request: null });
+        dispatch({ type: 'waiting-for-approval/set', waiting: false });
 
         try {
             await BladeDispatcher.chat({ type: 'StopGeneration', payload: {} });
@@ -1688,6 +1751,7 @@ export function useChatV2() {
                 markToolCallsSkippedLocally(pendingIds);
             }
             dispatch({ type: 'pending-actions/set', actions: null });
+            dispatch({ type: 'waiting-for-approval/set', waiting: false });
             await BladeDispatcher.workflow({
                 type: 'ApproveToolDecision',
                 payload: { decision },
@@ -1696,6 +1760,33 @@ export function useChatV2() {
             console.error('[useChatV2] Failed to approve tool decision:', error);
         }
     }, [markToolCallsSkippedLocally]);
+
+    const respondToApprovalRequest = useCallback(async (approved: boolean) => {
+        const request = pendingApprovalRequestRef.current;
+        if (!request) {
+            return;
+        }
+
+        if (approved) {
+            markToolCallsExecutingLocally([request.toolCallId]);
+        } else {
+            markToolCallsSkippedLocally([request.toolCallId], 'Denied by user');
+        }
+
+        dispatch({ type: 'pending-approval-request/set', request: null });
+        dispatch({ type: 'waiting-for-approval/set', waiting: false });
+
+        try {
+            await invoke('send_approval_response', {
+                sessionId: request.sessionId,
+                approvalId: request.approvalId,
+                toolCallId: request.toolCallId,
+                approved,
+            });
+        } catch (error) {
+            console.error('[useChatV2] Failed to send approval response:', error);
+        }
+    }, [markToolCallsExecutingLocally, markToolCallsSkippedLocally]);
 
     const skipSingleCommand = useCallback(async (callId: string) => {
         markToolCallsSkippedLocally([callId]);
@@ -1734,6 +1825,9 @@ export function useChatV2() {
             dispatch({ type: 'messages/replace', messages: [] });
             dispatch({ type: 'todos/set', todos: [] });
             dispatch({ type: 'queue/clear' });
+            dispatch({ type: 'pending-actions/set', actions: null });
+            dispatch({ type: 'pending-approval-request/set', request: null });
+            dispatch({ type: 'waiting-for-approval/set', waiting: false });
         } catch (error) {
             console.error('[useChatV2] Failed to start new conversation:', error);
         }
@@ -1753,6 +1847,9 @@ export function useChatV2() {
         replaceMessagesPreservingImagePreviews(messages);
         dispatch({ type: 'todos/set', todos: [] });
         dispatch({ type: 'queue/clear' });
+        dispatch({ type: 'pending-actions/set', actions: null });
+        dispatch({ type: 'pending-approval-request/set', request: null });
+        dispatch({ type: 'waiting-for-approval/set', waiting: false });
     }, [replaceMessagesPreservingImagePreviews, resetStreamingState]);
 
     const setConversation = useCallback((messages: ChatMessage[] | ((current: ChatMessage[]) => ChatMessage[])) => {
@@ -1784,8 +1881,11 @@ export function useChatV2() {
         chatMode: state.chatMode,
         setChatMode,
         pendingActions: state.pendingActions,
+        pendingApprovalRequest: state.pendingApprovalRequest,
+        waitingForApproval: state.waitingForApproval,
         approveTool,
         approveToolDecision,
+        respondToApprovalRequest,
         approveSingleCommand,
         skipSingleCommand,
         newConversation,

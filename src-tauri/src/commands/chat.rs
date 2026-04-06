@@ -222,7 +222,12 @@ pub fn stop_generation(state: State<'_, AppState>, app_handle: tauri::AppHandle)
 
     // Emit chat-done so the frontend resets loading state immediately
     // The orchestrator loop will also see streaming=false + rx=None and break
-    let _ = app_handle.emit("chat-done", ());
+    let _ = app_handle.emit(
+        crate::events::event_names::CHAT_DONE,
+        crate::events::ChatDonePayload {
+            finish_reason: "stop".to_string(),
+        },
+    );
 
     stopped
 }

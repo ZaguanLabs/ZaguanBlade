@@ -396,6 +396,23 @@ mod tests {
     }
 
     #[test]
+    fn execute_tool_supports_apply_patch_validated() {
+        let workspace = tempdir().expect("tempdir");
+        let file_path = workspace.path().join("example.txt");
+        fs::write(&file_path, "hello\nworld\n").expect("write test file");
+
+        let result = execute_tool(
+            workspace.path(),
+            "apply_patch_validated",
+            r#"{"path":"example.txt","old_text":"world","new_text":"blade"}"#,
+        );
+
+        assert!(result.success, "apply_patch_validated should succeed");
+        let updated = fs::read_to_string(&file_path).expect("read updated file");
+        assert_eq!(updated, "hello\nblade\n");
+    }
+
+    #[test]
     fn apply_patch_rejects_whitespace_only_fuzzy_match() {
         let content = "    TARGET   \nB\n";
         let err = apply_patch_to_string(content, "TARGET\n", "TARGET\nEXTRA\n").unwrap_err();
@@ -766,7 +783,9 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
     match tool_name {
         // Legacy tools (kept for compatibility)
         "read_file" => read_file(workspace_root, &args),
-        "write_file" | "create_file" => write_file(workspace_root, &args),
+        "write_file" | "write_file_validated" | "create_file" | "write_to_file" => {
+            write_file(workspace_root, &args)
+        }
         "edit_file" => edit_file(workspace_root, &args),
         "grep_search" | "rg" => grep_search(workspace_root, &args, grep_timeout_enforced),
         "codebase_search" => codebase_search(workspace_root, &args),
@@ -779,7 +798,13 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
         "symbol_graph" => symbol_graph_tool(workspace_root, &args, app_handle),
         "symbol_outline" => symbol_outline_tool(workspace_root, &args, app_handle),
         "read_file_range" => read_file_range(workspace_root, &args),
-        "apply_edit" | "apply_patch" => apply_edit_tool(workspace_root, &args, app_handle),
+        "apply_edit"
+        | "apply_patch"
+        | "apply_patch_validated"
+        | "replace_file_content"
+        | "multi_replace_file_content" => {
+            apply_edit_tool(workspace_root, &args, app_handle)
+        }
         "get_workspace_structure" => get_workspace_structure(workspace_root, &args),
         "get_project_index_overview" => get_project_index_overview(workspace_root, &args, app_handle),
         "get_project_index_chunk" => get_project_index_chunk(workspace_root, &args),
@@ -1474,10 +1499,16 @@ fn read_file_range(workspace_root: &Path, args: &HashMap<String, serde_json::Val
 }
 
 fn write_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {
-    let Some(path) = get_str_arg(args, &["path", "file_path", "filepath", "filename"]) else {
+    let Some(path) = get_str_arg(
+        args,
+        &["path", "file_path", "filepath", "filename", "TargetFile", "target_file"],
+    ) else {
         return ToolResult::err("missing required arg: path (or file_path)");
     };
-    let Some(content) = get_str_arg(args, &["content", "contents", "text", "data"]) else {
+    let Some(content) = get_str_arg(
+        args,
+        &["content", "contents", "text", "data", "CodeContent"],
+    ) else {
         return ToolResult::err("missing required arg: content (or contents/text)");
     };
 
@@ -1499,7 +1530,10 @@ fn write_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) 
 }
 
 fn edit_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {
-    let Some(path) = get_str_arg(args, &["path", "file_path", "filepath", "filename"]) else {
+    let Some(path) = get_str_arg(
+        args,
+        &["path", "file_path", "filepath", "filename", "TargetFile", "target_file"],
+    ) else {
         return ToolResult::err("missing required arg: path (or file_path)");
     };
     let Some(old_content) = get_str_arg(args, &["old_content", "old", "from"]) else {

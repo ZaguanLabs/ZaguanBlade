@@ -191,6 +191,20 @@ impl WsConnectionManager {
             .await
     }
 
+    pub async fn send_approval_response(
+        &self,
+        session_id: String,
+        approval_id: String,
+        tool_call_id: String,
+        approved: bool,
+    ) -> Result<(), String> {
+        let client_lock = self.client.lock().await;
+        let client = client_lock.as_ref().ok_or("Not connected")?;
+        client
+            .send_approval_response(session_id, approval_id, tool_call_id, approved)
+            .await
+    }
+
     /// Send conversation context
     pub async fn send_conversation_context(
         &self,

@@ -3,6 +3,21 @@ import { useOptionalStartupBootstrap } from './StartupBootstrapContext';
 import { EditorFacade, initEditorFacade, isBackendAuthoritative } from '../services/editorFacade';
 import { subscribeBladeNestedEventType } from '../services/bladeEvents';
 
+function areStringArraysEqual(a: string[], b: string[]): boolean {
+    if (a === b) {
+        return true;
+    }
+    if (a.length !== b.length) {
+        return false;
+    }
+    for (let index = 0; index < a.length; index += 1) {
+        if (a[index] !== b[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+
 interface EditorState {
     activeFile: string | null;
     openFiles: string[];
@@ -120,6 +135,9 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }, []);
 
     const setActiveFile = useCallback((file: string | null) => {
+        if (snapshotRef.current.activeFile === file) {
+            return;
+        }
         snapshotRef.current = {
             ...snapshotRef.current,
             activeFile: file,
@@ -134,6 +152,9 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }, []);
 
     const setCursorPosition = useCallback((line: number, column: number) => {
+        if (snapshotRef.current.cursorLine === line && snapshotRef.current.cursorColumn === column) {
+            return;
+        }
         snapshotRef.current = {
             ...snapshotRef.current,
             cursorLine: line,
@@ -150,6 +171,12 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }, []);
 
     const setSelection = useCallback((startLine: number, endLine: number) => {
+        if (
+            snapshotRef.current.selectionStartLine === startLine
+            && snapshotRef.current.selectionEndLine === endLine
+        ) {
+            return;
+        }
         snapshotRef.current = {
             ...snapshotRef.current,
             selectionStartLine: startLine,
@@ -166,6 +193,9 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }, []);
 
     const setOpenFiles = useCallback((files: string[]) => {
+        if (areStringArraysEqual(snapshotRef.current.openFiles, files)) {
+            return;
+        }
         snapshotRef.current = {
             ...snapshotRef.current,
             openFiles: files,
@@ -174,6 +204,12 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }, []);
 
     const clearSelection = useCallback(() => {
+        if (
+            snapshotRef.current.selectionStartLine === null
+            && snapshotRef.current.selectionEndLine === null
+        ) {
+            return;
+        }
         snapshotRef.current = {
             ...snapshotRef.current,
             selectionStartLine: null,
@@ -182,8 +218,6 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }, []);
 
     const getEditorSnapshot = useCallback(() => snapshotRef.current, []);
-
-
 
     const actions = useMemo<EditorActionsType>(() => ({
         setActiveFile,

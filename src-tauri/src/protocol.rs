@@ -84,6 +84,19 @@ pub struct TodoItem {
     pub status: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalRequest {
+    pub session_id: String,
+    pub approval_id: String,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub arguments: serde_json::Value,
+    pub source: Option<String>,
+    pub rule_name: Option<String>,
+    pub message: Option<String>,
+    pub decision: Option<String>,
+}
+
 pub enum ChatEvent {
     Session {
         session_id: String,
@@ -106,7 +119,8 @@ pub enum ChatEvent {
         percent: i32,
     },
     ToolActivity(ToolActivityPayload),
-    Done,
+    ApprovalRequest(ApprovalRequest),
+    Done { finish_reason: String },
     Error(String),
     /// Context length exceeded error with recovery information (RFC: Context Length Recovery)
     ContextLengthExceeded {

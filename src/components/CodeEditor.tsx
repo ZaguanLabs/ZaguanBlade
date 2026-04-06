@@ -51,6 +51,7 @@ interface CodeEditorProps {
     onChange: (val: string) => void;
     onSave?: (val: string) => void;
     filename?: string;
+    externalContentVersion?: number;
     highlightLines?: { startLine: number; endLine: number } | null;
     /** Callback for navigating to symbol definition */
     onNavigate?: (path: string, line: number, character: number) => void;
@@ -68,7 +69,7 @@ export interface CodeEditorHandle {
 }
 
 
-const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onChange, onSave, filename, highlightLines, onNavigate, lineWrap, unifiedDiff }, ref) => {
+const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onChange, onSave, filename, externalContentVersion = 0, highlightLines, onNavigate, lineWrap, unifiedDiff }, ref) => {
     const { t } = useTranslation();
     // Auto-enable line wrap for markdown files
     const isMarkdown = filename?.endsWith('.md') || filename?.endsWith('.markdown');
@@ -328,14 +329,17 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
 
     // Handle file switch and content updates
     const lastFilename = useRef(filename);
+    const lastExternalContentVersionRef = useRef(externalContentVersion);
     useEffect(() => {
         const view = viewRef.current;
         if (!view) return;
 
         const isFileSwitch = filename !== lastFilename.current;
+        const isExternalContentUpdate = externalContentVersion !== lastExternalContentVersionRef.current;
 
         if (isFileSwitch) {
             lastFilename.current = filename;
+            lastExternalContentVersionRef.current = externalContentVersion;
 
             const diffState = getDiffStateFromUnifiedDiff(unifiedDiff);
 
@@ -348,7 +352,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 ]
             });
 
-        } else if (!isUserEditRef.current) {
+        } else if (isMarkdown && !isUserEditRef.current) {
             // Only sync external content changes (e.g., file loaded, external modification)
             // Skip if this was a user edit to prevent feedback loops
             const currentDoc = view.state.doc.toString();
@@ -362,10 +366,24 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                     ]
                 });
             }
+        } else if (!isMarkdown && isExternalContentUpdate) {
+            lastExternalContentVersionRef.current = externalContentVersion;
+
+            const currentDoc = view.state.doc.toString();
+            if (currentDoc !== content) {
+                const diffState = getDiffStateFromUnifiedDiff(unifiedDiff);
+                view.dispatch({
+                    changes: { from: 0, to: view.state.doc.length, insert: content },
+                    effects: [
+                        setBaseContent.of(content),
+                        setDiffState.of(diffState),
+                    ]
+                });
+            }
         }
         // Reset the user edit flag after processing
         isUserEditRef.current = false;
-    }, [filename, content, onNavigate, unifiedDiff]);
+    }, [filename, content, externalContentVersion, onNavigate, unifiedDiff, isMarkdown]);
 
     // Apply diff decorations when unifiedDiff changes
     useEffect(() => {
@@ -399,7 +417,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
             : null;
 
         if (highlightLines) {
-            if (!content || highlightKey === lastAppliedHighlightRef.current) {
+            if (view.state.doc.length === 0 || highlightKey === lastAppliedHighlightRef.current) {
                 return;
             }
 
@@ -424,7 +442,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 effects: clearLineHighlight.of(null)
             });
         }
-    }, [highlightLines, content, filename]);
+    }, [highlightLines, filename]);
 
     // Custom context menu for the editor
     const handleContextMenu = useCallback((e: React.MouseEvent) => {

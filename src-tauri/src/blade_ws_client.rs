@@ -84,6 +84,17 @@ pub enum BladeWsEvent {
     TodoUpdated {
         todos: Vec<TodoItem>,
     },
+    ApprovalRequest {
+        session_id: String,
+        approval_id: String,
+        tool_call_id: String,
+        tool_name: String,
+        arguments: Value,
+        source: Option<String>,
+        rule_name: Option<String>,
+        message: Option<String>,
+        decision: Option<String>,
+    },
     ChatDone {
         finish_reason: String,
         recoverable: Option<bool>,
@@ -218,6 +229,14 @@ struct ToolResultPayload {
     error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     api_key: Option<String>, // API key for auth in multi-turn conversations
+}
+
+#[derive(Debug, Serialize)]
+struct ApprovalResponsePayload {
+    session_id: String,
+    approval_id: String,
+    tool_call_id: String,
+    approved: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -583,6 +602,40 @@ impl BladeWsClient {
         Ok(())
     }
 
+    pub async fn send_approval_response(
+        &self,
+        session_id: String,
+        approval_id: String,
+        tool_call_id: String,
+        approved: bool,
+    ) -> Result<(), String> {
+        let conn = self.connection.lock().await;
+        let conn = conn.as_ref().ok_or("Not connected")?;
+
+        let payload = ApprovalResponsePayload {
+            session_id,
+            approval_id,
+            tool_call_id,
+            approved,
+        };
+
+        let msg = WsBaseMessage {
+            id: format!("approval-response-{}", chrono::Utc::now().timestamp_millis()),
+            msg_type: "approval_response".to_string(),
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            payload: Some(serde_json::to_value(payload).unwrap()),
+        };
+
+        let json =
+            serde_json::to_string(&msg).map_err(|e| format!("JSON serialization error: {}", e))?;
+
+        conn.tx
+            .send(WsMessage::Send(json))
+            .map_err(|e| format!("Failed to send approval response: {}", e))?;
+
+        Ok(())
+    }
+
     /// Send conversation context in response to get_conversation_context request (RFC-002)
     pub async fn send_conversation_context(
         &self,
@@ -814,6 +867,65 @@ impl BladeWsClient {
                         }
                     }
                 }
+            }
+            "approval_request" => {
+                let session_id = msg
+                    .payload
+                    .get("session_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let approval_id = msg
+                    .payload
+                    .get("approval_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let tool_call_id = msg
+                    .payload
+                    .get("tool_call_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let tool_name = msg
+                    .payload
+                    .get("tool_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let source = msg
+                    .payload
+                    .get("source")
+                    .and_then(|v| v.as_str())
+                    .map(|v| v.to_string());
+                let rule_name = msg
+                    .payload
+                    .get("rule_name")
+                    .and_then(|v| v.as_str())
+                    .map(|v| v.to_string());
+                let message = msg
+                    .payload
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .map(|v| v.to_string());
+                let decision = msg
+                    .payload
+                    .get("decision")
+                    .and_then(|v| v.as_str())
+                    .map(|v| v.to_string());
+                let arguments = msg.payload.get("arguments").cloned().unwrap_or(Value::Null);
+
+                let _ = tx.send(BladeWsEvent::ApprovalRequest {
+                    session_id,
+                    approval_id,
+                    tool_call_id,
+                    tool_name,
+                    arguments,
+                    source,
+                    rule_name,
+                    message,
+                    decision,
+                });
             }
             "chat_done" => {
                 let finish_reason = msg

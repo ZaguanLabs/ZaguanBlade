@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { ArrowDown, Check, X, Loader2 } from 'lucide-react';
 import { useCommandExecution } from '../hooks/useCommandExecution';
 import { useHistory } from '../hooks/useHistory';
-import type { ChatMessage as ChatMessageType, ChatMode, ComposerMention, ImageAttachment, ModelInfo, QueuedRequest, ToolActivityState } from '../types/chat';
+import type { ChatMessage as ChatMessageType, ChatMode, ComposerMention, HookApprovalRequest, ImageAttachment, ModelInfo, QueuedRequest, ToolActivityState } from '../types/chat';
 
 import type { StructuredAction, TodoItem } from '../types/events';
 import { ChatMessage } from './ChatMessage';
@@ -39,7 +39,10 @@ interface ChatPanelProps {
     chatMode: ChatMode;
     setChatMode: (mode: ChatMode) => void;
     pendingActions: StructuredAction[] | null;
+    pendingApprovalRequest: HookApprovalRequest | null;
+    waitingForApproval: boolean;
     approveToolDecision: (decision: string) => void;
+    respondToApprovalRequest: (approved: boolean) => void;
     approveSingleCommand: (callId: string) => void;
     skipSingleCommand: (callId: string) => void;
     projectId: string;
@@ -137,7 +140,10 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     chatMode,
     setChatMode,
     pendingActions,
+    pendingApprovalRequest,
+    waitingForApproval,
     approveToolDecision,
+    respondToApprovalRequest,
     approveSingleCommand,
     skipSingleCommand,
     projectId,
@@ -180,20 +186,33 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     });
 
     const scrollContainerRef = useRef<HTMLDivElement>(null);
+    const scrollMetricsFrameRef = useRef<number | null>(null);
+    const pendingScrollMetricsRef = useRef<{
+        scrollTop: number;
+        viewportHeight: number;
+        viewportWidth: number;
+    } | null>(null);
+    const virtualizedRowHeightCacheRef = useRef(new WeakMap<object, Map<string, number>>());
 
-    useEffect(() => {
-        const container = scrollContainerRef.current;
-        if (!container) {
+    const scheduleScrollMetricsUpdate = useCallback((element: HTMLDivElement) => {
+        pendingScrollMetricsRef.current = {
+            scrollTop: element.scrollTop,
+            viewportHeight: element.clientHeight,
+            viewportWidth: element.clientWidth,
+        };
+
+        if (scrollMetricsFrameRef.current !== null) {
             return;
         }
 
-        const updateMetrics = () => {
+        scrollMetricsFrameRef.current = requestAnimationFrame(() => {
+            scrollMetricsFrameRef.current = null;
+            const next = pendingScrollMetricsRef.current;
+            if (!next) {
+                return;
+            }
+
             setScrollMetrics((current) => {
-                const next = {
-                    scrollTop: container.scrollTop,
-                    viewportHeight: container.clientHeight,
-                    viewportWidth: container.clientWidth,
-                };
                 if (
                     current.scrollTop === next.scrollTop
                     && current.viewportHeight === next.viewportHeight
@@ -203,12 +222,28 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                 }
                 return next;
             });
+        });
+    }, []);
+
+    useEffect(() => {
+        const container = scrollContainerRef.current;
+        if (!container) {
+            return;
+        }
+
+        const updateMetrics = () => {
+            scheduleScrollMetricsUpdate(container);
         };
 
         updateMetrics();
 
         if (typeof ResizeObserver === 'undefined') {
-            return;
+            return () => {
+                if (scrollMetricsFrameRef.current !== null) {
+                    cancelAnimationFrame(scrollMetricsFrameRef.current);
+                    scrollMetricsFrameRef.current = null;
+                }
+            };
         }
 
         const observer = new ResizeObserver(() => {
@@ -216,9 +251,13 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         });
         observer.observe(container);
         return () => {
+            if (scrollMetricsFrameRef.current !== null) {
+                cancelAnimationFrame(scrollMetricsFrameRef.current);
+                scrollMetricsFrameRef.current = null;
+            }
             observer.disconnect();
         };
-    }, [activeTab]);
+    }, [scheduleScrollMetricsUpdate]);
 
     const messageCount = messages.length;
     const firstMessageId = messages[0]?.id;
@@ -228,8 +267,11 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     const lastMessageContent = lastMessage?.content ?? '';
     const lastMessageReasoning = lastMessage?.reasoning ?? '';
     const lastMessageBlockCount = lastMessage?.blocks?.length ?? 0;
-    const shouldShowPendingResponseIndicator = loading && lastMessage?.role !== 'Assistant';
-    const chatRows = useMemo(() => deriveChatRows(messages, loading, pendingActions), [loading, messages, pendingActions]);
+    const shouldShowPendingResponseIndicator = loading && !waitingForApproval && lastMessage?.role !== 'Assistant';
+    const chatRows = useMemo(
+        () => deriveChatRows(messages, loading, pendingActions, pendingApprovalRequest),
+        [loading, messages, pendingActions, pendingApprovalRequest],
+    );
     const firstUnvirtualizedRowIndex = useMemo(
         () => findFirstUnvirtualizedChatRowIndex(chatRows, loading),
         [chatRows, loading]
@@ -243,7 +285,27 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         [chatRows, firstUnvirtualizedRowIndex]
     );
     const virtualizedRowHeights = useMemo(
-        () => virtualizedRows.map((row) => estimateChatRowHeight(row, { viewportWidthPx: scrollMetrics.viewportWidth })),
+        () => virtualizedRows.map((row) => {
+            const cacheKey = [
+                scrollMetrics.viewportWidth,
+                row.isContinued ? 1 : 0,
+                row.isActive ? 1 : 0,
+                row.pendingActions?.length ?? 0,
+            ].join('|');
+            const cacheByLayout = virtualizedRowHeightCacheRef.current.get(row.message);
+            const cachedHeight = cacheByLayout?.get(cacheKey);
+            if (typeof cachedHeight === 'number') {
+                return cachedHeight;
+            }
+
+            const estimatedHeight = estimateChatRowHeight(row, { viewportWidthPx: scrollMetrics.viewportWidth });
+            const nextCacheByLayout = cacheByLayout ?? new Map<string, number>();
+            nextCacheByLayout.set(cacheKey, estimatedHeight);
+            if (!cacheByLayout) {
+                virtualizedRowHeightCacheRef.current.set(row.message, nextCacheByLayout);
+            }
+            return estimatedHeight;
+        }),
         [scrollMetrics.viewportWidth, virtualizedRows]
     );
     const virtualizedRowOffsets = useMemo(() => {
@@ -301,11 +363,15 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         return indexMap;
     }, [chatRows]);
     const approvalTargetKey = useMemo(
-        () => pendingActions?.[0]?.id ? `approval:${pendingActions[0].id}` : null,
-        [pendingActions],
+        () => pendingApprovalRequest?.toolCallId
+            ? `approval:${pendingApprovalRequest.toolCallId}`
+            : pendingActions?.[0]?.id
+                ? `approval:${pendingActions[0].id}`
+                : null,
+        [pendingActions, pendingApprovalRequest],
     );
     const approvalRowKey = useMemo(
-        () => chatRows.find((row) => (row.pendingActions?.length ?? 0) > 0)?.key ?? null,
+        () => chatRows.find((row) => (row.pendingActions?.length ?? 0) > 0 || !!row.pendingApprovalRequest)?.key ?? null,
         [chatRows],
     );
     const activeStepTargetKey = useMemo(
@@ -402,21 +468,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
 
     const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
         const target = e.target as HTMLDivElement;
-        setScrollMetrics((current) => {
-            const next = {
-                scrollTop: target.scrollTop,
-                viewportHeight: target.clientHeight,
-                viewportWidth: target.clientWidth,
-            };
-            if (
-                current.scrollTop === next.scrollTop
-                && current.viewportHeight === next.viewportHeight
-                && current.viewportWidth === next.viewportWidth
-            ) {
-                return current;
-            }
-            return next;
-        });
+        scheduleScrollMetricsUpdate(target);
         const isBottom = Math.abs(target.scrollHeight - target.scrollTop - target.clientHeight) < 100;
         isUserAtBottomRef.current = isBottom;
         const nextShowScrollToBottom = !isBottom && messageCount > 0;
@@ -424,7 +476,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
             showScrollToBottomRef.current = nextShowScrollToBottom;
             setShowScrollToBottom(nextShowScrollToBottom);
         }
-    }, [messageCount]);
+    }, [messageCount, scheduleScrollMetricsUpdate]);
 
     const registerRowElement = useCallback((rowKey: string, element: HTMLDivElement | null) => {
         if (element) {
@@ -563,6 +615,14 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         approveToolDecision('reject');
     }, [approveToolDecision]);
 
+    const handleApproveApprovalRequest = useCallback(() => {
+        respondToApprovalRequest(true);
+    }, [respondToApprovalRequest]);
+
+    const handleDenyApprovalRequest = useCallback(() => {
+        respondToApprovalRequest(false);
+    }, [respondToApprovalRequest]);
+
     const handleApproveSingleCommand = useCallback((callId: string) => {
         approveSingleCommand(callId);
     }, [approveSingleCommand]);
@@ -659,8 +719,11 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                                 <ChatMessage
                                     message={row.message}
                                     pendingActions={row.pendingActions}
+                                    pendingApprovalRequest={row.pendingApprovalRequest}
                                     onApproveCommand={row.pendingActions ? handleApproveCommand : undefined}
                                     onSkipCommand={row.pendingActions ? handleSkipCommand : undefined}
+                                    onApproveApprovalRequest={row.pendingApprovalRequest ? handleApproveApprovalRequest : undefined}
+                                    onDenyApprovalRequest={row.pendingApprovalRequest ? handleDenyApprovalRequest : undefined}
                                     onApproveSingleCommand={row.pendingActions ? handleApproveSingleCommand : undefined}
                                     onSkipSingleCommand={row.pendingActions ? handleSkipSingleCommand : undefined}
                                     isContinued={row.isContinued}
@@ -682,8 +745,11 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                                 <ChatMessage
                                     message={row.message}
                                     pendingActions={row.pendingActions}
+                                    pendingApprovalRequest={row.pendingApprovalRequest}
                                     onApproveCommand={row.pendingActions ? handleApproveCommand : undefined}
                                     onSkipCommand={row.pendingActions ? handleSkipCommand : undefined}
+                                    onApproveApprovalRequest={row.pendingApprovalRequest ? handleApproveApprovalRequest : undefined}
+                                    onDenyApprovalRequest={row.pendingApprovalRequest ? handleDenyApprovalRequest : undefined}
                                     onApproveSingleCommand={row.pendingActions ? handleApproveSingleCommand : undefined}
                                     onSkipSingleCommand={row.pendingActions ? handleSkipSingleCommand : undefined}
                                     isContinued={row.isContinued}
@@ -754,6 +820,8 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
             <AgentRunStatusBar
                 loading={loading}
                 pendingActions={pendingActions}
+                pendingApprovalRequest={pendingApprovalRequest}
+                waitingForApproval={waitingForApproval}
                 toolActivity={toolActivity}
                 activeTodos={activeTodos}
                 queuedRequests={queuedRequests}

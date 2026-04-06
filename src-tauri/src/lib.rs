@@ -34,6 +34,7 @@ pub mod local_artifacts;
 pub mod local_index;
 
 pub mod models;
+pub mod post_edit_validation;
 pub mod project;
 pub mod project_settings;
 pub mod project_state;
@@ -175,6 +176,7 @@ pub fn run() {
             // Tools & Changes
             commands::tools::submit_command_result,
             commands::tools::approve_tool_decision,
+            commands::tools::send_approval_response,
             commands::tools::approve_single_command,
             crate::terminal::execute_native_command,
             crate::terminal::cancel_command_execution,
