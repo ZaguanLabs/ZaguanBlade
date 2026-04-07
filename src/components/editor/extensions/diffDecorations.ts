@@ -440,14 +440,13 @@ export const diffTheme = EditorView.baseTheme({
     // Added line
     ".cm-diff-added-line": {
         backgroundColor: "var(--editor-diff-added-bg, rgba(34, 197, 94, 0.18))",
-        borderLeft: "3px solid var(--editor-diff-added-border, #22c55e)",
-        boxShadow: "inset 0 1px 0 var(--editor-diff-added-edge, rgba(134, 239, 172, 0.12)), inset 0 -1px 0 var(--editor-diff-added-edge, rgba(134, 239, 172, 0.12)), inset 0 0 0 1px color-mix(in srgb, var(--editor-diff-added-border, #22c55e) 26%, transparent)",
+        borderLeft: "2px solid var(--editor-diff-added-border, #22c55e)",
     },
 
     // Character-level highlight within added lines
     ".cm-diff-char-added": {
         backgroundColor: "var(--editor-diff-added-char-bg, rgba(34, 197, 94, 0.32))",
-        borderRadius: "2px",
+        borderRadius: "1px",
     },
 
     // Removed line widget
@@ -455,14 +454,13 @@ export const diffTheme = EditorView.baseTheme({
         display: "flex",
         alignItems: "center",
         backgroundColor: "var(--editor-diff-removed-bg, rgba(248, 81, 73, 0.14))",
-        borderLeft: "3px solid var(--editor-diff-removed-border, rgba(248, 81, 73, 0.72))",
+        borderLeft: "2px solid var(--editor-diff-removed-border, rgba(248, 81, 73, 0.72))",
         fontFamily: "inherit",
         fontSize: "inherit",
         lineHeight: "inherit",
         minHeight: "1.4em",
         padding: "0",
         color: "var(--editor-diff-removed-fg, rgba(228, 228, 231, 0.78))",
-        boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--editor-diff-removed-border, rgba(248, 81, 73, 0.72)) 24%, transparent)",
         userSelect: "none",
     },
 
@@ -501,7 +499,7 @@ export const diffTheme = EditorView.baseTheme({
     // Character-level highlight within removed lines
     ".cm-diff-char-removed": {
         backgroundColor: "var(--editor-diff-removed-char-bg, rgba(248, 81, 73, 0.28))",
-        borderRadius: "2px",
+        borderRadius: "1px",
         textDecoration: "line-through",
         textDecorationColor: "var(--editor-diff-removed-strike, rgba(248, 113, 113, 0.82))",
     },

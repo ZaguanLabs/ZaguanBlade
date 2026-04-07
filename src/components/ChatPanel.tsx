@@ -20,6 +20,58 @@ import { deriveChatRows, estimateChatRowHeight, findFirstUnvirtualizedChatRowInd
 
 const VIRTUALIZATION_OVERSCAN_PX = 720;
 
+interface VisibleVirtualRange {
+    startIndex: number;
+    endIndex: number;
+    topSpacerHeight: number;
+    bottomSpacerHeight: number;
+}
+
+function sameVisibleVirtualRange(a: VisibleVirtualRange, b: VisibleVirtualRange): boolean {
+    return a.startIndex === b.startIndex
+        && a.endIndex === b.endIndex
+        && a.topSpacerHeight === b.topSpacerHeight
+        && a.bottomSpacerHeight === b.bottomSpacerHeight;
+}
+
+function computeVisibleVirtualRange(
+    scrollTop: number,
+    viewportHeight: number,
+    virtualizedRowOffsets: number[],
+    virtualizedRowHeights: number[],
+    totalVirtualizedHeight: number,
+): VisibleVirtualRange {
+    const rowCount = virtualizedRowHeights.length;
+    if (rowCount === 0) {
+        return { startIndex: 0, endIndex: 0, topSpacerHeight: 0, bottomSpacerHeight: 0 };
+    }
+
+    const viewportStart = Math.max(0, scrollTop - VIRTUALIZATION_OVERSCAN_PX);
+    const viewportEnd = scrollTop + viewportHeight + VIRTUALIZATION_OVERSCAN_PX;
+
+    let startIndex = 0;
+    while (
+        startIndex < rowCount
+        && virtualizedRowOffsets[startIndex] + virtualizedRowHeights[startIndex] < viewportStart
+    ) {
+        startIndex += 1;
+    }
+
+    let endIndex = startIndex;
+    while (endIndex < rowCount && virtualizedRowOffsets[endIndex] < viewportEnd) {
+        endIndex += 1;
+    }
+
+    const topSpacerHeight = virtualizedRowOffsets[startIndex] ?? totalVirtualizedHeight;
+    let renderedHeight = 0;
+    for (let index = startIndex; index < endIndex; index += 1) {
+        renderedHeight += virtualizedRowHeights[index] ?? 0;
+    }
+    const bottomSpacerHeight = Math.max(0, totalVirtualizedHeight - topSpacerHeight - renderedHeight);
+
+    return { startIndex, endIndex, topSpacerHeight, bottomSpacerHeight };
+}
+
 interface ResearchProgress {
     message: string;
     stage: string;
@@ -179,51 +231,85 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     const [pendingActivityJumpKey, setPendingActivityJumpKey] = useState<string | null>(null);
     const taskPanelRef = useRef<HTMLDivElement>(null);
     const queuePanelRef = useRef<HTMLDivElement>(null);
-    const [scrollMetrics, setScrollMetrics] = useState({
-        scrollTop: 0,
+    const [viewportMetrics, setViewportMetrics] = useState({
         viewportHeight: 0,
         viewportWidth: 0,
     });
+    const [visibleVirtualRange, setVisibleVirtualRange] = useState<VisibleVirtualRange>({
+        startIndex: 0,
+        endIndex: 0,
+        topSpacerHeight: 0,
+        bottomSpacerHeight: 0,
+    });
 
     const scrollContainerRef = useRef<HTMLDivElement>(null);
-    const scrollMetricsFrameRef = useRef<number | null>(null);
-    const pendingScrollMetricsRef = useRef<{
-        scrollTop: number;
+    const viewportMetricsFrameRef = useRef<number | null>(null);
+    const pendingViewportMetricsRef = useRef<{
         viewportHeight: number;
         viewportWidth: number;
     } | null>(null);
+    const visibleRangeFrameRef = useRef<number | null>(null);
+    const scrollTopRef = useRef(0);
+    const viewportHeightRef = useRef(0);
+    const virtualizedRowOffsetsRef = useRef<number[]>([]);
+    const virtualizedRowHeightsRef = useRef<number[]>([]);
+    const totalVirtualizedHeightRef = useRef(0);
     const virtualizedRowHeightCacheRef = useRef(new WeakMap<object, Map<string, number>>());
 
-    const scheduleScrollMetricsUpdate = useCallback((element: HTMLDivElement) => {
-        pendingScrollMetricsRef.current = {
-            scrollTop: element.scrollTop,
+    const scheduleVisibleVirtualRangeUpdate = useCallback((scrollTop?: number) => {
+        if (typeof scrollTop === 'number') {
+            scrollTopRef.current = scrollTop;
+        }
+
+        if (visibleRangeFrameRef.current !== null) {
+            return;
+        }
+
+        visibleRangeFrameRef.current = requestAnimationFrame(() => {
+            visibleRangeFrameRef.current = null;
+            const nextRange = computeVisibleVirtualRange(
+                scrollTopRef.current,
+                viewportHeightRef.current,
+                virtualizedRowOffsetsRef.current,
+                virtualizedRowHeightsRef.current,
+                totalVirtualizedHeightRef.current,
+            );
+            setVisibleVirtualRange((current) => sameVisibleVirtualRange(current, nextRange) ? current : nextRange);
+        });
+    }, []);
+
+    const scheduleViewportMetricsUpdate = useCallback((element: HTMLDivElement) => {
+        pendingViewportMetricsRef.current = {
             viewportHeight: element.clientHeight,
             viewportWidth: element.clientWidth,
         };
 
-        if (scrollMetricsFrameRef.current !== null) {
+        if (viewportMetricsFrameRef.current !== null) {
             return;
         }
 
-        scrollMetricsFrameRef.current = requestAnimationFrame(() => {
-            scrollMetricsFrameRef.current = null;
-            const next = pendingScrollMetricsRef.current;
+        viewportMetricsFrameRef.current = requestAnimationFrame(() => {
+            viewportMetricsFrameRef.current = null;
+            const next = pendingViewportMetricsRef.current;
             if (!next) {
                 return;
             }
 
-            setScrollMetrics((current) => {
+            viewportHeightRef.current = next.viewportHeight;
+
+            setViewportMetrics((current) => {
                 if (
-                    current.scrollTop === next.scrollTop
-                    && current.viewportHeight === next.viewportHeight
+                    current.viewportHeight === next.viewportHeight
                     && current.viewportWidth === next.viewportWidth
                 ) {
                     return current;
                 }
                 return next;
             });
+
+            scheduleVisibleVirtualRangeUpdate(scrollTopRef.current);
         });
-    }, []);
+    }, [scheduleVisibleVirtualRangeUpdate]);
 
     useEffect(() => {
         const container = scrollContainerRef.current;
@@ -231,17 +317,23 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
             return;
         }
 
+        scrollTopRef.current = container.scrollTop;
+
         const updateMetrics = () => {
-            scheduleScrollMetricsUpdate(container);
+            scheduleViewportMetricsUpdate(container);
         };
 
         updateMetrics();
 
         if (typeof ResizeObserver === 'undefined') {
             return () => {
-                if (scrollMetricsFrameRef.current !== null) {
-                    cancelAnimationFrame(scrollMetricsFrameRef.current);
-                    scrollMetricsFrameRef.current = null;
+                if (viewportMetricsFrameRef.current !== null) {
+                    cancelAnimationFrame(viewportMetricsFrameRef.current);
+                    viewportMetricsFrameRef.current = null;
+                }
+                if (visibleRangeFrameRef.current !== null) {
+                    cancelAnimationFrame(visibleRangeFrameRef.current);
+                    visibleRangeFrameRef.current = null;
                 }
             };
         }
@@ -251,13 +343,17 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         });
         observer.observe(container);
         return () => {
-            if (scrollMetricsFrameRef.current !== null) {
-                cancelAnimationFrame(scrollMetricsFrameRef.current);
-                scrollMetricsFrameRef.current = null;
+            if (viewportMetricsFrameRef.current !== null) {
+                cancelAnimationFrame(viewportMetricsFrameRef.current);
+                viewportMetricsFrameRef.current = null;
+            }
+            if (visibleRangeFrameRef.current !== null) {
+                cancelAnimationFrame(visibleRangeFrameRef.current);
+                visibleRangeFrameRef.current = null;
             }
             observer.disconnect();
         };
-    }, [scheduleScrollMetricsUpdate]);
+    }, [scheduleViewportMetricsUpdate]);
 
     const messageCount = messages.length;
     const firstMessageId = messages[0]?.id;
@@ -287,7 +383,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     const virtualizedRowHeights = useMemo(
         () => virtualizedRows.map((row) => {
             const cacheKey = [
-                scrollMetrics.viewportWidth,
+                viewportMetrics.viewportWidth,
                 row.isContinued ? 1 : 0,
                 row.isActive ? 1 : 0,
                 row.pendingActions?.length ?? 0,
@@ -298,7 +394,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                 return cachedHeight;
             }
 
-            const estimatedHeight = estimateChatRowHeight(row, { viewportWidthPx: scrollMetrics.viewportWidth });
+            const estimatedHeight = estimateChatRowHeight(row, { viewportWidthPx: viewportMetrics.viewportWidth });
             const nextCacheByLayout = cacheByLayout ?? new Map<string, number>();
             nextCacheByLayout.set(cacheKey, estimatedHeight);
             if (!cacheByLayout) {
@@ -306,7 +402,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
             }
             return estimatedHeight;
         }),
-        [scrollMetrics.viewportWidth, virtualizedRows]
+        [viewportMetrics.viewportWidth, virtualizedRows]
     );
     const virtualizedRowOffsets = useMemo(() => {
         const offsets: number[] = [];
@@ -321,40 +417,17 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         () => virtualizedRowHeights.reduce((sum, height) => sum + height, 0),
         [virtualizedRowHeights]
     );
-    const visibleVirtualRange = useMemo(() => {
-        const rowCount = virtualizedRows.length;
-        if (rowCount === 0) {
-            return { startIndex: 0, endIndex: 0, topSpacerHeight: 0, bottomSpacerHeight: 0 };
-        }
-
-        const viewportStart = Math.max(0, scrollMetrics.scrollTop - VIRTUALIZATION_OVERSCAN_PX);
-        const viewportEnd = scrollMetrics.scrollTop + scrollMetrics.viewportHeight + VIRTUALIZATION_OVERSCAN_PX;
-
-        let startIndex = 0;
-        while (
-            startIndex < rowCount
-            && virtualizedRowOffsets[startIndex] + virtualizedRowHeights[startIndex] < viewportStart
-        ) {
-            startIndex += 1;
-        }
-
-        let endIndex = startIndex;
-        while (endIndex < rowCount && virtualizedRowOffsets[endIndex] < viewportEnd) {
-            endIndex += 1;
-        }
-
-        const topSpacerHeight = virtualizedRowOffsets[startIndex] ?? totalVirtualizedHeight;
-        const renderedHeight = virtualizedRowHeights
-            .slice(startIndex, endIndex)
-            .reduce((sum, height) => sum + height, 0);
-        const bottomSpacerHeight = Math.max(0, totalVirtualizedHeight - topSpacerHeight - renderedHeight);
-
-        return { startIndex, endIndex, topSpacerHeight, bottomSpacerHeight };
-    }, [scrollMetrics.scrollTop, scrollMetrics.viewportHeight, totalVirtualizedHeight, virtualizedRowHeights, virtualizedRowOffsets, virtualizedRows.length]);
     const visibleVirtualRows = useMemo(
         () => virtualizedRows.slice(visibleVirtualRange.startIndex, visibleVirtualRange.endIndex),
         [virtualizedRows, visibleVirtualRange.endIndex, visibleVirtualRange.startIndex]
     );
+    useEffect(() => {
+        virtualizedRowOffsetsRef.current = virtualizedRowOffsets;
+        virtualizedRowHeightsRef.current = virtualizedRowHeights;
+        totalVirtualizedHeightRef.current = totalVirtualizedHeight;
+        viewportHeightRef.current = viewportMetrics.viewportHeight;
+        scheduleVisibleVirtualRangeUpdate(scrollTopRef.current);
+    }, [scheduleVisibleVirtualRangeUpdate, totalVirtualizedHeight, viewportMetrics.viewportHeight, virtualizedRowHeights, virtualizedRowOffsets]);
     const rowIndexByKey = useMemo(() => {
         const indexMap = new Map<string, number>();
         chatRows.forEach((row, index) => {
@@ -410,12 +483,14 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         const container = scrollContainerRef.current;
         if (!container) return;
         container.scrollTop = container.scrollHeight;
+        scrollTopRef.current = container.scrollTop;
+        scheduleVisibleVirtualRangeUpdate(container.scrollTop);
         isUserAtBottomRef.current = true;
         if (showScrollToBottomRef.current) {
             showScrollToBottomRef.current = false;
             setShowScrollToBottom(false);
         }
-    }, []);
+    }, [scheduleVisibleVirtualRangeUpdate]);
 
     // Scroll to bottom when a different conversation is loaded (or on initial mount).
     // Detect conversation change by tracking the first message's ID.
@@ -468,7 +543,8 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
 
     const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
         const target = e.target as HTMLDivElement;
-        scheduleScrollMetricsUpdate(target);
+        scrollTopRef.current = target.scrollTop;
+        scheduleVisibleVirtualRangeUpdate(target.scrollTop);
         const isBottom = Math.abs(target.scrollHeight - target.scrollTop - target.clientHeight) < 100;
         isUserAtBottomRef.current = isBottom;
         const nextShowScrollToBottom = !isBottom && messageCount > 0;
@@ -476,7 +552,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
             showScrollToBottomRef.current = nextShowScrollToBottom;
             setShowScrollToBottom(nextShowScrollToBottom);
         }
-    }, [messageCount, scheduleScrollMetricsUpdate]);
+    }, [messageCount, scheduleVisibleVirtualRangeUpdate]);
 
     const registerRowElement = useCallback((rowKey: string, element: HTMLDivElement | null) => {
         if (element) {

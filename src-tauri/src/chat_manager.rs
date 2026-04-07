@@ -827,6 +827,8 @@ impl ChatManager {
                                 name,
                                 arguments,
                             } => {
+                                accepted_output_index = None;
+                                last_reasoning_chunk = None;
                                 // eprintln!("[CHAT MGR] Tool call: {}", name);
                                 saw_content = true;
                                 let tool_call = ToolCall {
@@ -844,6 +846,8 @@ impl ChatManager {
                             crate::blade_ws_client::BladeWsEvent::ToolResultAck {
                                 pending_count: _pending_count,
                             } => {
+                                accepted_output_index = None;
+                                last_reasoning_chunk = None;
                                 // zcoderd acknowledged our tool result but is waiting for more
                                 // This is informational - keep connection alive and wait for real response
                                 // eprintln!(
@@ -876,6 +880,8 @@ impl ChatManager {
                                 message,
                                 decision,
                             } => {
+                                accepted_output_index = None;
+                                last_reasoning_chunk = None;
                                 let _ = tx.send(ChatEvent::ApprovalRequest(
                                     crate::protocol::ApprovalRequest {
                                         session_id,
@@ -894,6 +900,8 @@ impl ChatManager {
                                 finish_reason,
                                 recoverable,
                             } => {
+                                accepted_output_index = None;
+                                last_reasoning_chunk = None;
                                 // eprintln!("[CHAT MGR] Chat done: {} (recoverable: {:?})", finish_reason, recoverable);
                                 saw_chat_done = true;
 

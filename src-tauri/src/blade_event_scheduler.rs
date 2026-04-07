@@ -295,7 +295,7 @@ enum SchedulerCommand {
 
 #[derive(Default)]
 struct SchedulerState {
-    chat_seq: u64,
+    chat_seq_by_message: HashMap<String, u64>,
     terminal_seq: HashMap<String, u64>,
     pending_chat: VecDeque<PendingChatDelta>,
     pending_terminal: HashMap<String, PendingTerminalOutput>,
@@ -496,7 +496,7 @@ fn handle_command(state: &mut SchedulerState, command: SchedulerCommand) {
         } => emit_tracked(state, &emit, EmitClass::Immediate, envelope, queued_at),
         SchedulerCommand::ResetChatStream => {
             flush(state, FlushReason::Manual);
-            state.chat_seq = 0;
+            state.chat_seq_by_message.clear();
             state.pending_chat.clear();
         }
         SchedulerCommand::QueueChatDelta {
@@ -657,8 +657,12 @@ fn flush(state: &mut SchedulerState, reason: FlushReason) {
     let mut batch = Vec::new();
 
     while let Some(pending) = state.pending_chat.pop_front() {
-        let seq = state.chat_seq;
-        state.chat_seq += 1;
+        let seq_entry = state
+            .chat_seq_by_message
+            .entry(pending.message_id.clone())
+            .or_insert(0);
+        let seq = *seq_entry;
+        *seq_entry += 1;
         let event = match pending.kind {
             ChatDeltaKind::Content => BladeEvent::Chat(ChatEvent::MessageDelta {
                 id: pending.message_id,
