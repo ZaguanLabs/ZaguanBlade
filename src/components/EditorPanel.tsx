@@ -196,6 +196,17 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         return normA.endsWith(normB) || normB.endsWith(normA);
     };
 
+    useUncommittedChanges({
+        onFileChanged: (filePath) => {
+            if (!activeFile || !pathsMatch(filePath, activeFile)) {
+                return;
+            }
+
+            awaitingInitialSyncRef.current = false;
+            setReloadTrigger(prev => prev + 1);
+        },
+    });
+
     useEffect(() => {
         loadingRef.current = loading;
     }, [loading]);
@@ -534,12 +545,12 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             )}
             {error && !isPdfFile && (
                 <div className="bg-red-900/50 text-red-200 p-2 text-xs font-mono">
-                    ERR_LOAD: {error}
+                    {error}
                 </div>
             )}
-            <div className="flex-1 min-h-0 relative w-full">
+            <div className="flex-1 min-h-0 relative">
                 {isPdfFile ? (
-                    <Suspense fallback={<div className="h-full w-full bg-[var(--bg-app)]" />}>
+                    <Suspense fallback={<div className="h-full w-full bg-[var(--bg-editor)]" />}>
                         <PdfViewer filePath={activeFile} />
                     </Suspense>
                 ) : isMarkdownFile ? (
@@ -559,12 +570,15 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                         setContent={handleContentChange}
                         handleSave={handleSave}
                         activeFile={activeFile}
-                        highlightLines={highlightLines ?? null}
+                        highlightLines={highlightLines}
                         handleNavigate={handleNavigate}
+                        onFileContentChanged={() => {
+                            awaitingInitialSyncRef.current = false;
+                            setReloadTrigger(prev => prev + 1);
+                        }}
                     />
                 )}
             </div>
-
         </div>
     );
 };
@@ -576,11 +590,12 @@ interface EditorWithChangeBarProps {
     setContent: (content: string) => void;
     handleSave: (text: string) => void;
     activeFile: string;
-    highlightLines: { startLine: number; endLine: number } | null;
+    highlightLines?: { startLine: number; endLine: number } | null;
     handleNavigate: (path: string, line: number, character: number) => void;
+    onFileContentChanged: (filePath: string) => void;
 }
 
-const EditorWithChangeBar: React.FC<EditorWithChangeBarProps> = ({
+function EditorWithChangeBar({
     editorRef,
     content,
     externalContentVersion,
@@ -589,8 +604,11 @@ const EditorWithChangeBar: React.FC<EditorWithChangeBarProps> = ({
     activeFile,
     highlightLines,
     handleNavigate,
-}) => {
-    const { getChangeForFile, acceptFile, rejectFile, refresh } = useUncommittedChanges();
+    onFileContentChanged,
+}: EditorWithChangeBarProps) {
+    const { getChangeForFile, acceptFile, rejectFile, refresh } = useUncommittedChanges({
+        onFileChanged: onFileContentChanged,
+    });
     const change = getChangeForFile(activeFile);
 
     const handleAccept = async () => {
@@ -629,4 +647,4 @@ const EditorWithChangeBar: React.FC<EditorWithChangeBarProps> = ({
             )}
         </div>
     );
-};
+}

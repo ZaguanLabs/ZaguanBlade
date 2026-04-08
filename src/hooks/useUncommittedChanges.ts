@@ -9,6 +9,7 @@ interface UseUncommittedChangesOptions {
 
 interface UncommittedChangesUpdatedDetail {
   sourceId?: string;
+  filePaths?: string[];
 }
 
 export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
@@ -53,9 +54,9 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
     setChanges(prev => prev.filter(change => !predicate(change)));
   }, []);
 
-  const notifyUpdated = useCallback(() => {
+  const notifyUpdated = useCallback((filePaths?: string[]) => {
     window.dispatchEvent(new CustomEvent<UncommittedChangesUpdatedDetail>('uncommitted-changes-updated', {
-      detail: { sourceId: sourceIdRef.current },
+      detail: { sourceId: sourceIdRef.current, filePaths },
     }));
   }, []);
 
@@ -93,6 +94,10 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
         return;
       }
       void refresh();
+
+      if (options?.onFileChanged) {
+        customEvent.detail?.filePaths?.forEach(filePath => options.onFileChanged?.(filePath));
+      }
     };
     window.addEventListener('uncommitted-changes-updated', handleGlobalRefresh as EventListener);
 
@@ -136,9 +141,9 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
 
   const acceptChange = useCallback(async (id: string): Promise<boolean> => {
     try {
-      await invoke<UncommittedChange>('accept_change', { id });
-      removeChanges(change => change.id === id);
-      notifyUpdated();
+      const removed = await invoke<UncommittedChange>('accept_change', { id });
+      removeChanges(change => change.id === removed.id);
+      notifyUpdated([removed.file_path]);
       return true;
     } catch (error) {
       console.error('Failed to accept change:', error);
@@ -151,7 +156,7 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
       const removed = await invoke<UncommittedChange>('accept_file_changes', { filePath });
       const removedPath = normalizePath(removed.file_path);
       removeChanges(change => normalizePath(change.file_path) === removedPath);
-      notifyUpdated();
+      notifyUpdated([removed.file_path]);
       return true;
     } catch (error) {
       console.error('Failed to accept file changes:', error);
@@ -161,9 +166,9 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
 
   const acceptAll = useCallback(async (): Promise<boolean> => {
     try {
-      await invoke<UncommittedChange[]>('accept_all_changes');
+      const removed = await invoke<UncommittedChange[]>('accept_all_changes');
       setChanges([]);
-      notifyUpdated();
+      notifyUpdated(removed.map(change => change.file_path));
       return true;
     } catch (error) {
       console.error('Failed to accept all changes:', error);
@@ -173,9 +178,9 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
 
   const rejectChange = useCallback(async (id: string): Promise<boolean> => {
     try {
-      await invoke<UncommittedChange>('reject_change', { id });
-      removeChanges(change => change.id === id);
-      notifyUpdated();
+      const removed = await invoke<UncommittedChange>('reject_change', { id });
+      removeChanges(change => change.id === removed.id);
+      notifyUpdated([removed.file_path]);
       return true;
     } catch (error) {
       console.error('Failed to reject change:', error);
@@ -188,7 +193,7 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
       const removed = await invoke<UncommittedChange>('reject_file_changes', { filePath });
       const removedPath = normalizePath(removed.file_path);
       removeChanges(change => normalizePath(change.file_path) === removedPath);
-      notifyUpdated();
+      notifyUpdated([removed.file_path]);
       return true;
     } catch (error) {
       console.error('Failed to reject file changes:', error);
@@ -198,9 +203,9 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
 
   const rejectAll = useCallback(async (): Promise<boolean> => {
     try {
-      await invoke<UncommittedChange[]>('reject_all_changes');
+      const removed = await invoke<UncommittedChange[]>('reject_all_changes');
       setChanges([]);
-      notifyUpdated();
+      notifyUpdated(removed.map(change => change.file_path));
       return true;
     } catch (error) {
       console.error('Failed to reject all changes:', error);
