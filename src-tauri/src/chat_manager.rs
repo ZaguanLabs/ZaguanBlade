@@ -933,6 +933,7 @@ impl ChatManager {
                                 excess,
                                 recoverable,
                                 recovery_hint,
+                                ..
                             } => {
                                 // eprintln!("[CHAT MGR] Error: {} ({}) - {} (tokens: {:?}/{:?})", error_type, code, message, token_count, max_tokens);
 
@@ -1090,6 +1091,9 @@ impl ChatManager {
                                 }
                                 let _ = t0;
                             }
+                            crate::blade_ws_client::BladeWsEvent::HistoryListResponse { .. }
+                            | crate::blade_ws_client::BladeWsEvent::HistoryDetailResponse { .. }
+                            | crate::blade_ws_client::BladeWsEvent::ZlpResponse { .. } => {}
                         }
                     }
                 }

@@ -13,8 +13,8 @@ use tokio_tungstenite::{
 
 lazy_static! {
     static ref FILE_PATH_REGEXES: Vec<Regex> = vec![
-        Regex::new(r#""path"\s*:\s*"([^"]*)"#).unwrap(),
-        Regex::new(r#""file_path"\s*:\s*"([^"]*)"#).unwrap(),
+        Regex::new(r#""path"\s*:\s*"([^"]*)""#).unwrap(),
+        Regex::new(r#""file_path"\s*:\s*"([^"]*)""#).unwrap(),
         Regex::new(r#""target_file"\s*:\s*"([^"]*)"#).unwrap(),
         Regex::new(r#""absolute_path"\s*:\s*"([^"]*)"#).unwrap(),
         Regex::new(r#""file"\s*:\s*"([^"]*)"#).unwrap(),
@@ -22,6 +22,7 @@ lazy_static! {
 }
 
 /// WebSocket-based Blade Protocol v2 client
+#[derive(Clone)]
 pub struct BladeWsClient {
     base_url: String,
     api_key: String,
@@ -55,6 +56,18 @@ pub enum BladeWsEvent {
     Connected {
         user_id: String,
         server_version: String,
+    },
+    HistoryListResponse {
+        request_id: String,
+        conversations: Vec<crate::blade_protocol::ConversationSummary>,
+    },
+    HistoryDetailResponse {
+        request_id: String,
+        conversation: crate::blade_protocol::FullConversation,
+    },
+    ZlpResponse {
+        request_id: String,
+        response: Value,
     },
     Session {
         session_id: String,
@@ -112,6 +125,7 @@ pub enum BladeWsEvent {
         session_id: String,
     },
     Error {
+        request_id: Option<String>,
         /// Standardized error type (context_length_exceeded, rate_limit_error, etc.)
         error_type: String,
         /// Machine-readable error code
@@ -243,6 +257,16 @@ struct ApprovalResponsePayload {
 struct ConversationContextPayload {
     session_id: String,
     messages: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+struct HistoryListRequestPayload {
+    project_id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct HistoryDetailRequestPayload {
+    session_id: String,
 }
 
 /// Incoming WebSocket message
@@ -424,6 +448,7 @@ impl BladeWsClient {
             if let Err(_e) = msg_tx_clone.send(WsMessage::Send(auth_json)) {
                 // eprintln!("[BLADE WS] Failed to send auth: {}", _e);
                 let _ = event_tx_clone.send(BladeWsEvent::Error {
+                    request_id: None,
                     error_type: "authentication_error".to_string(),
                     code: "auth_failed".to_string(),
                     message: "Failed to send authentication".to_string(),
@@ -471,6 +496,7 @@ impl BladeWsClient {
                             // Message size limit exceeded - tell the model to use smaller responses
                             // eprintln!("[BLADE WS] Message size limit exceeded, sending recoverable error");
                             let _ = event_tx_clone.send(BladeWsEvent::Error {
+                                request_id: None,
                                 error_type: "message_too_large".to_string(),
                                 code: "size_limit_exceeded".to_string(),
                                 message: "The response was too large to process. Please break your response into smaller parts or use more concise output.".to_string(),
@@ -482,6 +508,7 @@ impl BladeWsClient {
                             });
                         } else {
                             let _ = event_tx_clone.send(BladeWsEvent::Error {
+                                request_id: None,
                                 error_type: "unknown_error".to_string(),
                                 code: "read_error".to_string(),
                                 message: format!("Read error: {}", msg),
@@ -686,6 +713,83 @@ impl BladeWsClient {
         Ok(())
     }
 
+    pub async fn send_history_list_request(
+        &self,
+        request_id: String,
+        project_id: String,
+    ) -> Result<(), String> {
+        let conn = self.connection.lock().await;
+        let conn = conn.as_ref().ok_or("Not connected")?;
+
+        let msg = WsBaseMessage {
+            id: request_id,
+            msg_type: "history_list_request".to_string(),
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            payload: Some(
+                serde_json::to_value(HistoryListRequestPayload { project_id })
+                    .map_err(|e| format!("JSON serialization error: {}", e))?,
+            ),
+        };
+
+        let json =
+            serde_json::to_string(&msg).map_err(|e| format!("JSON serialization error: {}", e))?;
+
+        conn.tx
+            .send(WsMessage::Send(json))
+            .map_err(|e| format!("Failed to send history list request: {}", e))?;
+
+        Ok(())
+    }
+
+    pub async fn send_history_detail_request(
+        &self,
+        request_id: String,
+        session_id: String,
+    ) -> Result<(), String> {
+        let conn = self.connection.lock().await;
+        let conn = conn.as_ref().ok_or("Not connected")?;
+
+        let msg = WsBaseMessage {
+            id: request_id,
+            msg_type: "history_detail_request".to_string(),
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            payload: Some(
+                serde_json::to_value(HistoryDetailRequestPayload { session_id })
+                    .map_err(|e| format!("JSON serialization error: {}", e))?,
+            ),
+        };
+
+        let json =
+            serde_json::to_string(&msg).map_err(|e| format!("JSON serialization error: {}", e))?;
+
+        conn.tx
+            .send(WsMessage::Send(json))
+            .map_err(|e| format!("Failed to send history detail request: {}", e))?;
+
+        Ok(())
+    }
+
+    pub async fn send_zlp_request(&self, request_id: String, payload: Value) -> Result<(), String> {
+        let conn = self.connection.lock().await;
+        let conn = conn.as_ref().ok_or("Not connected")?;
+
+        let msg = WsBaseMessage {
+            id: request_id,
+            msg_type: "zlp_request".to_string(),
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            payload: Some(payload),
+        };
+
+        let json =
+            serde_json::to_string(&msg).map_err(|e| format!("JSON serialization error: {}", e))?;
+
+        conn.tx
+            .send(WsMessage::Send(json))
+            .map_err(|e| format!("Failed to send ZLP request: {}", e))?;
+
+        Ok(())
+    }
+
     /// Update stored session ID
     pub async fn set_session_id(&self, session_id: String) {
         let mut conn = self.connection.lock().await;
@@ -732,6 +836,41 @@ impl BladeWsClient {
                 let _ = tx.send(BladeWsEvent::Connected {
                     user_id,
                     server_version,
+                });
+            }
+            "history_list_response" => {
+                let conversations = msg
+                    .payload
+                    .get("conversations")
+                    .cloned()
+                    .ok_or_else(|| "Missing conversations in history_list_response".to_string())
+                    .and_then(|value| {
+                        serde_json::from_value::<Vec<crate::blade_protocol::ConversationSummary>>(
+                            value,
+                        )
+                        .map_err(|e| format!("Failed to parse history list response: {}", e))
+                    })?;
+
+                let _ = tx.send(BladeWsEvent::HistoryListResponse {
+                    request_id: msg.id.clone(),
+                    conversations,
+                });
+            }
+            "history_detail_response" => {
+                let conversation = serde_json::from_value::<crate::blade_protocol::FullConversation>(
+                    msg.payload.clone(),
+                )
+                .map_err(|e| format!("Failed to parse history detail response: {}", e))?;
+
+                let _ = tx.send(BladeWsEvent::HistoryDetailResponse {
+                    request_id: msg.id.clone(),
+                    conversation,
+                });
+            }
+            "zlp_response" => {
+                let _ = tx.send(BladeWsEvent::ZlpResponse {
+                    request_id: msg.id.clone(),
+                    response: msg.payload.clone(),
                 });
             }
             "session_created" => {
@@ -977,6 +1116,7 @@ impl BladeWsClient {
                 // eprintln!("[BLADE WS] Error: {} ({}) - {} (tokens: {:?}/{:?}, recoverable: {:?})",
                 //     error_type, code, message, token_count, max_tokens, recoverable);
                 let _ = tx.send(BladeWsEvent::Error {
+                    request_id: Some(msg.id.clone()),
                     error_type,
                     code,
                     message,

@@ -12,7 +12,6 @@ import type { ChatMention } from '../types/blade';
 import type { ChatImage, ChatMessage, ChatMode, ComposerMention, CommandExecution, HookApprovalRequest, ImageAttachment, MessageBlock, ModelInfo, QueuedRequest, StreamingState, ToolActivityState, ToolCall } from '../types/chat';
 import { buildContextLengthSystemMessage, buildMessageTooLargeSystemMessage, formatChatErrorPayload } from '../utils/localizedEvents';
 
-const FLUSH_INTERVAL_MS = 80;
 const TOOL_ACTIVITY_DISPATCH_INTERVAL_MS = 120;
 const MESSAGE_COMPLETION_GRACE_MS = 1200;
 const STREAM_DEBUG_ENABLED = false;
@@ -473,7 +472,7 @@ export function useChatV2() {
         contentBeforeTools?: string;
         contentAfterTools?: string;
     }>>(new Map());
-    const flushScheduledRef = useRef<number | null>(null);
+    const flushFrameRef = useRef<number | null>(null);
     const streamingStatesRef = useRef<Map<string, StreamingState>>(new Map());
     const toolChunkCountsRef = useRef<Map<string, { chunkCount: number; startedAt: number; lastChunkAt: number }>>(new Map());
     const messageCompletionCleanupTimersRef = useRef<Map<string, number>>(new Map());
@@ -733,9 +732,9 @@ export function useChatV2() {
         pendingUpdatesRef.current.clear();
         streamingStatesRef.current.clear();
         toolChunkCountsRef.current.clear();
-        if (flushScheduledRef.current !== null) {
-            window.clearTimeout(flushScheduledRef.current);
-            flushScheduledRef.current = null;
+        if (flushFrameRef.current !== null) {
+            window.cancelAnimationFrame(flushFrameRef.current);
+            flushFrameRef.current = null;
         }
         clearPendingTimers();
         pendingRunCommandCompletionStatusRef.current.clear();
@@ -747,7 +746,7 @@ export function useChatV2() {
     }, [clearPendingTimers]);
 
     const flushPendingUpdates = useCallback(() => {
-        flushScheduledRef.current = null;
+        flushFrameRef.current = null;
         const pending = pendingUpdatesRef.current;
         if (pending.size === 0) {
             return;
@@ -837,9 +836,20 @@ export function useChatV2() {
         });
     }, [setMessages]);
 
+    const flushPendingUpdatesImmediately = useCallback(() => {
+        if (flushFrameRef.current !== null) {
+            window.cancelAnimationFrame(flushFrameRef.current);
+            flushFrameRef.current = null;
+        }
+        flushPendingUpdates();
+    }, [flushPendingUpdates]);
+
     const scheduleFlush = useCallback(() => {
-        if (flushScheduledRef.current === null) {
-            flushScheduledRef.current = window.setTimeout(flushPendingUpdates, FLUSH_INTERVAL_MS);
+        if (flushFrameRef.current === null) {
+            flushFrameRef.current = window.requestAnimationFrame(() => {
+                flushFrameRef.current = null;
+                flushPendingUpdates();
+            });
         }
     }, [flushPendingUpdates]);
 
@@ -1142,7 +1152,7 @@ export function useChatV2() {
                         normalizedBlocks.contentBeforeTools,
                         normalizedBlocks.contentAfterTools,
                     );
-                    flushPendingUpdates();
+                    flushPendingUpdatesImmediately();
                     blocksRef.current.delete(id);
                 },
             );
@@ -1451,6 +1461,7 @@ export function useChatV2() {
 
                 if (chatEvent.type === 'MessageCompleted') {
                     const { id } = chatEvent.payload;
+                    flushPendingUpdatesImmediately();
                     scheduleMessageCompletionCleanup(id);
                     toolChunkCountsRef.current.clear();
                     return;
@@ -1635,9 +1646,9 @@ export function useChatV2() {
             unlistenToolCompleted?.();
             unlistenTodoUpdated?.();
             unlistenBladeEvent?.();
-            if (flushScheduledRef.current !== null) {
-                window.clearTimeout(flushScheduledRef.current);
-                flushScheduledRef.current = null;
+            if (flushFrameRef.current !== null) {
+                window.cancelAnimationFrame(flushFrameRef.current);
+                flushFrameRef.current = null;
             }
             clearPendingTimers();
         };

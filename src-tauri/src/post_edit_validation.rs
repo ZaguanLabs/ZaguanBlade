@@ -1,6 +1,5 @@
 use crate::ai_workflow::PendingToolBatch;
 use crate::app_state::AppState;
-use crate::blade_client::{BladeClient, BladeEvent};
 use crate::config::ApiConfig;
 use crate::protocol::ToolCall;
 use crate::tools;
@@ -51,6 +50,7 @@ pub async fn augment_batch_with_validation_feedback<R: Runtime>(
     let mut feedback_cache: HashMap<String, Option<String>> = HashMap::new();
     let mut capability_cache: HashMap<String, bool> = HashMap::new();
     let mut validation_cache: HashMap<String, Option<ValidationSnapshot>> = HashMap::new();
+    let ws_manager = state.ws_connection.clone();
 
     for (call, result) in &mut batch.file_results {
         if !result.success || !is_validation_candidate_tool(call.function.name.as_str()) {
@@ -68,6 +68,7 @@ pub async fn augment_batch_with_validation_feedback<R: Runtime>(
             cached.clone()
         } else {
             let computed = match build_validation_feedback(
+                ws_manager.clone(),
                 &config,
                 &workspace_root,
                 &resolved_path,
@@ -141,6 +142,7 @@ fn resolve_tool_path(workspace_root: &Path, raw_path: &str) -> PathBuf {
 }
 
 async fn build_validation_feedback(
+    ws_manager: std::sync::Arc<crate::ws_connection_manager::WsConnectionManager>,
     config: &ApiConfig,
     workspace_root: &Path,
     resolved_path: &Path,
@@ -148,7 +150,13 @@ async fn build_validation_feedback(
     capability_cache: &mut HashMap<String, bool>,
     validation_cache: &mut HashMap<String, Option<ValidationSnapshot>>,
 ) -> Result<Option<String>, String> {
-    let Some(language) = resolve_supported_language(config, resolved_path, capability_cache).await?
+    let Some(language) = resolve_supported_language(
+        ws_manager.clone(),
+        config,
+        resolved_path,
+        capability_cache,
+    )
+    .await?
     else {
         return Ok(None);
     };
@@ -175,8 +183,14 @@ async fn build_validation_feedback(
     let post_snapshot = if let Some(cached) = validation_cache.get(cache_key.as_str()) {
         cached.clone()
     } else {
-        let computed = validate_snapshot(config, resolved_path, language.as_str(), content.clone())
-            .await?;
+        let computed = validate_snapshot(
+            ws_manager.clone(),
+            config,
+            resolved_path,
+            language.as_str(),
+            content.clone(),
+        )
+        .await?;
         validation_cache.insert(cache_key, computed.clone());
         computed
     };
@@ -188,6 +202,7 @@ async fn build_validation_feedback(
     let introduced_diagnostics = match derive_pre_edit_content(call, content.as_str())? {
         Some(pre_edit_content) => {
             let Some(pre_snapshot) = validate_snapshot(
+                ws_manager.clone(),
                 config,
                 resolved_path,
                 language.as_str(),
@@ -219,6 +234,7 @@ async fn build_validation_feedback(
 }
 
 async fn validate_snapshot(
+    ws_manager: std::sync::Arc<crate::ws_connection_manager::WsConnectionManager>,
     config: &ApiConfig,
     resolved_path: &Path,
     language: &str,
@@ -235,7 +251,7 @@ async fn validate_snapshot(
         return Ok(None);
     }
 
-    let response = request_zlp_validation(config, resolved_path, content, language).await?;
+    let response = request_zlp_validation(ws_manager, config, resolved_path, content, language).await?;
     let (tier, diagnostics) = parse_validation_response(&response);
     Ok(Some(ValidationSnapshot { tier, diagnostics }))
 }
@@ -409,6 +425,7 @@ fn candidate_languages_for_path(path: &Path) -> Vec<&'static str> {
 }
 
 async fn resolve_supported_language(
+    ws_manager: std::sync::Arc<crate::ws_connection_manager::WsConnectionManager>,
     config: &ApiConfig,
     path: &Path,
     capability_cache: &mut HashMap<String, bool>,
@@ -417,7 +434,7 @@ async fn resolve_supported_language(
         let supported = if let Some(cached) = capability_cache.get(candidate) {
             *cached
         } else {
-            let supports_validation = request_zlp_capabilities(config, candidate)
+            let supports_validation = request_zlp_capabilities(ws_manager.clone(), config, candidate)
                 .await
                 .map(|response| parse_capabilities_supports_validation(&response))
                 .unwrap_or(false);
@@ -434,43 +451,20 @@ async fn resolve_supported_language(
 }
 
 async fn request_zlp_capabilities(
+    ws_manager: std::sync::Arc<crate::ws_connection_manager::WsConnectionManager>,
     config: &ApiConfig,
     language: &str,
 ) -> Result<Value, String> {
-    let client = BladeClient::new(
-        config.blade_url.trim_end_matches('/').to_string(),
-        reqwest::Client::new(),
-        config.api_key.clone(),
-    );
     let payload = serde_json::json!({
         "method": "zlp.capabilities",
         "params": {
             "language": language
         }
     });
-    let mut rx = client.send_zlp_request(payload).await?;
 
     tokio::time::timeout(Duration::from_secs(VALIDATION_TIMEOUT_SECS), async move {
-        while let Some(event) = rx.recv().await {
-            match event {
-                BladeEvent::ZlpResponse(value) => return Ok(value),
-                BladeEvent::Error {
-                    code,
-                    message,
-                    details,
-                } => {
-                    if details.is_empty() {
-                        return Err(format!("zlp capabilities {}: {}", code, message));
-                    }
-                    return Err(format!(
-                        "zlp capabilities {}: {} ({})",
-                        code, message, details
-                    ));
-                }
-                _ => {}
-            }
-        }
-        Err("zlp capabilities stream ended before a response arrived".to_string())
+        let _ = config;
+        ws_manager.request_zlp(payload).await
     })
     .await
     .map_err(|_| "zlp capabilities timed out".to_string())?
@@ -504,16 +498,12 @@ fn parse_capabilities_supports_validation(response: &Value) -> bool {
 }
 
 async fn request_zlp_validation(
+    ws_manager: std::sync::Arc<crate::ws_connection_manager::WsConnectionManager>,
     config: &ApiConfig,
     path: &Path,
     content: String,
     language: &str,
 ) -> Result<Value, String> {
-    let client = BladeClient::new(
-        config.blade_url.trim_end_matches('/').to_string(),
-        reqwest::Client::new(),
-        config.api_key.clone(),
-    );
     let payload = serde_json::json!({
         "method": "zlp.validate",
         "params": {
@@ -523,26 +513,10 @@ async fn request_zlp_validation(
             "mode": "fast"
         }
     });
-    let mut rx = client.send_zlp_request(payload).await?;
 
     tokio::time::timeout(Duration::from_secs(VALIDATION_TIMEOUT_SECS), async move {
-        while let Some(event) = rx.recv().await {
-            match event {
-                BladeEvent::ZlpResponse(value) => return Ok(value),
-                BladeEvent::Error {
-                    code,
-                    message,
-                    details,
-                } => {
-                    if details.is_empty() {
-                        return Err(format!("zlp {}: {}", code, message));
-                    }
-                    return Err(format!("zlp {}: {} ({})", code, message, details));
-                }
-                _ => {}
-            }
-        }
-        Err("zlp validation stream ended before a response arrived".to_string())
+        let _ = config;
+        ws_manager.request_zlp(payload).await
     })
     .await
     .map_err(|_| "zlp validation timed out".to_string())?

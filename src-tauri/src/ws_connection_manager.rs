@@ -4,7 +4,10 @@
 //! Provides automatic reconnection and connection sharing across all operations.
 
 use crate::blade_ws_client::{BladeWsClient, BladeWsEvent, ToolResult, WorkspaceInfo};
+use serde_json::Value;
 use tokio::sync::{mpsc, Mutex, RwLock};
+use std::sync::Arc;
+use std::time::Duration;
 
 /// Connection state
 #[derive(Debug, Clone, PartialEq)]
@@ -15,6 +18,12 @@ pub enum ConnectionState {
     Reconnecting,
 }
 
+#[derive(Debug, Clone)]
+struct AuthState {
+    user_id: String,
+    server_version: String,
+}
+
 /// Manages a persistent WebSocket connection to zcoderd
 pub struct WsConnectionManager {
     blade_url: RwLock<String>,
@@ -23,6 +32,7 @@ pub struct WsConnectionManager {
     state: RwLock<ConnectionState>,
     event_subscribers: Mutex<Vec<mpsc::UnboundedSender<BladeWsEvent>>>,
     session_id: RwLock<Option<String>>,
+    auth_state: RwLock<Option<AuthState>>,
 }
 
 impl WsConnectionManager {
@@ -35,6 +45,7 @@ impl WsConnectionManager {
             state: RwLock::new(ConnectionState::Disconnected),
             event_subscribers: Mutex::new(Vec::new()),
             session_id: RwLock::new(None),
+            auth_state: RwLock::new(None),
         }
     }
 
@@ -70,21 +81,38 @@ impl WsConnectionManager {
 
     /// Ensure connection is established, connecting if necessary
     /// Returns a receiver for events from this connection
-    ///
-    /// Note: Each call creates a new connection. For true connection reuse,
-    /// the caller should maintain the event receiver and reuse it.
-    pub async fn ensure_connected(&self) -> Result<mpsc::UnboundedReceiver<BladeWsEvent>, String> {
-        // Always create a fresh connection for now
-        // Future optimization: reuse existing connection if still valid
-        self.connect().await
+    pub async fn ensure_connected(
+        self: &Arc<Self>,
+    ) -> Result<mpsc::UnboundedReceiver<BladeWsEvent>, String> {
+        let has_client = {
+            let client_lock = self.client.lock().await;
+            client_lock.is_some()
+        };
+
+        let state = self.state.read().await.clone();
+        if !has_client || matches!(state, ConnectionState::Disconnected) {
+            self.connect().await?;
+        }
+
+        Ok(self.add_subscriber().await)
     }
 
     /// Connect to the WebSocket server
-    async fn connect(&self) -> Result<mpsc::UnboundedReceiver<BladeWsEvent>, String> {
+    async fn connect(self: &Arc<Self>) -> Result<(), String> {
         // Set state to connecting
         {
             let mut state = self.state.write().await;
             *state = ConnectionState::Connecting;
+        }
+
+        {
+            let mut auth_state = self.auth_state.write().await;
+            *auth_state = None;
+        }
+
+        {
+            let mut session_id = self.session_id.write().await;
+            *session_id = None;
         }
 
         // Ensure any previous client is closed before opening a new connection.
@@ -109,20 +137,17 @@ impl WsConnectionManager {
                 // Store the client
                 {
                     let mut client_lock = self.client.lock().await;
-                    *client_lock = Some(client);
-                }
-
-                // Update state
-                {
-                    let mut state = self.state.write().await;
-                    *state = ConnectionState::Connected;
+                    *client_lock = Some(client.clone());
                 }
 
                 eprintln!("[WS MANAGER] Connected successfully");
 
-                // Return the event receiver directly to the caller
-                // The caller is responsible for processing events
-                Ok(event_rx)
+                let manager = Arc::clone(self);
+                tokio::spawn(async move {
+                    manager.run_event_fanout(event_rx).await;
+                });
+
+                Ok(())
             }
             Err(e) => {
                 // Reset state
@@ -133,6 +158,258 @@ impl WsConnectionManager {
                 Err(e)
             }
         }
+    }
+
+    async fn add_subscriber(&self) -> mpsc::UnboundedReceiver<BladeWsEvent> {
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        if let Some(auth_state) = self.auth_state.read().await.clone() {
+            let _ = tx.send(BladeWsEvent::Connected {
+                user_id: auth_state.user_id,
+                server_version: auth_state.server_version,
+            });
+        }
+
+        let mut subscribers = self.event_subscribers.lock().await;
+        subscribers.push(tx);
+        rx
+    }
+
+    async fn broadcast_event(&self, event: BladeWsEvent) {
+        let mut subscribers = self.event_subscribers.lock().await;
+        subscribers.retain(|subscriber| subscriber.send(event.clone()).is_ok());
+    }
+
+    async fn run_event_fanout(self: Arc<Self>, mut event_rx: mpsc::UnboundedReceiver<BladeWsEvent>) {
+        while let Some(event) = event_rx.recv().await {
+            match &event {
+                BladeWsEvent::Connected {
+                    user_id,
+                    server_version,
+                } => {
+                    {
+                        let mut auth_state = self.auth_state.write().await;
+                        *auth_state = Some(AuthState {
+                            user_id: user_id.clone(),
+                            server_version: server_version.clone(),
+                        });
+                    }
+                    {
+                        let mut state = self.state.write().await;
+                        *state = ConnectionState::Connected;
+                    }
+                }
+                BladeWsEvent::Session { session_id, .. } => {
+                    let mut current_session = self.session_id.write().await;
+                    *current_session = Some(session_id.clone());
+                }
+                BladeWsEvent::Disconnected => {
+                    {
+                        let mut state = self.state.write().await;
+                        *state = ConnectionState::Disconnected;
+                    }
+                    {
+                        let mut auth_state = self.auth_state.write().await;
+                        *auth_state = None;
+                    }
+                    {
+                        let mut session_id = self.session_id.write().await;
+                        *session_id = None;
+                    }
+                    {
+                        let mut client_lock = self.client.lock().await;
+                        client_lock.take();
+                    }
+                }
+                _ => {}
+            }
+
+            self.broadcast_event(event).await;
+        }
+
+        {
+            let mut state = self.state.write().await;
+            *state = ConnectionState::Disconnected;
+        }
+        {
+            let mut auth_state = self.auth_state.write().await;
+            *auth_state = None;
+        }
+        {
+            let mut session_id = self.session_id.write().await;
+            *session_id = None;
+        }
+        {
+            let mut client_lock = self.client.lock().await;
+            client_lock.take();
+        }
+    }
+
+    async fn wait_for_authenticated(
+        &self,
+        event_rx: &mut mpsc::UnboundedReceiver<BladeWsEvent>,
+    ) -> Result<(), String> {
+        if self.auth_state.read().await.is_some() {
+            return Ok(());
+        }
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match event_rx.recv().await {
+                    Some(BladeWsEvent::Connected { .. }) => return Ok(()),
+                    Some(BladeWsEvent::Error { message, .. }) => {
+                        return Err(format!("Authentication failed: {}", message));
+                    }
+                    Some(BladeWsEvent::Disconnected) => {
+                        return Err("WebSocket disconnected before authentication".to_string());
+                    }
+                    Some(_) => {}
+                    None => return Err("WebSocket closed before authentication".to_string()),
+                }
+            }
+        })
+        .await
+        .map_err(|_| "WebSocket authentication timed out".to_string())?
+    }
+
+    async fn get_client(&self) -> Result<BladeWsClient, String> {
+        let client_lock = self.client.lock().await;
+        client_lock
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "Not connected".to_string())
+    }
+
+    pub async fn request_history_list(
+        self: &Arc<Self>,
+        project_id: String,
+    ) -> Result<Vec<crate::blade_protocol::ConversationSummary>, String> {
+        let mut event_rx = self.ensure_connected().await?;
+        self.wait_for_authenticated(&mut event_rx).await?;
+
+        let request_id = format!("history-list-{}", uuid::Uuid::new_v4());
+        let client = self.get_client().await?;
+        client
+            .send_history_list_request(request_id.clone(), project_id)
+            .await?;
+
+        tokio::time::timeout(Duration::from_secs(15), async move {
+            loop {
+                match event_rx.recv().await {
+                    Some(BladeWsEvent::HistoryListResponse {
+                        request_id: response_id,
+                        conversations,
+                    }) if response_id == request_id => return Ok(conversations),
+                    Some(BladeWsEvent::Error {
+                        request_id: error_request_id,
+                        message,
+                        ..
+                    }) if error_request_id.as_deref().is_none_or(|value| value == request_id) => {
+                        return Err(message);
+                    }
+                    Some(BladeWsEvent::Disconnected) => {
+                        return Err("WebSocket disconnected while waiting for history list response"
+                            .to_string());
+                    }
+                    Some(_) => {}
+                    None => {
+                        return Err(
+                            "WebSocket closed while waiting for history list response"
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+        })
+        .await
+        .map_err(|_| "Timed out waiting for history list response".to_string())?
+    }
+
+    pub async fn request_history_detail(
+        self: &Arc<Self>,
+        session_id: String,
+    ) -> Result<crate::blade_protocol::FullConversation, String> {
+        let mut event_rx = self.ensure_connected().await?;
+        self.wait_for_authenticated(&mut event_rx).await?;
+
+        let request_id = format!("history-detail-{}", uuid::Uuid::new_v4());
+        let client = self.get_client().await?;
+        client
+            .send_history_detail_request(request_id.clone(), session_id)
+            .await?;
+
+        tokio::time::timeout(Duration::from_secs(15), async move {
+            loop {
+                match event_rx.recv().await {
+                    Some(BladeWsEvent::HistoryDetailResponse {
+                        request_id: response_id,
+                        conversation,
+                    }) if response_id == request_id => return Ok(conversation),
+                    Some(BladeWsEvent::Error {
+                        request_id: error_request_id,
+                        message,
+                        ..
+                    }) if error_request_id.as_deref().is_none_or(|value| value == request_id) => {
+                        return Err(message);
+                    }
+                    Some(BladeWsEvent::Disconnected) => {
+                        return Err(
+                            "WebSocket disconnected while waiting for history detail response"
+                                .to_string(),
+                        );
+                    }
+                    Some(_) => {}
+                    None => {
+                        return Err(
+                            "WebSocket closed while waiting for history detail response"
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+        })
+        .await
+        .map_err(|_| "Timed out waiting for history detail response".to_string())?
+    }
+
+    pub async fn request_zlp(self: &Arc<Self>, payload: Value) -> Result<Value, String> {
+        let mut event_rx = self.ensure_connected().await?;
+        self.wait_for_authenticated(&mut event_rx).await?;
+
+        let request_id = format!("zlp-{}", uuid::Uuid::new_v4());
+        let client = self.get_client().await?;
+        client.send_zlp_request(request_id.clone(), payload).await?;
+
+        tokio::time::timeout(Duration::from_secs(15), async move {
+            loop {
+                match event_rx.recv().await {
+                    Some(BladeWsEvent::ZlpResponse {
+                        request_id: response_id,
+                        response,
+                    }) if response_id == request_id => return Ok(response),
+                    Some(BladeWsEvent::Error {
+                        request_id: error_request_id,
+                        message,
+                        ..
+                    }) if error_request_id.as_deref().is_none_or(|value| value == request_id) => {
+                        return Err(message);
+                    }
+                    Some(BladeWsEvent::Disconnected) => {
+                        return Err(
+                            "WebSocket disconnected while waiting for ZLP response".to_string(),
+                        );
+                    }
+                    Some(_) => {}
+                    None => {
+                        return Err(
+                            "WebSocket closed while waiting for ZLP response".to_string(),
+                        );
+                    }
+                }
+            }
+        })
+        .await
+        .map_err(|_| "Timed out waiting for ZLP response".to_string())?
     }
 
     /// Send a chat message using the persistent connection
@@ -238,6 +515,11 @@ impl WsConnectionManager {
         // Clear subscribers
         let mut subscribers = self.event_subscribers.lock().await;
         subscribers.clear();
+
+        {
+            let mut auth_state = self.auth_state.write().await;
+            *auth_state = None;
+        }
 
         // Clear session
         let mut session = self.session_id.write().await;

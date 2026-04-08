@@ -906,36 +906,10 @@ pub async fn dispatch(
                 blade_protocol::HistoryIntent::ListConversations { project_id } => {
                     println!("[History] ListConversations: project={}", project_id);
 
-                    // Get config to create BladeClient
-                    let (blade_url, api_key) = {
-                        let config = state.config.lock().map_err(|e| {
-                            blade_protocol::BladeError::Internal {
-                                trace_id: intent_id.to_string(),
-                                message: format!("Failed to lock config: {}", e),
-                            }
-                        })?;
-                        (config.blade_url.clone(), config.api_key.clone())
-                    };
+                    let ws_manager = state.ws_connection.clone();
 
-                    // Create HTTP client and BladeClient
-                    let http_client = reqwest::Client::new();
-                    let blade_client =
-                        crate::blade_client::BladeClient::new(blade_url, http_client, api_key);
-
-                    // Call API
-                    match blade_client.get_conversation_history(&project_id).await {
-                        Ok(response) => {
-                            // Parse response into ConversationSummary vec
-                            let conversations: Vec<blade_protocol::ConversationSummary> =
-                                if let Some(convs) = response.get("conversations") {
-                                    serde_json::from_value(convs.clone()).unwrap_or_else(|e| {
-                                        eprintln!("[History] Failed to parse conversations: {}", e);
-                                        Vec::new()
-                                    })
-                                } else {
-                                    Vec::new()
-                                };
-
+                    match ws_manager.request_history_list(project_id).await {
+                        Ok(conversations) => {
                             emit_blade_event(
                                 &window,
                                 Some(intent_id.to_string()),
@@ -951,7 +925,7 @@ pub async fn dispatch(
                         Err(e) => {
                             let error = blade_protocol::BladeError::Internal {
                                 trace_id: intent_id.to_string(),
-                                message: format!("{:?}", e),
+                                message: e,
                             };
                             emit_system_event(
                                 &window,
@@ -968,120 +942,81 @@ pub async fn dispatch(
                 blade_protocol::HistoryIntent::LoadConversation { session_id } => {
                     println!("[History] LoadConversation: session={}", session_id);
 
-                    // Get config to create BladeClient
-                    let (blade_url, api_key) = {
-                        let config = state.config.lock().unwrap();
-                        (config.blade_url.clone(), config.api_key.clone())
-                    };
+                    let ws_manager = state.ws_connection.clone();
 
-                    // Create HTTP client and BladeClient
-                    let http_client = reqwest::Client::new();
-                    let blade_client =
-                        crate::blade_client::BladeClient::new(blade_url, http_client, api_key);
+                    match ws_manager.request_history_detail(session_id).await {
+                        Ok(full_conversation) => {
+                            eprintln!(
+                                "[History] Loaded {} messages for session {}",
+                                full_conversation.messages.len(),
+                                full_conversation.session_id
+                            );
 
-                    // Call API
-                    match blade_client.get_conversation(&session_id).await {
-                        Ok(response) => {
-                            // Parse response as FullConversation
-                            match serde_json::from_value::<blade_protocol::FullConversation>(
-                                response,
-                            ) {
-                                Ok(full_conversation) => {
-                                    // Verify message structure for debugging
-                                    eprintln!(
-                                        "[History] Loaded {} messages for session {}",
-                                        full_conversation.messages.len(),
-                                        full_conversation.session_id
+                            {
+                                let mut conversation = state.conversation.lock().unwrap();
+
+                                conversation.clear();
+
+                                conversation.metadata.id = uuid::Uuid::new_v4().to_string();
+                                conversation.metadata.session_id =
+                                    Some(full_conversation.session_id.clone());
+                                conversation.metadata.title = full_conversation.title.clone();
+
+                                for msg in &full_conversation.messages {
+                                    let role = match msg.role.as_str() {
+                                        "user" => crate::protocol::ChatRole::User,
+                                        "assistant" => crate::protocol::ChatRole::Assistant,
+                                        "system" => crate::protocol::ChatRole::System,
+                                        "tool" => crate::protocol::ChatRole::Tool,
+                                        _ => crate::protocol::ChatRole::User,
+                                    };
+
+                                    let mut chat_msg = crate::protocol::ChatMessage::new(
+                                        role,
+                                        msg.content.clone(),
                                     );
 
-                                    // CRITICAL FIX: Update backend state to match the loaded conversation
-                                    // This ensures that subsequent "SendMessage" intents use the correct context and session ID
-                                    {
-                                        let mut conversation = state.conversation.lock().unwrap();
-
-                                        // Clear current conversation
-                                        conversation.clear();
-
-                                        // Update metadata
-                                        conversation.metadata.id = uuid::Uuid::new_v4().to_string(); // Temporary local ID
-                                        conversation.metadata.session_id =
-                                            Some(full_conversation.session_id.clone());
-                                        conversation.metadata.title =
-                                            full_conversation.title.clone();
-                                        // We don't have model_id in FullConversation, keep default or guess?
-                                        // Ideally we should get it. For now, keep existing or default.
-
-                                        // Convert messages
-                                        for msg in &full_conversation.messages {
-                                            let role = match msg.role.as_str() {
-                                                "user" => crate::protocol::ChatRole::User,
-                                                "assistant" => crate::protocol::ChatRole::Assistant,
-                                                "system" => crate::protocol::ChatRole::System,
-                                                "tool" => crate::protocol::ChatRole::Tool,
-                                                _ => crate::protocol::ChatRole::User,
-                                            };
-
-                                            let mut chat_msg = crate::protocol::ChatMessage::new(
-                                                role,
-                                                msg.content.clone(),
-                                            );
-
-                                            // Handle tool calls if present
-                                            if let Some(ref tc_val) = msg.tool_calls {
-                                                if let Ok(tool_calls) = serde_json::from_value::<
-                                                    Vec<crate::protocol::ToolCall>,
-                                                >(
-                                                    tc_val.clone()
-                                                ) {
-                                                    chat_msg.tool_calls = Some(tool_calls);
-                                                }
-                                            }
-
-                                            chat_msg.tool_call_id = msg.tool_call_id.clone();
-                                            // created_at is strictly for display in history, ChatMessage doesn't store it per message usually (or defaults to now)
-
-                                            conversation.push(chat_msg);
+                                    if let Some(ref tc_val) = msg.tool_calls {
+                                        if let Ok(tool_calls) = serde_json::from_value::<
+                                            Vec<crate::protocol::ToolCall>,
+                                        >(
+                                            tc_val.clone()
+                                        ) {
+                                            chat_msg.tool_calls = Some(tool_calls);
                                         }
-
-                                        eprintln!("[History] Updated backend conversation state");
                                     }
 
-                                    // Update ChatManager session_id
-                                    {
-                                        let mut mgr = state.chat_manager.lock().unwrap();
-                                        mgr.session_id = Some(full_conversation.session_id.clone());
-                                        eprintln!(
-                                            "[History] Updated ChatManager session_id to {}",
-                                            full_conversation.session_id
-                                        );
-                                    }
+                                    chat_msg.tool_call_id = msg.tool_call_id.clone();
 
-                                    emit_blade_event(
-                                        &window,
-                                        Some(intent_id.to_string()),
-                                        blade_protocol::BladeEvent::History(
-                                            blade_protocol::HistoryEvent::ConversationLoaded(
-                                                full_conversation,
-                                            ),
-                                        ),
-                                    );
-                                    Ok(())
+                                    conversation.push(chat_msg);
                                 }
-                                Err(e) => {
-                                    eprintln!("[History] Failed to parse conversation data: {}", e);
-                                    Err(blade_protocol::BladeError::Internal {
-                                        trace_id: intent_id.to_string(),
-                                        message: format!(
-                                            "Failed to parse conversation data: {}",
-                                            e
-                                        ),
-                                    })
-                                }
+
+                                eprintln!("[History] Updated backend conversation state");
                             }
+
+                            {
+                                let mut mgr = state.chat_manager.lock().unwrap();
+                                mgr.session_id = Some(full_conversation.session_id.clone());
+                                eprintln!(
+                                    "[History] Updated ChatManager session_id to {}",
+                                    full_conversation.session_id
+                                );
+                            }
+
+                            emit_blade_event(
+                                &window,
+                                Some(intent_id.to_string()),
+                                blade_protocol::BladeEvent::History(
+                                    blade_protocol::HistoryEvent::ConversationLoaded(
+                                        full_conversation,
+                                    ),
+                                ),
+                            );
+                            Ok(())
                         }
                         Err(e) => Err(blade_protocol::BladeError::Internal {
                             trace_id: intent_id.to_string(),
-                            message: format!("{:?}", e),
+                            message: e,
                         }),
                     }
                 }
@@ -1094,69 +1029,40 @@ pub async fn dispatch(
         BladeIntent::Language(language_intent) => {
             match language_intent {
                 blade_protocol::LanguageIntent::ZlpMessage { data } => {
-                    // 1. Get config
-                    let (blade_url, api_key) = {
-                        let config = state.config.lock().unwrap();
-                        (config.blade_url.clone(), config.api_key.clone())
-                    };
-
-                    // 2. Create client
-                    let http_client = reqwest::Client::new();
-                    let blade_client =
-                        crate::blade_client::BladeClient::new(blade_url, http_client, api_key);
-
-                    // 3. Send request
-                    let mut rx = blade_client.send_zlp_request(data).await.map_err(|e| {
-                        blade_protocol::BladeError::Internal {
-                            trace_id: intent_id.to_string(),
-                            message: format!("ZLP Request Failed: {}", e),
-                        }
-                    })?;
-
                     let window_clone = window.clone();
                     let intent_id_clone = intent_id;
+                    let request_payload = data.clone();
+                    let ws_manager = state.ws_connection.clone();
 
-                    // 4. Process response stream
                     tauri::async_runtime::spawn(async move {
-                        while let Some(event) = rx.recv().await {
-                            match event {
-                                crate::blade_client::BladeEvent::ZlpResponse(val) => {
-                                    emit_blade_event(
-                                        &window_clone,
-                                        Some(intent_id_clone.to_string()),
-                                        blade_protocol::BladeEvent::Language(
-                                            blade_protocol::LanguageEvent::ZlpResponse {
-                                                original_request_id: intent_id_clone.to_string(),
-                                                result: val,
-                                            },
-                                        ),
-                                    );
-                                }
-                                crate::blade_client::BladeEvent::Error {
-                                    code,
-                                    message,
-                                    details,
-                                } => {
-                                    eprintln!("[ZLP] Error: {} - {} ({})", code, message, details);
-                                    emit_system_event(
-                                        &window_clone,
-                                        intent_id_clone,
-                                        blade_protocol::SystemEvent::IntentFailed {
-                                            intent_id: intent_id_clone,
-                                            error: blade_protocol::BladeError::Internal {
-                                                trace_id: intent_id_clone.to_string(),
-                                                message: format!("{}: {}", code, message),
-                                            },
+                        match ws_manager.request_zlp(request_payload).await {
+                            Ok(val) => {
+                                emit_blade_event(
+                                    &window_clone,
+                                    Some(intent_id_clone.to_string()),
+                                    blade_protocol::BladeEvent::Language(
+                                        blade_protocol::LanguageEvent::ZlpResponse {
+                                            original_request_id: intent_id_clone.to_string(),
+                                            result: val,
                                         },
-                                    );
-                                }
-                                _ => {
-                                    // Ignore other events for now or map them?
-                                    // ZLP might use progress/status events later
-                                }
+                                    ),
+                                );
+                            }
+                            Err(message) => {
+                                emit_system_event(
+                                    &window_clone,
+                                    intent_id_clone,
+                                    blade_protocol::SystemEvent::IntentFailed {
+                                        intent_id: intent_id_clone,
+                                        error: blade_protocol::BladeError::Internal {
+                                            trace_id: intent_id_clone.to_string(),
+                                            message,
+                                        },
+                                    },
+                                );
                             }
                         }
-                        // Emit completion
+
                         emit_system_event(
                             &window_clone,
                             intent_id_clone,
