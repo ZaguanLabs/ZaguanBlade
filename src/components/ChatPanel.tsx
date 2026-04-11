@@ -19,6 +19,8 @@ import type { UncommittedChange } from '../types/uncommitted';
 import { deriveChatRows, estimateChatRowHeight, findFirstUnvirtualizedChatRowIndex } from '../utils/chatTimeline';
 
 const VIRTUALIZATION_OVERSCAN_PX = 720;
+const SCROLL_BOTTOM_THRESHOLD_PX = 80;
+const VIRTUALIZATION_SCROLL_THROTTLE_MS = 150;
 
 interface VisibleVirtualRange {
     startIndex: number;
@@ -243,6 +245,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     });
 
     const scrollContainerRef = useRef<HTMLDivElement>(null);
+    const bottomSentinelRef = useRef<HTMLDivElement>(null);
     const viewportMetricsFrameRef = useRef<number | null>(null);
     const pendingViewportMetricsRef = useRef<{
         viewportHeight: number;
@@ -255,8 +258,10 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     const virtualizedRowHeightsRef = useRef<number[]>([]);
     const totalVirtualizedHeightRef = useRef(0);
     const virtualizedRowHeightCacheRef = useRef(new WeakMap<object, Map<string, number>>());
+    const virtualizationScrollTimerRef = useRef<number | null>(null);
+    const lastVirtualizationScrollUpdateRef = useRef(0);
 
-    const scheduleVisibleVirtualRangeUpdate = useCallback((scrollTop?: number) => {
+    const scheduleVisibleVirtualRangeUpdate = useCallback((scrollTop?: number, immediate?: boolean) => {
         if (typeof scrollTop === 'number') {
             scrollTopRef.current = scrollTop;
         }
@@ -265,7 +270,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
             return;
         }
 
-        visibleRangeFrameRef.current = requestAnimationFrame(() => {
+        const runUpdate = () => {
             visibleRangeFrameRef.current = null;
             const nextRange = computeVisibleVirtualRange(
                 scrollTopRef.current,
@@ -275,7 +280,13 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                 totalVirtualizedHeightRef.current,
             );
             setVisibleVirtualRange((current) => sameVisibleVirtualRange(current, nextRange) ? current : nextRange);
-        });
+        };
+
+        if (immediate) {
+            runUpdate();
+        } else {
+            visibleRangeFrameRef.current = requestAnimationFrame(runUpdate);
+        }
     }, []);
 
     const scheduleViewportMetricsUpdate = useCallback((element: HTMLDivElement) => {
@@ -484,8 +495,9 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         if (!container) return;
         container.scrollTop = container.scrollHeight;
         scrollTopRef.current = container.scrollTop;
-        scheduleVisibleVirtualRangeUpdate(container.scrollTop);
-        isUserAtBottomRef.current = true;
+        scheduleVisibleVirtualRangeUpdate(container.scrollTop, true);
+        // NOTE: Do NOT set isUserAtBottomRef here — only handleScroll should
+        // update that flag, otherwise programmatic scrolls override user intent.
         if (showScrollToBottomRef.current) {
             showScrollToBottomRef.current = false;
             setShowScrollToBottom(false);
@@ -528,12 +540,65 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         return;
     }, [lastMessageRole, messageCount, scrollToBottom]);
 
-    // Scroll during streaming updates only while user stays at bottom
+    // IntersectionObserver-based sticky bottom for streaming.
+    // Instead of forcing scrollToBottom on every streaming token (which fights
+    // the user's wheel scroll), we observe a sentinel div at the bottom. When
+    // the user is near the bottom and new content arrives, the browser's native
+    // overflow-anchor keeps the scroll position anchored. We only call
+    // scrollToBottom when the sentinel is visible (meaning user is at bottom)
+    // and new content has been appended that might push the sentinel out of view.
+    const streamingScrollFrameRef = useRef<number | null>(null);
+    const isSentinelVisibleRef = useRef(true);
+
     useEffect(() => {
-        if (!loading || !isUserAtBottomRef.current) return;
-        const rafId = requestAnimationFrame(scrollToBottom);
-        return () => cancelAnimationFrame(rafId);
-    }, [loading, streamingSignature, scrollToBottom]);
+        const sentinel = bottomSentinelRef.current;
+        if (!sentinel) return;
+
+        const observer = new IntersectionObserver(
+            ([entry]) => {
+                isSentinelVisibleRef.current = entry.isIntersecting;
+            },
+            {
+                root: scrollContainerRef.current,
+                threshold: 0,
+                rootMargin: `${SCROLL_BOTTOM_THRESHOLD_PX}px 0px 0px 0px`,
+            },
+        );
+
+        observer.observe(sentinel);
+        return () => observer.disconnect();
+    }, []);
+
+    // During streaming, gently nudge scroll to bottom only if the sentinel
+    // is visible (user is at/near bottom). This replaces the old
+    // streamingSignature-driven scrollToBottom which fought the user's wheel.
+    useEffect(() => {
+        if (!loading) return;
+        if (!isSentinelVisibleRef.current) return;
+        if (!isUserAtBottomRef.current) return;
+
+        if (streamingScrollFrameRef.current !== null) {
+            return;
+        }
+
+        streamingScrollFrameRef.current = requestAnimationFrame(() => {
+            streamingScrollFrameRef.current = null;
+            const container = scrollContainerRef.current;
+            if (!container) return;
+            // Only nudge if not already at bottom — avoids fighting user scroll
+            const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+            if (distanceFromBottom > 2) {
+                container.scrollTop = container.scrollHeight;
+                scrollTopRef.current = container.scrollTop;
+            }
+        });
+        return () => {
+            if (streamingScrollFrameRef.current !== null) {
+                cancelAnimationFrame(streamingScrollFrameRef.current);
+                streamingScrollFrameRef.current = null;
+            }
+        };
+    }, [loading, streamingSignature]);
 
     // Prevent default context menu on empty areas
     const handleContextMenu = useCallback((e: React.MouseEvent) => {
@@ -544,8 +609,26 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
         const target = e.target as HTMLDivElement;
         scrollTopRef.current = target.scrollTop;
-        scheduleVisibleVirtualRangeUpdate(target.scrollTop);
-        const isBottom = Math.abs(target.scrollHeight - target.scrollTop - target.clientHeight) < 100;
+
+        // Throttle virtualization updates during manual scrolling to prevent
+        // React state churn on every wheel event.
+        const now = Date.now();
+        if (now - lastVirtualizationScrollUpdateRef.current >= VIRTUALIZATION_SCROLL_THROTTLE_MS) {
+            lastVirtualizationScrollUpdateRef.current = now;
+            scheduleVisibleVirtualRangeUpdate(target.scrollTop);
+        } else {
+            // Still update the ref immediately for accuracy, but defer the
+            // expensive state computation.
+            if (virtualizationScrollTimerRef.current === null) {
+                virtualizationScrollTimerRef.current = window.setTimeout(() => {
+                    virtualizationScrollTimerRef.current = null;
+                    lastVirtualizationScrollUpdateRef.current = Date.now();
+                    scheduleVisibleVirtualRangeUpdate(scrollTopRef.current);
+                }, VIRTUALIZATION_SCROLL_THROTTLE_MS);
+            }
+        }
+
+        const isBottom = Math.abs(target.scrollHeight - target.scrollTop - target.clientHeight) < SCROLL_BOTTOM_THRESHOLD_PX;
         isUserAtBottomRef.current = isBottom;
         const nextShowScrollToBottom = !isBottom && messageCount > 0;
         if (showScrollToBottomRef.current !== nextShowScrollToBottom) {
@@ -758,7 +841,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
             {activeTab === 'chat' ? (
                 <div
                     ref={scrollContainerRef}
-                    className="relative flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent"
+                    className="relative flex-1 overflow-y-auto overflow-y-scroll scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent"
                     onScroll={handleScroll}
                 >
                     <div className="mx-auto flex w-full max-w-none flex-col gap-0.5 px-0.5 py-4 md:px-1">
@@ -848,6 +931,8 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                         )}
 
                         <div className="h-4" />
+                        {/* Bottom sentinel for IntersectionObserver-based sticky scroll */}
+                        <div ref={bottomSentinelRef} className="h-0" />
                     </div>
 
                     {showScrollToBottom && activeTab === 'chat' && (

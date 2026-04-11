@@ -51,11 +51,28 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
         hadContentRef.current = hasContent;
     }, [isActive, hasContent, isExpanded, userToggled]);
 
-    // Auto-scroll to bottom while streaming
+    // Auto-scroll to bottom while streaming (throttled to avoid layout thrash)
+    const reasoningScrollFrameRef = useRef<number | null>(null);
     useEffect(() => {
-        if (isExpanded && isActive && contentRef.current) {
-            contentRef.current.scrollTop = contentRef.current.scrollHeight;
+        if (!isExpanded || !isActive || !contentRef.current) return;
+
+        if (reasoningScrollFrameRef.current !== null) {
+            return;
         }
+
+        reasoningScrollFrameRef.current = requestAnimationFrame(() => {
+            reasoningScrollFrameRef.current = null;
+            if (contentRef.current) {
+                contentRef.current.scrollTop = contentRef.current.scrollHeight;
+            }
+        });
+
+        return () => {
+            if (reasoningScrollFrameRef.current !== null) {
+                cancelAnimationFrame(reasoningScrollFrameRef.current);
+                reasoningScrollFrameRef.current = null;
+            }
+        };
     }, [displayContent, isExpanded, isActive]);
 
     // DEBUG: Show raw content even if empty after cleaning, to see what's being suppressed
