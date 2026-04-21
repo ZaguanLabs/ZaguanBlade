@@ -17,6 +17,7 @@ import { QueuePanel } from './QueuePanel';
 import { AgentRunStatusBar } from './AgentRunStatusBar';
 import type { UncommittedChange } from '../types/uncommitted';
 import { deriveChatRows, estimateChatRowHeight, findFirstUnvirtualizedChatRowIndex } from '../utils/chatTimeline';
+import { recordDebugPerf } from '../utils/debugPerf';
 
 const VIRTUALIZATION_OVERSCAN_PX = 720;
 const SCROLL_BOTTOM_THRESHOLD_PX = 80;
@@ -150,32 +151,34 @@ const PendingResponseIndicator: React.FC = () => {
         t('chat.pendingResponse.ruminating'),
     ], [t]);
 
+    // Slow word rotation (4s instead of 1.8s) to reduce DOM mutations
+    // that keep WebKitGTK's frame clock cycling.
     useEffect(() => {
         const intervalId = window.setInterval(() => {
             setWordIndex((prev) => (prev + 1) % words.length);
-        }, 1800);
+        }, 4000);
 
         return () => window.clearInterval(intervalId);
     }, [words.length]);
 
     return (
         <div className="px-4 py-3">
-            <div className="inline-flex items-center gap-3 rounded-2xl border border-emerald-500/15 bg-[linear-gradient(180deg,rgba(16,185,129,0.08),rgba(24,24,27,0.7))] px-4 py-3 text-[11px] font-medium text-(--fg-secondary) shadow-[0_16px_40px_rgba(0,0,0,0.18)] backdrop-blur-md">
+            <div className="inline-flex items-center gap-3 rounded-2xl border border-emerald-500/15 bg-[linear-gradient(180deg,rgba(16,185,129,0.08),rgba(24,24,27,0.7))] px-4 py-3 text-[11px] font-medium text-(--fg-secondary) shadow-[0_16px_40px_rgba(0,0,0,0.18)]">
                 <div className="flex h-8 w-8 items-center justify-center rounded-2xl border border-emerald-500/20 bg-emerald-500/10">
-                    <Loader2 className="h-4 w-4 animate-spin text-emerald-300" />
+                    <Loader2 className="h-4 w-4 text-emerald-300" />
                 </div>
                 <div className="flex flex-col items-start">
                     <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-300/80">
                         {t('chat.assistantResponding')}
                     </span>
-                    <span key={words[wordIndex]} className="pending-response-word text-sm font-semibold text-(--fg-primary)">
+                    <span key={words[wordIndex]} className="text-sm font-semibold text-(--fg-primary)">
                         {words[wordIndex]}
                     </span>
                 </div>
                 <div className="ml-1 flex items-center gap-1">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400/80 animate-pulse" />
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400/60 animate-pulse [animation-delay:180ms]" />
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400/40 animate-pulse [animation-delay:360ms]" />
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400/80" />
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400/60" />
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400/40" />
                 </div>
             </div>
         </div>
@@ -215,6 +218,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     deleteQueuedRequest,
     onImplementPlan,
 }) => {
+    recordDebugPerf('ChatPanel.render');
     const { t } = useTranslation();
     const { stopCommandExecution } = useCommandExecution();
     const [taskPanelCollapsed, setTaskPanelCollapsed] = useState(false);
@@ -272,6 +276,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
 
         const runUpdate = () => {
             visibleRangeFrameRef.current = null;
+            recordDebugPerf('ChatPanel.visibleRangeUpdate');
             const nextRange = computeVisibleVirtualRange(
                 scrollTopRef.current,
                 viewportHeightRef.current,
@@ -301,6 +306,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
 
         viewportMetricsFrameRef.current = requestAnimationFrame(() => {
             viewportMetricsFrameRef.current = null;
+            recordDebugPerf('ChatPanel.viewportMetricsFrame');
             const next = pendingViewportMetricsRef.current;
             if (!next) {
                 return;
@@ -350,6 +356,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         }
 
         const observer = new ResizeObserver(() => {
+            recordDebugPerf('ChatPanel.resizeObserver');
             updateMetrics();
         });
         observer.observe(container);
@@ -583,6 +590,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
 
         streamingScrollFrameRef.current = requestAnimationFrame(() => {
             streamingScrollFrameRef.current = null;
+            recordDebugPerf('ChatPanel.streamingScrollFrame');
             const container = scrollContainerRef.current;
             if (!container) return;
             // Only nudge if not already at bottom — avoids fighting user scroll
@@ -607,6 +615,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     }, []);
 
     const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+        recordDebugPerf('ChatPanel.scroll');
         const target = e.target as HTMLDivElement;
         scrollTopRef.current = target.scrollTop;
 
@@ -846,7 +855,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                 >
                     <div className="mx-auto flex w-full max-w-none flex-col gap-0.5 px-0.5 py-4 md:px-1">
                         {messages.length === 0 && (
-                            <div className="mx-4 mt-10 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/70 px-6 py-8 text-center shadow-[0_24px_80px_rgba(0,0,0,0.25)] backdrop-blur-md">
+                            <div className="mx-4 mt-10 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/70 px-6 py-8 text-center shadow-[0_24px_80px_rgba(0,0,0,0.25)]">
                                 <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-emerald-500/20 bg-emerald-500/10 text-2xl shadow-[0_0_40px_rgba(16,185,129,0.15)]">
                                     🗡️
                                 </div>
@@ -939,7 +948,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                         <div className="pointer-events-none sticky bottom-0 z-10 flex justify-center px-4 pb-4">
                             <button
                                 onClick={scrollToBottom}
-                                className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-surface)]/95 px-4 py-2 text-xs font-medium text-[var(--fg-secondary)] shadow-[0_18px_48px_rgba(0,0,0,0.25)] backdrop-blur-md transition-colors hover:text-[var(--fg-primary)]"
+                                className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-surface)]/95 px-4 py-2 text-xs font-medium text-[var(--fg-secondary)] shadow-[0_18px_48px_rgba(0,0,0,0.25)] transition-colors hover:text-[var(--fg-primary)]"
                             >
                                 <ArrowDown className="h-3.5 w-3.5" />
                                 {t('chat.jumpToLatest')}

@@ -1,13 +1,47 @@
 import { useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { AppLayout } from './components/Layout';
 import { initNotifications, notifyFileChanges } from './utils/notifications';
 import { useCoreStateSync } from './hooks/useCoreStateSync';
 
-export default function App() {
-    // Initialize core state sync for headless architecture
+function readDebugFlag(name: string): boolean {
+    if (typeof window === 'undefined') {
+        return false;
+    }
+
+    try {
+        const globalFlags = (globalThis as { __ZBLADE_DEBUG_FLAGS__?: Record<string, unknown> }).__ZBLADE_DEBUG_FLAGS__;
+        const envValue = globalFlags?.[name];
+        if (envValue === true || envValue === '1' || envValue === 'true') {
+            return true;
+        }
+        if (envValue === false || envValue === '0' || envValue === 'false') {
+            return false;
+        }
+    } catch {
+        // ignore
+    }
+
+    const queryValue = new URLSearchParams(window.location.search).get(name);
+    if (queryValue === '1' || queryValue === 'true') {
+        return true;
+    }
+    if (queryValue === '0' || queryValue === 'false') {
+        return false;
+    }
+
+    try {
+        const storageValue = window.localStorage.getItem(`zblade.debug.${name}`);
+        return storageValue === '1' || storageValue === 'true';
+    } catch {
+        return false;
+    }
+}
+
+function AppWithCoreStateSync() {
     const { isRecovering, coreState, featureFlags, error } = useCoreStateSync();
+    void isRecovering;
+    void featureFlags;
 
     useEffect(() => {
         if (coreState) {
@@ -49,97 +83,38 @@ export default function App() {
         };
     }, []);
 
+    return <AppLayout />;
+}
+
+function AppWithoutCoreStateSync() {
     useEffect(() => {
-        if (typeof window === 'undefined') {
-            return;
-        }
+        initNotifications();
 
-        let repaintFrame1: number | null = null;
-        let repaintFrame2: number | null = null;
-        let lastRepaintAt = 0;
-        let unlistenFocusChanged: (() => void) | undefined;
-
-        const runRepaintRecovery = () => {
-            const now = Date.now();
-            if (now - lastRepaintAt < 250) {
-                return;
-            }
-            lastRepaintAt = now;
-
-            const root = document.getElementById('root');
-            if (!root) {
-                window.dispatchEvent(new Event('resize'));
-                return;
-            }
-
-            if (repaintFrame1 !== null) {
-                cancelAnimationFrame(repaintFrame1);
-                repaintFrame1 = null;
-            }
-            if (repaintFrame2 !== null) {
-                cancelAnimationFrame(repaintFrame2);
-                repaintFrame2 = null;
-            }
-
-            repaintFrame1 = requestAnimationFrame(() => {
-                repaintFrame1 = null;
-                const previousTransform = root.style.transform;
-                const previousWillChange = root.style.willChange;
-
-                root.style.willChange = 'transform';
-                root.style.transform = previousTransform ? `${previousTransform} translateZ(0)` : 'translateZ(0)';
-                void root.getBoundingClientRect();
-                window.dispatchEvent(new Event('resize'));
-
-                repaintFrame2 = requestAnimationFrame(() => {
-                    repaintFrame2 = null;
-                    root.style.transform = previousTransform;
-                    root.style.willChange = previousWillChange;
-                    window.dispatchEvent(new Event('resize'));
-                });
-            });
-        };
-
-        const handleVisibilityChange = () => {
-            if (document.visibilityState === 'visible') {
-                runRepaintRecovery();
-            }
-        };
-
-        const handleFocus = () => {
-            runRepaintRecovery();
-        };
-
-        document.addEventListener('visibilitychange', handleVisibilityChange);
-        window.addEventListener('focus', handleFocus);
-        window.addEventListener('pageshow', handleFocus);
-
-        if ('__TAURI_INTERNALS__' in window) {
-            const currentWindow = getCurrentWindow();
-            currentWindow.onFocusChanged(({ payload: focused }) => {
-                if (focused) {
-                    runRepaintRecovery();
+        const setupListener = async () => {
+            const unlisten = await listen<{ count: number; paths: string[] }>(
+                'file-changes-detected',
+                async (event) => {
+                    const fileNames = event.payload.paths.map(
+                        (p) => p.split('/').pop() || p
+                    );
+                    await notifyFileChanges(event.payload.count, fileNames);
                 }
-            }).then((unlisten) => {
-                unlistenFocusChanged = unlisten;
-            }).catch(console.error);
-        }
+            );
+
+            return unlisten;
+        };
+
+        const unlistenPromise = setupListener();
 
         return () => {
-            if (repaintFrame1 !== null) {
-                cancelAnimationFrame(repaintFrame1);
-            }
-            if (repaintFrame2 !== null) {
-                cancelAnimationFrame(repaintFrame2);
-            }
-            document.removeEventListener('visibilitychange', handleVisibilityChange);
-            window.removeEventListener('focus', handleFocus);
-            window.removeEventListener('pageshow', handleFocus);
-            if (unlistenFocusChanged) {
-                unlistenFocusChanged();
-            }
+            unlistenPromise.then((unlisten) => unlisten());
         };
     }, []);
 
     return <AppLayout />;
+}
+
+export default function App() {
+    const disableCoreStateSync = readDebugFlag('disableCoreStateSync');
+    return disableCoreStateSync ? <AppWithoutCoreStateSync /> : <AppWithCoreStateSync />;
 }

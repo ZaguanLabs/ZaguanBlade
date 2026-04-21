@@ -17,6 +17,9 @@ import { useGitStatus } from '../hooks/useGitStatus';
 import { useTabManager, type Tab } from '../hooks/useTabManager';
 import { useResizeHandlers } from '../hooks/useResizeHandlers';
 import { useLayoutEvents } from '../hooks/useLayoutEvents';
+import { readDebugFlag, readDebugSurfaceFlag } from '../utils/debugFlags';
+import type { ChatMode } from '../types/chat';
+import { recordDebugPerf } from '../utils/debugPerf';
 const ExplorerPanel = React.lazy(() => import('./ExplorerPanel').then(module => ({ default: module.ExplorerPanel })));
 const ChatPanel = React.lazy(() => import('./ChatPanel').then(module => ({ default: module.ChatPanel })));
 const GitPanel = React.lazy(() => import('./GitPanel').then(module => ({ default: module.GitPanel })));
@@ -67,19 +70,187 @@ function findMatchingChangeRange(
     };
 }
 
+function useNoopChat() {
+    const [messages, setMessages] = useState<any[]>([]);
+    const [selectedModelId, setSelectedModelId] = useState<string>('disabled');
+    const [chatMode, setChatMode] = useState<ChatMode>('planning');
+    const [activeTodos, setActiveTodos] = useState<any[]>([]);
+    const [messageQueue, setMessageQueue] = useState<any[]>([]);
+
+    const sendMessage = useCallback(() => Promise.resolve(), []);
+    const stopGeneration = useCallback(() => Promise.resolve(), []);
+    const refreshModels = useCallback(() => Promise.resolve([]), []);
+    const approveTool = useCallback(() => Promise.resolve(), []);
+    const approveToolDecision = useCallback(() => Promise.resolve(), []);
+    const respondToApprovalRequest = useCallback(() => Promise.resolve(), []);
+    const approveSingleCommand = useCallback(() => Promise.resolve(), []);
+    const skipSingleCommand = useCallback(() => Promise.resolve(), []);
+    const newConversation = useCallback(() => Promise.resolve(), []);
+    const undoTool = useCallback(() => Promise.resolve(), []);
+    const loadConversation = useCallback(() => Promise.resolve(), []);
+    const deleteQueuedRequest = useCallback((index: number) => {
+        setMessageQueue(prev => prev.filter((_, currentIndex) => currentIndex !== index));
+    }, []);
+
+    return {
+        messages,
+        loading: false,
+        error: null as string | null,
+        sendMessage,
+        stopGeneration,
+        models: [],
+        refreshModels,
+        selectedModelId,
+        setSelectedModelId,
+        chatMode,
+        setChatMode,
+        pendingActions: null,
+        pendingApprovalRequest: null,
+        waitingForApproval: false,
+        approveTool,
+        approveToolDecision,
+        respondToApprovalRequest,
+        approveSingleCommand,
+        skipSingleCommand,
+        newConversation,
+        undoTool,
+        setConversation: setMessages,
+        loadConversation,
+        toolActivity: null,
+        activeTodos,
+        setActiveTodos,
+        messageQueue,
+        deleteQueuedRequest,
+    };
+}
+
+function useNoopTabManager(uncommittedChanges: { file_path: string }[]) {
+    const [tabs, setTabs] = useState<Tab[]>([]);
+    const [activeTabId, setActiveTabId] = useState<string | null>(null);
+    const [aiEditedFilePaths, setAiEditedFilePaths] = useState<Set<string>>(new Set());
+    const [unseenAiEditedFilePaths, setUnseenAiEditedFilePaths] = useState<Set<string>>(new Set());
+    const processingFilesRef = useRef<Set<string>>(new Set());
+
+    const activeTab = useMemo(
+        () => tabs.find(tab => tab.id === activeTabId) ?? null,
+        [tabs, activeTabId],
+    );
+    const activeFilename = activeTab?.title ?? null;
+    const appBarTabs = useMemo(() => tabs.map((tab) => ({
+        id: tab.id,
+        title: tab.title,
+        isEphemeral: tab.type === 'ephemeral',
+        isDirty: Boolean(tab.isDirty),
+        hasVirtualChanges: Boolean(tab.path && uncommittedChanges.some(change => change.file_path === tab.path)),
+        isAiEdited: Boolean(tab.path && aiEditedFilePaths.has(tab.path)),
+        hasUnreadAiEdit: Boolean(tab.path && unseenAiEditedFilePaths.has(tab.path)),
+    })), [tabs, uncommittedChanges, aiEditedFilePaths, unseenAiEditedFilePaths]);
+
+    const handleTabClick = useCallback((tabId: string) => {
+        setActiveTabId(tabId);
+    }, []);
+
+    const handleFileSelect = useCallback((path: string, highlightLines?: { startLine: number; endLine: number } | null) => {
+        const tabId = `file-${path}`;
+        setTabs(prev => {
+            const existingTab = prev.find(tab => tab.type === 'file' && tab.path === path);
+            if (existingTab) {
+                return highlightLines
+                    ? prev.map(tab => tab.id === existingTab.id ? { ...tab, highlightLines: highlightLines ?? undefined } : tab)
+                    : prev;
+            }
+
+            return [
+                ...prev,
+                {
+                    id: tabId,
+                    title: path.split('/').pop() || path,
+                    type: 'file',
+                    path,
+                    highlightLines: highlightLines ?? undefined,
+                },
+            ];
+        });
+        setActiveTabId(tabId);
+    }, []);
+
+    const handleTabClose = useCallback((tabId: string) => {
+        setTabs(prev => prev.filter(tab => tab.id !== tabId));
+        setActiveTabId(prev => prev === tabId ? null : prev);
+    }, []);
+
+    const handleTabReorder = useCallback((fromIndex: number, toIndex: number) => {
+        setTabs(prev => {
+            const next = [...prev];
+            const [moved] = next.splice(fromIndex, 1);
+            if (!moved) {
+                return prev;
+            }
+            next.splice(toIndex, 0, moved);
+            return next;
+        });
+    }, []);
+
+    const handleEphemeralSave = useCallback(async () => undefined, []);
+
+    return {
+        tabs,
+        setTabs,
+        activeTabId,
+        setActiveTabId,
+        activeTab,
+        activeFilename,
+        appBarTabs,
+        setAiEditedFilePaths,
+        setUnseenAiEditedFilePaths,
+        processingFilesRef,
+        handleTabClick,
+        handleFileSelect,
+        handleTabClose,
+        handleTabReorder,
+        handleEphemeralSave,
+    };
+}
+
 const AppLayoutInner: React.FC = () => {
+    recordDebugPerf('Layout.render');
     const { t } = useTranslation();
     const appWindow = getCurrentWindow();
     const { bootstrap } = useStartupBootstrap();
+    const disableTerminalSurface = useMemo(() => readDebugSurfaceFlag('disableTerminal'), []);
+    const disableEditorSurface = useMemo(() => readDebugSurfaceFlag('disableEditor'), []);
+    const disableChatSurface = useMemo(() => readDebugSurfaceFlag('disableChat'), []);
+    const disableChatHook = useMemo(() => readDebugFlag('disableChatHook'), []);
+    const disableGitStatus = useMemo(() => readDebugFlag('disableGitStatus'), []);
+    const disableUncommittedChanges = useMemo(() => readDebugFlag('disableUncommittedChanges'), []);
+    const disableLayoutEvents = useMemo(() => readDebugFlag('disableLayoutEvents'), []);
+    const disableProjectState = useMemo(() => readDebugFlag('disableProjectState'), []);
+    const disableWarmup = useMemo(() => readDebugFlag('disableWarmup'), []);
+    const disableTabManager = useMemo(() => readDebugFlag('disableTabManager'), []);
+    const disableActivityBar = useMemo(() => readDebugFlag('disableActivityBar'), []);
+    const disableSidebarOverlay = useMemo(() => readDebugFlag('disableSidebarOverlay'), []);
+    const disableEditorChrome = useMemo(() => readDebugFlag('disableEditorChrome'), []);
+    const disableChatChrome = useMemo(() => readDebugFlag('disableChatChrome'), []);
+    const disableEditorWidthObserver = useMemo(() => readDebugFlag('disableEditorWidthObserver'), []);
 
     // Sidebar State
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [activeSidebar, setActiveSidebar] = useState<'explorer' | 'git' | 'history'>('explorer');
     const isGitSidebarVisible = isSidebarOpen && activeSidebar === 'git';
 
-    const chat = useChat();
+    const chat = disableChatHook ? useNoopChat() : useChat();
     const [wasStoppedByUser, setWasStoppedByUser] = useState(false);
-    const { changes: uncommittedChanges, acceptAll: acceptAllChanges, rejectAll: rejectAllChanges } = useUncommittedChanges();
+    const {
+        changes: uncommittedChanges,
+        acceptAll: acceptAllChanges,
+        rejectAll: rejectAllChanges,
+    } = disableUncommittedChanges
+        ? {
+            changes: [],
+            acceptAll: async () => false,
+            rejectAll: async () => false,
+        }
+        : useUncommittedChanges();
     const {
         status: gitStatus,
         files: gitFiles,
@@ -96,7 +267,35 @@ const AppLayoutInner: React.FC = () => {
         diff: diffGit,
         generateCommitMessage: generateGitCommitMessage,
         commitPreflight: commitPreflightGit,
-    } = useGitStatus({ includeFiles: isGitSidebarVisible });
+    } = disableGitStatus
+        ? {
+            status: null,
+            files: [],
+            error: null,
+            filesError: null,
+            lastRefreshedAt: null,
+            refresh: async () => undefined,
+            stageFile: async (_path: string) => undefined,
+            unstageFile: async (_path: string) => undefined,
+            stageAll: async () => undefined,
+            unstageAll: async () => undefined,
+            commit: async (_message: string) => undefined,
+            push: async () => undefined,
+            diff: async (_path: string, _staged: boolean) => '',
+            generateCommitMessage: async (_modelId?: string) => '',
+            commitPreflight: async () => ({
+                canCommit: false,
+                isRepo: false,
+                branch: null,
+                isDetached: false,
+                hasUpstream: false,
+                hasConflicts: false,
+                stagedCount: 0,
+                errorMessage: 'Git status disabled',
+                errorKey: 'git_disabled',
+            }),
+        }
+        : useGitStatus({ includeFiles: isGitSidebarVisible });
     const gitChangedCount = gitStatus?.changedCount ?? 0;
     const { selectedModelId, setSelectedModelId, refreshModels } = chat;
     const terminalPaneRef = useRef<TerminalPaneHandle>(null);
@@ -107,7 +306,9 @@ const AppLayoutInner: React.FC = () => {
     }, [chat.stopGeneration]);
 
     // Tab management (CRUD, history, keyboard shortcuts, backend sync)
-    const tabManager = useTabManager(uncommittedChanges);
+    const tabManager = disableTabManager
+        ? useNoopTabManager(uncommittedChanges)
+        : useTabManager(uncommittedChanges);
     const {
         tabs, setTabs, activeTabId, setActiveTabId, activeTab, activeFilename,
         appBarTabs, setAiEditedFilePaths, setUnseenAiEditedFilePaths,
@@ -243,14 +444,19 @@ const AppLayoutInner: React.FC = () => {
     }, [activeTabId, flushPendingTabContentState]);
 
     // Tauri event listeners (file open, research progress, change-applied, etc.)
-    const { researchProgress, finalizeResearchActivities } = useLayoutEvents({
-        setTabs,
-        setActiveTabId,
-        setAiEditedFilePaths,
-        setUnseenAiEditedFilePaths,
-        processingFilesRef,
-        setConversation: chat.setConversation,
-    });
+    const { researchProgress, finalizeResearchActivities } = disableLayoutEvents
+        ? {
+            researchProgress: null,
+            finalizeResearchActivities: (_loading: boolean, _wasStoppedByUser: boolean) => undefined,
+        }
+        : useLayoutEvents({
+            setTabs,
+            setActiveTabId,
+            setAiEditedFilePaths,
+            setUnseenAiEditedFilePaths,
+            processingFilesRef,
+            setConversation: chat.setConversation,
+        });
 
     type SettingsSection = 'configuration' | 'account' | 'localai' | 'storage' | 'context' | 'privacy' | 'editor' | 'about';
 
@@ -385,22 +591,26 @@ const AppLayoutInner: React.FC = () => {
     const terminalState = getTerminalState();
 
     // Project state persistence
-    const { loaded: stateLoaded, isClosing } = useProjectState({
-        projectPath: workspacePath,
-        tabs: tabs.map(t => ({ id: t.id, title: t.title, type: t.type, path: t.path })),
-        activeTabId,
-        selectedModelId,
-        terminals: terminalState.terminals,
-        activeTerminalId: terminalState.activeId,
-        terminalHeight,
-        chatPanelWidth,
-        onStateLoaded: handleStateLoaded,
-    });
+    const { loaded: stateLoaded, isClosing } = disableProjectState
+        ? { loaded: true, isClosing: false }
+        : useProjectState({
+            projectPath: workspacePath,
+            tabs: tabs.map(t => ({ id: t.id, title: t.title, type: t.type, path: t.path })),
+            activeTabId,
+            selectedModelId,
+            terminals: terminalState.terminals,
+            activeTerminalId: terminalState.activeId,
+            terminalHeight,
+            chatPanelWidth,
+            onStateLoaded: handleStateLoaded,
+        });
 
     // Cache warmup (Blade Protocol v2.1)
     // Automatically warms cache on launch, model change, and workspace change
     // Wait for stateLoaded to prevent multiple warmups during initialization
-    const { trackActivity } = useWarmup(workspacePath, selectedModelId, stateLoaded);
+    const { trackActivity } = disableWarmup
+        ? { trackActivity: () => undefined }
+        : useWarmup(workspacePath, selectedModelId, stateLoaded);
 
     useEffect(() => {
         if (chat.loading) {
@@ -416,14 +626,20 @@ const AppLayoutInner: React.FC = () => {
     // Measure editor column width so AppBar can constrain the tab strip to it
     const [editorColumnWidth, setEditorColumnWidth] = useState<number | undefined>(undefined);
     useEffect(() => {
+        if (disableEditorWidthObserver) {
+            setEditorColumnWidth(undefined);
+            return;
+        }
+
         const el = editorColumnRef.current;
         if (!el) return;
         const ro = new ResizeObserver(entries => {
+            recordDebugPerf('Layout.editorWidthObserver');
             setEditorColumnWidth(entries[0].contentRect.width);
         });
         ro.observe(el);
         return () => ro.disconnect();
-    }, []);
+    }, [disableEditorWidthObserver]);
 
     // Toggle sidebar function
     const toggleSidebar = (view: 'explorer' | 'git' | 'history') => {
@@ -435,7 +651,7 @@ const AppLayoutInner: React.FC = () => {
         }
     };
 
-    const editorViewportBottomInset = terminalHeight > 0 ? terminalHeight : 0;
+    const editorViewportBottomInset = !disableTerminalSurface && terminalHeight > 0 ? terminalHeight : 0;
 
     return (
         <div className="h-screen w-screen bg-[var(--bg-app)] overflow-hidden flex flex-col font-sans text-[var(--fg-primary)]">
@@ -455,16 +671,17 @@ const AppLayoutInner: React.FC = () => {
                 style={{ padding: 'var(--panel-gap)', gap: 'var(--panel-gap)' }}
             >
                 {/* Activity Bar (Vertical) — floating pill */}
-                <div
-                    className="flex flex-col items-center py-4 gap-6 z-50 shrink-0 relative"
-                    style={{
-                        width: '46px',
-                        backgroundColor: 'var(--bg-panel)',
-                        borderRadius: '0',
-                        border: '1px solid var(--border-default)',
-                        boxShadow: 'var(--panel-shadow)',
-                    }}
-                >
+                {!disableActivityBar && (
+                    <div
+                        className="flex flex-col items-center py-4 gap-6 z-50 shrink-0 relative"
+                        style={{
+                            width: '46px',
+                            backgroundColor: 'var(--bg-panel)',
+                            borderRadius: '0',
+                            border: '1px solid var(--border-default)',
+                            boxShadow: 'var(--panel-shadow)',
+                        }}
+                    >
                     <div
                         onClick={() => toggleSidebar('explorer')}
                         title={t('activityBar.explorer')}
@@ -531,26 +748,28 @@ const AppLayoutInner: React.FC = () => {
                     >
                         <Settings className="w-5 h-5" />
                     </div>
-                </div>
+                    </div>
+                )}
 
                 {/* Explorer / Sidebar (Floating overlay — anchored to outer row, above all editor content) */}
-                <div
-                    className={`
-                        absolute top-0 bottom-0 w-80 bg-[var(--bg-panel)] flex flex-col overflow-hidden
-                        transition-all duration-[var(--transition-fast)] ease-[cubic-bezier(0.22,1,0.36,1)]
-                        ${isSidebarOpen
-                            ? 'opacity-100 visible'
-                            : 'opacity-0 invisible pointer-events-none'}
-                    `}
-                    style={{
-                        left: 'calc(46px + 2 * var(--panel-gap))',
-                        borderRadius: '0',
-                        border: '1px solid var(--border-default)',
-                        boxShadow: isSidebarOpen ? 'var(--panel-shadow)' : 'none',
-                        zIndex: 200,
-                        transform: isSidebarOpen ? 'translateX(0)' : 'translateX(-100%)',
-                    }}
-                >
+                {!disableSidebarOverlay && (
+                    <div
+                        className={`
+                            absolute top-0 bottom-0 w-80 bg-[var(--bg-panel)] flex flex-col overflow-hidden
+                            transition-all duration-[var(--transition-fast)] ease-[cubic-bezier(0.22,1,0.36,1)]
+                            ${isSidebarOpen
+                                ? 'opacity-100 visible'
+                                : 'opacity-0 invisible pointer-events-none'}
+                        `}
+                        style={{
+                            left: disableActivityBar ? 'var(--panel-gap)' : 'calc(46px + 2 * var(--panel-gap))',
+                            borderRadius: '0',
+                            border: '1px solid var(--border-default)',
+                            boxShadow: isSidebarOpen ? 'var(--panel-shadow)' : 'none',
+                            zIndex: 200,
+                            transform: isSidebarOpen ? 'translateX(0)' : 'translateX(-100%)',
+                        }}
+                    >
                     {activeSidebar === 'explorer' && (
                         <Suspense fallback={<div className="h-full flex items-center justify-center text-[var(--fg-subtle)]">{t('sidebar.loadingExplorer', 'Loading explorer...')}</div>}>
                             <ExplorerPanel onFileSelect={handleExplorerFileSelect} activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
@@ -582,7 +801,8 @@ const AppLayoutInner: React.FC = () => {
                             <FileHistoryPanel activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
                         </Suspense>
                     )}
-                </div>
+                    </div>
+                )}
 
                 {/* Content Area */}
                 <div className="flex-1 flex min-w-0 overflow-hidden" style={{ gap: 'var(--panel-gap)' }}>
@@ -591,7 +811,7 @@ const AppLayoutInner: React.FC = () => {
                     <div
                         ref={editorColumnRef}
                         className="flex-1 flex flex-col min-w-0 relative overflow-hidden"
-                        style={{
+                        style={disableEditorChrome ? undefined : {
                             backgroundColor: 'var(--bg-editor)',
                             borderRadius: 'var(--panel-radius)',
                             border: '1px solid var(--border-default)',
@@ -602,7 +822,7 @@ const AppLayoutInner: React.FC = () => {
                         <div
                             className="flex-1 overflow-hidden relative"
                         >
-                            {activeTab?.type === 'file' && (
+                            {!disableEditorSurface && activeTab?.type === 'file' && (
                                 <div
                                     key={activeTab.id}
                                     className="absolute inset-x-0 top-0 z-10"
@@ -622,7 +842,7 @@ const AppLayoutInner: React.FC = () => {
                                 </div>
                             )}
 
-                            {tabs.length === 0 && (
+                            {!disableEditorSurface && tabs.length === 0 && (
                                 <div className="absolute inset-x-0 top-0 z-10" style={{ bottom: editorViewportBottomInset }}>
                                     <EditorPanel
                                         activeFile={null}
@@ -633,7 +853,7 @@ const AppLayoutInner: React.FC = () => {
                                 </div>
                             )}
 
-                            {activeTab?.type === 'ephemeral' && (
+                            {!disableEditorSurface && activeTab?.type === 'ephemeral' && (
                                 <div
                                     key={activeTab.id}
                                     className="absolute inset-x-0 top-0 z-10"
@@ -653,106 +873,122 @@ const AppLayoutInner: React.FC = () => {
                                     </Suspense>
                                 </div>
                             )}
+
+                            {disableEditorSurface && (
+                                <div
+                                    className="absolute inset-0 flex items-center justify-center text-sm text-[var(--fg-secondary)]"
+                                    style={{ bottom: editorViewportBottomInset }}
+                                >
+                                    Editor surface disabled via `?disableEditor=1`
+                                </div>
+                            )}
                         </div>
 
                         {/* Terminal Drawer — floats over the editor from the bottom */}
-                        <div
-                            className="absolute bottom-0 left-0 right-0 z-20 flex flex-col overflow-hidden"
-                            style={{
-                                height: terminalHeight,
-                                backgroundColor: 'var(--term-bg)',
-                                borderRadius: `0 0 var(--panel-radius) var(--panel-radius)`,
-                                boxShadow: '0 -10px 28px rgba(0,0,0,0.45)',
-                                transform: terminalHeight > 0 ? 'translateY(0)' : 'translateY(100%)',
-                                transition: isTerminalDragging ? 'none' : 'transform var(--transition-base)',
-                            }}
-                        >
-                            {/* Drag handle strip */}
+                        {!disableTerminalSurface && (
                             <div
-                                className="relative h-3 shrink-0 group flex items-center resize-y-cursor select-none"
-                                onMouseDown={handleTerminalMouseDown}
+                                className="absolute bottom-0 left-0 right-0 z-20 flex flex-col overflow-hidden"
+                                style={{
+                                    height: terminalHeight,
+                                    backgroundColor: 'var(--term-bg)',
+                                    borderRadius: disableEditorChrome ? '0' : `0 0 var(--panel-radius) var(--panel-radius)`,
+                                    boxShadow: disableEditorChrome ? 'none' : '0 -10px 28px rgba(0,0,0,0.45)',
+                                    transform: terminalHeight > 0 ? 'translateY(0)' : 'translateY(100%)',
+                                    transition: isTerminalDragging ? 'none' : 'transform var(--transition-base)',
+                                }}
                             >
+                                {/* Drag handle strip */}
                                 <div
-                                    className={`w-full transition-all duration-[var(--transition-fast)] ${isTerminalDragging
-                                        ? 'h-[2px] bg-[var(--accent-primary)]'
-                                        : 'h-px bg-[var(--border-subtle)] group-hover:h-[2px] group-hover:bg-[var(--accent-primary)]'
-                                    }`}
-                                />
+                                    className="relative h-3 shrink-0 group flex items-center resize-y-cursor select-none"
+                                    onMouseDown={handleTerminalMouseDown}
+                                >
+                                    <div
+                                        className={`w-full transition-all duration-[var(--transition-fast)] ${isTerminalDragging
+                                            ? 'h-[2px] bg-[var(--accent-primary)]'
+                                            : 'h-px bg-[var(--border-subtle)] group-hover:h-[2px] group-hover:bg-[var(--accent-primary)]'
+                                        }`}
+                                    />
+                                </div>
+                                <div className="flex-1 min-h-0 overflow-hidden">
+                                    <TerminalPane ref={terminalPaneRef} workspaceRoot={workspacePath} />
+                                </div>
                             </div>
-                            <div className="flex-1 min-h-0 overflow-hidden">
-                                <TerminalPane ref={terminalPaneRef} workspaceRoot={workspacePath} />
-                            </div>
-                        </div>
+                        )}
                     </div>
 
                     {/* Chat Panel Resizer */}
-                    <div
-                        className="relative w-0 z-40 shrink-0 select-none pointer-events-none"
-                        style={{
-                            marginLeft: 'calc(var(--panel-gap) / -2)',
-                            marginRight: 'calc(var(--panel-gap) / -2)',
-                        }}
-                    >
+                    {!disableChatSurface && !disableChatChrome && (
                         <div
-                            className={`absolute inset-y-0 left-1/2 -translate-x-1/2 flex items-center justify-center pointer-events-auto resize-x-cursor transition-colors duration-[var(--transition-fast)] ${isChatDragging
-                                ? 'bg-[var(--accent-primary)]/10'
-                                : 'bg-transparent hover:bg-[var(--accent-primary)]/10'
-                                }`}
-                            style={{ width: 'var(--panel-gap)' }}
-                            onMouseDown={handleChatMouseDown}
+                            className="relative w-0 z-40 shrink-0 select-none pointer-events-none"
+                            style={{
+                                marginLeft: 'calc(var(--panel-gap) / -2)',
+                                marginRight: 'calc(var(--panel-gap) / -2)',
+                            }}
                         >
-                            <div className={`h-full w-px ${isChatDragging ? 'bg-[var(--accent-primary)]' : 'bg-transparent hover:bg-[var(--accent-primary)]'}`} />
+                            <div
+                                className={`absolute inset-y-0 left-1/2 -translate-x-1/2 flex items-center justify-center pointer-events-auto resize-x-cursor transition-colors duration-[var(--transition-fast)] ${isChatDragging
+                                    ? 'bg-[var(--accent-primary)]/10'
+                                    : 'bg-transparent hover:bg-[var(--accent-primary)]/10'
+                                    }`}
+                                style={{ width: 'var(--panel-gap)' }}
+                                onMouseDown={handleChatMouseDown}
+                            >
+                                <div className={`h-full w-px ${isChatDragging ? 'bg-[var(--accent-primary)]' : 'bg-transparent hover:bg-[var(--accent-primary)]'}`} />
+                            </div>
                         </div>
-                    </div>
+                    )}
 
                     {/* AI Chat — floating card */}
-                    <div
-                        style={{
-                            width: chatPanelWidth,
-                            backgroundColor: 'var(--bg-panel)',
-                            borderRadius: '0',
-                            border: '1px solid var(--border-default)',
-                            boxShadow: 'var(--panel-shadow)',
-                        }}
-                        className="min-w-[280px] max-w-[800px] flex flex-col z-30 overflow-hidden"
-                    >
-                        <Suspense fallback={<div className="flex-1 bg-[var(--bg-panel)] h-full w-full" />}>
-                            <ChatPanel
-                                messages={chat.messages}
-                                loading={chat.loading}
-                                error={chat.error}
-                                sendMessage={chat.sendMessage}
-                                stopGeneration={handleStopGeneration}
-                                models={chat.models}
-                                selectedModelId={chat.selectedModelId}
-                                setSelectedModelId={chat.setSelectedModelId}
-                                chatMode={chat.chatMode}
-                                setChatMode={chat.setChatMode}
-                                pendingActions={chat.pendingActions}
-                                pendingApprovalRequest={chat.pendingApprovalRequest}
-                                waitingForApproval={chat.waitingForApproval}
-                                approveToolDecision={chat.approveToolDecision}
-                                respondToApprovalRequest={chat.respondToApprovalRequest}
-                                approveSingleCommand={chat.approveSingleCommand}
-                                skipSingleCommand={chat.skipSingleCommand}
-
-                                projectId={projectId || "default-project"}
-                                onLoadConversation={chat.loadConversation}
-                                researchProgress={researchProgress}
-                                onNewConversation={chat.newConversation}
-                                onUndoTool={chat.undoTool}
-                                onOpenFile={handleOpenChatFile}
-                                uncommittedChanges={uncommittedChanges}
-                                onAcceptAllChanges={acceptAllChanges}
-                                onRejectAllChanges={rejectAllChanges}
-                                toolActivity={chat.toolActivity}
-                                activeTodos={chat.activeTodos}
-                                queuedRequests={chat.messageQueue}
-                                deleteQueuedRequest={chat.deleteQueuedRequest}
-                                onImplementPlan={handleImplementPlan}
-                            />
-                        </Suspense>
-                    </div>
+                    {!disableChatSurface && (
+                        <div
+                            style={disableChatChrome ? {
+                                width: chatPanelWidth,
+                            } : {
+                                width: chatPanelWidth,
+                                backgroundColor: 'var(--bg-panel)',
+                                borderRadius: '0',
+                                border: '1px solid var(--border-default)',
+                                boxShadow: 'var(--panel-shadow)',
+                            }}
+                            className="min-w-[280px] max-w-[800px] flex flex-col z-30 overflow-hidden"
+                        >
+                            <Suspense fallback={<div className="flex-1 bg-[var(--bg-panel)] h-full w-full" />}>
+                                <ChatPanel
+                                    messages={chat.messages}
+                                    loading={chat.loading}
+                                    error={chat.error}
+                                    sendMessage={chat.sendMessage}
+                                    stopGeneration={handleStopGeneration}
+                                    models={chat.models}
+                                    selectedModelId={chat.selectedModelId}
+                                    setSelectedModelId={chat.setSelectedModelId}
+                                    chatMode={chat.chatMode}
+                                    setChatMode={chat.setChatMode}
+                                    pendingActions={chat.pendingActions}
+                                    pendingApprovalRequest={chat.pendingApprovalRequest}
+                                    waitingForApproval={chat.waitingForApproval}
+                                    approveToolDecision={chat.approveToolDecision}
+                                    respondToApprovalRequest={chat.respondToApprovalRequest}
+                                    approveSingleCommand={chat.approveSingleCommand}
+                                    skipSingleCommand={chat.skipSingleCommand}
+                                    projectId={projectId || "default-project"}
+                                    onLoadConversation={chat.loadConversation}
+                                    researchProgress={researchProgress}
+                                    onNewConversation={chat.newConversation}
+                                    onUndoTool={chat.undoTool}
+                                    onOpenFile={handleOpenChatFile}
+                                    uncommittedChanges={uncommittedChanges}
+                                    onAcceptAllChanges={acceptAllChanges}
+                                    onRejectAllChanges={rejectAllChanges}
+                                    toolActivity={chat.toolActivity}
+                                    activeTodos={chat.activeTodos}
+                                    queuedRequests={chat.messageQueue}
+                                    deleteQueuedRequest={chat.deleteQueuedRequest}
+                                    onImplementPlan={handleImplementPlan}
+                                />
+                            </Suspense>
+                        </div>
+                    )}
 
                 </div>
             </div>
@@ -776,6 +1012,14 @@ const AppLayoutInner: React.FC = () => {
                     </span>
                 </div>
                 <div className="flex items-center gap-4 opacity-70">
+                    {(disableEditorSurface || disableTerminalSurface || disableChatSurface) && (
+                        <span className="text-amber-400">
+                            debug:
+                            {disableEditorSurface ? ' editor-off' : ''}
+                            {disableTerminalSurface ? ' terminal-off' : ''}
+                            {disableChatSurface ? ' chat-off' : ''}
+                        </span>
+                    )}
                     {/* Saving Indicator */}
                     {isClosing && (
                         <span className="text-emerald-500 animate-pulse font-semibold">{t('statusBar.saving')}</span>
@@ -833,10 +1077,41 @@ const AppLayoutInner: React.FC = () => {
     );
 };
 
+const MinimalShellLayout: React.FC = () => {
+    return (
+        <div className="h-screen w-screen bg-[var(--bg-app)] overflow-hidden flex flex-col font-sans text-[var(--fg-primary)]">
+            <AppBar tabs={[]} activeTabId={null} projectName="Debug Shell" />
+            <div className="flex-1 flex items-center justify-center text-sm text-[var(--fg-secondary)]">
+                Minimal layout mode enabled
+            </div>
+            <div
+                className="text-[var(--fg-tertiary)] flex items-center px-3 text-[10px] font-mono justify-between select-none z-40"
+                style={{
+                    height: '24px',
+                    backgroundColor: 'var(--bg-panel)',
+                    margin: '0 var(--panel-gap) var(--panel-gap)',
+                    borderRadius: '0',
+                    border: '1px solid var(--border-default)',
+                    boxShadow: 'var(--panel-shadow)',
+                }}
+            >
+                <div className="flex items-center gap-1.5">
+                    <span>minimal-shell</span>
+                </div>
+                <div className="flex items-center gap-4 opacity-70">
+                    <span>debug</span>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 export const AppLayout: React.FC = () => {
+    const minimalLayout = readDebugFlag('minimalLayout');
+
     return (
         <EditorProvider>
-            <AppLayoutInner />
+            {minimalLayout ? <MinimalShellLayout /> : <AppLayoutInner />}
         </EditorProvider>
     );
 };

@@ -69,7 +69,7 @@ export const InputModal: React.FC<InputModalProps> = ({
         <div className="fixed inset-0 z-[9999] flex items-center justify-center animate-in fade-in duration-[var(--transition-fast)]">
             {/* Backdrop */}
             <div
-                className="absolute inset-0 bg-black/70 backdrop-blur-md animate-in fade-in duration-[var(--transition-base)]"
+                className="absolute inset-0 bg-black/70 animate-in fade-in duration-[var(--transition-base)]"
                 onClick={onCancel}
             />
 
@@ -172,7 +172,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
         <div className="fixed inset-0 z-[9999] flex items-center justify-center animate-in fade-in duration-[var(--transition-fast)]">
             {/* Backdrop */}
             <div
-                className="absolute inset-0 bg-black/70 backdrop-blur-md animate-in fade-in duration-[var(--transition-base)]"
+                className="absolute inset-0 bg-black/70 animate-in fade-in duration-[var(--transition-base)]"
                 onClick={onCancel}
             />
 

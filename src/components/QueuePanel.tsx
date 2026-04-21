@@ -14,7 +14,7 @@ const QueuePanelComponent: React.FC<QueuePanelProps> = ({ requests, onEditReques
     if (requests.length === 0) return null;
 
     return (
-        <div className="border-t border-(--border-subtle) bg-(--bg-surface)/70 backdrop-blur-sm">
+        <div className="border-t border-(--border-subtle) bg-(--bg-surface)">
             <div className="flex items-center gap-3 px-3 py-2.5 text-[11px] text-(--fg-secondary)">
                 <div className="flex h-7 w-7 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950/40">
                     <ListOrdered className="h-3.5 w-3.5 text-zinc-400" />

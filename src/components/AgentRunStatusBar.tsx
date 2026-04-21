@@ -255,7 +255,7 @@ export const AgentRunStatusBar: React.FC<AgentRunStatusBarProps> = ({
     const visiblePhaseItems = phaseItems.filter((phaseItem) => phaseItem.isPresent);
 
     return (
-        <div className={`border-t ${tone.border} ${tone.bg} backdrop-blur-sm`}>
+        <div className={`border-t ${tone.border} ${tone.bg}`}>
             <div className="flex items-start gap-3 px-3 py-2.5">
                 <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border ${tone.border} ${tone.bg}`}>
                     {loading && !toolActivity && pendingApprovalCount === 0 && !waitingForApproval ? (

@@ -47,19 +47,33 @@ fn debounced_update_loop(index: Arc<RwLock<ProjectIndex>>, rx: mpsc::Receiver<Ev
     let debounce_duration = Duration::from_secs(2);
 
     loop {
-        match rx.recv_timeout(Duration::from_millis(500)) {
-            Ok(event) => {
-                let paths = extract_paths(&event);
-                pending_changes.extend(paths);
-                last_change = Instant::now();
+        // When idle (no pending changes), block on recv() to avoid
+        // unnecessary wakeups. Only poll with timeout when there are
+        // pending changes waiting for debounce to expire.
+        if pending_changes.is_empty() {
+            match rx.recv() {
+                Ok(event) => {
+                    let paths = extract_paths(&event);
+                    pending_changes.extend(paths);
+                    last_change = Instant::now();
+                }
+                Err(_) => break,
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                break;
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                if !pending_changes.is_empty() && last_change.elapsed() > debounce_duration {
-                    apply_changes(&index, &pending_changes);
-                    pending_changes.clear();
+        } else {
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(event) => {
+                    let paths = extract_paths(&event);
+                    pending_changes.extend(paths);
+                    last_change = Instant::now();
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    break;
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if !pending_changes.is_empty() && last_change.elapsed() > debounce_duration {
+                        apply_changes(&index, &pending_changes);
+                        pending_changes.clear();
+                    }
                 }
             }
         }

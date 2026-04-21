@@ -32,6 +32,7 @@ pub mod indexer;
 pub mod language_service;
 pub mod local_artifacts;
 pub mod local_index;
+pub mod linux_webkit_workaround;
 
 pub mod models;
 pub mod post_edit_validation;
@@ -73,6 +74,8 @@ pub struct Cli {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    crate::linux_webkit_workaround::apply();
+
     let cli = Cli::parse();
 
     // Resolve relative paths (like "." or "..") to absolute paths
@@ -121,6 +124,7 @@ pub fn run() {
             commands::misc::log_frontend,
             commands::misc::frontend_shell_ready,
             commands::misc::get_blade_event_metrics,
+            commands::misc::get_runtime_debug_flags,
             // commands::misc::set_virtual_buffer,
             // commands::misc::clear_virtual_buffer,
             // commands::misc::has_virtual_buffer,

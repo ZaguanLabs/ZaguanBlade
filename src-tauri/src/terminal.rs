@@ -34,6 +34,14 @@ fn strip_appimage_env(cmd: &mut CommandBuilder) {
     cmd.env_remove("OWD");
 }
 
+fn strip_python_runtime_env(cmd: &mut CommandBuilder) {
+    cmd.env_remove("PYTHONHOME");
+    cmd.env_remove("PYTHONPATH");
+    cmd.env_remove("PYTHONEXECUTABLE");
+    cmd.env_remove("PYTHONUSERBASE");
+    cmd.env_remove("__PYVENV_LAUNCHER__");
+}
+
 // Helper struct to hold the PTY state
 pub struct PtyState {
     pub writer: Box<dyn Write + Send>,
@@ -95,6 +103,7 @@ fn configure_terminal_environment(cmd: &mut CommandBuilder) {
     }
 
     strip_appimage_env(cmd);
+    strip_python_runtime_env(cmd);
 }
 
 fn emit_terminal_output<R: Runtime>(

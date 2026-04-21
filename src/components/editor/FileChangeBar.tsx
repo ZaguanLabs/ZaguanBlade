@@ -25,8 +25,6 @@ export const FileChangeBar: React.FC<FileChangeBarProps> = ({
         border: '1px solid var(--border-default)',
         borderRadius: '9999px',
         boxShadow: 'var(--panel-shadow)',
-        backdropFilter: 'blur(8px)',
-        WebkitBackdropFilter: 'blur(8px)',
       }}
     >
       {/* File name */}

@@ -274,6 +274,8 @@ struct HistoryDetailRequestPayload {
 struct WsIncomingMessage {
     #[allow(dead_code)]
     id: String,
+    #[serde(default)]
+    request_id: Option<String>,
     #[serde(rename = "type")]
     msg_type: String,
     #[allow(dead_code)]
@@ -282,6 +284,24 @@ struct WsIncomingMessage {
 }
 
 impl BladeWsClient {
+    fn correlation_id_for_message(msg: &WsIncomingMessage) -> String {
+        msg.request_id
+            .clone()
+            .or_else(|| {
+                msg.payload
+                    .get("request_id")
+                    .and_then(|value| value.as_str())
+                    .map(ToString::to_string)
+            })
+            .or_else(|| {
+                msg.payload
+                    .get("original_request_id")
+                    .and_then(|value| value.as_str())
+                    .map(ToString::to_string)
+            })
+            .unwrap_or_else(|| msg.id.clone())
+    }
+
     /// Create a new WebSocket Blade Protocol client
     pub fn new(base_url: String, api_key: String) -> Self {
         Self {
@@ -816,6 +836,7 @@ impl BladeWsClient {
     fn parse_message(text: &str, tx: &mpsc::UnboundedSender<BladeWsEvent>) -> Result<(), String> {
         let msg: WsIncomingMessage =
             serde_json::from_str(text).map_err(|e| format!("JSON parse error: {}", e))?;
+        let correlation_id = Self::correlation_id_for_message(&msg);
 
         match msg.msg_type.as_str() {
             "authenticated" => {
@@ -852,7 +873,7 @@ impl BladeWsClient {
                     })?;
 
                 let _ = tx.send(BladeWsEvent::HistoryListResponse {
-                    request_id: msg.id.clone(),
+                    request_id: correlation_id.clone(),
                     conversations,
                 });
             }
@@ -863,13 +884,13 @@ impl BladeWsClient {
                 .map_err(|e| format!("Failed to parse history detail response: {}", e))?;
 
                 let _ = tx.send(BladeWsEvent::HistoryDetailResponse {
-                    request_id: msg.id.clone(),
+                    request_id: correlation_id.clone(),
                     conversation,
                 });
             }
             "zlp_response" => {
                 let _ = tx.send(BladeWsEvent::ZlpResponse {
-                    request_id: msg.id.clone(),
+                    request_id: correlation_id.clone(),
                     response: msg.payload.clone(),
                 });
             }
@@ -1116,7 +1137,7 @@ impl BladeWsClient {
                 // eprintln!("[BLADE WS] Error: {} ({}) - {} (tokens: {:?}/{:?}, recoverable: {:?})",
                 //     error_type, code, message, token_count, max_tokens, recoverable);
                 let _ = tx.send(BladeWsEvent::Error {
-                    request_id: Some(msg.id.clone()),
+                    request_id: Some(correlation_id.clone()),
                     error_type,
                     code,
                     message,
@@ -1260,7 +1281,7 @@ impl BladeWsClient {
                 };
 
                 let _ = tx.send(BladeWsEvent::GetConversationContext {
-                    request_id: msg.id.clone(),
+                    request_id: correlation_id,
                     session_id,
                 });
             }

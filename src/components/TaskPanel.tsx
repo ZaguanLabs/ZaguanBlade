@@ -52,7 +52,7 @@ const TaskPanelComponent: React.FC<TaskPanelProps> = ({ todos, isCollapsed, onTo
     return (
         <div
             ref={panelRef}
-            className={`border-t border-[var(--border-subtle)] bg-[var(--bg-surface)]/80 backdrop-blur-sm transition-all duration-300 ease-out ${
+            className={`border-t border-[var(--border-subtle)] bg-[var(--bg-surface)] transition-all duration-300 ease-out ${
                 isVisible ? 'opacity-100 max-h-[300px]' : 'opacity-0 max-h-0'
             } ${allDoneState ? 'border-t-emerald-500/30' : ''}`}
             style={{ overflow: 'hidden' }}

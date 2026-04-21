@@ -1,7 +1,6 @@
 import React, { Suspense, useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
 import { invoke } from '@tauri-apps/api/core';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import App from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ContextMenuProvider } from './components/ui/ContextMenu';
@@ -10,10 +9,33 @@ import { StartupBootstrapProvider, useStartupBootstrap } from './contexts/Startu
 import { ThemeProvider } from './contexts/ThemeContext';
 import './index.css';
 import './i18n'; // Initialize i18n
+import { parseBooleanFlag, readDebugFlag } from './utils/debugFlags';
+import { startDebugPerfReporter } from './utils/debugPerf';
 
-let hasShownWindow = false;
 let hasHiddenLoadingScreen = false;
 let hasTriggeredPostUiStartup = false;
+
+window.__ZBLADE_DEBUG_FLAGS__ = {
+    disableTERMINAL: parseBooleanFlag(import.meta.env.VITE_ZBLADE_DISABLE_TERMINAL),
+    disableEDITOR: parseBooleanFlag(import.meta.env.VITE_ZBLADE_DISABLE_EDITOR),
+    disableCHAT: parseBooleanFlag(import.meta.env.VITE_ZBLADE_DISABLE_CHAT),
+    blankApp: parseBooleanFlag(import.meta.env.VITE_ZBLADE_BLANK_APP),
+    disableCoreStateSync: parseBooleanFlag(import.meta.env.VITE_ZBLADE_DISABLE_CORE_STATE_SYNC),
+    minimalLayout: parseBooleanFlag(import.meta.env.VITE_ZBLADE_MINIMAL_LAYOUT),
+    disableChatHook: parseBooleanFlag(import.meta.env.VITE_ZBLADE_DISABLE_CHAT_HOOK),
+    disableGitStatus: parseBooleanFlag(import.meta.env.VITE_ZBLADE_DISABLE_GIT_STATUS),
+    disableUncommittedChanges: parseBooleanFlag(import.meta.env.VITE_ZBLADE_DISABLE_UNCOMMITTED_CHANGES),
+    disableLayoutEvents: parseBooleanFlag(import.meta.env.VITE_ZBLADE_DISABLE_LAYOUT_EVENTS),
+    disableProjectState: parseBooleanFlag(import.meta.env.VITE_ZBLADE_DISABLE_PROJECT_STATE),
+    disableWarmup: parseBooleanFlag(import.meta.env.VITE_ZBLADE_DISABLE_WARMUP),
+    disableTabManager: parseBooleanFlag(import.meta.env.VITE_ZBLADE_DISABLE_TAB_MANAGER),
+    disableActivityBar: parseBooleanFlag(import.meta.env.VITE_ZBLADE_DISABLE_ACTIVITY_BAR),
+    disableSidebarOverlay: parseBooleanFlag(import.meta.env.VITE_ZBLADE_DISABLE_SIDEBAR_OVERLAY),
+    disableEditorChrome: parseBooleanFlag(import.meta.env.VITE_ZBLADE_DISABLE_EDITOR_CHROME),
+    disableChatChrome: parseBooleanFlag(import.meta.env.VITE_ZBLADE_DISABLE_CHAT_CHROME),
+    disableEditorWidthObserver: parseBooleanFlag(import.meta.env.VITE_ZBLADE_DISABLE_EDITOR_WIDTH_OBSERVER),
+    debugPerf: undefined,
+};
 
 function hideLoadingScreen() {
     if (hasHiddenLoadingScreen) {
@@ -31,24 +53,15 @@ function hideLoadingScreen() {
 }
 
 async function revealWindow(signalPostUiStartup: boolean) {
-    try {
-        if (!hasShownWindow && typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
-            hasShownWindow = true;
-            await getCurrentWindow().show();
-        }
-    } catch (err) {
-        console.error('[WINDOW] Failed to show window:', err);
-    } finally {
-        hideLoadingScreen();
+    hideLoadingScreen();
 
-        if (signalPostUiStartup && !hasTriggeredPostUiStartup) {
-            hasTriggeredPostUiStartup = true;
-            window.setTimeout(() => {
-                void invoke('frontend_shell_ready').catch((err) => {
-                    console.error('[WINDOW] Failed to trigger post-UI startup:', err);
-                });
-            }, 0);
-        }
+    if (signalPostUiStartup && !hasTriggeredPostUiStartup) {
+        hasTriggeredPostUiStartup = true;
+        window.setTimeout(() => {
+            void invoke('frontend_shell_ready').catch((err) => {
+                console.error('[WINDOW] Failed to trigger post-UI startup:', err);
+            });
+        }, 0);
     }
 }
 
@@ -83,7 +96,57 @@ const StartupWindowController = () => {
     return null;
 };
 
+const DebugFlagBootstrap = ({ children }: { children: React.ReactNode }) => {
+    const [ready, setReady] = React.useState(false);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        const loadRuntimeFlags = async () => {
+            try {
+                const runtimeFlags = await invoke<Record<string, string | undefined>>('get_runtime_debug_flags');
+                if (!cancelled) {
+                    window.__ZBLADE_DEBUG_FLAGS__ = {
+                        ...window.__ZBLADE_DEBUG_FLAGS__,
+                        ...runtimeFlags,
+                    };
+                    if (runtimeFlags.debugPerf === 'true') {
+                        startDebugPerfReporter();
+                    }
+                }
+            } catch (error) {
+                console.error('[DEBUG] Failed to load runtime debug flags:', error);
+            } finally {
+                if (!cancelled) {
+                    setReady(true);
+                }
+            }
+        };
+
+        void loadRuntimeFlags();
+
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    if (!ready) {
+        return <div className="h-screen w-screen bg-[var(--bg-app)]" />;
+    }
+
+    return <>{children}</>;
+};
+
 const AppWrapper = () => {
+    const blankApp = readDebugFlag('blankApp');
+
+    if (blankApp) {
+        return (
+            <div className="h-screen w-screen bg-[var(--bg-app)] text-[var(--fg-secondary)] flex items-center justify-center">
+                Blank app mode enabled
+            </div>
+        );
+    }
 
     return (
         <Suspense fallback={<div className="h-screen w-screen bg-(--bg-app)" />}>
@@ -99,7 +162,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <LanguageProvider>
                 <ThemeProvider>
                     <ContextMenuProvider>
-                        <AppWrapper />
+                        <DebugFlagBootstrap>
+                            <AppWrapper />
+                        </DebugFlagBootstrap>
                     </ContextMenuProvider>
                 </ThemeProvider>
             </LanguageProvider>

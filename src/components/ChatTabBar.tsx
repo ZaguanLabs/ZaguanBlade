@@ -11,7 +11,7 @@ interface ChatTabBarProps {
 export const ChatTabBar: React.FC<ChatTabBarProps> = ({ activeTab, onTabChange, onNewConversation }) => {
     const { t } = useTranslation();
     return (
-        <div className="flex h-12 shrink-0 items-center justify-between border-b border-[var(--border-subtle)] bg-[var(--bg-app)]/90 px-3 select-none backdrop-blur-md">
+        <div className="flex h-12 shrink-0 items-center justify-between border-b border-[var(--border-subtle)] bg-[var(--bg-app)] px-3 select-none">
             <div className="flex items-center gap-2 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/60 p-1">
                 <button
                     onClick={() => onTabChange('chat')}

@@ -742,7 +742,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
 
     return (
         <>
-            <div className="shrink-0 border-t border-[var(--border-subtle)] bg-[var(--bg-app)]/95 backdrop-blur-md">
+            <div className="shrink-0 border-t border-[var(--border-subtle)] bg-[var(--bg-app)]">
                 <div className="px-2 pb-2 pt-2">
                     <div className={`relative rounded-xl border shadow-[0_16px_44px_rgba(0,0,0,0.22)] transition-colors ${chatMode === 'planning'
                         ? 'border-sky-500/35 bg-[var(--bg-surface)]/85'
@@ -829,7 +829,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                     <div className={`relative px-1.5 pb-0 pt-1.5 transition-colors ${loading ? 'bg-[var(--bg-surface)]/40' : ''}`}>
                         {showSuggestions && suggestions.length > 0 && (
                             <div
-                                className="absolute bottom-full left-0 right-0 z-[80] mx-0.5 mb-1.5 overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-[0_16px_44px_rgba(0,0,0,0.34)] backdrop-blur-md"
+                                className="absolute bottom-full left-0 right-0 z-[80] mx-0.5 mb-1.5 overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-[0_16px_44px_rgba(0,0,0,0.34)]"
                             >
                                 {suggestions.map((suggestion, idx) => {
                                     const isActiveSuggestion = idx === selectedSuggestionIndex;

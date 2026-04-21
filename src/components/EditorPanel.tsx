@@ -18,6 +18,7 @@ import { FileChangeBar } from './editor/FileChangeBar';
 import { Breadcrumb } from './editor/Breadcrumb';
 import { useUncommittedChanges } from '../hooks/useUncommittedChanges';
 import { formatBladeError, formatUnknownBackendError } from '../utils/backendErrors';
+import { recordDebugPerf } from '../utils/debugPerf';
 
 const CodeEditor = React.lazy(() => import('./CodeEditor'));
 const PdfViewer = React.lazy(() =>
@@ -164,6 +165,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     onContentStateChange,
     onOpenSettings,
 }) => {
+    recordDebugPerf('EditorPanel.render');
     const { t } = useTranslation();
     const [content, setContent] = useState(() => draftContent ?? savedContent ?? '');
     const [loading, setLoading] = useState(false);

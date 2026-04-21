@@ -412,7 +412,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
         <div className="fixed inset-0 z-[9999] flex items-center justify-center p-6">
             {/* Backdrop */}
             <div
-                className="absolute inset-0 bg-black/72 backdrop-blur-[3px]"
+                className="absolute inset-0 bg-black/72"
                 onClick={onClose}
             />
 

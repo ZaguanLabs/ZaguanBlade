@@ -16,6 +16,11 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
   const [changes, setChanges] = useState<UncommittedChange[]>([]);
   const [loading, setLoading] = useState(true);
   const sourceIdRef = useRef(`uncommitted-${crypto.randomUUID()}`);
+  const onFileChangedRef = useRef(options?.onFileChanged);
+
+  useEffect(() => {
+    onFileChangedRef.current = options?.onFileChanged;
+  }, [options?.onFileChanged]);
 
   const normalizePath = useCallback((value: string): string => {
     return value.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
@@ -82,7 +87,7 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
         }
 
         if (options?.onFileChanged) {
-          affectedPaths.forEach(filePath => options.onFileChanged?.(filePath));
+          affectedPaths.forEach(filePath => onFileChangedRef.current?.(filePath));
         }
       })();
     });
@@ -95,8 +100,8 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
       }
       void refresh();
 
-      if (options?.onFileChanged) {
-        customEvent.detail?.filePaths?.forEach(filePath => options.onFileChanged?.(filePath));
+      if (onFileChangedRef.current) {
+        customEvent.detail?.filePaths?.forEach(filePath => onFileChangedRef.current?.(filePath));
       }
     };
     window.addEventListener('uncommitted-changes-updated', handleGlobalRefresh as EventListener);
@@ -107,7 +112,7 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
         .catch(console.error);
       window.removeEventListener('uncommitted-changes-updated', handleGlobalRefresh as EventListener);
     };
-  }, [refresh, options?.onFileChanged, upsertChange]);
+  }, [refresh, upsertChange]);
 
   const getChangeForFile = useCallback((filePath: string): UncommittedChange | undefined => {
     const target = normalizePath(filePath);

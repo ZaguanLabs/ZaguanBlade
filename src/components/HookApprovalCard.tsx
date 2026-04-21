@@ -32,7 +32,7 @@ export const HookApprovalCard: React.FC<HookApprovalCardProps> = ({
     }, [request.arguments]);
 
     return (
-        <div className="my-2 overflow-hidden rounded-xl border border-(--border-subtle) bg-(--bg-surface)/88 shadow-[0_10px_28px_rgba(0,0,0,0.18)] backdrop-blur-sm">
+        <div className="my-2 overflow-hidden rounded-xl border border-(--border-subtle) bg-(--bg-surface) shadow-[0_10px_28px_rgba(0,0,0,0.18)]">
             <div className="flex items-center gap-2 border-b border-(--border-subtle)/70 bg-white/2 px-2.5 py-2">
                 <div className="flex h-6 w-6 items-center justify-center rounded-lg border border-(--border-subtle) bg-(--bg-app)/70">
                     {isWaiting ? (

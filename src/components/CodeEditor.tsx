@@ -170,7 +170,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 highlightActiveLineGutter(),
                 highlightActiveLine(),
                 foldGutter(),
-                drawSelection(),
+                drawSelection({ cursorBlinkRate: 0 }),
                 dropCursor(),
                 rectangularSelection(),
                 crosshairCursor(),

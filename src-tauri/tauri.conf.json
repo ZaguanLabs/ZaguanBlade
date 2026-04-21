@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "ZaguanBlade",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "identifier": "com.zaguan.zblade",
   "build": {
     "beforeDevCommand": "bun run dev",
@@ -18,7 +18,7 @@
         "resizable": true,
         "decorations": false,
         "center": true,
-        "visible": false,
+        "visible": true,
         "transparent": false,
         "backgroundColor": [10, 10, 10, 255]
       }

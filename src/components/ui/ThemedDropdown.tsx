@@ -6,7 +6,7 @@ interface ThemedDropdownSurfaceProps extends React.HTMLAttributes<HTMLDivElement
 export const ThemedDropdownSurface: React.FC<ThemedDropdownSurfaceProps> = ({ className, ...props }) => (
     <div
         className={cn(
-            'z-50 overflow-hidden rounded-[calc(var(--panel-radius)+6px)] border border-(--border-default) bg-[color-mix(in_srgb,var(--bg-panel)_92%,var(--bg-surface))] p-2 shadow-(--panel-shadow) backdrop-blur-[18px]',
+            'z-50 overflow-hidden rounded-[calc(var(--panel-radius)+6px)] border border-(--border-default) bg-[color-mix(in_srgb,var(--bg-panel)_92%,var(--bg-surface))] p-2 shadow-(--panel-shadow)',
             className,
         )}
         {...props}

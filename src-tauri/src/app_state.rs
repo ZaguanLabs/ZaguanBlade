@@ -14,13 +14,32 @@ use dotenvy::dotenv;
 use notify::RecommendedWatcher;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::{atomic::AtomicBool, Arc, Mutex, RwLock};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64},
+    Arc, Mutex, RwLock,
+};
 
 fn project_data_root(workspace_root: Option<&PathBuf>) -> PathBuf {
     workspace_root
         .cloned()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".zblade")
+}
+
+pub struct FrontendWatchdogState {
+    pub last_ping_ms: AtomicU64,
+    pub last_recovery_ms: AtomicU64,
+    pub recovery_attempts: AtomicU64,
+}
+
+impl FrontendWatchdogState {
+    fn new() -> Self {
+        Self {
+            last_ping_ms: AtomicU64::new(0),
+            last_recovery_ms: AtomicU64::new(0),
+            recovery_attempts: AtomicU64::new(0),
+        }
+    }
 }
 
 pub struct AppState {
@@ -63,6 +82,7 @@ pub struct AppState {
     pub ws_connection: Arc<WsConnectionManager>,       // Persistent WebSocket connection to zcoderd
     pub pending_error_feedback: Mutex<Option<String>>, // Recovery hint to prepend to next user message
     pub git_dir: RwLock<Option<PathBuf>>,              // Path to .git directory for gix::open()
+    pub frontend_watchdog: FrontendWatchdogState,
 }
 
 impl AppState {
@@ -163,6 +183,7 @@ impl AppState {
             ws_connection,
             pending_error_feedback: Mutex::new(None),
             git_dir: RwLock::new(None),
+            frontend_watchdog: FrontendWatchdogState::new(),
         }
     }
 

@@ -427,17 +427,35 @@ fn scheduler_loop(rx: mpsc::Receiver<SchedulerCommand>) {
     let mut state = SchedulerState::default();
 
     loop {
-        match rx.recv_timeout(FRAME_FLUSH_INTERVAL) {
-            Ok(command) => {
-                handle_command(&mut state, command);
-                if should_flush_early(&state) {
-                    flush(&mut state, FlushReason::Early);
+        // When idle (no pending work), block indefinitely on recv() to avoid
+        // ~83 unnecessary wakeups/sec from recv_timeout(12ms). Only use
+        // recv_timeout when there's pending data that needs timely flushing.
+        if !has_pending(&state) {
+            match rx.recv() {
+                Ok(command) => {
+                    handle_command(&mut state, command);
+                    if should_flush_early(&state) {
+                        flush(&mut state, FlushReason::Early);
+                    }
+                }
+                Err(_) => {
+                    flush(&mut state, FlushReason::Disconnect);
+                    break;
                 }
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => flush(&mut state, FlushReason::Interval),
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                flush(&mut state, FlushReason::Disconnect);
-                break;
+        } else {
+            match rx.recv_timeout(FRAME_FLUSH_INTERVAL) {
+                Ok(command) => {
+                    handle_command(&mut state, command);
+                    if should_flush_early(&state) {
+                        flush(&mut state, FlushReason::Early);
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => flush(&mut state, FlushReason::Interval),
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    flush(&mut state, FlushReason::Disconnect);
+                    break;
+                }
             }
         }
     }

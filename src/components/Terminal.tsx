@@ -13,6 +13,7 @@ import { useTheme } from "../contexts/ThemeContext";
 import { useContextMenu, ContextMenuItem } from "./ui/ContextMenu";
 import { Copy, ClipboardPaste, Trash2, MessageSquare } from "lucide-react";
 import { BLADE_TERMINAL_ID } from "../constants/terminal";
+import { recordDebugPerf } from "../utils/debugPerf";
 
 function stripAnsiEscapes(data: string): string {
     return data.replace(/\u001b\[[0-?]*[ -\/]*[@-~]/g, '').replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '');
@@ -91,6 +92,7 @@ interface TerminalProps {
 }
 
 export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, command, displayCommand, interactive = true }) => {
+    recordDebugPerf(`Terminal.render.${id}`);
     const { t } = useTranslation();
     const { themeId } = useTheme();
     const terminalRef = useRef<HTMLDivElement>(null);
@@ -190,7 +192,7 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
             fontSize: 12,
             lineHeight: 1.2,
             theme: getTerminalTheme(),
-            allowTransparency: true,
+            allowTransparency: false,
             fontWeight: "normal",
             fontWeightBold: "bold",
         });
@@ -269,6 +271,7 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
         });
 
         const syncTerminalSize = () => {
+            recordDebugPerf(`Terminal.syncSize.${id}`);
             if (!fitAddonRef.current || !terminalRef.current || !xtermRef.current) return;
             if (!terminalRef.current.offsetParent) return;
             try {
@@ -305,12 +308,14 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
         };
 
         const scheduleResize = () => {
+            recordDebugPerf(`Terminal.scheduleResize.${id}`);
             if (resizeFrameRef.current !== null) {
                 return;
             }
 
             resizeFrameRef.current = requestAnimationFrame(() => {
                 resizeFrameRef.current = null;
+                recordDebugPerf(`Terminal.resizeFrame.${id}`);
                 syncTerminalSize();
             });
         };
@@ -320,6 +325,7 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
         // We poll for a short period until we get valid dimensions.
         let fitAttempts = 0;
         fitIntervalRef.current = setInterval(() => {
+            recordDebugPerf(`Terminal.fitInterval.${id}`);
             fitAttempts++;
             try {
                 const dims = fitAddon.proposeDimensions();
@@ -425,6 +431,7 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
         });
 
         const resizeObserver = new ResizeObserver(() => {
+            recordDebugPerf(`Terminal.resizeObserver.${id}`);
             scheduleResize();
         });
 

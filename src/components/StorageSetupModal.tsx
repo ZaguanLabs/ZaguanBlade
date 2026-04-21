@@ -73,7 +73,7 @@ export const StorageSetupModal: React.FC<StorageSetupModalProps> = ({
     return (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center">
             {/* Backdrop */}
-            <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+            <div className="absolute inset-0 bg-black/70" />
 
             {/* Modal */}
             <div className="relative bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded-xl shadow-2xl w-full max-w-2xl mx-4 animate-in fade-in zoom-in-95 duration-200">
