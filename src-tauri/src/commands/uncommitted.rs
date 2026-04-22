@@ -113,7 +113,9 @@ pub async fn reject_change(
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let history_service = state.history_service()?;
-        state.uncommitted_changes.reject(&id, history_service.as_ref())
+        let change = state.uncommitted_changes.reject(&id, history_service.as_ref())?;
+        crate::file_state_sync::sync_from_disk_after_write(&app, &change.file_path);
+        Ok(change)
     })
     .await
     .map_err(|e| format!("reject change task failed: {}", e))?
@@ -128,9 +130,11 @@ pub async fn reject_file_changes(
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let history_service = state.history_service()?;
-        state
+        let change = state
             .uncommitted_changes
-            .reject_by_path(&PathBuf::from(file_path), history_service.as_ref())
+            .reject_by_path(&PathBuf::from(file_path), history_service.as_ref())?;
+        crate::file_state_sync::sync_from_disk_after_write(&app, &change.file_path);
+        Ok(change)
     })
     .await
     .map_err(|e| format!("reject file changes task failed: {}", e))?
@@ -144,7 +148,11 @@ pub async fn reject_all_changes(
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let history_service = state.history_service()?;
-        state.uncommitted_changes.reject_all(history_service.as_ref())
+        let changes = state.uncommitted_changes.reject_all(history_service.as_ref())?;
+        for change in &changes {
+            crate::file_state_sync::sync_from_disk_after_write(&app, &change.file_path);
+        }
+        Ok(changes)
     })
     .await
     .map_err(|e| format!("reject all changes task failed: {}", e))?

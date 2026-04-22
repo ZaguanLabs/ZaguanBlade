@@ -27,7 +27,13 @@ pub async fn revert_file_to_snapshot(
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let history_service = state.history_service()?;
-        history_service.revert_to(&snapshot_id)
+        let entry = history_service.get_entry(&snapshot_id);
+        history_service.revert_to(&snapshot_id)?;
+        if let Some(entry) = entry {
+            let file_path = entry.file_path;
+            crate::file_state_sync::sync_from_disk_after_write(&app, &file_path);
+        }
+        Ok(())
     })
     .await
     .map_err(|e| format!("revert snapshot task failed: {}", e))?

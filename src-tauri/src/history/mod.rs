@@ -132,6 +132,16 @@ impl HistoryService {
         }
     }
 
+    pub fn get_entry(&self, entry_id: &str) -> Option<HistoryEntry> {
+        let index = self.index.lock().unwrap();
+        for entries in index.values() {
+            if let Some(entry) = entries.iter().find(|entry| entry.id == entry_id) {
+                return Some(entry.clone());
+            }
+        }
+        None
+    }
+
     pub fn undo_batch(&self, group_id: &str) -> Result<Vec<String>, String> {
         let index = self.index.lock().unwrap();
 

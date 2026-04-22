@@ -23,6 +23,7 @@ pub mod ephemeral_documents;
 pub mod events;
 pub mod explorer;
 pub mod feature_flags;
+pub mod file_state_sync;
 pub mod fs_watcher;
 pub mod git;
 pub mod gitignore_filter;

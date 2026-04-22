@@ -60,23 +60,25 @@ fn build_editor_state<R: Runtime>(context: &ToolExecutionContext<R>) -> tools::E
     }
 }
 
-fn execute_tool_snapshot(
+fn execute_tool_snapshot<R: Runtime>(
     workspace_root: Option<String>,
     editor_state: tools::EditorState,
     tool_name: String,
     args: String,
-) -> ToolResult {
+    app_handle: Option<AppHandle<R>>,
+) -> ToolResult
+{
     let workspace_path = workspace_root
         .as_deref()
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
 
-    tools::execute_tool_with_editor::<tauri::Wry>(
+    tools::execute_tool_with_editor::<R>(
         &workspace_path,
         &tool_name,
         &args,
         Some(&editor_state),
-        None,
+        app_handle.as_ref(),
     )
 }
 
@@ -147,13 +149,23 @@ pub fn execute_tool_with_default_timeout<R: Runtime>(
     context: &ToolExecutionContext<R>,
     tool_name: &str,
     args: &str,
-) -> ToolResult {
+) -> ToolResult
+where
+    R: 'static,
+{
     let workspace_root = context.workspace_root.clone();
     let editor_state = build_editor_state(context);
     let tool_name_owned = tool_name.to_string();
     let args_owned = args.to_string();
+    let app_handle = context.app_handle.clone();
     execute_with_timeout(tool_name, DEFAULT_TOOL_EXECUTION_TIMEOUT, move || {
-        execute_tool_snapshot(workspace_root, editor_state, tool_name_owned, args_owned)
+        execute_tool_snapshot(
+            workspace_root,
+            editor_state,
+            tool_name_owned,
+            args_owned,
+            app_handle,
+        )
     })
 }
 

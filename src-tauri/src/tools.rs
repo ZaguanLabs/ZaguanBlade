@@ -782,7 +782,7 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
 
     match tool_name {
         // Legacy tools (kept for compatibility)
-        "read_file" => read_file(workspace_root, &args),
+        "read_file" => read_file_with_app(workspace_root, &args, app_handle),
         "write_file" | "write_file_validated" | "create_file" | "write_to_file" => {
             write_file(workspace_root, &args)
         }
@@ -947,6 +947,47 @@ fn read_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -
             ToolResult::ok(content)
         }
         Err(e) => ToolResult::err(e.to_string()),
+    }
+}
+
+fn read_file_with_app<R: tauri::Runtime>(
+    workspace_root: &Path,
+    args: &HashMap<String, serde_json::Value>,
+    app_handle: Option<&tauri::AppHandle<R>>,
+) -> ToolResult {
+    let Some(handle) = app_handle else {
+        return read_file(workspace_root, args);
+    };
+
+    let Some(path) = get_str_arg(args, &["path", "file_path", "filepath", "filename"]) else {
+        return ToolResult::err("missing required arg: path (or file_path)");
+    };
+
+    let abs = match validate_path_under_workspace(workspace_root, Path::new(&path)) {
+        Ok(p) => p,
+        Err(e) => return ToolResult::err(e),
+    };
+
+    let content_result = match language_service_from_app_handle(Some(handle)) {
+        Ok(service) => service.get_file_content(&abs.to_string_lossy()).map_err(|e| e.to_string()),
+        Err(_) => {
+            return read_file(workspace_root, args);
+        }
+    };
+
+    match content_result {
+        Ok(s) => {
+            let content = if s.is_empty() {
+                format!(
+                    "=== File: {} (empty) ===\n// This file exists but contains no content.",
+                    abs.to_string_lossy()
+                )
+            } else {
+                format!("=== File: {} ===\n{}", abs.to_string_lossy(), s)
+            };
+            ToolResult::ok(content)
+        }
+        Err(e) => ToolResult::err(e),
     }
 }
 
@@ -2369,6 +2410,19 @@ fn emit_change_applied_for_paths<R: tauri::Runtime>(
     );
 }
 
+fn sync_after_tool_write<R: tauri::Runtime>(
+    app_handle: Option<&tauri::AppHandle<R>>,
+    change_id: &str,
+    abs_path: &Path,
+    display_path: &str,
+) {
+    if let Some(handle) = app_handle {
+        crate::file_state_sync::sync_from_disk_after_write(handle, abs_path);
+        let changed_paths = vec![display_path.to_string()];
+        emit_change_applied_for_paths(handle, change_id, &changed_paths);
+    }
+}
+
 fn apply_edit_tool<R: tauri::Runtime>(
     workspace_root: &Path,
     args: &HashMap<String, serde_json::Value>,
@@ -2454,6 +2508,7 @@ fn apply_edit_tool<R: tauri::Runtime>(
             match apply_multi_patch_to_string(&content, &patches) {
                 Ok(new_content) => match fs::write(&abs, new_content.as_bytes()) {
                     Ok(()) => {
+                        sync_after_tool_write(app_handle, "apply_patch", &abs, &path);
                         let count = patches.len();
                         ToolResult::ok(format!(
                             "Applied {} patch{} atomically to {}",
@@ -2482,7 +2537,10 @@ fn apply_edit_tool<R: tauri::Runtime>(
 
         match apply_patch_to_string(&content, &old_text, &new_text) {
             Ok(new_content) => match fs::write(&abs, new_content.as_bytes()) {
-                Ok(()) => ToolResult::ok(format!("Applied edit to {}", path)),
+                Ok(()) => {
+                    sync_after_tool_write(app_handle, "apply_patch", &abs, &path);
+                    ToolResult::ok(format!("Applied edit to {}", path))
+                }
                 Err(e) => ToolResult::err(e.to_string()),
             },
             Err(e) => {

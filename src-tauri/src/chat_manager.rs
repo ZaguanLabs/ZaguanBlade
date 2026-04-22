@@ -2279,17 +2279,18 @@ impl ChatManager {
             return DrainResult::None;
         };
 
-        // Consume at most one provider event per drain call.
-        // This keeps processing incremental and avoids pull-style channel scanning work.
         let mut events: Vec<ProviderEvent> = Vec::new();
-        match rx.try_recv() {
-            Ok(ev) => events.push(ev),
-            Err(std::sync::mpsc::TryRecvError::Empty) => {}
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                // Terminal state: producer side is gone, so this turn cannot emit more events.
-                // Clear receiver + streaming so orchestrator can finalize instead of waiting forever.
-                self.rx = None;
-                self.streaming = false;
+        loop {
+            match rx.try_recv() {
+                Ok(ev) => events.push(ev),
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    // Terminal state: producer side is gone, so this turn cannot emit more events.
+                    // Clear receiver + streaming so orchestrator can finalize instead of waiting forever.
+                    self.rx = None;
+                    self.streaming = false;
+                    break;
+                }
             }
         }
 

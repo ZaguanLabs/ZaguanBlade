@@ -7,6 +7,7 @@ use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::Path;
+use std::time::Instant;
 
 // use eframe::egui; // Removed for Tauri migration
 
@@ -16,6 +17,32 @@ use crate::tools;
 use tauri::Emitter;
 
 pub use tool_defs::{get_tool_definitions, get_tool_definitions_for_model};
+
+fn is_parallel_read_only_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "get_editor_state"
+            | "symbol_search"
+            | "symbol_resolve"
+            | "symbol_outline"
+            | "read_file"
+            | "read_file_range"
+            | "read_many_files"
+            | "grep_search"
+            | "rg"
+            | "codebase_search"
+            | "list_dir"
+            | "list_directory"
+            | "get_workspace_structure"
+            | "find_files"
+            | "find_files_glob"
+            | "glob"
+            | "get_file_info"
+            | "get_project_index_overview"
+            | "get_project_index_chunk"
+            | "codebase_investigator"
+    )
+}
 
 #[derive(Clone, Debug)]
 pub struct CommandSpec {
@@ -55,6 +82,22 @@ pub struct PendingCommand {
 #[cfg(test)]
 mod tests {
     use super::parse_run_command_args;
+    use crate::protocol::{ToolCall, ToolFunction};
+    use crate::tool_execution::ToolExecutionContext;
+    use tempfile::tempdir;
+
+    fn tool_call(id: &str, name: &str, arguments: &str) -> ToolCall {
+        ToolCall {
+            id: id.to_string(),
+            typ: "function".to_string(),
+            function: ToolFunction {
+                name: name.to_string(),
+                arguments: arguments.to_string(),
+            },
+            status: None,
+            result: None,
+        }
+    }
 
     #[test]
     fn parse_run_command_defaults_to_blocking() {
@@ -93,6 +136,73 @@ mod tests {
             vec!["hello".to_string(), "world".to_string()]
         );
         assert!(!parsed.spec.shell);
+    }
+
+    #[test]
+    fn apply_patch_invalidates_cached_read_file_results() {
+        let workspace = tempdir().expect("tempdir");
+        let file_path = workspace.path().join("example.txt");
+        std::fs::write(&file_path, "before\n").expect("seed file");
+
+        let context = ToolExecutionContext::<tauri::Wry>::new(
+            Some(workspace.path().to_string_lossy().to_string()),
+            None,
+            Vec::new(),
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let mut workflow = crate::ai_workflow::AiWorkflow::new();
+
+        let read_before = workflow
+            .handle_tool_calls(
+                workspace.path(),
+                vec![tool_call(
+                    "read-1",
+                    "read_file",
+                    r#"{"path":"example.txt"}"#,
+                )],
+                Some("initial read".to_string()),
+                &context,
+            )
+            .expect("batch for initial read");
+        assert_eq!(read_before.file_results.len(), 1);
+        assert!(read_before.file_results[0].1.content.contains("before"));
+
+        let apply_batch = workflow
+            .handle_tool_calls(
+                workspace.path(),
+                vec![tool_call(
+                    "patch-1",
+                    "apply_patch",
+                    r#"{"path":"example.txt","old_text":"before","new_text":"after"}"#,
+                )],
+                Some("apply patch".to_string()),
+                &context,
+            )
+            .expect("batch for patch");
+        assert_eq!(apply_batch.file_results.len(), 1);
+        assert!(apply_batch.file_results[0].1.success);
+
+        let read_after = workflow
+            .handle_tool_calls(
+                workspace.path(),
+                vec![tool_call(
+                    "read-2",
+                    "read_file",
+                    r#"{"path":"example.txt"}"#,
+                )],
+                Some("read after patch".to_string()),
+                &context,
+            )
+            .expect("batch for second read");
+        assert_eq!(read_after.file_results.len(), 1);
+        assert!(read_after.file_results[0].1.content.contains("after"));
+        assert!(!read_after.file_results[0].1.content.contains("before\n"));
     }
 }
 
@@ -298,11 +408,11 @@ impl AiWorkflow {
         let mut loop_detected = false;
         let mut seen_in_batch: HashMap<(String, String), usize> = HashMap::new();
 
-        struct PendingRead<R: tauri::Runtime> {
+        struct PendingParallelTool<R: tauri::Runtime> {
             call: ToolCall,
             context: crate::tool_execution::ToolExecutionContext<R>,
         }
-        let mut pending_read_tasks: Vec<PendingRead<R>> = Vec::new();
+        let mut pending_parallel_tasks: Vec<PendingParallelTool<R>> = Vec::new();
 
         for call in &calls {
             // Normalize arguments for comparison
@@ -510,9 +620,15 @@ impl AiWorkflow {
 
                         match apply_result {
                             Ok(_) => {
+                                self.clear_recent_file_tool_cache();
                                 if let Some(app) = &context.app_handle {
                                     use tauri::Manager;
                                     let state = app.state::<crate::app_state::AppState>();
+
+                                    crate::file_state_sync::sync_from_disk_after_write(
+                                        app,
+                                        &full_path,
+                                    );
 
                                     // Track as uncommitted change if we have a snapshot
                                     if let Some(snap_id) = &snapshot_id {
@@ -675,7 +791,9 @@ impl AiWorkflow {
 
                         match fs::remove_file(&full_path) {
                             Ok(_) => {
+                                self.clear_recent_file_tool_cache();
                                 if let Some(app) = &context.app_handle {
+                                    crate::file_state_sync::sync_after_delete(app, &full_path);
                                     crate::blade_event_scheduler::queue_refresh_explorer(app);
                                     let _ = app.emit(
                                         crate::events::event_names::CHANGE_APPLIED,
@@ -793,8 +911,10 @@ impl AiWorkflow {
                     tool_name: call.function.name.clone(),
                     description,
                 });
-            } else if matches!(call.function.name.as_str(), "read_file" | "read_file_range") {
-                // Defer read_file to run in parallel outside the main loop
+            } else if is_parallel_read_only_tool(&call.function.name) {
+                // Defer read-only tools to run in parallel outside the main loop.
+                // zcoderd waits for the full client-side tool batch before continuing,
+                // so serializing these calls creates large dead gaps between model turns.
                 let ctx = crate::tool_execution::ToolExecutionContext {
                     workspace_root: context.workspace_root.clone(),
                     active_file: context.active_file.clone(),
@@ -804,17 +924,29 @@ impl AiWorkflow {
                     cursor_column: context.cursor_column,
                     selection_start_line: context.selection_start_line,
                     selection_end_line: context.selection_end_line,
-                    app_handle: None, // not needed for read operations
+                    app_handle: context.app_handle.clone(),
                 };
-                pending_read_tasks.push(PendingRead {
+                pending_parallel_tasks.push(PendingParallelTool {
                     call: call.clone(),
                     context: ctx,
                 });
             } else {
+                let started_at = Instant::now();
+                eprintln!(
+                    "[AI TOOL LATENCY] start serial tool={} call_id={}",
+                    call.function.name, call.id
+                );
                 let res = crate::tool_execution::execute_tool_with_default_timeout(
                     context,
                     &call.function.name,
                     &call.function.arguments,
+                );
+                eprintln!(
+                    "[AI TOOL LATENCY] finish serial tool={} call_id={} duration_ms={} success={}",
+                    call.function.name,
+                    call.id,
+                    started_at.elapsed().as_millis(),
+                    res.success
                 );
 
                 if res.success
@@ -830,15 +962,27 @@ impl AiWorkflow {
             }
         }
 
-        // Execute read_file/read_file_range tasks in parallel threads
-        if !pending_read_tasks.is_empty() {
+        // Execute read-only tasks in parallel threads.
+        if !pending_parallel_tasks.is_empty() {
             let mut handles = Vec::new();
-            for task in pending_read_tasks {
+            for task in pending_parallel_tasks {
                 handles.push(std::thread::spawn(move || {
+                    let started_at = Instant::now();
+                    eprintln!(
+                        "[AI TOOL LATENCY] start parallel tool={} call_id={}",
+                        task.call.function.name, task.call.id
+                    );
                     let res = crate::tool_execution::execute_tool_with_default_timeout(
                         &task.context,
                         &task.call.function.name,
                         &task.call.function.arguments,
+                    );
+                    eprintln!(
+                        "[AI TOOL LATENCY] finish parallel tool={} call_id={} duration_ms={} success={}",
+                        task.call.function.name,
+                        task.call.id,
+                        started_at.elapsed().as_millis(),
+                        res.success
                     );
                     (task.call, res)
                 }));
@@ -919,6 +1063,10 @@ impl AiWorkflow {
         self.recent_file_tool_cache.clear();
         self.last_assistant_content_fingerprint = None;
         self.stagnant_tool_turns = 0;
+    }
+
+    pub fn clear_recent_file_tool_cache(&mut self) {
+        self.recent_file_tool_cache.clear();
     }
 }
 
