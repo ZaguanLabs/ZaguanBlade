@@ -342,24 +342,37 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
             lastExternalContentVersionRef.current = externalContentVersion;
 
             const diffState = getDiffStateFromUnifiedDiff(unifiedDiff);
+            const { main } = view.state.selection;
+            const safeAnchor = Math.min(main.anchor, content.length);
+            const safeHead = Math.min(main.head, content.length);
 
             // Replace entire document content
             view.dispatch({
                 changes: { from: 0, to: view.state.doc.length, insert: content },
+                selection: { anchor: safeAnchor, head: safeHead },
                 effects: [
                     setBaseContent.of(content), // Initialize virtual buffer with base content
                     setDiffState.of(diffState),
                 ]
             });
 
-        } else if (isMarkdown && !isUserEditRef.current) {
+        } else if (isMarkdown) {
             // Only sync external content changes (e.g., file loaded, external modification)
             // Skip if this was a user edit to prevent feedback loops
+            if (isUserEditRef.current) {
+                isUserEditRef.current = false;
+                return;
+            }
+
             const currentDoc = view.state.doc.toString();
             if (currentDoc !== content) {
                 const diffState = getDiffStateFromUnifiedDiff(unifiedDiff);
+                const { main } = view.state.selection;
+                const safeAnchor = Math.min(main.anchor, content.length);
+                const safeHead = Math.min(main.head, content.length);
                 view.dispatch({
                     changes: { from: 0, to: view.state.doc.length, insert: content },
+                    selection: { anchor: safeAnchor, head: safeHead },
                     effects: [
                         setBaseContent.of(content), // Update base content
                         setDiffState.of(diffState),
@@ -372,8 +385,12 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
             const currentDoc = view.state.doc.toString();
             if (currentDoc !== content) {
                 const diffState = getDiffStateFromUnifiedDiff(unifiedDiff);
+                const { main } = view.state.selection;
+                const safeAnchor = Math.min(main.anchor, content.length);
+                const safeHead = Math.min(main.head, content.length);
                 view.dispatch({
                     changes: { from: 0, to: view.state.doc.length, insert: content },
+                    selection: { anchor: safeAnchor, head: safeHead },
                     effects: [
                         setBaseContent.of(content),
                         setDiffState.of(diffState),

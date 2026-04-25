@@ -27,23 +27,30 @@ export class EventBuffer<T> {
     private onApply: (data: T, is_final?: boolean, seq?: number) => void;
     private onComplete?: () => void;
     private initialSeq: number;
+    private adoptFirstSeq: boolean;
 
     constructor(
         onApply: (data: T, is_final?: boolean, seq?: number) => void,
         onComplete?: () => void,
         initialSeq = 0,
+        adoptFirstSeq = false,
     ) {
         this.chunks = new Map();
         this.nextSeq = initialSeq;
         this.onApply = onApply;
         this.onComplete = onComplete;
         this.initialSeq = initialSeq;
+        this.adoptFirstSeq = adoptFirstSeq;
     }
 
     /**
      * Add a chunk to the buffer and apply all sequential chunks
      */
     add(seq: number, data: T, is_final?: boolean): void {
+        if (this.adoptFirstSeq && this.nextSeq === this.initialSeq && this.chunks.size === 0 && seq > this.nextSeq) {
+            this.nextSeq = seq;
+        }
+
         // Drop stale/already-applied chunks (late delivery or duplicate replay).
         // A true new stream should use a new message ID or explicitly clear the buffer.
         if (seq < this.nextSeq) {
@@ -102,16 +109,19 @@ export class BufferManager<T> {
     private onApply: (id: string, data: T, is_final?: boolean, seq?: number) => void;
     private onComplete?: (id: string) => void;
     private initialSeq: number;
+    private adoptFirstSeq: boolean;
 
     constructor(
         onApply: (id: string, data: T, is_final?: boolean, seq?: number) => void,
         onComplete?: (id: string) => void,
         initialSeq = 0,
+        adoptFirstSeq = false,
     ) {
         this.buffers = new Map();
         this.onApply = onApply;
         this.onComplete = onComplete;
         this.initialSeq = initialSeq;
+        this.adoptFirstSeq = adoptFirstSeq;
     }
 
     /**
@@ -131,6 +141,7 @@ export class BufferManager<T> {
                         this.buffers.delete(id);
                     },
                     this.initialSeq,
+                    this.adoptFirstSeq,
                 )
             );
         }
@@ -182,7 +193,9 @@ export class MessageBuffer extends BufferManager<MessageChunk> {
     ) {
         super(
             (id, data, is_final, seq) => onChunk(id, seq ?? 0, data.chunk, is_final ?? false, data.type || 'content'),
-            onComplete
+            onComplete,
+            0,
+            true,
         );
     }
 

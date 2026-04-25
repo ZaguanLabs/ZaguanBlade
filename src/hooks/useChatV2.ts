@@ -1126,6 +1126,12 @@ export function useChatV2() {
                         normalizedBlocks.contentBeforeTools,
                         normalizedBlocks.contentAfterTools,
                     );
+                    if (
+                        !existingMessage
+                        && normalizedBlocks.blocks.some((block) => block.type === 'text' && !isWhitespaceOnly(block.content))
+                    ) {
+                        flushPendingUpdatesImmediately();
+                    }
                 },
                 (id) => {
                     const previousStreaming = streamingStatesRef.current.get(id);
@@ -1652,7 +1658,7 @@ export function useChatV2() {
             }
             clearPendingTimers();
         };
-    }, [applyDeferredRunCommandCompletion, clearPendingTimers, flushPendingUpdates, queueMessageUpdate, setMessages, setToolActivity, updateMessages, updateToolCallsStatusLocally]);
+    }, [applyDeferredRunCommandCompletion, clearPendingTimers, flushPendingUpdates, flushPendingUpdatesImmediately, queueMessageUpdate, setMessages, setToolActivity, updateMessages, updateToolCallsStatusLocally]);
 
     const dispatchToBackend = useCallback(async (text: string, attachments?: ImageAttachment[], mentions?: ComposerMention[], mode?: ChatMode) => {
         try {

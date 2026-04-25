@@ -1,8 +1,63 @@
 use crate::app_state::AppState;
 use crate::uncommitted_changes::UncommittedChange;
 use std::fs;
-use std::path::PathBuf;
 use tauri::{AppHandle, Manager, State};
+
+fn normalize_path(value: &str) -> String {
+    value.replace('\\', "/").replace("//", "/").trim_end_matches('/').to_string()
+}
+
+fn is_boundary_suffix_match(full: &str, suffix: &str) -> bool {
+    if !full.ends_with(suffix) {
+        return false;
+    }
+    if full.len() == suffix.len() {
+        return true;
+    }
+    full.as_bytes()
+        .get(full.len().saturating_sub(suffix.len() + 1))
+        .copied()
+        == Some(b'/')
+}
+
+fn resolve_change_for_file_path(state: &AppState, file_path: &str) -> Option<UncommittedChange> {
+    let requested = normalize_path(file_path);
+    let all = state.uncommitted_changes.get_all();
+
+    let mut exact_matches: Vec<UncommittedChange> = all
+        .iter()
+        .filter(|change| normalize_path(&change.file_path.to_string_lossy()) == requested)
+        .cloned()
+        .collect();
+    if !exact_matches.is_empty() {
+        exact_matches.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        return exact_matches.into_iter().find(|change| !change.unified_diff.trim().is_empty()).or_else(|| {
+            state
+                .uncommitted_changes
+                .get_all()
+                .into_iter()
+                .filter(|change| normalize_path(&change.file_path.to_string_lossy()) == requested)
+                .max_by_key(|change| change.timestamp)
+        });
+    }
+
+    let mut suffix_matches: Vec<UncommittedChange> = all
+        .into_iter()
+        .filter(|change| {
+            let candidate = normalize_path(&change.file_path.to_string_lossy());
+            is_boundary_suffix_match(&candidate, &requested)
+                || is_boundary_suffix_match(&requested, &candidate)
+        })
+        .collect();
+    if suffix_matches.is_empty() {
+        return None;
+    }
+
+    suffix_matches.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    suffix_matches
+        .into_iter()
+        .find(|change| !change.unified_diff.trim().is_empty())
+}
 
 #[tauri::command]
 pub async fn get_uncommitted_changes(
@@ -74,9 +129,7 @@ pub fn get_uncommitted_change_for_file(
     state: State<'_, AppState>,
     file_path: String,
 ) -> Option<UncommittedChange> {
-    state
-        .uncommitted_changes
-        .get_by_path(&PathBuf::from(file_path))
+    resolve_change_for_file_path(&*state, &file_path)
 }
 
 #[tauri::command]
@@ -92,11 +145,12 @@ pub fn accept_file_changes(
     state: State<'_, AppState>,
     file_path: String,
 ) -> Result<UncommittedChange, String> {
-    let path = PathBuf::from(&file_path);
+    let resolved = resolve_change_for_file_path(&*state, &file_path)
+        .ok_or_else(|| format!("No uncommitted change for file: {}", file_path))?;
     state
         .uncommitted_changes
-        .accept_by_path(&path)
-        .ok_or_else(|| format!("No uncommitted change for file: {}", file_path))
+        .accept(&resolved.id)
+        .ok_or_else(|| format!("Change not found: {}", resolved.id))
 }
 
 #[tauri::command]
@@ -130,9 +184,11 @@ pub async fn reject_file_changes(
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let history_service = state.history_service()?;
+        let resolved = resolve_change_for_file_path(&*state, &file_path)
+            .ok_or_else(|| format!("No uncommitted change for file: {}", file_path))?;
         let change = state
             .uncommitted_changes
-            .reject_by_path(&PathBuf::from(file_path), history_service.as_ref())?;
+            .reject(&resolved.id, history_service.as_ref())?;
         crate::file_state_sync::sync_from_disk_after_write(&app, &change.file_path);
         Ok(change)
     })

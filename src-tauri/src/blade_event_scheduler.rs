@@ -436,6 +436,8 @@ fn scheduler_loop(rx: mpsc::Receiver<SchedulerCommand>) {
                     handle_command(&mut state, command);
                     if should_flush_early(&state) {
                         flush(&mut state, FlushReason::Early);
+                    } else if should_flush_on_age(&state) {
+                        flush(&mut state, FlushReason::Interval);
                     }
                 }
                 Err(_) => {
@@ -449,6 +451,8 @@ fn scheduler_loop(rx: mpsc::Receiver<SchedulerCommand>) {
                     handle_command(&mut state, command);
                     if should_flush_early(&state) {
                         flush(&mut state, FlushReason::Early);
+                    } else if should_flush_on_age(&state) {
+                        flush(&mut state, FlushReason::Interval);
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => flush(&mut state, FlushReason::Interval),
@@ -462,6 +466,15 @@ fn scheduler_loop(rx: mpsc::Receiver<SchedulerCommand>) {
 }
 
 fn should_flush_early(state: &SchedulerState) -> bool {
+    if state
+        .pending_chat
+        .front()
+        .map(|pending| !state.chat_seq_by_message.contains_key(&pending.message_id))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
     let chat_bytes = state
         .pending_chat
         .iter()
@@ -477,6 +490,47 @@ fn should_flush_early(state: &SchedulerState) -> bool {
         .map(|pending| pending.data.len())
         .sum::<usize>();
     terminal_bytes >= TERMINAL_FLUSH_BYTES
+}
+
+fn should_flush_on_age(state: &SchedulerState) -> bool {
+    oldest_pending_age(state)
+        .map(|age| age >= FRAME_FLUSH_INTERVAL)
+        .unwrap_or(false)
+}
+
+fn oldest_pending_age(state: &SchedulerState) -> Option<Duration> {
+    let now = Instant::now();
+    let oldest_chat = state.pending_chat.front().map(|pending| now.saturating_duration_since(pending.queued_at));
+    let oldest_terminal = state
+        .pending_terminal
+        .values()
+        .map(|pending| now.saturating_duration_since(pending.queued_at))
+        .min();
+    let oldest_tool_update = state
+        .pending_tool_update
+        .values()
+        .map(|pending| now.saturating_duration_since(pending.queued_at))
+        .min();
+    let oldest_tool_activity = state
+        .pending_tool_activity
+        .values()
+        .map(|pending| now.saturating_duration_since(pending.queued_at))
+        .min();
+    let oldest_explorer_refresh = state
+        .pending_explorer_refresh
+        .as_ref()
+        .map(|pending| now.saturating_duration_since(pending.queued_at));
+
+    [
+        oldest_chat,
+        oldest_terminal,
+        oldest_tool_update,
+        oldest_tool_activity,
+        oldest_explorer_refresh,
+    ]
+    .into_iter()
+    .flatten()
+    .max()
 }
 
 fn has_pending(state: &SchedulerState) -> bool {

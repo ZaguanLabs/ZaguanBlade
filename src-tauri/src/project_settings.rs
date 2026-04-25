@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::Write;
+use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 
 /// Storage mode for conversation history
@@ -166,21 +168,43 @@ fn line_ignores_zblade(line: &str) -> bool {
 
 fn ensure_project_gitignore_has_zblade(project_path: &Path) {
     let project_gitignore = project_path.join(".gitignore");
-    let mut content = fs::read_to_string(&project_gitignore).unwrap_or_default();
+    let existing_bytes = match fs::read(&project_gitignore) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(err) => {
+            eprintln!(
+                "[zblade] Warning: Failed to read existing .gitignore without overwriting it: {}",
+                err
+            );
+            return;
+        }
+    };
 
-    let already_ignored = content.lines().any(line_ignores_zblade);
-    if already_ignored {
+    let existing_content = String::from_utf8_lossy(&existing_bytes);
+    if existing_content.lines().any(line_ignores_zblade) {
         return;
     }
 
-    if !content.is_empty() && !content.ends_with('\n') {
-        content.push('\n');
+    let mut file = match OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&project_gitignore)
+    {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("[zblade] Warning: Failed to open .gitignore for append: {}", err);
+            return;
+        }
+    };
+
+    let mut suffix = String::new();
+    if !existing_bytes.is_empty() && existing_bytes.last().copied() != Some(b'\n') {
+        suffix.push('\n');
     }
+    suffix.push_str("\n# ZaguanBlade local data\n.zblade/\n");
 
-    content.push_str("\n# ZaguanBlade local data\n.zblade/\n");
-
-    if let Err(e) = fs::write(&project_gitignore, content) {
-        eprintln!("[zblade] Warning: Failed to update .gitignore: {}", e);
+    if let Err(err) = file.write_all(suffix.as_bytes()) {
+        eprintln!("[zblade] Warning: Failed to append to .gitignore: {}", err);
     }
 }
 
@@ -335,5 +359,34 @@ mod tests {
 
         let content = fs::read_to_string(project_path.join(".gitignore")).unwrap();
         assert!(content.lines().any(line_ignores_zblade));
+    }
+
+    #[test]
+    fn test_init_zblade_dir_appends_to_existing_project_gitignore() {
+        let temp = tempdir().unwrap();
+        let project_path = temp.path();
+        let gitignore_path = project_path.join(".gitignore");
+
+        fs::write(&gitignore_path, "node_modules/\ndist/\n").unwrap();
+
+        init_zblade_dir(project_path).unwrap();
+
+        let content = fs::read_to_string(&gitignore_path).unwrap();
+        assert!(content.contains("node_modules/\n"));
+        assert!(content.contains("dist/\n"));
+        assert!(content.lines().any(line_ignores_zblade));
+    }
+
+    #[test]
+    fn test_init_zblade_dir_does_not_duplicate_project_gitignore_entry() {
+        let temp = tempdir().unwrap();
+        let project_path = temp.path();
+
+        init_zblade_dir(project_path).unwrap();
+        init_zblade_dir(project_path).unwrap();
+
+        let content = fs::read_to_string(project_path.join(".gitignore")).unwrap();
+        let zblade_lines = content.lines().filter(|line| line_ignores_zblade(line)).count();
+        assert_eq!(zblade_lines, 1);
     }
 }
