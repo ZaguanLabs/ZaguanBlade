@@ -141,44 +141,73 @@ function getPlanTextFromMessage(message: ChatMessageType): string | null {
     return null;
 }
 
-const PendingResponseIndicator: React.FC = () => {
+function friendlyToolName(name: string): string {
+    const labels: Record<string, string> = {
+        apply_patch: 'Applying patch',
+        edit_file: 'Editing file',
+        read_file: 'Reading file',
+        write_to_file: 'Writing file',
+        grep_search: 'Searching code',
+        code_search: 'Researching codebase',
+        find_by_name: 'Finding files',
+        list_dir: 'Listing directory',
+        read_terminal: 'Reading terminal',
+        command_status: 'Checking command',
+        run_command: 'Running command',
+        ask_user_question: 'Waiting for your choice',
+        todo_list: 'Updating plan',
+        browser_preview: 'Opening preview',
+        read_url_content: 'Reading URL',
+        search_web: 'Searching web',
+    };
+
+    return labels[name] ?? name.split('_').join(' ');
+}
+
+const PendingResponseIndicator: React.FC<{ toolActivity?: ToolActivityState | null }> = ({ toolActivity }) => {
     const { t } = useTranslation();
-    const [wordIndex, setWordIndex] = useState(0);
-    const words = useMemo(() => [
-        t('chat.pendingResponse.working'),
-        t('chat.pendingResponse.thinking'),
-        t('chat.pendingResponse.waiting'),
-        t('chat.pendingResponse.ruminating'),
-    ], [t]);
-
-    // Slow word rotation (4s instead of 1.8s) to reduce DOM mutations
-    // that keep WebKitGTK's frame clock cycling.
-    useEffect(() => {
-        const intervalId = window.setInterval(() => {
-            setWordIndex((prev) => (prev + 1) % words.length);
-        }, 4000);
-
-        return () => window.clearInterval(intervalId);
-    }, [words.length]);
+    const isUsingTools = !!toolActivity;
+    const shellLabel = isUsingTools ? 'Using tools' : t('chat.assistantResponding');
+    const title = isUsingTools
+        ? friendlyToolName(toolActivity.toolName)
+        : 'Preparing response';
+    const detail = isUsingTools
+        ? (toolActivity.filePath
+            ? `${toolActivity.action} ${toolActivity.filePath}`
+            : toolActivity.action)
+        : 'Reviewing context and planning the next step';
+    const borderClass = isUsingTools ? 'border-indigo-500/15' : 'border-emerald-500/15';
+    const panelClass = isUsingTools
+        ? 'bg-[linear-gradient(180deg,rgba(99,102,241,0.08),rgba(24,24,27,0.7))]'
+        : 'bg-[linear-gradient(180deg,rgba(16,185,129,0.08),rgba(24,24,27,0.7))]';
+    const iconWrapClass = isUsingTools
+        ? 'border-indigo-500/20 bg-indigo-500/10'
+        : 'border-emerald-500/20 bg-emerald-500/10';
+    const iconClass = isUsingTools ? 'text-indigo-300' : 'text-emerald-300';
+    const accentClass = isUsingTools ? 'text-indigo-300/80' : 'text-emerald-300/80';
+    const dotClass = isUsingTools ? 'bg-indigo-400/80' : 'bg-emerald-400/80';
 
     return (
         <div className="px-4 py-3">
-            <div className="inline-flex items-center gap-3 rounded-2xl border border-emerald-500/15 bg-[linear-gradient(180deg,rgba(16,185,129,0.08),rgba(24,24,27,0.7))] px-4 py-3 text-[11px] font-medium text-(--fg-secondary) shadow-[0_16px_40px_rgba(0,0,0,0.18)]">
-                <div className="flex h-8 w-8 items-center justify-center rounded-2xl border border-emerald-500/20 bg-emerald-500/10">
-                    <Loader2 className="h-4 w-4 text-emerald-300" />
+            <div className={`inline-flex max-w-full items-center gap-3 rounded-2xl border px-4 py-3 text-[11px] font-medium text-(--fg-secondary) shadow-[0_16px_40px_rgba(0,0,0,0.18)] ${borderClass} ${panelClass}`}>
+                <div className={`flex h-8 w-8 items-center justify-center rounded-2xl border ${iconWrapClass}`}>
+                    <Loader2 className={`h-4 w-4 animate-spin ${iconClass}`} />
                 </div>
-                <div className="flex flex-col items-start">
-                    <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-300/80">
-                        {t('chat.assistantResponding')}
+                <div className="min-w-0 flex flex-col items-start">
+                    <span className={`text-[10px] font-semibold uppercase tracking-[0.18em] ${accentClass}`}>
+                        {shellLabel}
                     </span>
-                    <span key={words[wordIndex]} className="text-sm font-semibold text-(--fg-primary)">
-                        {words[wordIndex]}
+                    <span className="text-sm font-semibold text-(--fg-primary)">
+                        {title}
+                    </span>
+                    <span className="max-w-[min(44ch,70vw)] truncate text-[11px] text-(--fg-secondary)">
+                        {detail}
                     </span>
                 </div>
                 <div className="ml-1 flex items-center gap-1">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400/80" />
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400/60" />
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400/40" />
+                    <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
+                    <span className={`h-1.5 w-1.5 rounded-full ${isUsingTools ? 'bg-indigo-400/60' : 'bg-emerald-400/60'}`} />
+                    <span className={`h-1.5 w-1.5 rounded-full ${isUsingTools ? 'bg-indigo-400/40' : 'bg-emerald-400/40'}`} />
                 </div>
             </div>
         </div>
@@ -381,7 +410,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     const lastMessageContent = lastMessage?.content ?? '';
     const lastMessageReasoning = lastMessage?.reasoning ?? '';
     const lastMessageBlockCount = lastMessage?.blocks?.length ?? 0;
-    const shouldShowPendingResponseIndicator = loading && !waitingForApproval && lastMessage?.role !== 'Assistant';
+    const shouldShowPendingResponseIndicator = (loading || !!toolActivity) && !waitingForApproval && lastMessage?.role !== 'Assistant';
     const chatRows = useMemo(
         () => deriveChatRows(messages, loading, pendingActions, pendingApprovalRequest),
         [loading, messages, pendingActions, pendingApprovalRequest],
@@ -930,7 +959,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                             </div>
                         ))}
 
-                        {shouldShowPendingResponseIndicator && <PendingResponseIndicator />}
+                        {shouldShowPendingResponseIndicator && <PendingResponseIndicator toolActivity={toolActivity} />}
 
                         {/* Research progress indicator */}
                         {showProgressIndicator && (

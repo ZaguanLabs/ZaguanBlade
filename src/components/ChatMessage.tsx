@@ -21,6 +21,31 @@ const REVERTIBLE_TOOLS = new Set([
     'write_to_file',
 ]);
 
+const LARGE_USER_MESSAGE_CHAR_THRESHOLD = 12000;
+const LARGE_USER_MESSAGE_LINE_THRESHOLD = 220;
+
+const PlainTextMessage = React.memo<{ content: string }>(({ content }) => (
+    <div className="select-text">
+        <pre className="m-0 whitespace-pre-wrap wrap-break-word bg-transparent font-sans text-[13px] leading-6 text-(--fg-primary)">
+            {content}
+        </pre>
+    </div>
+));
+PlainTextMessage.displayName = 'PlainTextMessage';
+
+function shouldUsePlainTextForLargeUserMessage(content: string): boolean {
+    if (!content) {
+        return false;
+    }
+
+    if (content.length >= LARGE_USER_MESSAGE_CHAR_THRESHOLD) {
+        return true;
+    }
+
+    const lineCount = (content.match(/\n/g)?.length ?? 0) + 1;
+    return lineCount >= LARGE_USER_MESSAGE_LINE_THRESHOLD;
+}
+
 const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent?: boolean }> = ({ content, isActive, hasContent }) => {
     const { t } = useTranslation();
     const [isExpanded, setIsExpanded] = useState(true); // Start expanded
@@ -456,6 +481,15 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     }
 
     const hasContent = initialText.length > 0 || finalText.length > 0;
+    const renderTextContent = (content: string) => {
+        if (isUser && shouldUsePlainTextForLargeUserMessage(content)) {
+            return <PlainTextMessage content={content} />;
+        }
+
+        return shouldUseStreamingMarkdown
+            ? <StreamingMarkdownRenderer content={content} />
+            : <MarkdownRenderer content={content} />;
+    };
     const imageAttachments = (message.images || []).flatMap((image, index) => {
         const { fullUrl, previewUrl, name } = resolveImageUrls(image);
         if (!fullUrl) return [];
@@ -752,11 +786,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                         {previousSegment?.kind === 'activity_group' && (
                                             <div className="mb-3 h-px w-full bg-zinc-800/80" style={assistantDividerStyle} />
                                         )}
-                                        {shouldUseStreamingMarkdown ? (
-                                            <StreamingMarkdownRenderer content={block.content} />
-                                        ) : (
-                                            <MarkdownRenderer content={block.content} />
-                                        )}
+                                        {renderTextContent(block.content)}
                                     </div>
                                 );
                             } else if (block.type === 'todo') {
@@ -836,11 +866,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 )}
                                 {initialText && (
                                     <div className="mb-2 select-text">
-                                        {shouldUseStreamingMarkdown ? (
-                                            <StreamingMarkdownRenderer content={initialText} />
-                                        ) : (
-                                            <MarkdownRenderer content={initialText} />
-                                        )}
+                                        {renderTextContent(initialText)}
                                     </div>
                                 )}
                                 {hasToolCalls && (
@@ -909,11 +935,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 {finalText && (
                                     <div className="select-text">
                                         {hasToolCalls && <div className="mb-3 h-px w-full bg-zinc-800/80" style={assistantDividerStyle} />}
-                                        {shouldUseStreamingMarkdown ? (
-                                            <StreamingMarkdownRenderer content={finalText} />
-                                        ) : (
-                                            <MarkdownRenderer content={finalText} />
-                                        )}
+                                        {renderTextContent(finalText)}
                                     </div>
                                 )}
                                 {message.commandExecutions && message.commandExecutions.length > 0 && (

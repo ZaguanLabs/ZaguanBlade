@@ -3,7 +3,7 @@
 //! Persistent storage for extracted code symbols with efficient
 //! indexing and retrieval.
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, params_from_iter, types::Value, Connection};
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -523,31 +523,58 @@ impl SymbolStore {
         pattern: &str,
         limit: usize,
     ) -> Result<Vec<Symbol>, SymbolStoreError> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+        let trimmed = pattern.trim();
+        if trimmed.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut search_patterns = Vec::new();
+        search_patterns.push(format!("%{}%", trimmed));
+        for term in symbol_search_terms(trimmed) {
+            let candidate = format!("%{}%", term);
+            if !search_patterns.iter().any(|existing| existing == &candidate) {
+                search_patterns.push(candidate);
+            }
+        }
+
+        let where_clause = std::iter::repeat("(name LIKE ? OR qualified_name LIKE ?)")
+            .take(search_patterns.len())
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        let sql = format!(
             r#"
             SELECT id, name, qualified_name, symbol_type, file_path, start_line, start_char,
                    end_line, end_char, byte_offset, byte_length, parent_id, docstring, signature, content_hash
             FROM symbols 
-            WHERE name LIKE ?1 OR qualified_name LIKE ?1
+            WHERE {}
             ORDER BY CASE
-                WHEN qualified_name = ?2 THEN 0
-                WHEN name = ?2 THEN 1
-                WHEN qualified_name LIKE ?3 THEN 2
-                WHEN name LIKE ?3 THEN 3
+                WHEN lower(qualified_name) = lower(?) THEN 0
+                WHEN lower(name) = lower(?) THEN 1
+                WHEN lower(qualified_name) LIKE lower(?) THEN 2
+                WHEN lower(name) LIKE lower(?) THEN 3
                 ELSE 4
-            END, name
-            LIMIT ?4
+            END, length(name), name
+            LIMIT ?
             "#,
-        )?;
+            where_clause
+        );
 
-        let like_pattern = format!("%{}%", pattern);
-        let prefix_pattern = format!("{}%", pattern);
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&sql)?;
+
+        let mut values = Vec::with_capacity(search_patterns.len() * 2 + 5);
+        for search_pattern in search_patterns {
+            values.push(Value::Text(search_pattern.clone()));
+            values.push(Value::Text(search_pattern));
+        }
+        values.push(Value::Text(trimmed.to_string()));
+        values.push(Value::Text(trimmed.to_string()));
+        values.push(Value::Text(format!("{}%", trimmed)));
+        values.push(Value::Text(format!("{}%", trimmed)));
+        values.push(Value::Integer(limit as i64));
+
         let symbols = stmt
-            .query_map(
-                params![like_pattern, pattern, prefix_pattern, limit as i64],
-                |row| row_to_symbol(row),
-            )?
+            .query_map(params_from_iter(values), |row| row_to_symbol(row))?
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(symbols)
@@ -822,6 +849,15 @@ fn ensure_column(
     Ok(())
 }
 
+fn symbol_search_terms(query: &str) -> Vec<String> {
+    query
+        .split(|ch: char| !ch.is_alphanumeric() && ch != '_')
+        .map(str::trim)
+        .filter(|term| term.len() >= 2)
+        .map(ToString::to_string)
+        .collect()
+}
+
 /// Error type for symbol store operations
 #[derive(Debug)]
 pub enum SymbolStoreError {
@@ -940,6 +976,20 @@ mod tests {
 
         let results = store.search_by_name_like("auth", 10).unwrap();
         assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_search_by_name_like_matches_multi_word_queries() {
+        let store = SymbolStore::in_memory().unwrap();
+        let sym1 = create_test_symbol("authenticateUser", "auth.ts");
+        let sym2 = create_test_symbol("UserService", "service.ts");
+        let sym3 = create_test_symbol("validateToken", "valid.ts");
+
+        store.upsert_symbols(&[sym1, sym2, sym3]).unwrap();
+
+        let results = store.search_by_name_like("auth user", 10).unwrap();
+        assert!(results.iter().any(|symbol| symbol.name == "authenticateUser"));
+        assert!(results.iter().any(|symbol| symbol.name == "UserService"));
     }
 
     #[test]

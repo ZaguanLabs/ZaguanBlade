@@ -386,7 +386,7 @@ impl SymbolExtractor {
                     range,
                 ))
             }
-            "function_declaration" | "function" => {
+            "function_declaration" | "generator_function_declaration" | "function_signature" => {
                 let name = self.get_child_text(node, "name", source)?;
                 Some(Symbol::new(
                     name,
@@ -395,7 +395,16 @@ impl SymbolExtractor {
                     range,
                 ))
             }
-            "method_definition" => {
+            "function" | "generator_function" => {
+                let name = self.get_child_text(node, "name", source)?;
+                Some(Symbol::new(
+                    name,
+                    SymbolType::Function,
+                    self.file_path.clone(),
+                    range,
+                ))
+            }
+            "method_definition" | "method_signature" | "abstract_method_signature" => {
                 let name = self.get_child_text(node, "name", source)?;
                 Some(Symbol::new(
                     name,
@@ -440,48 +449,74 @@ impl SymbolExtractor {
                     range,
                 ))
             }
-            "arrow_function" => {
-                // Arrow functions assigned to variables/constants
-                if let Some(parent) = node.parent() {
-                    if parent.kind() == "variable_declarator" {
-                        if let Some(name_node) = parent.child_by_field_name("name") {
-                            let name = name_node.utf8_text(source.as_bytes()).ok()?;
-                            return Some(Symbol::new(
-                                name.to_string(),
-                                SymbolType::Function,
-                                self.file_path.clone(),
-                                Range::from_node(&parent),
-                            ));
-                        }
-                    }
-                }
-                None
+            "enum_assignment" => {
+                let name = self.get_child_text(node, "name", source)?;
+                Some(Symbol::new(
+                    name,
+                    SymbolType::EnumMember,
+                    self.file_path.clone(),
+                    range,
+                ))
             }
-            "lexical_declaration" => {
-                // const/let declarations - check if it's a function expression
-                if let Some(declarator) = node.child_by_field_name("declarator") {
-                    if let Some(value) = declarator.child_by_field_name("value") {
-                        if value.kind() == "arrow_function" || value.kind() == "function" {
-                            // Already handled by arrow_function case
-                            return None;
-                        }
-                    }
-                    // Regular constant
-                    let name = self.get_child_text(&declarator, "name", source)?;
-                    let is_const = node.utf8_text(source.as_bytes()).ok()?.starts_with("const");
-                    Some(Symbol::new(
-                        name,
-                        if is_const {
-                            SymbolType::Constant
-                        } else {
-                            SymbolType::Variable
-                        },
-                        self.file_path.clone(),
-                        range,
-                    ))
+            "variable_declarator" => {
+                let name_node = node.child_by_field_name("name")?;
+                let name = self.extract_js_ts_binding_name(&name_node, source)?;
+                let value = node.child_by_field_name("value");
+                let symbol_type = if value
+                    .as_ref()
+                    .is_some_and(|value| self.is_js_ts_function_value(value, source))
+                {
+                    SymbolType::Function
+                } else if self.is_js_ts_const_declarator(node, source) {
+                    SymbolType::Constant
                 } else {
-                    None
+                    SymbolType::Variable
+                };
+                Some(Symbol::new(
+                    name,
+                    symbol_type,
+                    self.file_path.clone(),
+                    range,
+                ))
+            }
+            "pair" => {
+                let value = node.child_by_field_name("value")?;
+                if !self.is_js_ts_function_value(&value, source) {
+                    return None;
                 }
+                let key = node.child_by_field_name("key")?;
+                let name = self.extract_js_ts_property_name(&key, source)?;
+                Some(Symbol::new(
+                    name,
+                    SymbolType::Method,
+                    self.file_path.clone(),
+                    range,
+                ))
+            }
+            "public_field_definition" | "field_definition" | "property_signature" => {
+                let name_node = node.child_by_field_name("name")?;
+                let name = self.extract_js_ts_property_name(&name_node, source)?;
+                let symbol_type = node
+                    .child_by_field_name("value")
+                    .as_ref()
+                    .filter(|value| self.is_js_ts_function_value(value, source))
+                    .map(|_| SymbolType::Method)
+                    .unwrap_or(SymbolType::Property);
+                Some(Symbol::new(
+                    name,
+                    symbol_type,
+                    self.file_path.clone(),
+                    range,
+                ))
+            }
+            "namespace_declaration" | "internal_module" => {
+                let name = self.get_child_text(node, "name", source)?;
+                Some(Symbol::new(
+                    name,
+                    SymbolType::Namespace,
+                    self.file_path.clone(),
+                    range,
+                ))
             }
             _ => None,
         }
@@ -718,6 +753,77 @@ impl SymbolExtractor {
         node.child_by_field_name(field_name)
             .and_then(|n| n.utf8_text(source.as_bytes()).ok())
             .map(|s| s.to_string())
+    }
+
+    fn extract_js_ts_binding_name(&self, node: &Node, source: &str) -> Option<String> {
+        match node.kind() {
+            "identifier" | "type_identifier" => node
+                .utf8_text(source.as_bytes())
+                .ok()
+                .map(|value| value.to_string()),
+            _ => None,
+        }
+    }
+
+    fn extract_js_ts_property_name(&self, node: &Node, source: &str) -> Option<String> {
+        let text = node.utf8_text(source.as_bytes()).ok()?.trim();
+        let normalized = text
+            .trim_start_matches('#')
+            .trim_matches('"')
+            .trim_matches('\'')
+            .trim_matches('`');
+        if normalized.is_empty() || normalized.starts_with('[') {
+            None
+        } else {
+            Some(normalized.to_string())
+        }
+    }
+
+    fn is_js_ts_const_declarator(&self, node: &Node, source: &str) -> bool {
+        let Some(parent) = node.parent() else {
+            return false;
+        };
+        if parent.kind() != "lexical_declaration" {
+            return false;
+        }
+        parent
+            .utf8_text(source.as_bytes())
+            .ok()
+            .is_some_and(|text| text.trim_start().starts_with("const"))
+    }
+
+    fn is_js_ts_function_value(&self, node: &Node, source: &str) -> bool {
+        match node.kind() {
+            "arrow_function" | "function" | "function_expression" | "generator_function" => true,
+            "parenthesized_expression"
+            | "as_expression"
+            | "satisfies_expression"
+            | "non_null_expression"
+            | "type_assertion" => last_named_child(node)
+                .as_ref()
+                .is_some_and(|child| self.is_js_ts_function_value(child, source)),
+            "call_expression" => {
+                let is_component_wrapper = node
+                    .child_by_field_name("function")
+                    .and_then(|callee| extract_callable_name(&callee, source))
+                    .is_some_and(|name| matches!(name.as_str(), "memo" | "forwardRef" | "lazy"));
+                is_component_wrapper && self.has_js_ts_function_descendant(node, source)
+            }
+            _ => false,
+        }
+    }
+
+    fn has_js_ts_function_descendant(&self, node: &Node, source: &str) -> bool {
+        for i in 0..node.named_child_count() {
+            if let Some(child) = node.named_child(i as u32) {
+                if self.is_js_ts_function_value(&child, source)
+                    || self.has_js_ts_function_descendant(&child, source)
+                {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     fn extract_quoted_text(&self, text: &str) -> Option<String> {
@@ -1461,6 +1567,75 @@ class UserService {
         assert!(symbols
             .iter()
             .any(|s| s.name == "./utils" && s.symbol_type == SymbolType::Import));
+    }
+
+    #[test]
+    fn test_extract_typescript_variable_function_symbols() {
+        let mut parser = TreeSitterParser::new().unwrap();
+        let code = r#"
+export const authenticateUser = async (token: string): Promise<boolean> => true;
+const normalizeToken = function (token: string): string { return token.trim(); };
+let retryCount = 0;
+"#;
+        let tree = parser.parse(code, Language::TypeScript).unwrap();
+        let symbols = extract_symbols(&tree, code, Language::TypeScript, "auth.ts");
+
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "authenticateUser" && s.symbol_type == SymbolType::Function));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "normalizeToken" && s.symbol_type == SymbolType::Function));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "retryCount" && s.symbol_type == SymbolType::Variable));
+    }
+
+    #[test]
+    fn test_extract_tsx_react_component_symbols() {
+        let mut parser = TreeSitterParser::new().unwrap();
+        let code = r#"
+import React, { memo, forwardRef } from "react";
+
+export const UserCard = memo(function UserCard({ user }: Props) {
+    return <section>{user.name}</section>;
+});
+
+const SearchInput = forwardRef<HTMLInputElement, Props>((props, ref) => {
+    return <input ref={ref} />;
+});
+"#;
+        let tree = parser.parse(code, Language::Tsx).unwrap();
+        let symbols = extract_symbols(&tree, code, Language::Tsx, "UserCard.tsx");
+
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "UserCard" && s.symbol_type == SymbolType::Function));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "SearchInput" && s.symbol_type == SymbolType::Function));
+    }
+
+    #[test]
+    fn test_extract_javascript_object_function_symbols() {
+        let mut parser = TreeSitterParser::new().unwrap();
+        let code = r#"
+const handlers = {
+    authenticate(req) {
+        return true;
+    },
+    refresh: async (token) => token,
+};
+"#;
+        let tree = parser.parse(code, Language::JavaScript).unwrap();
+        let symbols = extract_symbols(&tree, code, Language::JavaScript, "handlers.js");
+
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "authenticate" && s.symbol_type == SymbolType::Method));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "refresh" && s.symbol_type == SymbolType::Method));
     }
 
     #[test]

@@ -55,10 +55,41 @@ function sanitizeTerminalOutput(data: string): string {
         .join('');
 }
 
-function getTerminalTheme() {
+interface TerminalTheme {
+    background: string;
+    foreground: string;
+    cursor: string;
+    cursorAccent: string;
+    selectionBackground: string;
+    black: string;
+    red: string;
+    green: string;
+    yellow: string;
+    blue: string;
+    magenta: string;
+    cyan: string;
+    white: string;
+    brightBlack: string;
+    brightRed: string;
+    brightGreen: string;
+    brightYellow: string;
+    brightBlue: string;
+    brightMagenta: string;
+    brightCyan: string;
+    brightWhite: string;
+}
+
+// Cache terminal theme to avoid repeated getComputedStyle calls
+let cachedTerminalTheme: TerminalTheme | null = null;
+
+function getTerminalTheme(): TerminalTheme {
+    if (cachedTerminalTheme) {
+        return cachedTerminalTheme;
+    }
+
     const styles = getComputedStyle(document.documentElement);
 
-    return {
+    cachedTerminalTheme = {
         background: styles.getPropertyValue('--term-bg').trim(),
         foreground: styles.getPropertyValue('--term-fg').trim(),
         cursor: styles.getPropertyValue('--term-cursor').trim(),
@@ -81,6 +112,8 @@ function getTerminalTheme() {
         brightCyan: styles.getPropertyValue('--term-bright-cyan').trim(),
         brightWhite: styles.getPropertyValue('--term-bright-white').trim(),
     };
+
+    return cachedTerminalTheme;
 }
 
 interface TerminalProps {
@@ -438,7 +471,6 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
         resizeObserver.observe(terminalRef.current);
 
         return () => {
-            term.dispose();
             terminalBufferRef.current?.clear(id);
             if (fitIntervalRef.current) {
                 clearInterval(fitIntervalRef.current);
@@ -453,10 +485,7 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
                 payload: { id }
             }).catch(console.error);
 
-            // Dispose logic
             try {
-                // We don't dispose the term immediately to avoid race conditions if the ref is used elsewhere?
-                // No, we should dispose.
                 term.dispose();
             } catch (e) { console.error("Error disposing terminal", e); }
 

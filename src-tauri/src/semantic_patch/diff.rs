@@ -4,6 +4,7 @@
 //! before they are applied.
 
 use serde::{Deserialize, Serialize};
+use similar::{Algorithm, ChangeTag, TextDiff};
 
 /// A hunk in a unified diff
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,21 +82,62 @@ impl DiffHunk {
 
 /// Generate a unified diff between two strings
 pub fn generate_diff(old_content: &str, new_content: &str, context_lines: usize) -> Vec<DiffHunk> {
-    let old_lines: Vec<&str> = old_content.lines().collect();
-    let new_lines: Vec<&str> = new_content.lines().collect();
+    let diff = TextDiff::configure()
+        .algorithm(Algorithm::Histogram)
+        .diff_lines(old_content, new_content);
 
-    // Simple LCS-based diff algorithm
-    let lcs = compute_lcs(&old_lines, &new_lines);
+    diff.grouped_ops(context_lines)
+        .into_iter()
+        .filter_map(|ops| {
+            let first = ops.first()?;
+            let last = ops.last()?;
+            let old_range = first.old_range().start..last.old_range().end;
+            let new_range = first.new_range().start..last.new_range().end;
+            let mut hunk = DiffHunk {
+                old_start: old_range.start + 1,
+                old_count: old_range.len(),
+                new_start: new_range.start + 1,
+                new_count: new_range.len(),
+                lines: Vec::new(),
+            };
 
-    // Build diff operations
-    let ops = build_diff_ops(&old_lines, &new_lines, &lcs);
+            for op in ops {
+                for change in diff.iter_changes(&op) {
+                    match change.tag() {
+                        ChangeTag::Equal => hunk.lines.push(DiffLine {
+                            kind: DiffLineKind::Context,
+                            content: change.value().trim_end_matches('\n').to_string(),
+                            old_line: change.old_index().map(|index| index + 1),
+                            new_line: change.new_index().map(|index| index + 1),
+                        }),
+                        ChangeTag::Delete => hunk.lines.push(DiffLine {
+                            kind: DiffLineKind::Removed,
+                            content: change.value().trim_end_matches('\n').to_string(),
+                            old_line: change.old_index().map(|index| index + 1),
+                            new_line: None,
+                        }),
+                        ChangeTag::Insert => hunk.lines.push(DiffLine {
+                            kind: DiffLineKind::Added,
+                            content: change.value().trim_end_matches('\n').to_string(),
+                            old_line: None,
+                            new_line: change.new_index().map(|index| index + 1),
+                        }),
+                    }
+                }
+            }
 
-    // Group into hunks with context
-    build_hunks(&old_lines, &new_lines, &ops, context_lines)
+            if hunk.lines.iter().any(|line| line.kind != DiffLineKind::Context) {
+                Some(hunk)
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// Diff operation
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 enum DiffOp {
     Keep(usize, usize), // old_idx, new_idx
     Remove(usize),      // old_idx
@@ -103,6 +145,7 @@ enum DiffOp {
 }
 
 /// Compute longest common subsequence indices
+#[allow(dead_code)]
 fn compute_lcs<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<(usize, usize)> {
     let m = old.len();
     let n = new.len();
@@ -146,6 +189,7 @@ fn compute_lcs<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<(usize, usize)> {
 }
 
 /// Build diff operations from LCS
+#[allow(dead_code)]
 fn build_diff_ops(old: &[&str], new: &[&str], lcs: &[(usize, usize)]) -> Vec<DiffOp> {
     let mut ops = Vec::new();
     let mut old_idx = 0;
@@ -185,6 +229,7 @@ fn build_diff_ops(old: &[&str], new: &[&str], lcs: &[(usize, usize)]) -> Vec<Dif
 }
 
 /// Build hunks from diff operations
+#[allow(dead_code)]
 fn build_hunks(old: &[&str], new: &[&str], ops: &[DiffOp], context_lines: usize) -> Vec<DiffHunk> {
     if ops.is_empty() {
         return vec![];
@@ -254,6 +299,7 @@ fn build_hunks(old: &[&str], new: &[&str], ops: &[DiffOp], context_lines: usize)
     hunks
 }
 
+#[allow(dead_code)]
 fn get_line_numbers_at_idx(ops: &[DiffOp], idx: usize) -> (usize, usize) {
     let mut old_line = 0;
     let mut new_line = 0;
@@ -272,6 +318,7 @@ fn get_line_numbers_at_idx(ops: &[DiffOp], idx: usize) -> (usize, usize) {
     (old_line, new_line)
 }
 
+#[allow(dead_code)]
 fn add_op_to_hunk(hunk: &mut DiffHunk, op: &DiffOp, old: &[&str], new: &[&str]) {
     match op {
         DiffOp::Keep(old_idx, new_idx) => {

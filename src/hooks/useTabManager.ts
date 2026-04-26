@@ -142,6 +142,12 @@ export function useTabManager(uncommittedChanges: UncommittedChange[]) {
         );
     }, [uncommittedChanges]);
 
+    // Memoize uncommitted changes count and paths to avoid frequent recomputation
+    const uncommittedChangesMetadata = useMemo(() => ({
+        count: uncommittedChanges.length,
+        paths: new Set(uncommittedChanges.map(c => c.file_path)),
+    }), [uncommittedChanges]);
+
     const appBarTabs = useMemo((): AppBarTab[] => tabs.map(t => {
         const isFileTab = t.type === 'file' && !!t.path;
         const path = t.path;
@@ -151,11 +157,11 @@ export function useTabManager(uncommittedChanges: UncommittedChange[]) {
             title: t.title,
             isEphemeral: t.type === 'ephemeral',
             isDirty: Boolean(t.isDirty),
-            hasVirtualChanges: isFileTab ? hasPendingVirtualChanges(path) : false,
+            hasVirtualChanges: isFileTab ? uncommittedChangesMetadata.paths.has(path!) : false,
             isAiEdited: isFileTab ? aiEditedFilePaths.has(path!) : false,
             hasUnreadAiEdit: isFileTab ? unseenAiEditedFilePaths.has(path!) : false,
         };
-    }), [tabs, hasPendingVirtualChanges, aiEditedFilePaths, unseenAiEditedFilePaths]);
+    }), [tabs, uncommittedChangesMetadata, aiEditedFilePaths, unseenAiEditedFilePaths]);
 
     const handleTabClick = useCallback((tabId: string) => {
         setActiveTabId(tabId);
