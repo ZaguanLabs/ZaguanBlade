@@ -524,7 +524,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
             lastMessageReasoning,
             lastMessageBlockCount,
         ].join('|');
-    }, [lastMessageBlockCount, lastMessageContent, lastMessageId, lastMessageReasoning, messageCount]);
+    }, [lastMessage, lastMessageBlockCount, lastMessageContent, lastMessageId, lastMessageReasoning, messageCount]);
 
     const scrollToBottom = useCallback(() => {
         const container = scrollContainerRef.current;
@@ -867,7 +867,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         && researchProgress.stage.toLowerCase() !== 'considering_next_steps';
 
     return (
-        <div className="flex flex-col h-full bg-[var(--bg-app)] text-[var(--fg-primary)] font-sans tracking-tight" onContextMenu={handleContextMenu}>
+        <div className="flex flex-col h-full bg-(--bg-app) text-(--fg-primary) font-sans tracking-tight" onContextMenu={handleContextMenu}>
             {/* Tab Bar */}
             <ChatTabBar
                 activeTab={activeTab}
@@ -879,29 +879,29 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
             {activeTab === 'chat' ? (
                 <div
                     ref={scrollContainerRef}
-                    className="relative flex-1 overflow-y-auto overflow-y-scroll scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent"
+                    className="relative flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent"
                     onScroll={handleScroll}
                 >
                     <div className="mx-auto flex w-full max-w-none flex-col gap-0.5 px-0.5 py-4 md:px-1">
                         {messages.length === 0 && (
-                            <div className="mx-4 mt-10 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/70 px-6 py-8 text-center shadow-[0_24px_80px_rgba(0,0,0,0.25)]">
+                            <div className="mx-4 mt-10 rounded-2xl border border-(--border-subtle) bg-(--bg-surface)/70 px-6 py-8 text-center shadow-[0_24px_80px_rgba(0,0,0,0.25)]">
                                 <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-emerald-500/20 bg-emerald-500/10 text-2xl shadow-[0_0_40px_rgba(16,185,129,0.15)]">
                                     🗡️
                                 </div>
-                                <h2 className="text-sm font-semibold uppercase tracking-[0.24em] text-[var(--fg-secondary)]">{t('app.name')}</h2>
-                                <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-[var(--fg-tertiary)]">
+                                <h2 className="text-sm font-semibold uppercase tracking-[0.24em] text-(--fg-secondary)">{t('app.name')}</h2>
+                                <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-(--fg-tertiary)">
                                     {t('chat.emptyState.intro')}
                                 </p>
-                                <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-[var(--fg-secondary)]">
+                                <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-(--fg-secondary)">
                                     {t('chat.emptyState.tip')}
                                 </p>
-                                <div className="mt-5 flex flex-wrap items-center justify-center gap-2 text-[11px] text-[var(--fg-tertiary)]">
-                                    <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-app)] px-3 py-1">{t('chat.emptyState.understandFile')}</span>
-                                    <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-app)] px-3 py-1">{t('chat.emptyState.planNextChange')}</span>
-                                    <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-app)] px-3 py-1">{t('chat.emptyState.reviewCommandOutput')}</span>
-                                    <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-app)] px-3 py-1">{t('chat.emptyState.attachScreenshots')}</span>
+                                <div className="mt-5 flex flex-wrap items-center justify-center gap-2 text-[11px] text-(--fg-tertiary)">
+                                    <span className="rounded-full border border-(--border-subtle) bg-(--bg-app) px-3 py-1">{t('chat.emptyState.understandFile')}</span>
+                                    <span className="rounded-full border border-(--border-subtle) bg-(--bg-app) px-3 py-1">{t('chat.emptyState.planNextChange')}</span>
+                                    <span className="rounded-full border border-(--border-subtle) bg-(--bg-app) px-3 py-1">{t('chat.emptyState.reviewCommandOutput')}</span>
+                                    <span className="rounded-full border border-(--border-subtle) bg-(--bg-app) px-3 py-1">{t('chat.emptyState.attachScreenshots')}</span>
                                 </div>
-                                <p className="mt-5 text-xs font-mono uppercase tracking-[0.2em] text-[var(--fg-tertiary)]/70">
+                                <p className="mt-5 text-xs font-mono uppercase tracking-[0.2em] text-(--fg-tertiary)/70">
                                     {t('chat.emptyState.startPrompt')}
                                 </p>
                             </div>
@@ -977,7 +977,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                         <div className="pointer-events-none sticky bottom-0 z-10 flex justify-center px-4 pb-4">
                             <button
                                 onClick={scrollToBottom}
-                                className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-surface)]/95 px-4 py-2 text-xs font-medium text-[var(--fg-secondary)] shadow-[0_18px_48px_rgba(0,0,0,0.25)] transition-colors hover:text-[var(--fg-primary)]"
+                                className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-(--border-subtle) bg-(--bg-surface)/95 px-4 py-2 text-xs font-medium text-(--fg-secondary) shadow-[0_18px_48px_rgba(0,0,0,0.25)] transition-colors hover:text-(--fg-primary)"
                             >
                                 <ArrowDown className="h-3.5 w-3.5" />
                                 {t('chat.jumpToLatest')}
