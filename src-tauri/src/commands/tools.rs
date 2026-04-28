@@ -95,14 +95,6 @@ fn strip_ansi_codes(input: &str) -> String {
         .to_string()
 }
 
-fn truncate_builtin_output(mut output: String) -> String {
-    if output.len() > 50_000 {
-        output.truncate(50_000);
-        output.push_str("\n...truncated...\n");
-    }
-    output
-}
-
 fn resolve_command_dir(
     workspace_root: &Path,
     cwd: Option<&str>,
@@ -219,7 +211,6 @@ fn build_builtin_result(
     exit_code: i32,
     refresh_explorer: bool,
 ) -> (crate::tools::ToolResult, String, i32, bool) {
-    let output = truncate_builtin_output(output);
     let content = output.trim_end_matches('\n').to_string();
     let result = if exit_code == 0 {
         crate::tools::ToolResult::ok(content)
@@ -920,10 +911,7 @@ fn approve_tool<R: Runtime>(approved: bool, app_handle: tauri::AppHandle<R>) {
 }
 
 #[tauri::command]
-pub async fn approve_tool_decision<R: Runtime>(
-    decision: String,
-    app_handle: tauri::AppHandle<R>,
-) {
+pub async fn approve_tool_decision<R: Runtime>(decision: String, app_handle: tauri::AppHandle<R>) {
     if let Err(error) = tokio::task::spawn_blocking(move || {
         let approved = decision == "approve_once" || decision == "approve_always";
         let state = app_handle.state::<AppState>();

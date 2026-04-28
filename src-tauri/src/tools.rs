@@ -48,6 +48,21 @@ fn get_bounded_usize_arg(
     default
 }
 
+fn get_optional_bounded_usize_arg(
+    args: &HashMap<String, serde_json::Value>,
+    keys: &[&str],
+    cap: usize,
+) -> Option<usize> {
+    for k in keys {
+        if let Some(value) = args.get(*k) {
+            if let Some(n) = value.as_u64() {
+                return Some((n as usize).min(cap));
+            }
+        }
+    }
+    None
+}
+
 fn get_string_array_arg(
     args: &HashMap<String, serde_json::Value>,
     keys: &[&str],
@@ -180,7 +195,6 @@ const PROJECT_INDEX_CHUNK_DEFAULT_MAX_CHARS: usize = 4000;
 const PROJECT_INDEX_CHUNK_MAX_CHARS: usize = 8000;
 const READ_MANY_FILES_DEFAULT_MAX_FILES: usize = 100;
 const READ_MANY_FILES_MAX_FILES_CAP: usize = 500;
-const READ_MANY_FILES_DEFAULT_MAX_BYTES_PER_FILE: usize = 64 * 1024;
 const READ_MANY_FILES_MAX_BYTES_PER_FILE_CAP: usize = 512 * 1024;
 
 const GREP_TIMEOUT_DEFAULT_MS: u64 = 8_000;
@@ -464,6 +478,39 @@ mod tests {
     }
 
     #[test]
+    fn batch_preserves_full_nested_tool_output() {
+        let workspace = tempdir().expect("tempdir");
+        let file_path = workspace.path().join("large.txt");
+        let content = (0..220)
+            .map(|i| format!("line {i:03} {}", "x".repeat(300)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&file_path, &content).expect("write test file");
+
+        let args = r#"{
+            "calls": [
+                {"tool": "read_file", "arguments": {"path": "large.txt"}}
+            ]
+        }"#;
+
+        let result = execute_tool(workspace.path(), "batch", args);
+        assert!(result.success, "batch should succeed");
+
+        let payload: serde_json::Value =
+            serde_json::from_str(&result.content).expect("batch json output");
+        let output = payload["results"][0]["output"]
+            .as_str()
+            .expect("nested output should be string");
+
+        assert!(output.contains("line 000"));
+        assert!(output.contains("line 219"));
+        assert!(
+            !output.contains("[TRUNCATED:"),
+            "nested batch output should not be pre-truncated"
+        );
+    }
+
+    #[test]
     fn read_many_files_includes_metrics_in_summary() {
         let workspace = tempdir().expect("tempdir");
         let file_path = workspace.path().join("example.txt");
@@ -483,6 +530,55 @@ mod tests {
         assert!(metrics["calls"].as_u64().unwrap_or(0) >= 1);
         assert!(metrics["latency_ms"]["p50"].is_number());
         assert!(metrics["latency_ms"]["p95"].is_number());
+    }
+
+    #[test]
+    fn read_many_files_returns_full_content_by_default() {
+        let workspace = tempdir().expect("tempdir");
+        let file_path = workspace.path().join("long.txt");
+        let content = "x".repeat(70 * 1024);
+        fs::write(&file_path, &content).expect("write test file");
+
+        let result = execute_tool(
+            workspace.path(),
+            "read_many_files",
+            r#"{"paths":["long.txt"],"max_files":10,"include_line_numbers":false}"#,
+        );
+        assert!(result.success, "read_many_files should succeed");
+
+        let payload: serde_json::Value =
+            serde_json::from_str(&result.content).expect("read_many_files json output");
+        let file = &payload["files"][0];
+        assert_eq!(file["truncated"].as_bool(), Some(false));
+        assert_eq!(file["content"].as_str(), Some(content.as_str()));
+        assert_eq!(
+            payload["summary"]["truncated_files"].as_u64(),
+            Some(0),
+            "default read_many_files should not truncate per-file content"
+        );
+    }
+
+    #[test]
+    fn read_many_files_honors_explicit_max_bytes_per_file() {
+        let workspace = tempdir().expect("tempdir");
+        let file_path = workspace.path().join("long.txt");
+        fs::write(&file_path, "abcdefghij").expect("write test file");
+
+        let result = execute_tool(
+            workspace.path(),
+            "read_many_files",
+            r#"{"paths":["long.txt"],"max_files":10,"max_bytes_per_file":4,"include_line_numbers":false}"#,
+        );
+        assert!(result.success, "read_many_files should succeed");
+
+        let payload: serde_json::Value =
+            serde_json::from_str(&result.content).expect("read_many_files json output");
+        let file = &payload["files"][0];
+        assert_eq!(file["truncated"].as_bool(), Some(true));
+        assert_eq!(file["content"].as_str(), Some("abcd"));
+        assert_eq!(file["byte_count"].as_u64(), Some(4));
+        assert_eq!(file["original_byte_count"].as_u64(), Some(10));
+        assert_eq!(payload["summary"]["truncated_files"].as_u64(), Some(1));
     }
 
     #[test]
@@ -1010,10 +1106,9 @@ fn read_many_files(workspace_root: &Path, args: &HashMap<String, serde_json::Val
         READ_MANY_FILES_DEFAULT_MAX_FILES,
         READ_MANY_FILES_MAX_FILES_CAP,
     );
-    let max_bytes_per_file = get_bounded_usize_arg(
+    let max_bytes_per_file = get_optional_bounded_usize_arg(
         args,
         &["max_bytes_per_file"],
-        READ_MANY_FILES_DEFAULT_MAX_BYTES_PER_FILE,
         READ_MANY_FILES_MAX_BYTES_PER_FILE_CAP,
     );
     let include_line_numbers = get_bool_arg(args, &["include_line_numbers"], true);
@@ -1044,11 +1139,12 @@ fn read_many_files(workspace_root: &Path, args: &HashMap<String, serde_json::Val
         match fs::read(&abs_path) {
             Ok(bytes) => {
                 let original_byte_count = bytes.len();
-                let truncated = original_byte_count > max_bytes_per_file;
-                let selected_bytes = if truncated {
-                    &bytes[..max_bytes_per_file]
-                } else {
-                    &bytes[..]
+                let truncated = max_bytes_per_file
+                    .map(|limit| original_byte_count > limit)
+                    .unwrap_or(false);
+                let selected_bytes = match max_bytes_per_file {
+                    Some(limit) if truncated => &bytes[..limit],
+                    _ => &bytes[..],
                 };
 
                 let mut content = String::from_utf8_lossy(selected_bytes).to_string();
@@ -1219,7 +1315,7 @@ fn batch(
                 "index": index,
                 "tool": tool_name,
                 "ok": true,
-                "output": result.to_tool_content_truncated(),
+                "output": result.to_tool_content(),
                 "elapsed_ms": elapsed_ms,
             })
         } else {

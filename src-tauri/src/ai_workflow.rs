@@ -81,7 +81,7 @@ pub struct PendingCommand {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_run_command_args;
+    use super::{parse_run_command_args, run_command_spec_in_workspace, CommandSpec};
     use crate::protocol::{ToolCall, ToolFunction};
     use crate::tool_execution::ToolExecutionContext;
     use tempfile::tempdir;
@@ -136,6 +136,27 @@ mod tests {
             vec!["hello".to_string(), "world".to_string()]
         );
         assert!(!parsed.spec.shell);
+    }
+
+    #[test]
+    fn run_command_preserves_large_output() {
+        let workspace = tempdir().expect("tempdir");
+        let command_spec = CommandSpec {
+            command_line: None,
+            program: Some("python3".to_string()),
+            args: vec![
+                "-c".to_string(),
+                "print('a' * 60000 + 'TAIL_MARKER')".to_string(),
+            ],
+            shell: false,
+        };
+
+        let result = run_command_spec_in_workspace(workspace.path(), &command_spec, None);
+
+        assert!(result.success, "large output command should succeed");
+        assert!(result.content.contains("TAIL_MARKER"));
+        assert!(!result.content.contains("...truncated..."));
+        assert!(result.content.len() > 60_000);
     }
 
     #[test]
@@ -626,8 +647,7 @@ impl AiWorkflow {
                                     let state = app.state::<crate::app_state::AppState>();
 
                                     crate::file_state_sync::sync_from_disk_after_write(
-                                        app,
-                                        &full_path,
+                                        app, &full_path,
                                     );
 
                                     // Track as uncommitted change if we have a snapshot
@@ -1350,10 +1370,6 @@ pub fn run_command_spec_in_workspace(
                 if !s.ends_with('\n') {
                     s.push('\n');
                 }
-            }
-            if s.len() > 50_000 {
-                s.truncate(50_000);
-                s.push_str("\n...truncated...\n");
             }
             tools::ToolResult {
                 success: out.status.success(),

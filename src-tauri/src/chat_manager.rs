@@ -789,7 +789,7 @@ impl ChatManager {
                                     if accepted_output_index.is_none() {
                                         accepted_output_index = Some(idx);
                                     } else if accepted_output_index != Some(idx) {
-                                            continue;
+                                        continue;
                                     }
                                 }
                                 if phase.as_deref() == Some("commentary") {
@@ -815,7 +815,7 @@ impl ChatManager {
                                     if accepted_output_index.is_none() {
                                         accepted_output_index = Some(idx);
                                     } else if accepted_output_index != Some(idx) {
-                                            continue;
+                                        continue;
                                     }
                                 }
                                 last_reasoning_chunk = Some(text.clone());
@@ -918,9 +918,7 @@ impl ChatManager {
                                     });
                                 }
 
-                                let _ = tx.send(ChatEvent::Done {
-                                    finish_reason,
-                                });
+                                let _ = tx.send(ChatEvent::Done { finish_reason });
                                 // Don't break - keep connection alive for tool results
                                 // The connection will close when the user sends a new message
                             }
@@ -1091,8 +1089,12 @@ impl ChatManager {
                                 }
                                 let _ = t0;
                             }
-                            crate::blade_ws_client::BladeWsEvent::HistoryListResponse { .. }
-                            | crate::blade_ws_client::BladeWsEvent::HistoryDetailResponse { .. }
+                            crate::blade_ws_client::BladeWsEvent::HistoryListResponse {
+                                ..
+                            }
+                            | crate::blade_ws_client::BladeWsEvent::HistoryDetailResponse {
+                                ..
+                            }
                             | crate::blade_ws_client::BladeWsEvent::ZlpResponse { .. } => {}
                         }
                     }
@@ -1195,7 +1197,15 @@ impl ChatManager {
                     ("assistant", content, None)
                 }
                 ChatRole::System => ("system", Some(msg.content.clone()), None),
-                ChatRole::Tool => ("tool", Some(msg.content.clone()), msg.tool_call_id.clone()),
+                ChatRole::Tool => (
+                    "tool",
+                    Some(
+                        msg.backend_content
+                            .clone()
+                            .unwrap_or_else(|| msg.content.clone()),
+                    ),
+                    msg.tool_call_id.clone(),
+                ),
             };
             if content.as_deref().unwrap_or("").trim().is_empty()
                 && msg.role != ChatRole::Assistant
@@ -1434,7 +1444,8 @@ impl ChatManager {
                     if let Some(msg) = parsed.message {
                         if let Some(content) = msg.content {
                             if !content.is_empty() {
-                                if reasoning_parser.is_none() && contains_reasoning_marker(&content) {
+                                if reasoning_parser.is_none() && contains_reasoning_marker(&content)
+                                {
                                     reasoning_parser = Some(ReasoningParser::new());
                                 }
 
@@ -1655,7 +1666,10 @@ impl ChatManager {
                             for image in images {
                                 parts.push(OpenAIContentPart::ImageUrl {
                                     image_url: OpenAIImageUrl {
-                                        url: format!("data:{};base64,{}", image.mime_type, image.data),
+                                        url: format!(
+                                            "data:{};base64,{}",
+                                            image.mime_type, image.data
+                                        ),
                                     },
                                 });
                             }
@@ -1675,7 +1689,10 @@ impl ChatManager {
                             for image in images {
                                 parts.push(OpenAIContentPart::ImageUrl {
                                     image_url: OpenAIImageUrl {
-                                        url: format!("data:{};base64,{}", image.mime_type, image.data),
+                                        url: format!(
+                                            "data:{};base64,{}",
+                                            image.mime_type, image.data
+                                        ),
                                     },
                                 });
                             }
@@ -1723,7 +1740,11 @@ impl ChatManager {
                 }),
                 ChatRole::Tool => messages.push(OpenAIMessage {
                     role: "tool".to_string(),
-                    content: Some(OpenAIContent::Text(msg.content.clone())),
+                    content: Some(OpenAIContent::Text(
+                        msg.backend_content
+                            .clone()
+                            .unwrap_or_else(|| msg.content.clone()),
+                    )),
                     tool_calls: None,
                     tool_call_id: msg.tool_call_id.clone(),
                 }),
@@ -1896,16 +1917,12 @@ impl ChatManager {
                     if let Some(json_str) = line.strip_prefix("data: ") {
                         if let Ok(parsed) = serde_json::from_str::<StreamChunk>(json_str) {
                             if let Some(choice) = parsed.choices.first() {
-                                let content = choice
-                                    .delta
-                                    .content
-                                    .as_ref()
-                                    .or_else(|| {
-                                        choice
-                                            .message
-                                            .as_ref()
-                                            .and_then(|message| message.content.as_ref())
-                                    });
+                                let content = choice.delta.content.as_ref().or_else(|| {
+                                    choice
+                                        .message
+                                        .as_ref()
+                                        .and_then(|message| message.content.as_ref())
+                                });
 
                                 // Handle text / reasoning deltas
                                 if let Some(content) = content {
@@ -2114,20 +2131,24 @@ impl ChatManager {
         // Store tool results in conversation history
         // RFC: Large Tool Result Handling - truncate in local mode
         for (_call, result) in batch.file_results.iter() {
+            let full_content = result.to_tool_content();
             let content = if is_local_mode {
                 result.to_tool_content_truncated()
             } else {
-                result.to_tool_content()
+                full_content.clone()
             };
             let mut tool_msg = ChatMessage::new(ChatRole::Tool, content);
+            if is_local_mode {
+                tool_msg.backend_content = Some(full_content);
+            }
             tool_msg.tool_call_id = Some(_call.id.clone());
             conversation.push(tool_msg);
         }
 
         // Update tool call status in the assistant message and store for emission
         // RFC: Large Tool Result Handling - truncate in local mode
-        if let Some(updated_assistant) = conversation
-            .update_tool_call_status_with_truncation(&batch.file_results, is_local_mode)
+        if let Some(updated_assistant) =
+            conversation.update_tool_call_status_with_truncation(&batch.file_results, is_local_mode)
         {
             self.pending_results
                 .push_back(DrainResult::ToolStatusUpdate(updated_assistant));
@@ -2192,7 +2213,7 @@ impl ChatManager {
         batch: &PendingToolBatch,
         conversation: &mut ConversationHistory,
         workspace: Option<&PathBuf>,
-        is_local_mode: bool,
+        _is_local_mode: bool,
     ) -> Result<(), String> {
         // Send tool results to Blade Protocol via WebSocket
         // We need to send ALL tool results, not just the first one
@@ -2208,7 +2229,6 @@ impl ChatManager {
             .ok_or_else(|| "No WebSocket client available".to_string())?
             .clone();
         let results = batch.file_results.clone(); // Clone for the task
-        let is_local_mode_clone = is_local_mode; // Clone for async task
         let provider_event_tx = self.provider_event_tx.clone();
         let _ = workspace;
 
@@ -2227,11 +2247,7 @@ impl ChatManager {
             // Send ALL results sequentially
             // RFC: Large Tool Result Handling - truncate in local mode
             for (call, result) in &results {
-                let tool_content = if is_local_mode_clone {
-                    result.to_tool_content_truncated()
-                } else {
-                    result.to_tool_content()
-                };
+                let tool_content = result.to_tool_content();
 
                 let tool_result = crate::blade_ws_client::ToolResult {
                     success: result.success,
@@ -3015,6 +3031,33 @@ mod tests {
             .and_then(|value| value.as_array())
             .expect("expected images on latest user turn");
         assert_eq!(images.len(), 1);
+    }
+
+    #[test]
+    fn blade_conversation_context_uses_backend_content_for_tool_results() {
+        let mut conversation = ConversationHistory::new();
+        let mut tool = ChatMessage::new(ChatRole::Tool, "[TRUNCATED]".to_string());
+        tool.backend_content = Some("full workspace analysis result".to_string());
+        tool.tool_call_id = Some("call-1".to_string());
+        conversation.push(tool);
+
+        let messages = ChatManager::to_blade_conversation_messages(&conversation);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[0].get("role").and_then(|value| value.as_str()),
+            Some("tool")
+        );
+        assert_eq!(
+            messages[0].get("content").and_then(|value| value.as_str()),
+            Some("full workspace analysis result")
+        );
+        assert_eq!(
+            messages[0]
+                .get("tool_call_id")
+                .and_then(|value| value.as_str()),
+            Some("call-1")
+        );
     }
 
     #[test]

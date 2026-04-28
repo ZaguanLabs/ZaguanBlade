@@ -667,7 +667,10 @@ impl BladeWsClient {
         };
 
         let msg = WsBaseMessage {
-            id: format!("approval-response-{}", chrono::Utc::now().timestamp_millis()),
+            id: format!(
+                "approval-response-{}",
+                chrono::Utc::now().timestamp_millis()
+            ),
             msg_type: "approval_response".to_string(),
             timestamp: chrono::Utc::now().timestamp_millis(),
             payload: Some(serde_json::to_value(payload).unwrap()),
@@ -878,10 +881,11 @@ impl BladeWsClient {
                 });
             }
             "history_detail_response" => {
-                let conversation = serde_json::from_value::<crate::blade_protocol::FullConversation>(
-                    msg.payload.clone(),
-                )
-                .map_err(|e| format!("Failed to parse history detail response: {}", e))?;
+                let conversation =
+                    serde_json::from_value::<crate::blade_protocol::FullConversation>(
+                        msg.payload.clone(),
+                    )
+                    .map_err(|e| format!("Failed to parse history detail response: {}", e))?;
 
                 let _ = tx.send(BladeWsEvent::HistoryDetailResponse {
                     request_id: correlation_id.clone(),
