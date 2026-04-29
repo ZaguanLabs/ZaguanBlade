@@ -136,20 +136,24 @@ impl PatchApplier {
                 target_position,
             } => {
                 return self.apply_move(
-                &content,
-                start,
-                end,
-                &patch.file_path,
-                target_file,
-                *target_position,
-            )
+                    &content,
+                    start,
+                    end,
+                    &patch.file_path,
+                    target_file,
+                    *target_position,
+                )
             }
         };
 
         Ok(Self::single_result(&patch.file_path, content, new_content))
     }
 
-    fn single_result(file_path: &str, original_content: String, new_content: String) -> ApplyResult {
+    fn single_result(
+        file_path: &str,
+        original_content: String,
+        new_content: String,
+    ) -> ApplyResult {
         let primary_change = Self::build_file_change(file_path, original_content, new_content);
 
         ApplyResult {
@@ -161,7 +165,10 @@ impl PatchApplier {
         }
     }
 
-    fn multi_result(primary_change: ApplyFileChange, additional_changes: Vec<ApplyFileChange>) -> ApplyResult {
+    fn multi_result(
+        primary_change: ApplyFileChange,
+        additional_changes: Vec<ApplyFileChange>,
+    ) -> ApplyResult {
         ApplyResult {
             new_content: primary_change.new_content.clone(),
             diff: primary_change.diff.clone(),
@@ -171,7 +178,11 @@ impl PatchApplier {
         }
     }
 
-    fn build_file_change(file_path: &str, original_content: String, new_content: String) -> ApplyFileChange {
+    fn build_file_change(
+        file_path: &str,
+        original_content: String,
+        new_content: String,
+    ) -> ApplyFileChange {
         let diff_hunks = generate_diff(&original_content, &new_content, 3);
         let diff = diff_hunks
             .iter()
@@ -208,7 +219,9 @@ impl PatchApplier {
                 let replacement = patch.content.as_ref().ok_or_else(|| {
                     ApplyError::ContentMismatch("Missing content for match".to_string())
                 })?;
-                regex.replace_all(content, replacement.as_str()).into_owned()
+                regex
+                    .replace_all(content, replacement.as_str())
+                    .into_owned()
             }
             PatchOperation::Delete => regex.replace_all(content, "").into_owned(),
             _ => return Ok(None),
@@ -252,9 +265,7 @@ impl PatchApplier {
             PatchTarget::LineRange { start, end } => {
                 self.get_line_byte_range(semantic_path, *start, *end)
             }
-            PatchTarget::File => {
-                Ok((0, file_content.len()))
-            }
+            PatchTarget::File => Ok((0, file_content.len())),
         }
     }
 
@@ -307,7 +318,8 @@ impl PatchApplier {
                     self.get_symbol_inner_byte_range(&symbol, semantic_path)
                 }
                 PatchTarget::Cursor { line, character } => {
-                    let symbol = self.resolve_cursor_symbol_target(semantic_path, *line, *character)?;
+                    let symbol =
+                        self.resolve_cursor_symbol_target(semantic_path, *line, *character)?;
                     self.get_symbol_inner_byte_range(&symbol, semantic_path)
                 }
                 _ => self.resolve_target(target, semantic_path, full_path),
@@ -353,7 +365,9 @@ impl PatchApplier {
 
         symbols
             .into_iter()
-            .find(|symbol| symbol.name == name && symbol_type.is_none_or(|kind| symbol.symbol_type == kind))
+            .find(|symbol| {
+                symbol.name == name && symbol_type.is_none_or(|kind| symbol.symbol_type == kind)
+            })
             .ok_or_else(|| ApplyError::SymbolNotFound(name.to_string()))
     }
 
@@ -366,10 +380,9 @@ impl PatchApplier {
         self.language_service
             .get_symbol_at(semantic_path, line, character)
             .map_err(|error| ApplyError::ServiceError(error.to_string()))?
-            .ok_or_else(|| ApplyError::TargetNotFound(format!(
-                "No symbol at cursor {}:{}",
-                line, character
-            )))
+            .ok_or_else(|| {
+                ApplyError::TargetNotFound(format!("No symbol at cursor {}:{}", line, character))
+            })
     }
 
     fn resolve_pattern_target(
@@ -386,16 +399,15 @@ impl PatchApplier {
             .map_err(|error| ApplyError::ContentMismatch(format!("Invalid regex: {}", error)))?;
         let occurrence = occurrence.unwrap_or(0);
 
-        let matched = regex
-            .find_iter(&content)
-            .nth(occurrence);
+        let matched = regex.find_iter(&content).nth(occurrence);
 
         matched
             .map(|matched| (matched.start(), matched.end()))
             .ok_or_else(|| {
                 ApplyError::TargetNotFound(format!(
                     "Pattern did not match occurrence {}: {}",
-                    occurrence, regex.as_str()
+                    occurrence,
+                    regex.as_str()
                 ))
             })
     }
@@ -411,10 +423,16 @@ impl PatchApplier {
         new_string
     }
 
-    fn apply_wrap(&self, original: &str, start: usize, end: usize, before: &str, after: &str) -> String {
+    fn apply_wrap(
+        &self,
+        original: &str,
+        start: usize,
+        end: usize,
+        before: &str,
+        after: &str,
+    ) -> String {
         let target = &original[start..end];
-        let mut new_string =
-            String::with_capacity(original.len() + before.len() + after.len());
+        let mut new_string = String::with_capacity(original.len() + before.len() + after.len());
         new_string.push_str(&original[..start]);
         new_string.push_str(before);
         new_string.push_str(target);
@@ -502,7 +520,8 @@ impl PatchApplier {
             ));
         };
 
-        let (source_end, moved, source_new_content) = self.extract_move_source(original, start, end);
+        let (source_end, moved, source_new_content) =
+            self.extract_move_source(original, start, end);
 
         if source_file == target_file {
             let (destination, _) = self
@@ -526,7 +545,11 @@ impl PatchApplier {
             result.push_str(&moved);
             result.push_str(&source_new_content[adjusted_destination..]);
 
-            return Ok(Self::single_result(source_file, original.to_string(), result));
+            return Ok(Self::single_result(
+                source_file,
+                original.to_string(),
+                result,
+            ));
         }
 
         let target_full_path = self.language_service.resolve_path(target_file);
@@ -549,21 +572,20 @@ impl PatchApplier {
             &moved,
         );
 
-        let primary_change = Self::build_file_change(
-            source_file,
-            original.to_string(),
-            source_new_content,
-        );
-        let target_change = Self::build_file_change(
-            target_file,
-            target_content,
-            target_new_content,
-        );
+        let primary_change =
+            Self::build_file_change(source_file, original.to_string(), source_new_content);
+        let target_change =
+            Self::build_file_change(target_file, target_content, target_new_content);
 
         Ok(Self::multi_result(primary_change, vec![target_change]))
     }
 
-    fn extract_move_source(&self, original: &str, start: usize, end: usize) -> (usize, String, String) {
+    fn extract_move_source(
+        &self,
+        original: &str,
+        start: usize,
+        end: usize,
+    ) -> (usize, String, String) {
         let mut source_end = end;
         let source_is_line_aligned = (start == 0 || original[..start].ends_with('\n'))
             && (end == original.len() || original[end..].starts_with('\n'));
@@ -638,7 +660,10 @@ mod tests {
         };
 
         let result = applier.apply(&patch).unwrap();
-        assert_eq!(result.new_content, "function renamed() { return testValue; }");
+        assert_eq!(
+            result.new_content,
+            "function renamed() { return testValue; }"
+        );
     }
 
     #[test]
@@ -646,7 +671,11 @@ mod tests {
         let (applier, temp_dir) = create_test_env();
         let file_path = temp_dir.path().join("cursor_replace.ts");
 
-        fs::write(&file_path, "function greet() { return 'hi'; }\nconst untouched = 1;\n").unwrap();
+        fs::write(
+            &file_path,
+            "function greet() { return 'hi'; }\nconst untouched = 1;\n",
+        )
+        .unwrap();
         let _ = applier.language_service.index_file("cursor_replace.ts");
 
         let patch = SemanticPatch {
@@ -691,7 +720,10 @@ mod tests {
         };
 
         let result = applier.apply(&patch).unwrap();
-        assert_eq!(result.new_content, "function welcome() { return greetingValue; }\n");
+        assert_eq!(
+            result.new_content,
+            "function welcome() { return greetingValue; }\n"
+        );
     }
 
     #[test]
@@ -727,7 +759,11 @@ mod tests {
         let (applier, temp_dir) = create_test_env();
         let file_path = temp_dir.path().join("insert_end.ts");
 
-        fs::write(&file_path, "function greet() {\n  return 'hi';\n}\nconst untouched = 1;\n").unwrap();
+        fs::write(
+            &file_path,
+            "function greet() {\n  return 'hi';\n}\nconst untouched = 1;\n",
+        )
+        .unwrap();
         let _ = applier.language_service.index_file("insert_end.ts");
 
         let patch = SemanticPatch {
@@ -867,7 +903,9 @@ mod tests {
         };
 
         let result = applier.apply(&patch).unwrap();
-        assert!(result.new_content.contains("if (enabled) {\nfunction greet() { return 'hi'; }\n}"));
+        assert!(result
+            .new_content
+            .contains("if (enabled) {\nfunction greet() { return 'hi'; }\n}"));
     }
 
     #[test]
@@ -875,7 +913,11 @@ mod tests {
         let (applier, temp_dir) = create_test_env();
         let file_path = temp_dir.path().join("wrap_cursor.ts");
 
-        fs::write(&file_path, "function greet() { return 'hi'; }\nconst untouched = 1;\n").unwrap();
+        fs::write(
+            &file_path,
+            "function greet() { return 'hi'; }\nconst untouched = 1;\n",
+        )
+        .unwrap();
         let _ = applier.language_service.index_file("wrap_cursor.ts");
 
         let patch = SemanticPatch {
@@ -895,7 +937,9 @@ mod tests {
         };
 
         let result = applier.apply(&patch).unwrap();
-        assert!(result.new_content.contains("track(() => {\nfunction greet() { return 'hi'; }\n});"));
+        assert!(result
+            .new_content
+            .contains("track(() => {\nfunction greet() { return 'hi'; }\n});"));
         assert!(result.new_content.contains("const untouched = 1;"));
     }
 
@@ -968,11 +1012,7 @@ mod tests {
         let target_path = temp_dir.path().join("move_target.ts");
 
         fs::write(&source_path, "function first() { return 1; }\n").unwrap();
-        fs::write(
-            &target_path,
-            "const before = 0;\nconst after = 1;\n",
-        )
-        .unwrap();
+        fs::write(&target_path, "const before = 0;\nconst after = 1;\n").unwrap();
         let _ = applier.language_service.index_file("move_source.ts");
         let _ = applier.language_service.index_file("move_target.ts");
 
@@ -1010,8 +1050,12 @@ mod tests {
 
         fs::write(&source_path, "function first() { return 1; }\n").unwrap();
         fs::write(&target_path, "const second = 2;\n").unwrap();
-        let _ = applier.language_service.index_file("move_source_unsupported.ts");
-        let _ = applier.language_service.index_file("move_target_unsupported.ts");
+        let _ = applier
+            .language_service
+            .index_file("move_source_unsupported.ts");
+        let _ = applier
+            .language_service
+            .index_file("move_target_unsupported.ts");
 
         let patch = SemanticPatch {
             id: "move-cross-file-unsupported".to_string(),

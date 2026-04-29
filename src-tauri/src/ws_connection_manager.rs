@@ -5,9 +5,9 @@
 
 use crate::blade_ws_client::{BladeWsClient, BladeWsEvent, ToolResult, WorkspaceInfo};
 use serde_json::Value;
-use tokio::sync::{mpsc, Mutex, RwLock};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::{mpsc, Mutex, RwLock};
 
 /// Connection state
 #[derive(Debug, Clone, PartialEq)]
@@ -180,7 +180,10 @@ impl WsConnectionManager {
         subscribers.retain(|subscriber| subscriber.send(event.clone()).is_ok());
     }
 
-    async fn run_event_fanout(self: Arc<Self>, mut event_rx: mpsc::UnboundedReceiver<BladeWsEvent>) {
+    async fn run_event_fanout(
+        self: Arc<Self>,
+        mut event_rx: mpsc::UnboundedReceiver<BladeWsEvent>,
+    ) {
         while let Some(event) = event_rx.recv().await {
             match &event {
                 BladeWsEvent::Connected {
@@ -304,18 +307,22 @@ impl WsConnectionManager {
                         request_id: error_request_id,
                         message,
                         ..
-                    }) if error_request_id.as_deref().is_none_or(|value| value == request_id) => {
+                    }) if error_request_id
+                        .as_deref()
+                        .is_none_or(|value| value == request_id) =>
+                    {
                         return Err(message);
                     }
                     Some(BladeWsEvent::Disconnected) => {
-                        return Err("WebSocket disconnected while waiting for history list response"
-                            .to_string());
+                        return Err(
+                            "WebSocket disconnected while waiting for history list response"
+                                .to_string(),
+                        );
                     }
                     Some(_) => {}
                     None => {
                         return Err(
-                            "WebSocket closed while waiting for history list response"
-                                .to_string(),
+                            "WebSocket closed while waiting for history list response".to_string()
                         );
                     }
                 }
@@ -349,7 +356,10 @@ impl WsConnectionManager {
                         request_id: error_request_id,
                         message,
                         ..
-                    }) if error_request_id.as_deref().is_none_or(|value| value == request_id) => {
+                    }) if error_request_id
+                        .as_deref()
+                        .is_none_or(|value| value == request_id) =>
+                    {
                         return Err(message);
                     }
                     Some(BladeWsEvent::Disconnected) => {
@@ -360,10 +370,8 @@ impl WsConnectionManager {
                     }
                     Some(_) => {}
                     None => {
-                        return Err(
-                            "WebSocket closed while waiting for history detail response"
-                                .to_string(),
-                        );
+                        return Err("WebSocket closed while waiting for history detail response"
+                            .to_string());
                     }
                 }
             }
@@ -391,19 +399,20 @@ impl WsConnectionManager {
                         request_id: error_request_id,
                         message,
                         ..
-                    }) if error_request_id.as_deref().is_none_or(|value| value == request_id) => {
+                    }) if error_request_id
+                        .as_deref()
+                        .is_none_or(|value| value == request_id) =>
+                    {
                         return Err(message);
                     }
                     Some(BladeWsEvent::Disconnected) => {
                         return Err(
-                            "WebSocket disconnected while waiting for ZLP response".to_string(),
+                            "WebSocket disconnected while waiting for ZLP response".to_string()
                         );
                     }
                     Some(_) => {}
                     None => {
-                        return Err(
-                            "WebSocket closed while waiting for ZLP response".to_string(),
-                        );
+                        return Err("WebSocket closed while waiting for ZLP response".to_string());
                     }
                 }
             }

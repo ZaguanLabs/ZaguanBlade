@@ -10,8 +10,8 @@ pub async fn get_recent_workspaces(app_handle: tauri::AppHandle) -> Result<Vec<S
         let workspace = state.workspace.lock().unwrap();
         workspace.get_recent_workspaces()
     })
-        .await
-        .map_err(|e| format!("get recent workspaces task failed: {}", e))
+    .await
+    .map_err(|e| format!("get recent workspaces task failed: {}", e))
 }
 
 #[tauri::command]
@@ -26,9 +26,11 @@ pub async fn load_project_state(
     project_path: String,
 ) -> Result<Option<project_state::ProjectState>, String> {
     let project_path_for_load = project_path.clone();
-    let loaded = tokio::task::spawn_blocking(move || project_state::load_project_state(&project_path_for_load))
-        .await
-        .map_err(|e| format!("load project state task failed: {}", e))?;
+    let loaded = tokio::task::spawn_blocking(move || {
+        project_state::load_project_state(&project_path_for_load)
+    })
+    .await
+    .map_err(|e| format!("load project state task failed: {}", e))?;
 
     if let Some(ref project_state) = loaded {
         state
@@ -60,9 +62,10 @@ pub async fn graceful_shutdown_with_state(
 ) -> Result<(), String> {
     state_data.uncommitted_changes = state.uncommitted_changes.get_all();
 
-    if let Err(e) = tokio::task::spawn_blocking(move || project_state::save_project_state(&state_data))
-        .await
-        .map_err(|e| format!("graceful shutdown save task failed: {}", e))?
+    if let Err(e) =
+        tokio::task::spawn_blocking(move || project_state::save_project_state(&state_data))
+            .await
+            .map_err(|e| format!("graceful shutdown save task failed: {}", e))?
     {
         println!("[Backend] Failed to save state during shutdown: {}", e);
         // We continue to exit even if save fails, to prevent hanging
@@ -77,7 +80,8 @@ pub async fn graceful_shutdown_with_state(
 #[tauri::command]
 pub async fn get_project_state_path(project_path: String) -> Result<Option<String>, String> {
     tokio::task::spawn_blocking(move || {
-        project_state::get_project_state_path(&project_path).map(|p| p.to_string_lossy().to_string())
+        project_state::get_project_state_path(&project_path)
+            .map(|p| p.to_string_lossy().to_string())
     })
     .await
     .map_err(|e| format!("get project state path task failed: {}", e))

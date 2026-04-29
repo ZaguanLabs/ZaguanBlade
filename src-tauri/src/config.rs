@@ -149,12 +149,84 @@ pub fn ensure_global_prompts_dir() -> Result<(), String> {
     fs::create_dir_all(&dir).map_err(|e| e.to_string())
 }
 
+fn prompt_model_name_candidates(model_name: &str) -> Vec<String> {
+    let trimmed = model_name.trim();
+    let stripped = trimmed
+        .strip_prefix("ollama/")
+        .or_else(|| trimmed.strip_prefix("openai-compat/"))
+        .unwrap_or(trimmed);
+
+    let mut candidates = Vec::new();
+    for name in [trimmed, stripped] {
+        if name.is_empty() {
+            continue;
+        }
+        push_prompt_candidate(&mut candidates, name);
+        if let Some((base, _tag)) = name.split_once(':') {
+            push_prompt_candidate(&mut candidates, base);
+        }
+    }
+    candidates
+}
+
+fn push_prompt_candidate(candidates: &mut Vec<String>, name: &str) {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    for candidate in [trimmed.to_string(), lower] {
+        if !candidates.iter().any(|existing| existing == &candidate) {
+            candidates.push(candidate);
+        }
+    }
+}
+
+fn resolve_prompt_path_for_model(
+    prompts_dir: &Path,
+    model_name: &str,
+) -> Result<Option<PathBuf>, String> {
+    let candidates = prompt_model_name_candidates(model_name);
+    for candidate in &candidates {
+        let path = prompts_dir.join(format!("{}.md", candidate));
+        if path.exists() {
+            return Ok(Some(path));
+        }
+    }
+
+    let Ok(entries) = fs::read_dir(prompts_dir) else {
+        return Ok(None);
+    };
+    let candidate_filenames = candidates
+        .iter()
+        .map(|candidate| format!("{}.md", candidate).to_ascii_lowercase())
+        .collect::<Vec<_>>();
+
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Failed to read prompts directory: {}", e))?;
+        let file_name = entry.file_name();
+        let Some(file_name) = file_name.to_str() else {
+            continue;
+        };
+        if candidate_filenames
+            .iter()
+            .any(|candidate| candidate == &file_name.to_ascii_lowercase())
+        {
+            return Ok(Some(entry.path()));
+        }
+    }
+
+    Ok(None)
+}
+
 pub fn read_prompt_for_model(model_name: &str) -> Result<Option<String>, String> {
-    let filename = format!("{}.md", model_name);
-    let path = global_prompts_dir().join(filename);
+    let Some(path) = resolve_prompt_path_for_model(&global_prompts_dir(), model_name)? else {
+        return Ok(None);
+    };
     if !path.exists() {
         return Ok(None);
     }
+    eprintln!("[CONFIG] Loading local AI prompt: {}", path.display());
     fs::read_to_string(&path)
         .map(Some)
         .map_err(|e| format!("Failed to read prompt file {}: {}", path.display(), e))
@@ -257,4 +329,47 @@ pub fn get_or_create_user_id(config_path: &Path) -> String {
     }
 
     config.user_id
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn prompt_candidates_include_provider_stripped_and_lowercase_names() {
+        let candidates = prompt_model_name_candidates("ollama/laguna-xs.2:Q4_K_M");
+
+        assert!(candidates.contains(&"ollama/laguna-xs.2:Q4_K_M".to_string()));
+        assert!(candidates.contains(&"ollama/laguna-xs.2:q4_k_m".to_string()));
+        assert!(candidates.contains(&"laguna-xs.2:Q4_K_M".to_string()));
+        assert!(candidates.contains(&"laguna-xs.2:q4_k_m".to_string()));
+        assert!(candidates.contains(&"laguna-xs.2".to_string()));
+    }
+
+    #[test]
+    fn resolve_prompt_path_matches_ollama_tag_case_insensitively() {
+        let dir = tempdir().expect("tempdir");
+        let prompt_path = dir.path().join("laguna-xs.2:q4_K_M.md");
+        fs::write(&prompt_path, "Laguna prompt").expect("write prompt");
+
+        let resolved = resolve_prompt_path_for_model(dir.path(), "ollama/laguna-xs.2:Q4_K_M")
+            .expect("resolve prompt")
+            .expect("prompt should resolve");
+
+        assert_eq!(resolved, prompt_path);
+    }
+
+    #[test]
+    fn resolve_prompt_path_falls_back_to_base_model_name() {
+        let dir = tempdir().expect("tempdir");
+        let prompt_path = dir.path().join("laguna-xs.2.md");
+        fs::write(&prompt_path, "Base Laguna prompt").expect("write prompt");
+
+        let resolved = resolve_prompt_path_for_model(dir.path(), "ollama/laguna-xs.2:Q4_K_M")
+            .expect("resolve prompt")
+            .expect("prompt should resolve");
+
+        assert_eq!(resolved, prompt_path);
+    }
 }

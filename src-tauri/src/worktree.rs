@@ -86,7 +86,9 @@ impl TestFs {
         let mut current = PathBuf::new();
         for component in normalized.components() {
             current.push(component.as_os_str());
-            nodes.entry(current.clone()).or_insert(TestFsNodeKind::Directory);
+            nodes
+                .entry(current.clone())
+                .or_insert(TestFsNodeKind::Directory);
         }
         nodes.insert(normalized, kind);
     }
@@ -332,7 +334,11 @@ impl WorktreeSnapshot {
         children: &mut BTreeMap<String, Vec<usize>>,
     ) -> Result<(), String> {
         let mut dir_entries = fs.read_dir(absolute_dir).map_err(|e| e.to_string())?;
-        dir_entries.sort_by(|left, right| left.file_name.to_lowercase().cmp(&right.file_name.to_lowercase()));
+        dir_entries.sort_by(|left, right| {
+            left.file_name
+                .to_lowercase()
+                .cmp(&right.file_name.to_lowercase())
+        });
 
         for entry in dir_entries {
             if should_skip_component(&entry.file_name) {
@@ -350,7 +356,9 @@ impl WorktreeSnapshot {
                 format!("{}/{}", relative_dir, entry.file_name.as_str())
             };
             let is_dir = matches!(entry.kind, FsEntryKind::Directory);
-            let hidden = relative_path.split('/').any(|component| component.starts_with('.'));
+            let hidden = relative_path
+                .split('/')
+                .any(|component| component.starts_with('.'));
             let supported_language = !is_dir && Language::from_path(&relative_path).is_some();
             let index = entries.len();
             entries.push(WorktreeEntry {
@@ -392,7 +400,11 @@ impl WorktreeSnapshot {
                 let entry = &self.entries[*index];
                 FileEntry {
                     name: entry.name.clone(),
-                    path: self.workspace_root.join(&entry.path).to_string_lossy().to_string(),
+                    path: self
+                        .workspace_root
+                        .join(&entry.path)
+                        .to_string_lossy()
+                        .to_string(),
                     is_dir: entry.is_dir,
                     children: None,
                 }
@@ -460,21 +472,8 @@ fn path_in_scope(path: &str, scope: &str) -> bool {
 
 fn should_skip_component(name: &str) -> bool {
     match name {
-        ".git"
-        | ".zblade"
-        | "node_modules"
-        | "target"
-        | "dist"
-        | "build"
-        | "__pycache__"
-        | ".svn"
-        | "vendor"
-        | ".next"
-        | ".nuxt"
-        | ".venv"
-        | "venv"
-        | ".cargo"
-        | ".rustup" => true,
+        ".git" | ".zblade" | "node_modules" | "target" | "dist" | "build" | "__pycache__"
+        | ".svn" | "vendor" | ".next" | ".nuxt" | ".venv" | "venv" | ".cargo" | ".rustup" => true,
         _ => false,
     }
 }
@@ -549,7 +548,9 @@ mod tests {
         let matches = snapshot.search_paths("main", 10);
         assert_eq!(matches.len(), 2);
         assert!(matches.iter().any(|entry| entry.path == "src/main.rs"));
-        assert!(matches.iter().any(|entry| entry.path == "tests/main_test.rs"));
+        assert!(matches
+            .iter()
+            .any(|entry| entry.path == "tests/main_test.rs"));
 
         let language_files = snapshot.supported_language_files("src");
         assert_eq!(language_files.len(), 2);

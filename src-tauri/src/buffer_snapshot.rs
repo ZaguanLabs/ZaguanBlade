@@ -108,7 +108,11 @@ impl BufferSnapshot {
         )
     }
 
-    pub fn line_byte_range(&self, start_line_1based: u32, end_line_1based: u32) -> Result<(usize, usize), String> {
+    pub fn line_byte_range(
+        &self,
+        start_line_1based: u32,
+        end_line_1based: u32,
+    ) -> Result<(usize, usize), String> {
         let start_idx = start_line_1based.saturating_sub(1) as usize;
         let end_idx = end_line_1based as usize;
         if start_idx >= self.line_count() {
@@ -139,7 +143,8 @@ impl BufferSnapshot {
         }
         let start_byte = self.line_starts[start_line] + start_character;
         let end_byte = self.line_starts[end_line] + end_character;
-        if start_byte > self.content.len() || end_byte > self.content.len() || start_byte > end_byte {
+        if start_byte > self.content.len() || end_byte > self.content.len() || start_byte > end_byte
+        {
             return Err("Invalid byte range".to_string());
         }
         Ok((start_byte, end_byte))
@@ -161,10 +166,17 @@ impl BufferSnapshotStore {
     }
 
     pub fn contains_live(&self, path: &str) -> bool {
-        self.get(path).map(|snapshot| snapshot.is_live()).unwrap_or(false)
+        self.get(path)
+            .map(|snapshot| snapshot.is_live())
+            .unwrap_or(false)
     }
 
-    pub fn upsert_live(&self, path: &str, version: Option<i32>, content: &str) -> Arc<BufferSnapshot> {
+    pub fn upsert_live(
+        &self,
+        path: &str,
+        version: Option<i32>,
+        content: &str,
+    ) -> Arc<BufferSnapshot> {
         self.upsert(path, version, content, BufferSnapshotSource::Live)
     }
 
@@ -183,7 +195,12 @@ impl BufferSnapshotStore {
         content: &str,
         source: BufferSnapshotSource,
     ) -> Arc<BufferSnapshot> {
-        let snapshot = Arc::new(BufferSnapshot::new(path.to_string(), version, content, source));
+        let snapshot = Arc::new(BufferSnapshot::new(
+            path.to_string(),
+            version,
+            content,
+            source,
+        ));
         self.snapshots
             .write()
             .unwrap()
@@ -224,7 +241,10 @@ mod tests {
             "fn main() {\n    println!(\"hi\");\n}\n",
             BufferSnapshotSource::Live,
         );
-        assert_eq!(snapshot.excerpt_around_line(1, 1), "fn main() {\n    println!(\"hi\");\n}\n");
+        assert_eq!(
+            snapshot.excerpt_around_line(1, 1),
+            "fn main() {\n    println!(\"hi\");\n}\n"
+        );
         assert_eq!(snapshot.line_byte_range(2, 2).unwrap(), (12, 32));
     }
 
@@ -243,8 +263,14 @@ mod tests {
             symbol_type: SymbolType::Function,
             file_path: "src/lib.rs".to_string(),
             range: Range {
-                start: Position { line: 0, character: 0 },
-                end: Position { line: 2, character: 1 },
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 2,
+                    character: 1,
+                },
             },
             byte_offset: 0,
             byte_length: 34,
@@ -254,7 +280,10 @@ mod tests {
             content_hash: String::new(),
         };
         let (start, end) = snapshot.symbol_byte_range(&symbol).unwrap();
-        assert_eq!(&snapshot.content()[start..end], "pub fn hello() {\n    world();\n}");
+        assert_eq!(
+            &snapshot.content()[start..end],
+            "pub fn hello() {\n    world();\n}"
+        );
     }
 
     #[test]

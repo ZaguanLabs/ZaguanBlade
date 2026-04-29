@@ -66,8 +66,7 @@ fn execute_tool_snapshot<R: Runtime>(
     tool_name: String,
     args: String,
     app_handle: Option<AppHandle<R>>,
-) -> ToolResult
-{
+) -> ToolResult {
     let workspace_path = workspace_root
         .as_deref()
         .map(PathBuf::from)

@@ -4,7 +4,11 @@ use std::fs;
 use tauri::{AppHandle, Manager, State};
 
 fn normalize_path(value: &str) -> String {
-    value.replace('\\', "/").replace("//", "/").trim_end_matches('/').to_string()
+    value
+        .replace('\\', "/")
+        .replace("//", "/")
+        .trim_end_matches('/')
+        .to_string()
 }
 
 fn is_boundary_suffix_match(full: &str, suffix: &str) -> bool {
@@ -31,14 +35,19 @@ fn resolve_change_for_file_path(state: &AppState, file_path: &str) -> Option<Unc
         .collect();
     if !exact_matches.is_empty() {
         exact_matches.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-        return exact_matches.into_iter().find(|change| !change.unified_diff.trim().is_empty()).or_else(|| {
-            state
-                .uncommitted_changes
-                .get_all()
-                .into_iter()
-                .filter(|change| normalize_path(&change.file_path.to_string_lossy()) == requested)
-                .max_by_key(|change| change.timestamp)
-        });
+        return exact_matches
+            .into_iter()
+            .find(|change| !change.unified_diff.trim().is_empty())
+            .or_else(|| {
+                state
+                    .uncommitted_changes
+                    .get_all()
+                    .into_iter()
+                    .filter(|change| {
+                        normalize_path(&change.file_path.to_string_lossy()) == requested
+                    })
+                    .max_by_key(|change| change.timestamp)
+            });
     }
 
     let mut suffix_matches: Vec<UncommittedChange> = all
@@ -76,7 +85,8 @@ pub async fn get_uncommitted_changes(
         let mut changed_any = false;
 
         for mut change in existing {
-            let current_modified_ms = crate::uncommitted_changes::file_modified_ms(&change.file_path);
+            let current_modified_ms =
+                crate::uncommitted_changes::file_modified_ms(&change.file_path);
             if current_modified_ms == change.file_modified_ms {
                 refreshed.push(change);
                 continue;
@@ -167,7 +177,9 @@ pub async fn reject_change(
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let history_service = state.history_service()?;
-        let change = state.uncommitted_changes.reject(&id, history_service.as_ref())?;
+        let change = state
+            .uncommitted_changes
+            .reject(&id, history_service.as_ref())?;
         crate::file_state_sync::sync_from_disk_after_write(&app, &change.file_path);
         Ok(change)
     })
@@ -204,7 +216,9 @@ pub async fn reject_all_changes(
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let history_service = state.history_service()?;
-        let changes = state.uncommitted_changes.reject_all(history_service.as_ref())?;
+        let changes = state
+            .uncommitted_changes
+            .reject_all(history_service.as_ref())?;
         for change in &changes {
             crate::file_state_sync::sync_from_disk_after_write(&app, &change.file_path);
         }

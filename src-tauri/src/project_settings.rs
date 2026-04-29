@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::Write;
 use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Storage mode for conversation history
@@ -192,7 +192,10 @@ fn ensure_project_gitignore_has_zblade(project_path: &Path) {
     {
         Ok(file) => file,
         Err(err) => {
-            eprintln!("[zblade] Warning: Failed to open .gitignore for append: {}", err);
+            eprintln!(
+                "[zblade] Warning: Failed to open .gitignore for append: {}",
+                err
+            );
             return;
         }
     };
@@ -386,7 +389,10 @@ mod tests {
         init_zblade_dir(project_path).unwrap();
 
         let content = fs::read_to_string(project_path.join(".gitignore")).unwrap();
-        let zblade_lines = content.lines().filter(|line| line_ignores_zblade(line)).count();
+        let zblade_lines = content
+            .lines()
+            .filter(|line| line_ignores_zblade(line))
+            .count();
         assert_eq!(zblade_lines, 1);
     }
 }

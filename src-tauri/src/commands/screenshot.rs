@@ -29,9 +29,11 @@ pub async fn capture_window_region(
     width: u32,
     height: u32,
 ) -> Result<screenshot::CaptureResult, String> {
-    tokio::task::spawn_blocking(move || screenshot::capture_window_region(window_id, x, y, width, height))
-        .await
-        .map_err(|e| format!("capture window region task failed: {}", e))?
+    tokio::task::spawn_blocking(move || {
+        screenshot::capture_window_region(window_id, x, y, width, height)
+    })
+    .await
+    .map_err(|e| format!("capture window region task failed: {}", e))?
 }
 
 #[tauri::command]

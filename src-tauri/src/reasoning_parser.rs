@@ -303,7 +303,11 @@ impl ReasoningParser {
         None
     }
 
-    fn find_closing_tag(&self, text: &str, format: ReasoningFormat) -> Option<(usize, &'static str)> {
+    fn find_closing_tag(
+        &self,
+        text: &str,
+        format: ReasoningFormat,
+    ) -> Option<(usize, &'static str)> {
         let mut best: Option<(usize, &'static str)> = None;
 
         for tag in format.close_tags() {

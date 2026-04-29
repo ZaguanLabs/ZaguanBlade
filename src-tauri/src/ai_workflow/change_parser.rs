@@ -185,16 +185,16 @@ mod tests {
 
         let change = parse_change_args(&raw_args, workspace.path(), "write_to_file")
             .expect("write_to_file alias should parse");
-     
-         assert_eq!(change.path, "nested/example.txt");
-         match change.change_type {
-             ChangeType::NewFile { content } => assert_eq!(content, "hello"),
-             _ => panic!("expected NewFile change type"),
-         }
-     }
- 
-     #[test]
-     fn parse_change_args_supports_replace_file_content_aliases() {
+
+        assert_eq!(change.path, "nested/example.txt");
+        match change.change_type {
+            ChangeType::NewFile { content } => assert_eq!(content, "hello"),
+            _ => panic!("expected NewFile change type"),
+        }
+    }
+
+    #[test]
+    fn parse_change_args_supports_replace_file_content_aliases() {
         let workspace = tempdir().expect("tempdir");
         let file_path = workspace.path().join("example.txt");
         std::fs::write(&file_path, "before").expect("seed file");
@@ -214,16 +214,16 @@ mod tests {
             ChangeType::Patch {
                 old_content,
                 new_content,
-             } => {
-                 assert_eq!(old_content, "before");
-                 assert_eq!(new_content, "after");
-             }
-             _ => panic!("expected Patch change type"),
-         }
-     }
- 
-     #[test]
-     fn parse_change_args_supports_multi_replace_file_content_alias() {
+            } => {
+                assert_eq!(old_content, "before");
+                assert_eq!(new_content, "after");
+            }
+            _ => panic!("expected Patch change type"),
+        }
+    }
+
+    #[test]
+    fn parse_change_args_supports_multi_replace_file_content_alias() {
         let workspace = tempdir().expect("tempdir");
         let raw_args = json!({
             "path": "example.txt",
@@ -239,15 +239,15 @@ mod tests {
         let change = parse_change_args(&raw_args, workspace.path(), "multi_replace_file_content")
             .expect("multi_replace_file_content alias should parse");
 
-         match change.change_type {
-             ChangeType::MultiPatch { patches } => {
-                 assert_eq!(patches.len(), 1);
-                 assert_eq!(patches[0].old_text, "alpha");
-                 assert_eq!(patches[0].new_text, "beta");
-             }
-             _ => panic!("expected MultiPatch change type"),
-         }
-     }
+        match change.change_type {
+            ChangeType::MultiPatch { patches } => {
+                assert_eq!(patches.len(), 1);
+                assert_eq!(patches[0].old_text, "alpha");
+                assert_eq!(patches[0].new_text, "beta");
+            }
+            _ => panic!("expected MultiPatch change type"),
+        }
+    }
 
     #[test]
     fn parse_change_args_supports_apply_patch_validated_alias() {
@@ -276,4 +276,4 @@ mod tests {
             _ => panic!("expected Patch change type"),
         }
     }
- }
+}

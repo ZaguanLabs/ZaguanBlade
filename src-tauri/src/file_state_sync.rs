@@ -19,7 +19,11 @@ fn invalidate_recent_file_tool_cache<R: Runtime>(app_handle: &tauri::AppHandle<R
     };
 }
 
-pub(crate) fn sync_after_write<R: Runtime>(app_handle: &tauri::AppHandle<R>, path: &Path, content: &str) {
+pub(crate) fn sync_after_write<R: Runtime>(
+    app_handle: &tauri::AppHandle<R>,
+    path: &Path,
+    content: &str,
+) {
     invalidate_recent_file_tool_cache(app_handle);
 
     let state = app_handle.state::<AppState>();
@@ -43,7 +47,10 @@ pub(crate) fn sync_after_write<R: Runtime>(app_handle: &tauri::AppHandle<R>, pat
     }
 }
 
-pub(crate) fn sync_from_disk_after_write<R: Runtime>(app_handle: &tauri::AppHandle<R>, path: &Path) {
+pub(crate) fn sync_from_disk_after_write<R: Runtime>(
+    app_handle: &tauri::AppHandle<R>,
+    path: &Path,
+) {
     match std::fs::read_to_string(path) {
         Ok(content) => sync_after_write(app_handle, path, &content),
         Err(error) => {

@@ -7,8 +7,8 @@ use crate::ephemeral_documents;
 use crate::feature_flags::FeatureFlags;
 use crate::uncommitted_changes::UncommittedChangeTracker;
 use crate::warmup;
-use crate::worktree::WorktreeStore;
 use crate::workspace_manager::WorkspaceManager;
+use crate::worktree::WorktreeStore;
 use crate::ws_connection_manager::WsConnectionManager;
 use dotenvy::dotenv;
 use notify::RecommendedWatcher;
@@ -265,7 +265,9 @@ impl AppState {
             return Ok(store);
         }
 
-        let workspace_root = self.workspace_root().ok_or_else(|| "No workspace open".to_string())?;
+        let workspace_root = self
+            .workspace_root()
+            .ok_or_else(|| "No workspace open".to_string())?;
         let store = Arc::new(WorktreeStore::new(workspace_root)?);
 
         let mut guard = self

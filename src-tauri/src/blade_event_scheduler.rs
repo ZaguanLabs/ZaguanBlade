@@ -1,4 +1,6 @@
-use crate::blade_protocol::{BladeEvent, BladeEventEnvelope, BladeEventTransport, ChatEvent, TerminalEvent};
+use crate::blade_protocol::{
+    BladeEvent, BladeEventEnvelope, BladeEventTransport, ChatEvent, TerminalEvent,
+};
 use crate::protocol::ToolCall;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{mpsc, Arc, OnceLock};
@@ -393,7 +395,13 @@ fn emit_batch_tracked(
     }
 
     let transport = if batch.len() == 1 {
-        BladeEventTransport::Single(batch.into_iter().next().expect("single batch item").envelope)
+        BladeEventTransport::Single(
+            batch
+                .into_iter()
+                .next()
+                .expect("single batch item")
+                .envelope,
+        )
     } else {
         BladeEventTransport::Batch(batch.into_iter().map(|pending| pending.envelope).collect())
     };
@@ -500,7 +508,10 @@ fn should_flush_on_age(state: &SchedulerState) -> bool {
 
 fn oldest_pending_age(state: &SchedulerState) -> Option<Duration> {
     let now = Instant::now();
-    let oldest_chat = state.pending_chat.front().map(|pending| now.saturating_duration_since(pending.queued_at));
+    let oldest_chat = state
+        .pending_chat
+        .front()
+        .map(|pending| now.saturating_duration_since(pending.queued_at));
     let oldest_terminal = state
         .pending_terminal
         .values()
@@ -654,7 +665,13 @@ fn handle_command(state: &mut SchedulerState, command: SchedulerCommand) {
         } => {
             state.metrics.record_queued(
                 EmitClass::ToolUpdate,
-                estimate_tool_update_bytes(&message_id, &tool_call_id, &status, &result, &tool_call),
+                estimate_tool_update_bytes(
+                    &message_id,
+                    &tool_call_id,
+                    &status,
+                    &result,
+                    &tool_call,
+                ),
             );
             let key = format!("{}\u{001f}{}", message_id, tool_call_id);
             if state.pending_tool_update.contains_key(&key) {
@@ -682,7 +699,9 @@ fn handle_command(state: &mut SchedulerState, command: SchedulerCommand) {
             tool_call_id,
             queued_at,
         } => {
-            state.metrics.record_queued(EmitClass::ToolActivity, file_path.len() + action.len());
+            state
+                .metrics
+                .record_queued(EmitClass::ToolActivity, file_path.len() + action.len());
             let key = format!(
                 "{}\u{001f}{}\u{001f}{}\u{001f}{}",
                 tool_name,
@@ -764,9 +783,16 @@ fn flush(state: &mut SchedulerState, reason: FlushReason) {
         });
     }
 
-    let drained_terminal: Vec<_> = state.pending_terminal.drain().map(|(_, pending)| pending).collect();
+    let drained_terminal: Vec<_> = state
+        .pending_terminal
+        .drain()
+        .map(|(_, pending)| pending)
+        .collect();
     for pending in drained_terminal {
-        let seq = state.terminal_seq.entry(pending.terminal_id.clone()).or_insert(0);
+        let seq = state
+            .terminal_seq
+            .entry(pending.terminal_id.clone())
+            .or_insert(0);
         let event = BladeEvent::Terminal(TerminalEvent::Output {
             id: pending.terminal_id,
             seq: *seq,
@@ -846,7 +872,11 @@ fn flush(state: &mut SchedulerState, reason: FlushReason) {
     }
 }
 
-pub fn emit_blade_event<R: Runtime>(app: &tauri::AppHandle<R>, causality_id: Option<String>, event: BladeEvent) {
+pub fn emit_blade_event<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    causality_id: Option<String>,
+    event: BladeEvent,
+) {
     let _ = sender().send(SchedulerCommand::EmitEnvelope {
         emit: emitter_for(app),
         envelope: build_envelope(causality_id, event),
@@ -866,7 +896,12 @@ pub fn reset_chat_stream() {
     let _ = sender().send(SchedulerCommand::ResetChatStream);
 }
 
-pub fn queue_chat_message_delta<R: Runtime>(app: &tauri::AppHandle<R>, message_id: String, causality_id: Option<String>, chunk: String) {
+pub fn queue_chat_message_delta<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    message_id: String,
+    causality_id: Option<String>,
+    chunk: String,
+) {
     let _ = sender().send(SchedulerCommand::QueueChatDelta {
         emit: emitter_for(app),
         causality_id,
@@ -877,7 +912,12 @@ pub fn queue_chat_message_delta<R: Runtime>(app: &tauri::AppHandle<R>, message_i
     });
 }
 
-pub fn queue_chat_reasoning_delta<R: Runtime>(app: &tauri::AppHandle<R>, message_id: String, causality_id: Option<String>, chunk: String) {
+pub fn queue_chat_reasoning_delta<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    message_id: String,
+    causality_id: Option<String>,
+    chunk: String,
+) {
     let _ = sender().send(SchedulerCommand::QueueChatDelta {
         emit: emitter_for(app),
         causality_id,
@@ -888,7 +928,11 @@ pub fn queue_chat_reasoning_delta<R: Runtime>(app: &tauri::AppHandle<R>, message
     });
 }
 
-pub fn queue_terminal_output<R: Runtime>(app: &tauri::AppHandle<R>, terminal_id: &str, data: String) {
+pub fn queue_terminal_output<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    terminal_id: &str,
+    data: String,
+) {
     let _ = sender().send(SchedulerCommand::QueueTerminalOutput {
         emit: emitter_for(app),
         terminal_id: terminal_id.to_string(),
@@ -954,10 +998,11 @@ pub fn metrics_snapshot() -> serde_json::Value {
         });
     }
 
-    rx.recv_timeout(Duration::from_millis(250)).unwrap_or_else(|error| {
-        serde_json::json!({
-            "available": false,
-            "error": format!("metrics snapshot failed: {}", error),
+    rx.recv_timeout(Duration::from_millis(250))
+        .unwrap_or_else(|error| {
+            serde_json::json!({
+                "available": false,
+                "error": format!("metrics snapshot failed: {}", error),
+            })
         })
-    })
 }

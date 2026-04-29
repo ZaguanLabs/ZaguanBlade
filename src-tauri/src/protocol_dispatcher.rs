@@ -207,11 +207,12 @@ pub async fn dispatch(
         BladeIntent::File(file_intent) => match file_intent {
             blade_protocol::FileIntent::Read { path } => {
                 let requested_path = std::path::PathBuf::from(&path);
-                let resolved_path = files::resolve_path_under_workspace_async(&*state, requested_path)
-                    .await
-                    .map_err(|e| BladeError::ResourceNotFound {
-                        id: path.clone() + " (" + &e + ")",
-                    })?;
+                let resolved_path =
+                    files::resolve_path_under_workspace_async(&*state, requested_path)
+                        .await
+                        .map_err(|e| BladeError::ResourceNotFound {
+                            id: path.clone() + " (" + &e + ")",
+                        })?;
 
                 match fs::read_to_string(&resolved_path).await {
                     Ok(content) => {
@@ -243,12 +244,13 @@ pub async fn dispatch(
             }
             blade_protocol::FileIntent::Write { path, content } => {
                 let requested_path = std::path::PathBuf::from(&path);
-                let resolved_path = files::resolve_path_under_workspace_async(&*state, requested_path)
-                    .await
-                    .map_err(|e| blade_protocol::BladeError::Internal {
-                        trace_id: intent_id.to_string(),
-                        message: e,
-                    })?;
+                let resolved_path =
+                    files::resolve_path_under_workspace_async(&*state, requested_path)
+                        .await
+                        .map_err(|e| blade_protocol::BladeError::Internal {
+                            trace_id: intent_id.to_string(),
+                            message: e,
+                        })?;
 
                 match fs::write(&resolved_path, content).await {
                     Ok(_) => {
@@ -550,15 +552,14 @@ pub async fn dispatch(
                     match tokio::task::spawn_blocking(move || {
                         let state = blocking_app_handle.state::<AppState>();
                         let service = state.language_service()?;
-                        service.did_close(&close_path).map_err(|error| error.to_string())
+                        service
+                            .did_close(&close_path)
+                            .map_err(|error| error.to_string())
                     })
                     .await
                     {
                         Ok(Err(error)) => {
-                            eprintln!(
-                                "[Editor] Failed to close live document {}: {}",
-                                path, error
-                            );
+                            eprintln!("[Editor] Failed to close live document {}: {}", path, error);
                         }
                         Err(error) => {
                             eprintln!(
@@ -901,209 +902,199 @@ pub async fn dispatch(
                 })
             }
         },
-        BladeIntent::History(history_intent) => {
-            match history_intent {
-                blade_protocol::HistoryIntent::ListConversations { project_id } => {
-                    println!("[History] ListConversations: project={}", project_id);
+        BladeIntent::History(history_intent) => match history_intent {
+            blade_protocol::HistoryIntent::ListConversations { project_id } => {
+                println!("[History] ListConversations: project={}", project_id);
 
-                    let ws_manager = state.ws_connection.clone();
+                let ws_manager = state.ws_connection.clone();
 
-                    match ws_manager.request_history_list(project_id).await {
-                        Ok(conversations) => {
-                            emit_blade_event(
-                                &window,
-                                Some(intent_id.to_string()),
-                                blade_protocol::BladeEvent::History(
-                                    blade_protocol::HistoryEvent::ConversationList {
-                                        conversations,
-                                    },
-                                ),
-                            );
+                match ws_manager.request_history_list(project_id).await {
+                    Ok(conversations) => {
+                        emit_blade_event(
+                            &window,
+                            Some(intent_id.to_string()),
+                            blade_protocol::BladeEvent::History(
+                                blade_protocol::HistoryEvent::ConversationList { conversations },
+                            ),
+                        );
 
-                            Ok(())
-                        }
-                        Err(e) => {
-                            let error = blade_protocol::BladeError::Internal {
-                                trace_id: intent_id.to_string(),
-                                message: e,
-                            };
-                            emit_system_event(
-                                &window,
-                                intent_id,
-                                blade_protocol::SystemEvent::IntentFailed {
-                                    intent_id,
-                                    error: error.clone(),
-                                },
-                            );
-                            Err(error)
-                        }
+                        Ok(())
                     }
-                }
-                blade_protocol::HistoryIntent::LoadConversation { session_id } => {
-                    println!("[History] LoadConversation: session={}", session_id);
-
-                    let ws_manager = state.ws_connection.clone();
-
-                    match ws_manager.request_history_detail(session_id).await {
-                        Ok(full_conversation) => {
-                            eprintln!(
-                                "[History] Loaded {} messages for session {}",
-                                full_conversation.messages.len(),
-                                full_conversation.session_id
-                            );
-
-                            {
-                                let mut conversation = state.conversation.lock().unwrap();
-
-                                conversation.clear();
-
-                                conversation.metadata.id = uuid::Uuid::new_v4().to_string();
-                                conversation.metadata.session_id =
-                                    Some(full_conversation.session_id.clone());
-                                conversation.metadata.title = full_conversation.title.clone();
-
-                                for msg in &full_conversation.messages {
-                                    let role = match msg.role.as_str() {
-                                        "user" => crate::protocol::ChatRole::User,
-                                        "assistant" => crate::protocol::ChatRole::Assistant,
-                                        "system" => crate::protocol::ChatRole::System,
-                                        "tool" => crate::protocol::ChatRole::Tool,
-                                        _ => crate::protocol::ChatRole::User,
-                                    };
-
-                                    let mut chat_msg = crate::protocol::ChatMessage::new(
-                                        role,
-                                        msg.content.clone(),
-                                    );
-
-                                    if let Some(ref tc_val) = msg.tool_calls {
-                                        if let Ok(tool_calls) = serde_json::from_value::<
-                                            Vec<crate::protocol::ToolCall>,
-                                        >(
-                                            tc_val.clone()
-                                        ) {
-                                            chat_msg.tool_calls = Some(tool_calls);
-                                        }
-                                    }
-
-                                    chat_msg.tool_call_id = msg.tool_call_id.clone();
-
-                                    conversation.push(chat_msg);
-                                }
-
-                                eprintln!("[History] Updated backend conversation state");
-                            }
-
-                            {
-                                let mut mgr = state.chat_manager.lock().unwrap();
-                                mgr.session_id = Some(full_conversation.session_id.clone());
-                                eprintln!(
-                                    "[History] Updated ChatManager session_id to {}",
-                                    full_conversation.session_id
-                                );
-                            }
-
-                            emit_blade_event(
-                                &window,
-                                Some(intent_id.to_string()),
-                                blade_protocol::BladeEvent::History(
-                                    blade_protocol::HistoryEvent::ConversationLoaded(
-                                        full_conversation,
-                                    ),
-                                ),
-                            );
-                            Ok(())
-                        }
-                        Err(e) => Err(blade_protocol::BladeError::Internal {
+                    Err(e) => {
+                        let error = blade_protocol::BladeError::Internal {
                             trace_id: intent_id.to_string(),
                             message: e,
-                        }),
+                        };
+                        emit_system_event(
+                            &window,
+                            intent_id,
+                            blade_protocol::SystemEvent::IntentFailed {
+                                intent_id,
+                                error: error.clone(),
+                            },
+                        );
+                        Err(error)
                     }
                 }
             }
-        }
+            blade_protocol::HistoryIntent::LoadConversation { session_id } => {
+                println!("[History] LoadConversation: session={}", session_id);
+
+                let ws_manager = state.ws_connection.clone();
+
+                match ws_manager.request_history_detail(session_id).await {
+                    Ok(full_conversation) => {
+                        eprintln!(
+                            "[History] Loaded {} messages for session {}",
+                            full_conversation.messages.len(),
+                            full_conversation.session_id
+                        );
+
+                        {
+                            let mut conversation = state.conversation.lock().unwrap();
+
+                            conversation.clear();
+
+                            conversation.metadata.id = uuid::Uuid::new_v4().to_string();
+                            conversation.metadata.session_id =
+                                Some(full_conversation.session_id.clone());
+                            conversation.metadata.title = full_conversation.title.clone();
+
+                            for msg in &full_conversation.messages {
+                                let role = match msg.role.as_str() {
+                                    "user" => crate::protocol::ChatRole::User,
+                                    "assistant" => crate::protocol::ChatRole::Assistant,
+                                    "system" => crate::protocol::ChatRole::System,
+                                    "tool" => crate::protocol::ChatRole::Tool,
+                                    _ => crate::protocol::ChatRole::User,
+                                };
+
+                                let mut chat_msg =
+                                    crate::protocol::ChatMessage::new(role, msg.content.clone());
+
+                                if let Some(ref tc_val) = msg.tool_calls {
+                                    if let Ok(tool_calls) =
+                                        serde_json::from_value::<Vec<crate::protocol::ToolCall>>(
+                                            tc_val.clone(),
+                                        )
+                                    {
+                                        chat_msg.tool_calls = Some(tool_calls);
+                                    }
+                                }
+
+                                chat_msg.tool_call_id = msg.tool_call_id.clone();
+
+                                conversation.push(chat_msg);
+                            }
+
+                            eprintln!("[History] Updated backend conversation state");
+                        }
+
+                        {
+                            let mut mgr = state.chat_manager.lock().unwrap();
+                            mgr.session_id = Some(full_conversation.session_id.clone());
+                            eprintln!(
+                                "[History] Updated ChatManager session_id to {}",
+                                full_conversation.session_id
+                            );
+                        }
+
+                        emit_blade_event(
+                            &window,
+                            Some(intent_id.to_string()),
+                            blade_protocol::BladeEvent::History(
+                                blade_protocol::HistoryEvent::ConversationLoaded(full_conversation),
+                            ),
+                        );
+                        Ok(())
+                    }
+                    Err(e) => Err(blade_protocol::BladeError::Internal {
+                        trace_id: intent_id.to_string(),
+                        message: e,
+                    }),
+                }
+            }
+        },
         BladeIntent::System(system_intent) => {
             println!("System Intent: {:?}", system_intent);
             Ok(())
         }
-        BladeIntent::Language(language_intent) => {
-            match language_intent {
-                blade_protocol::LanguageIntent::ZlpMessage { data } => {
-                    let window_clone = window.clone();
-                    let intent_id_clone = intent_id;
-                    let request_payload = data.clone();
-                    let ws_manager = state.ws_connection.clone();
+        BladeIntent::Language(language_intent) => match language_intent {
+            blade_protocol::LanguageIntent::ZlpMessage { data } => {
+                let window_clone = window.clone();
+                let intent_id_clone = intent_id;
+                let request_payload = data.clone();
+                let ws_manager = state.ws_connection.clone();
 
-                    tauri::async_runtime::spawn(async move {
-                        match ws_manager.request_zlp(request_payload).await {
-                            Ok(val) => {
-                                emit_blade_event(
-                                    &window_clone,
-                                    Some(intent_id_clone.to_string()),
-                                    blade_protocol::BladeEvent::Language(
-                                        blade_protocol::LanguageEvent::ZlpResponse {
-                                            original_request_id: intent_id_clone.to_string(),
-                                            result: val,
-                                        },
-                                    ),
-                                );
-                            }
-                            Err(message) => {
-                                emit_system_event(
-                                    &window_clone,
-                                    intent_id_clone,
-                                    blade_protocol::SystemEvent::IntentFailed {
-                                        intent_id: intent_id_clone,
-                                        error: blade_protocol::BladeError::Internal {
-                                            trace_id: intent_id_clone.to_string(),
-                                            message,
-                                        },
+                tauri::async_runtime::spawn(async move {
+                    match ws_manager.request_zlp(request_payload).await {
+                        Ok(val) => {
+                            emit_blade_event(
+                                &window_clone,
+                                Some(intent_id_clone.to_string()),
+                                blade_protocol::BladeEvent::Language(
+                                    blade_protocol::LanguageEvent::ZlpResponse {
+                                        original_request_id: intent_id_clone.to_string(),
+                                        result: val,
                                     },
-                                );
-                            }
+                                ),
+                            );
                         }
+                        Err(message) => {
+                            emit_system_event(
+                                &window_clone,
+                                intent_id_clone,
+                                blade_protocol::SystemEvent::IntentFailed {
+                                    intent_id: intent_id_clone,
+                                    error: blade_protocol::BladeError::Internal {
+                                        trace_id: intent_id_clone.to_string(),
+                                        message,
+                                    },
+                                },
+                            );
+                        }
+                    }
 
-                        emit_system_event(
-                            &window_clone,
-                            intent_id_clone,
-                            SystemEvent::ProcessCompleted {
-                                intent_id: intent_id_clone,
-                            },
-                        );
-                    });
+                    emit_system_event(
+                        &window_clone,
+                        intent_id_clone,
+                        SystemEvent::ProcessCompleted {
+                            intent_id: intent_id_clone,
+                        },
+                    );
+                });
 
-                    Ok(())
-                }
-                other => {
-                    eprintln!("[Language] Intent received: {:?}", other);
-                    let blocking_app_handle = app_handle.clone();
-                    let handler = tokio::task::spawn_blocking(move || {
-                        let state = blocking_app_handle.state::<AppState>();
-                        state.language_handler()
-                    })
+                Ok(())
+            }
+            other => {
+                eprintln!("[Language] Intent received: {:?}", other);
+                let blocking_app_handle = app_handle.clone();
+                let handler = tokio::task::spawn_blocking(move || {
+                    let state = blocking_app_handle.state::<AppState>();
+                    state.language_handler()
+                })
+                .await
+                .map_err(|e| blade_protocol::BladeError::Internal {
+                    trace_id: intent_id.to_string(),
+                    message: format!("language handler task failed: {}", e),
+                })?
+                .map_err(|e| blade_protocol::BladeError::Internal {
+                    trace_id: intent_id.to_string(),
+                    message: e,
+                })?;
+                let maybe_event = handler
+                    .handle(other, intent_id, Some(&state))
                     .await
                     .map_err(|e| blade_protocol::BladeError::Internal {
                         trace_id: intent_id.to_string(),
-                        message: format!("language handler task failed: {}", e),
-                    })?
-                    .map_err(|e| blade_protocol::BladeError::Internal {
-                        trace_id: intent_id.to_string(),
-                        message: e,
+                        message: format!("{:?}", e),
                     })?;
-                    let maybe_event = handler
-                        .handle(other, intent_id, Some(&state))
-                        .await
-                        .map_err(|e| blade_protocol::BladeError::Internal {
-                            trace_id: intent_id.to_string(),
-                            message: format!("{:?}", e),
-                        })?;
 
-                    if let Some(event) = maybe_event {
-                        blade_event_scheduler::emit_envelope(&window.app_handle(), event);
-                    }
-                    Ok(())
+                if let Some(event) = maybe_event {
+                    blade_event_scheduler::emit_envelope(&window.app_handle(), event);
                 }
+                Ok(())
             }
-        }
+        },
     }
 }

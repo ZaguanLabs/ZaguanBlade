@@ -106,11 +106,7 @@ fn configure_terminal_environment(cmd: &mut CommandBuilder) {
     strip_python_runtime_env(cmd);
 }
 
-fn emit_terminal_output<R: Runtime>(
-    app: &tauri::AppHandle<R>,
-    id: &str,
-    data: String,
-) {
+fn emit_terminal_output<R: Runtime>(app: &tauri::AppHandle<R>, id: &str, data: String) {
     if data.is_empty() {
         return;
     }
@@ -1005,7 +1001,11 @@ pub fn resize_terminal(
 }
 
 pub fn kill_terminal(id: String, state: tauri::State<'_, TerminalManager>) -> Result<(), String> {
-    state.pending_writes.lock().map_err(|e| e.to_string())?.remove(&id);
+    state
+        .pending_writes
+        .lock()
+        .map_err(|e| e.to_string())?
+        .remove(&id);
     let mut ptys = state.ptys.lock().map_err(|e| e.to_string())?;
     let pty = ptys
         .get_mut(&id)

@@ -3,11 +3,11 @@
 pub mod agentic_loop;
 pub mod ai_workflow;
 pub mod app_state;
-pub mod buffer_snapshot;
-pub mod blade_event_scheduler;
 pub mod blade_client;
+pub mod blade_event_scheduler;
 pub mod blade_protocol;
 pub mod blade_ws_client;
+pub mod buffer_snapshot;
 pub mod chat;
 pub mod chat_manager;
 pub mod chat_orchestrator;
@@ -31,9 +31,9 @@ pub mod history;
 pub mod idempotency;
 pub mod indexer;
 pub mod language_service;
+pub mod linux_webkit_workaround;
 pub mod local_artifacts;
 pub mod local_index;
-pub mod linux_webkit_workaround;
 
 pub mod models;
 pub mod post_edit_validation;
@@ -56,8 +56,8 @@ pub mod uncommitted_changes;
 pub mod utils;
 pub mod warmup;
 pub mod workflow_controller;
-pub mod worktree;
 pub mod workspace_manager;
+pub mod worktree;
 pub mod ws_connection_manager;
 pub mod xml_parser;
 

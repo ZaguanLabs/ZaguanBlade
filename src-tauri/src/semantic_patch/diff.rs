@@ -126,7 +126,11 @@ pub fn generate_diff(old_content: &str, new_content: &str, context_lines: usize)
                 }
             }
 
-            if hunk.lines.iter().any(|line| line.kind != DiffLineKind::Context) {
+            if hunk
+                .lines
+                .iter()
+                .any(|line| line.kind != DiffLineKind::Context)
+            {
                 Some(hunk)
             } else {
                 None

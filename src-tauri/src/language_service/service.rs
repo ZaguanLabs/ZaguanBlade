@@ -561,7 +561,10 @@ impl LanguageService {
         *self.worktree_store.write().unwrap() = Some(store);
     }
 
-    pub fn get_buffer_snapshot(&self, file_path: &str) -> Result<Arc<BufferSnapshot>, LanguageError> {
+    pub fn get_buffer_snapshot(
+        &self,
+        file_path: &str,
+    ) -> Result<Arc<BufferSnapshot>, LanguageError> {
         self.load_buffer_snapshot(file_path)
     }
 
@@ -701,9 +704,12 @@ impl LanguageService {
         }
 
         // Detect language and parse
-        let language = snapshot.language().or_else(|| Language::from_path(file_path)).ok_or_else(|| {
-            LanguageError::NotSupported(format!("Unknown language for: {}", file_path))
-        })?;
+        let language = snapshot
+            .language()
+            .or_else(|| Language::from_path(file_path))
+            .ok_or_else(|| {
+                LanguageError::NotSupported(format!("Unknown language for: {}", file_path))
+            })?;
 
         let tree = {
             let mut parser = self.parser.lock().unwrap();
@@ -1036,7 +1042,8 @@ impl LanguageService {
     /// Notify that a document was opened
     pub fn did_open(&self, file_path: &str, content: &str) -> Result<(), LanguageError> {
         let snapshot_key = self.snapshot_key(file_path);
-        self.buffer_snapshots.upsert_live(&snapshot_key, None, content);
+        self.buffer_snapshots
+            .upsert_live(&snapshot_key, None, content);
 
         if should_allow_non_indexed_live_sync(file_path) {
             return Ok(());
@@ -1197,7 +1204,10 @@ impl LanguageService {
     }
 
     fn ensure_file_fresh(&self, file_path: &str) -> Result<(), LanguageError> {
-        if self.buffer_snapshots.contains_live(&self.snapshot_key(file_path)) {
+        if self
+            .buffer_snapshots
+            .contains_live(&self.snapshot_key(file_path))
+        {
             return Ok(());
         }
 
@@ -1500,9 +1510,9 @@ impl LanguageService {
         version: Option<i32>,
         content: &str,
     ) -> Result<Vec<Symbol>, LanguageError> {
-        let snapshot = self
-            .buffer_snapshots
-            .upsert_live(&self.snapshot_key(file_path), version, content);
+        let snapshot =
+            self.buffer_snapshots
+                .upsert_live(&self.snapshot_key(file_path), version, content);
         let hash = snapshot.hash().to_string();
 
         // Check cache first
@@ -1516,9 +1526,12 @@ impl LanguageService {
         }
 
         // Detect language and parse
-        let language = snapshot.language().or_else(|| Language::from_path(file_path)).ok_or_else(|| {
-            LanguageError::NotSupported(format!("Unknown language for: {}", file_path))
-        })?;
+        let language = snapshot
+            .language()
+            .or_else(|| Language::from_path(file_path))
+            .ok_or_else(|| {
+                LanguageError::NotSupported(format!("Unknown language for: {}", file_path))
+            })?;
 
         let tree = {
             let mut parser = self.parser.lock().unwrap();
@@ -1529,8 +1542,13 @@ impl LanguageService {
 
         // Extract symbols
         let extracted_symbols = extract_symbols(&tree, snapshot.content(), language, file_path);
-        let mut relationships =
-            extract_symbol_relationships(&tree, snapshot.content(), language, file_path, &extracted_symbols);
+        let mut relationships = extract_symbol_relationships(
+            &tree,
+            snapshot.content(),
+            language,
+            file_path,
+            &extracted_symbols,
+        );
         let symbols = self.with_file_root_symbol(file_path, snapshot.content(), extracted_symbols);
         self.canonicalize_import_relationships(file_path, &mut relationships);
         self.append_module_export_relationships(
@@ -1575,7 +1593,10 @@ impl LanguageService {
         }
     }
 
-    fn load_snapshot_for_indexing(&self, file_path: &str) -> Result<Arc<BufferSnapshot>, LanguageError> {
+    fn load_snapshot_for_indexing(
+        &self,
+        file_path: &str,
+    ) -> Result<Arc<BufferSnapshot>, LanguageError> {
         let key = self.snapshot_key(file_path);
         if let Some(snapshot) = self.buffer_snapshots.get(&key) {
             if snapshot.is_live() {

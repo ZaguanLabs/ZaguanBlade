@@ -532,7 +532,10 @@ impl SymbolStore {
         search_patterns.push(format!("%{}%", trimmed));
         for term in symbol_search_terms(trimmed) {
             let candidate = format!("%{}%", term);
-            if !search_patterns.iter().any(|existing| existing == &candidate) {
+            if !search_patterns
+                .iter()
+                .any(|existing| existing == &candidate)
+            {
                 search_patterns.push(candidate);
             }
         }
@@ -988,7 +991,9 @@ mod tests {
         store.upsert_symbols(&[sym1, sym2, sym3]).unwrap();
 
         let results = store.search_by_name_like("auth user", 10).unwrap();
-        assert!(results.iter().any(|symbol| symbol.name == "authenticateUser"));
+        assert!(results
+            .iter()
+            .any(|symbol| symbol.name == "authenticateUser"));
         assert!(results.iter().any(|symbol| symbol.name == "UserService"));
     }
 

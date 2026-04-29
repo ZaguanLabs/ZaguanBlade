@@ -900,9 +900,9 @@ pub async fn handle_send_message<R: Runtime>(
                 blade_event_scheduler::emit_blade_event(
                     &app_handle,
                     None,
-                    blade_protocol::BladeEvent::Chat(
-                        blade_protocol::ChatEvent::MessageCompleted { id },
-                    ),
+                    blade_protocol::BladeEvent::Chat(blade_protocol::ChatEvent::MessageCompleted {
+                        id,
+                    }),
                 );
             } else if let DrainResult::ContextLengthExceeded {
                 message,
@@ -1327,7 +1327,9 @@ pub async fn handle_send_message<R: Runtime>(
                                         .as_ref()
                                         .map(|ws| {
                                             let settings =
-                                                project_settings::load_project_settings_or_default(ws);
+                                                project_settings::load_project_settings_or_default(
+                                                    ws,
+                                                );
                                             matches!(
                                                 settings.storage.mode,
                                                 project_settings::StorageMode::Local
@@ -1391,7 +1393,9 @@ pub async fn handle_send_message<R: Runtime>(
                                         .as_ref()
                                         .map(|ws| {
                                             let settings =
-                                                project_settings::load_project_settings_or_default(ws);
+                                                project_settings::load_project_settings_or_default(
+                                                    ws,
+                                                );
                                             matches!(
                                                 settings.storage.mode,
                                                 project_settings::StorageMode::Local

@@ -124,16 +124,17 @@ pub fn restart_fs_watcher<R: Runtime>(app_handle: &tauri::AppHandle<R>) {
                             let state = app_handle_clone.state::<AppState>();
                             if let Ok(store) = state.worktree() {
                                 if let Err(error) = store.refresh() {
-                                    eprintln!("[WATCHER] Failed to refresh worktree snapshot: {}", error);
+                                    eprintln!(
+                                        "[WATCHER] Failed to refresh worktree snapshot: {}",
+                                        error
+                                    );
                                 }
                             }
                             reindex_changed_paths(&state, &callback_root, &event);
 
                             let _ =
                                 app_handle_clone.emit("file-changes-detected", file_change_event);
-                            crate::blade_event_scheduler::queue_refresh_explorer(
-                                &app_handle_clone,
-                            );
+                            crate::blade_event_scheduler::queue_refresh_explorer(&app_handle_clone);
                         }
                         Err(e) => eprintln!("[WATCHER] error: {}", e),
                     }

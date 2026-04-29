@@ -157,7 +157,10 @@ fn detect_os_version() -> Option<String> {
     #[cfg(target_os = "macos")]
     {
         // Use sw_vers to get macOS version
-        if let Ok(output) = std::process::Command::new("sw_vers").arg("-productVersion").output() {
+        if let Ok(output) = std::process::Command::new("sw_vers")
+            .arg("-productVersion")
+            .output()
+        {
             if output.status.success() {
                 let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 return Some(format!("macOS {}", version));
@@ -168,7 +171,10 @@ fn detect_os_version() -> Option<String> {
     #[cfg(target_os = "windows")]
     {
         // Use systeminfo or registry
-        if let Ok(output) = std::process::Command::new("cmd").args(["/C", "ver"]).output() {
+        if let Ok(output) = std::process::Command::new("cmd")
+            .args(["/C", "ver"])
+            .output()
+        {
             if output.status.success() {
                 let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 return Some(version);

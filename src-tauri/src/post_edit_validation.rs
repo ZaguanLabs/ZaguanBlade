@@ -129,7 +129,11 @@ fn extract_tool_path(call: &ToolCall) -> Option<String> {
         "target_file",
     ]
     .iter()
-    .find_map(|key| args.get(key).and_then(Value::as_str).map(ToString::to_string))
+    .find_map(|key| {
+        args.get(key)
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+    })
 }
 
 fn resolve_tool_path(workspace_root: &Path, raw_path: &str) -> PathBuf {
@@ -150,13 +154,9 @@ async fn build_validation_feedback(
     capability_cache: &mut HashMap<String, bool>,
     validation_cache: &mut HashMap<String, Option<ValidationSnapshot>>,
 ) -> Result<Option<String>, String> {
-    let Some(language) = resolve_supported_language(
-        ws_manager.clone(),
-        config,
-        resolved_path,
-        capability_cache,
-    )
-    .await?
+    let Some(language) =
+        resolve_supported_language(ws_manager.clone(), config, resolved_path, capability_cache)
+            .await?
     else {
         return Ok(None);
     };
@@ -212,10 +212,7 @@ async fn build_validation_feedback(
             else {
                 return Ok(None);
             };
-            diff_newly_introduced_diagnostics(
-                &pre_snapshot.diagnostics,
-                &post_snapshot.diagnostics,
-            )
+            diff_newly_introduced_diagnostics(&pre_snapshot.diagnostics, &post_snapshot.diagnostics)
         }
         None => post_snapshot
             .diagnostics
@@ -251,12 +248,16 @@ async fn validate_snapshot(
         return Ok(None);
     }
 
-    let response = request_zlp_validation(ws_manager, config, resolved_path, content, language).await?;
+    let response =
+        request_zlp_validation(ws_manager, config, resolved_path, content, language).await?;
     let (tier, diagnostics) = parse_validation_response(&response);
     Ok(Some(ValidationSnapshot { tier, diagnostics }))
 }
 
-fn derive_pre_edit_content(call: &ToolCall, post_edit_content: &str) -> Result<Option<String>, String> {
+fn derive_pre_edit_content(
+    call: &ToolCall,
+    post_edit_content: &str,
+) -> Result<Option<String>, String> {
     let args: Value = serde_json::from_str(&call.function.arguments)
         .map_err(|error| format!("invalid tool args json: {}", error))?;
     let Some(object) = args.as_object() else {
@@ -434,10 +435,11 @@ async fn resolve_supported_language(
         let supported = if let Some(cached) = capability_cache.get(candidate) {
             *cached
         } else {
-            let supports_validation = request_zlp_capabilities(ws_manager.clone(), config, candidate)
-                .await
-                .map(|response| parse_capabilities_supports_validation(&response))
-                .unwrap_or(false);
+            let supports_validation =
+                request_zlp_capabilities(ws_manager.clone(), config, candidate)
+                    .await
+                    .map(|response| parse_capabilities_supports_validation(&response))
+                    .unwrap_or(false);
             capability_cache.insert(candidate.to_string(), supports_validation);
             supports_validation
         };
@@ -530,15 +532,24 @@ fn parse_validation_response(response: &Value) -> (Option<String>, Vec<Validatio
         .map(ToString::to_string);
 
     let errors = if let Some(array) = payload.as_array() {
-        array.iter().filter_map(parse_validation_diagnostic).collect()
+        array
+            .iter()
+            .filter_map(parse_validation_diagnostic)
+            .collect()
     } else if let Some(array) = payload.get("errors").and_then(Value::as_array) {
-        array.iter().filter_map(parse_validation_diagnostic).collect()
+        array
+            .iter()
+            .filter_map(parse_validation_diagnostic)
+            .collect()
     } else if let Some(array) = payload
         .get("result")
         .and_then(|value| value.get("errors"))
         .and_then(Value::as_array)
     {
-        array.iter().filter_map(parse_validation_diagnostic).collect()
+        array
+            .iter()
+            .filter_map(parse_validation_diagnostic)
+            .collect()
     } else {
         Vec::new()
     };
@@ -628,7 +639,10 @@ fn format_validation_feedback(
         line.push_str(diagnostic.message.as_str());
 
         let code_or_source = match (
-            diagnostic.source.as_deref().filter(|value| !value.is_empty()),
+            diagnostic
+                .source
+                .as_deref()
+                .filter(|value| !value.is_empty()),
             diagnostic.code.as_deref().filter(|value| !value.is_empty()),
         ) {
             (Some(source), Some(code)) => Some(format!("{}:{}", source, code)),
@@ -669,9 +683,9 @@ fn format_location(diagnostic: &ValidationDiagnostic) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        candidate_languages_for_path, derive_pre_edit_content,
-        diff_newly_introduced_diagnostics, format_validation_feedback,
-        parse_capabilities_supports_validation, parse_validation_response, ValidationDiagnostic,
+        candidate_languages_for_path, derive_pre_edit_content, diff_newly_introduced_diagnostics,
+        format_validation_feedback, parse_capabilities_supports_validation,
+        parse_validation_response, ValidationDiagnostic,
     };
     use crate::protocol::{ToolCall, ToolFunction};
     use serde_json::json;
@@ -736,10 +750,8 @@ mod tests {
         };
 
         let after = vec![existing.clone(), new_error.clone()];
-        let introduced = diff_newly_introduced_diagnostics(
-            std::slice::from_ref(&existing),
-            after.as_slice(),
-        );
+        let introduced =
+            diff_newly_introduced_diagnostics(std::slice::from_ref(&existing), after.as_slice());
 
         assert_eq!(introduced, vec![new_error]);
     }
@@ -873,8 +885,7 @@ mod tests {
             "POST-EDIT VALIDATION: 1 newly introduced error found in src/app/page.tsx (compile)"
         ));
         assert!(feedback.contains("line 12, column 3: Cannot find name 'foo' [tsc:TS2304]"));
-        assert!(feedback.contains(
-            "Fix these validation errors before continuing with unrelated changes."
-        ));
+        assert!(feedback
+            .contains("Fix these validation errors before continuing with unrelated changes."));
     }
 }

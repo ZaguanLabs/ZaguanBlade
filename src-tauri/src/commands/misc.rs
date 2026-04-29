@@ -48,7 +48,12 @@ pub fn get_blade_event_metrics() -> Value {
 #[tauri::command]
 pub fn get_runtime_debug_flags() -> HashMap<String, String> {
     fn read_bool_env(key: &str) -> Option<String> {
-        match std::env::var(key).ok()?.trim().to_ascii_lowercase().as_str() {
+        match std::env::var(key)
+            .ok()?
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
             "1" | "true" => Some(String::from("true")),
             "0" | "false" => Some(String::from("false")),
             _ => None,
@@ -64,7 +69,10 @@ pub fn get_runtime_debug_flags() -> HashMap<String, String> {
         ("ZBLADE_MINIMAL_LAYOUT", "minimalLayout"),
         ("ZBLADE_DISABLE_CHAT_HOOK", "disableChatHook"),
         ("ZBLADE_DISABLE_GIT_STATUS", "disableGitStatus"),
-        ("ZBLADE_DISABLE_UNCOMMITTED_CHANGES", "disableUncommittedChanges"),
+        (
+            "ZBLADE_DISABLE_UNCOMMITTED_CHANGES",
+            "disableUncommittedChanges",
+        ),
         ("ZBLADE_DISABLE_LAYOUT_EVENTS", "disableLayoutEvents"),
         ("ZBLADE_DISABLE_PROJECT_STATE", "disableProjectState"),
         ("ZBLADE_DISABLE_WARMUP", "disableWarmup"),
@@ -73,11 +81,16 @@ pub fn get_runtime_debug_flags() -> HashMap<String, String> {
         ("ZBLADE_DISABLE_SIDEBAR_OVERLAY", "disableSidebarOverlay"),
         ("ZBLADE_DISABLE_EDITOR_CHROME", "disableEditorChrome"),
         ("ZBLADE_DISABLE_CHAT_CHROME", "disableChatChrome"),
-        ("ZBLADE_DISABLE_EDITOR_WIDTH_OBSERVER", "disableEditorWidthObserver"),
+        (
+            "ZBLADE_DISABLE_EDITOR_WIDTH_OBSERVER",
+            "disableEditorWidthObserver",
+        ),
         ("ZBLADE_DEBUG_PERF", "debugPerf"),
     ]
     .into_iter()
-    .filter_map(|(env_key, flag_key)| read_bool_env(env_key).map(|value| (String::from(flag_key), value)))
+    .filter_map(|(env_key, flag_key)| {
+        read_bool_env(env_key).map(|value| (String::from(flag_key), value))
+    })
     .collect()
 }
 

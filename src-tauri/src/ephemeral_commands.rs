@@ -70,7 +70,9 @@ pub async fn save_ephemeral_document(
         .get(&id)
         .ok_or_else(|| "Document not found".to_string())?;
 
-    fs::write(&path, doc.content).await.map_err(|e| e.to_string())?;
+    fs::write(&path, doc.content)
+        .await
+        .map_err(|e| e.to_string())?;
 
     // Remove from ephemeral storage after successful save
     state.ephemeral_docs.remove(&id);

@@ -10,12 +10,12 @@ pub(crate) fn resolve_path_under_workspace_root(
     crate::worktree::resolve_path_under_workspace_root(workspace_root, path)
 }
 
- fn workspace_root_path(state: &AppState) -> Result<std::path::PathBuf, String> {
-     let ws = state.workspace.lock().unwrap();
-     ws.workspace
-         .clone()
-         .ok_or_else(|| "No workspace open".to_string())
- }
+fn workspace_root_path(state: &AppState) -> Result<std::path::PathBuf, String> {
+    let ws = state.workspace.lock().unwrap();
+    ws.workspace
+        .clone()
+        .ok_or_else(|| "No workspace open".to_string())
+}
 
 pub(crate) fn resolve_path_under_workspace(
     state: &AppState,
@@ -131,7 +131,9 @@ pub fn list_files_logic(
 ) -> Result<Vec<crate::explorer::FileEntry>, String> {
     let workspace_root = workspace_root_path(state)?;
     let resolved_path = match path.as_ref() {
-        Some(path) => resolve_path_under_workspace_root(&workspace_root, std::path::Path::new(path))?,
+        Some(path) => {
+            resolve_path_under_workspace_root(&workspace_root, std::path::Path::new(path))?
+        }
         None => workspace_root,
     };
 

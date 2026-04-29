@@ -384,9 +384,8 @@ impl ToolResult {
 mod tests {
     use super::{
         apply_multi_patch_to_string, apply_patch_to_string, apply_semantic_patch_with_service,
-        execute_tool, grep_search, parse_grep_timeout_ms, stage_semantic_patch_writes,
-        PatchHunk, SemanticPatchWrite, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS,
-        GREP_TIMEOUT_MIN_MS,
+        execute_tool, grep_search, parse_grep_timeout_ms, stage_semantic_patch_writes, PatchHunk,
+        SemanticPatchWrite, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS, GREP_TIMEOUT_MIN_MS,
     };
     use crate::semantic_patch::{InsertPosition, PatchOperation, PatchTarget, SemanticPatch};
     use crate::symbol_index::SymbolStore;
@@ -690,8 +689,7 @@ mod tests {
         let source_path = workspace.path().join("move_source.ts");
         let target_path = workspace.path().join("move_target.ts");
         fs::write(&source_path, "function first() { return 1; }\n").expect("write source");
-        fs::write(&target_path, "const before = 0;\nconst after = 1;\n")
-            .expect("write target");
+        fs::write(&target_path, "const before = 0;\nconst after = 1;\n").expect("write target");
         service.index_file("move_source.ts").expect("index source");
         service.index_file("move_target.ts").expect("index target");
 
@@ -711,9 +709,8 @@ mod tests {
             confidence: 1.0,
         };
 
-        let affected_paths =
-            apply_semantic_patch_with_service(workspace.path(), &service, &patch)
-                .expect("apply semantic patch");
+        let affected_paths = apply_semantic_patch_with_service(workspace.path(), &service, &patch)
+            .expect("apply semantic patch");
 
         assert_eq!(
             affected_paths,
@@ -1065,7 +1062,9 @@ fn read_file_with_app<R: tauri::Runtime>(
     };
 
     let content_result = match language_service_from_app_handle(Some(handle)) {
-        Ok(service) => service.get_file_content(&abs.to_string_lossy()).map_err(|e| e.to_string()),
+        Ok(service) => service
+            .get_file_content(&abs.to_string_lossy())
+            .map_err(|e| e.to_string()),
         Err(_) => {
             return read_file(workspace_root, args);
         }
@@ -1148,7 +1147,11 @@ fn read_many_files(workspace_root: &Path, args: &HashMap<String, serde_json::Val
                 };
 
                 let mut content = String::from_utf8_lossy(selected_bytes).to_string();
-                let line_count = if content.is_empty() { 0 } else { content.lines().count() };
+                let line_count = if content.is_empty() {
+                    0
+                } else {
+                    content.lines().count()
+                };
                 if include_line_numbers {
                     content = render_with_line_numbers(&content);
                 }
@@ -1176,7 +1179,11 @@ fn read_many_files(workspace_root: &Path, args: &HashMap<String, serde_json::Val
     let failed_count = files.len().saturating_sub(successful_count);
     let truncated_files = files
         .iter()
-        .filter(|f| f.get("truncated").and_then(|v| v.as_bool()).unwrap_or(false))
+        .filter(|f| {
+            f.get("truncated")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+        })
         .count();
 
     if successful_count == 0 {
@@ -1335,7 +1342,12 @@ fn batch(
     }
 
     if ordered {
-        results.sort_by_key(|value| value.get("index").and_then(|v| v.as_u64()).unwrap_or(u64::MAX));
+        results.sort_by_key(|value| {
+            value
+                .get("index")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(u64::MAX)
+        });
     }
 
     let succeeded = results
@@ -1415,7 +1427,9 @@ fn codebase_investigator(
     });
 
     if output_format.eq_ignore_ascii_case("markdown") {
-        return ToolResult::ok("# Codebase Investigator Report\n\n## Findings\n- No findings generated.\n");
+        return ToolResult::ok(
+            "# Codebase Investigator Report\n\n## Findings\n- No findings generated.\n",
+        );
     }
 
     ToolResult::ok(serde_json::to_string_pretty(&report).unwrap_or_default())
@@ -1440,10 +1454,15 @@ fn get_project_index_overview<R: tauri::Runtime>(
     let offset = parse_bounded_usize_arg(args, "offset", 0, usize::MAX);
 
     if let Ok(service) = language_service_from_app_handle(app_handle) {
-        let scope_root = if root == workspace_root { None } else { Some(root.as_path()) };
+        let scope_root = if root == workspace_root {
+            None
+        } else {
+            Some(root.as_path())
+        };
         match service.build_semantic_project_overview(scope_root, 8, 6) {
             Ok(Some(content)) => {
-                let (window, end, total_chars, has_more) = slice_by_char_window(&content, offset, max_chars);
+                let (window, end, total_chars, has_more) =
+                    slice_by_char_window(&content, offset, max_chars);
                 let returned_chars = window.chars().count();
                 let result = serde_json::json!({
                     "tool": "get_project_index_overview",
@@ -1542,7 +1561,10 @@ fn resolve_index_root(
         return Err(format!("project root does not exist: {}", root.display()));
     }
     if !root.is_dir() {
-        return Err(format!("project root must be a directory: {}", root.display()));
+        return Err(format!(
+            "project root must be a directory: {}",
+            root.display()
+        ));
     }
     Ok(root)
 }
@@ -1612,7 +1634,10 @@ fn read_file_range(workspace_root: &Path, args: &HashMap<String, serde_json::Val
         .get("end_line")
         .and_then(|v| v.as_u64())
         .unwrap_or(total_lines as u64) as usize;
-    let context_lines = args.get("context_lines").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let context_lines = args
+        .get("context_lines")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as usize;
 
     let requested_start = start_line.saturating_sub(1).saturating_sub(context_lines);
     let requested_end = end_line.saturating_add(context_lines).min(total_lines);
@@ -1638,7 +1663,14 @@ fn read_file_range(workspace_root: &Path, args: &HashMap<String, serde_json::Val
 fn write_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {
     let Some(path) = get_str_arg(
         args,
-        &["path", "file_path", "filepath", "filename", "TargetFile", "target_file"],
+        &[
+            "path",
+            "file_path",
+            "filepath",
+            "filename",
+            "TargetFile",
+            "target_file",
+        ],
     ) else {
         return ToolResult::err("missing required arg: path (or file_path)");
     };
@@ -1661,7 +1693,11 @@ fn write_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) 
     }
 
     match fs::write(&abs, content.as_bytes()) {
-        Ok(()) => ToolResult::ok(format!("wrote {} bytes to {}", content.len(), abs.display())),
+        Ok(()) => ToolResult::ok(format!(
+            "wrote {} bytes to {}",
+            content.len(),
+            abs.display()
+        )),
         Err(e) => ToolResult::err(format!("write failed: {}", e)),
     }
 }
@@ -1669,7 +1705,14 @@ fn write_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) 
 fn edit_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {
     let Some(path) = get_str_arg(
         args,
-        &["path", "file_path", "filepath", "filename", "TargetFile", "target_file"],
+        &[
+            "path",
+            "file_path",
+            "filepath",
+            "filename",
+            "TargetFile",
+            "target_file",
+        ],
     ) else {
         return ToolResult::err("missing required arg: path (or file_path)");
     };
@@ -1750,7 +1793,11 @@ fn grep_search(
     let mut result_count = 0usize;
     let mut timed_out = false;
 
-    'file_loop: for entry in WalkDir::new(&abs).follow_links(false).into_iter().filter_map(Result::ok) {
+    'file_loop: for entry in WalkDir::new(&abs)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
         if !entry.file_type().is_file() {
             continue;
         }
@@ -1783,7 +1830,10 @@ fn grep_search(
             if regex.is_match(line) {
                 let hit = format!(
                     "{}:{}:{}",
-                    entry_path.strip_prefix(workspace_root).unwrap_or(entry_path).display(),
+                    entry_path
+                        .strip_prefix(workspace_root)
+                        .unwrap_or(entry_path)
+                        .display(),
                     idx + 1,
                     line
                 );
@@ -1826,7 +1876,10 @@ fn codebase_search(workspace_root: &Path, args: &HashMap<String, serde_json::Val
     };
 
     let file_pattern = get_str_arg(args, &["file_pattern"]);
-    let max_results = args.get("max_results").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+    let max_results = args
+        .get("max_results")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(50) as usize;
     let abs = match fs::canonicalize(workspace_root) {
         Ok(p) => p,
         Err(e) => return ToolResult::err(format!("cannot canonicalize workspace: {}", e)),
@@ -1839,7 +1892,11 @@ fn codebase_search(workspace_root: &Path, args: &HashMap<String, serde_json::Val
     let mut results = Vec::new();
     let mut count = 0usize;
 
-    for entry in WalkDir::new(&abs).follow_links(false).into_iter().filter_map(Result::ok) {
+    for entry in WalkDir::new(&abs)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
         if !entry.file_type().is_file() {
             continue;
         }
@@ -1918,7 +1975,9 @@ fn language_service_from_app_handle<R: tauri::Runtime>(
         return Err("language service unavailable: missing app handle".to_string());
     };
     use tauri::Manager;
-    app_handle.state::<crate::app_state::AppState>().language_service()
+    app_handle
+        .state::<crate::app_state::AppState>()
+        .language_service()
 }
 
 fn list_directory(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {
@@ -1964,16 +2023,21 @@ fn list_directory(workspace_root: &Path, args: &HashMap<String, serde_json::Valu
         a_name.cmp(b_name)
     });
 
-    ToolResult::ok(serde_json::to_string_pretty(&serde_json::json!({
-        "path": path,
-        "entries": entries,
-    })).unwrap_or_default())
+    ToolResult::ok(
+        serde_json::to_string_pretty(&serde_json::json!({
+            "path": path,
+            "entries": entries,
+        }))
+        .unwrap_or_default(),
+    )
 }
 
 fn symbol_path_arg(workspace_root: &Path, path: &str) -> Result<String, String> {
     let resolved = resolve_path_in_workspace(workspace_root, Path::new(path))?;
     let workspace = fs::canonicalize(workspace_root).map_err(|e| e.to_string())?;
-    let relative = resolved.strip_prefix(&workspace).map_err(|e| e.to_string())?;
+    let relative = resolved
+        .strip_prefix(&workspace)
+        .map_err(|e| e.to_string())?;
     Ok(normalize_rel_path(relative))
 }
 
@@ -2020,7 +2084,9 @@ fn resolve_symbol_from_graph_args(
     args: &HashMap<String, serde_json::Value>,
 ) -> Result<Option<crate::tree_sitter::Symbol>, String> {
     if let Some(symbol_id) = get_str_arg(args, &["symbol_id", "id"]) {
-        return service.get_symbol(&symbol_id).map_err(|err| err.to_string());
+        return service
+            .get_symbol(&symbol_id)
+            .map_err(|err| err.to_string());
     }
 
     let Some(file_path) = get_str_arg(args, &["path", "file", "file_path"]) else {
@@ -2030,16 +2096,23 @@ fn resolve_symbol_from_graph_args(
     let qualified_name = get_str_arg(args, &["qualified_name"]);
     let name = get_str_arg(args, &["name"]);
     if qualified_name.is_none() && name.is_none() {
-        return Err("symbol_graph requires 'name' or 'qualified_name' when resolving by path".to_string());
+        return Err(
+            "symbol_graph requires 'name' or 'qualified_name' when resolving by path".to_string(),
+        );
     }
 
-    let symbols = service.get_file_symbols(&file_path).map_err(|err| err.to_string())?;
+    let symbols = service
+        .get_file_symbols(&file_path)
+        .map_err(|err| err.to_string())?;
     Ok(symbols.into_iter().find(|symbol| {
         qualified_name
             .as_ref()
             .map(|value| &symbol.qualified_name == value)
             .unwrap_or(false)
-            || name.as_ref().map(|value| &symbol.name == value).unwrap_or(false)
+            || name
+                .as_ref()
+                .map(|value| &symbol.name == value)
+                .unwrap_or(false)
     }))
 }
 
@@ -2056,7 +2129,8 @@ fn outline_nodes_for_parent(
         .into_iter()
         .map(|symbol| {
             let mut value = symbol_to_json(&symbol);
-            value["children"] = serde_json::Value::Array(outline_nodes_for_parent(by_parent, Some(&symbol.id)));
+            value["children"] =
+                serde_json::Value::Array(outline_nodes_for_parent(by_parent, Some(&symbol.id)));
             value
         })
         .collect()
@@ -2091,7 +2165,12 @@ fn symbol_search_tool<R: tauri::Runtime>(
         Err(err) => return ToolResult::err(err),
     };
     let started = Instant::now();
-    let results = match service.search_symbols_filtered(&query, file_filter.as_deref(), symbol_types, limit) {
+    let results = match service.search_symbols_filtered(
+        &query,
+        file_filter.as_deref(),
+        symbol_types,
+        limit,
+    ) {
         Ok(results) => results,
         Err(err) => return ToolResult::err(err.to_string()),
     };
@@ -2149,7 +2228,10 @@ fn symbol_resolve_tool<R: tauri::Runtime>(
                 .as_ref()
                 .map(|value| &symbol.qualified_name == value)
                 .unwrap_or(false)
-                || name.as_ref().map(|value| &symbol.name == value).unwrap_or(false)
+                || name
+                    .as_ref()
+                    .map(|value| &symbol.name == value)
+                    .unwrap_or(false)
         }) else {
             return ToolResult::err("symbol not found".to_string());
         };
@@ -2188,7 +2270,10 @@ fn symbol_outline_tool<R: tauri::Runtime>(
 
     let mut by_parent: HashMap<Option<String>, Vec<crate::tree_sitter::Symbol>> = HashMap::new();
     for symbol in symbols {
-        by_parent.entry(symbol.parent_id.clone()).or_default().push(symbol);
+        by_parent
+            .entry(symbol.parent_id.clone())
+            .or_default()
+            .push(symbol);
     }
     let payload = serde_json::json!({
         "path": path,
@@ -2232,7 +2317,11 @@ fn symbol_graph_tool<R: tauri::Runtime>(
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
 }
 
-pub fn apply_patch_to_string(content: &str, old_text: &str, new_text: &str) -> Result<String, String> {
+pub fn apply_patch_to_string(
+    content: &str,
+    old_text: &str,
+    new_text: &str,
+) -> Result<String, String> {
     if !old_text.is_empty() {
         let mut exact_matches = content.match_indices(old_text);
         if let Some((pos, _)) = exact_matches.next() {
@@ -2328,12 +2417,20 @@ struct StagedSemanticPatchWrite {
     backup_path: PathBuf,
 }
 
-fn semantic_patch_sidecar_path(abs_path: &Path, stage_id: &str, idx: usize, suffix: &str) -> PathBuf {
+fn semantic_patch_sidecar_path(
+    abs_path: &Path,
+    stage_id: &str,
+    idx: usize,
+    suffix: &str,
+) -> PathBuf {
     let file_name = abs_path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("semantic-patch");
-    let sidecar_name = format!(".{}.zblade-semantic-{}-{}.{}", file_name, stage_id, idx, suffix);
+    let sidecar_name = format!(
+        ".{}.zblade-semantic-{}-{}.{}",
+        file_name, stage_id, idx, suffix
+    );
     abs_path
         .parent()
         .unwrap_or_else(|| Path::new("."))
@@ -2460,12 +2557,18 @@ fn apply_semantic_patch_with_service(
     for staged in &staged_writes {
         if let Err(error) = fs::rename(&staged.write.abs_path, &staged.backup_path) {
             cleanup_semantic_patch_stage_files(&staged_writes);
-            return Err(format!("Failed to backup {}: {}", staged.write.file_path, error));
+            return Err(format!(
+                "Failed to backup {}: {}",
+                staged.write.file_path, error
+            ));
         }
         if let Err(error) = fs::rename(&staged.temp_path, &staged.write.abs_path) {
             let _ = fs::rename(&staged.backup_path, &staged.write.abs_path);
             rollback_semantic_patch_writes(service, &staged_writes, applied_count);
-            return Err(format!("Failed to commit {}: {}", staged.write.file_path, error));
+            return Err(format!(
+                "Failed to commit {}: {}",
+                staged.write.file_path, error
+            ));
         }
         applied_count += 1;
     }
@@ -2473,7 +2576,10 @@ fn apply_semantic_patch_with_service(
     for staged in &staged_writes {
         if let Err(error) = service.did_open(&staged.write.file_path, &staged.write.new_content) {
             rollback_semantic_patch_writes(service, &staged_writes, applied_count);
-            return Err(format!("Failed to index {}: {}", staged.write.file_path, error));
+            return Err(format!(
+                "Failed to index {}: {}",
+                staged.write.file_path, error
+            ));
         }
     }
 

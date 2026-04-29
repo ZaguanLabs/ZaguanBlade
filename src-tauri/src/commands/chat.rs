@@ -167,10 +167,7 @@ pub async fn delete_conversation(
 }
 
 #[tauri::command]
-pub async fn save_conversation(
-    state: State<'_, AppState>,
-    app: AppHandle,
-) -> Result<(), String> {
+pub async fn save_conversation(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
     let stored = {
         let conversation = state.conversation.lock().unwrap();
         conversation.to_stored()

@@ -94,9 +94,7 @@ pub fn apply() {
 
     if session == "wayland" {
         set_env_if_unset("__NV_DISABLE_EXPLICIT_SYNC", "1");
-        eprintln!(
-            "[LINUX WEBKIT] Applied Wayland/NVIDIA workaround: __NV_DISABLE_EXPLICIT_SYNC=1"
-        );
+        eprintln!("[LINUX WEBKIT] Applied Wayland/NVIDIA workaround: __NV_DISABLE_EXPLICIT_SYNC=1");
         return;
     }
 

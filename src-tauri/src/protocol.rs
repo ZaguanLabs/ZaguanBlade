@@ -120,7 +120,9 @@ pub enum ChatEvent {
     },
     ToolActivity(ToolActivityPayload),
     ApprovalRequest(ApprovalRequest),
-    Done { finish_reason: String },
+    Done {
+        finish_reason: String,
+    },
     Error(String),
     /// Context length exceeded error with recovery information (RFC: Context Length Recovery)
     ContextLengthExceeded {
