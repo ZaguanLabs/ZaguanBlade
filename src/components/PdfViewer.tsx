@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import * as pdfjsLib from 'pdfjs-dist';
+import type { DocumentInitParameters } from 'pdfjs-dist/types/src/display/api';
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Maximize2, FileText } from 'lucide-react';
 import { readFile } from '@tauri-apps/plugin-fs';
@@ -41,12 +42,13 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
                 console.debug('[PDF] File read successfully, size:', fileData.length, 'bytes');
                 
                 // Load the PDF from the binary data (fileData is already Uint8Array)
-                const loadingTask = pdfjsLib.getDocument({
+                const documentParams: DocumentInitParameters = {
                     data: fileData,
                     useWorkerFetch: false,
                     isEvalSupported: false,
                     useSystemFonts: true,
-                });
+                };
+                const loadingTask = pdfjsLib.getDocument(documentParams);
                 const pdf = await loadingTask.promise;
                 console.debug('[PDF] PDF loaded successfully, pages:', pdf.numPages);
                 
