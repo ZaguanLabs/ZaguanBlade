@@ -42,7 +42,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
                 console.debug('[PDF] File read successfully, size:', fileData.length, 'bytes');
                 
                 // Load the PDF from the binary data (fileData is already Uint8Array)
-                const documentParams: DocumentInitParameters = {
+                const documentParams: DocumentInitParameters & { isEvalSupported?: boolean } = {
                     data: fileData,
                     useWorkerFetch: false,
                     isEvalSupported: false,
