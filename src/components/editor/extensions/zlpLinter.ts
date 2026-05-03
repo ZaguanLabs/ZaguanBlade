@@ -1,6 +1,7 @@
 import { linter, Diagnostic } from "@codemirror/lint";
 import { ZLPService } from "../../../services/zlp";
 import { ZLPValidationError } from "../../../types/zlp";
+import { recordZlpDiagnostics } from "../../../services/problemStore";
 
 // Map file extension to language ID for ZLP
 function getLanguageId(filename: string): string {
@@ -34,6 +35,7 @@ export function zlpLinter(filename: string) {
         try {
             // Call ZLP Service
             const errors = await ZLPService.getDiagnostics(filename, content, language);
+            recordZlpDiagnostics(filename, errors);
 
             // Convert ZLP errors to CodeMirror Diagnostics
             return errors.map((err: ZLPValidationError) => {

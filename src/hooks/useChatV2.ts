@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { BladeDispatcher } from '../services/blade';
 import { subscribeBladeEventType, waitForBladeEvent } from '../services/bladeEvents';
 import { EditorFacade } from '../services/editorFacade';
+import { ensureProblemCaptureStarted, getActiveDiagnostics } from '../services/problemStore';
 import { useEditorActions } from '../contexts/EditorContext';
 import { MessageBuffer } from '../utils/eventBuffer';
 import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertToolCallBlockPreservingOrder, moveExistingContentAfterTools, upsertSplitTextBlocks } from '../utils/messageBlocks';
@@ -646,6 +647,7 @@ export function useChatV2() {
             cursor_column: snapshot.cursorColumn ?? null,
             selection_start: snapshot.selectionStartLine ?? null,
             selection_end: snapshot.selectionEndLine ?? null,
+            diagnostics: getActiveDiagnostics(safeActiveFile, normalizedOpenFiles),
         };
     }, []);
 
@@ -945,6 +947,8 @@ export function useChatV2() {
                 if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
                     return;
                 }
+
+                ensureProblemCaptureStarted();
 
                 const cachedModels = readCachedModels();
                 if (cachedModels.length > 0) {

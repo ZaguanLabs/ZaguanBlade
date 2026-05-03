@@ -1,7 +1,7 @@
 "use client";
 import React, { useEffect, useRef, forwardRef, useImperativeHandle, useCallback } from "react";
 import { useTranslation } from 'react-i18next';
-import { EditorState, Compartment, Prec } from "@codemirror/state";
+import { EditorState, Compartment, Prec, type TransactionSpec } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightActiveLine, drawSelection, dropCursor, rectangularSelection, crosshairCursor, placeholder, highlightSpecialChars } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { bracketMatching, indentOnInput, foldGutter, foldKeymap } from "@codemirror/language";
@@ -45,6 +45,23 @@ const getDiffStateFromUnifiedDiff = (unifiedDiff?: string) => {
     };
 };
 
+const dispatchPreservingScroll = (view: EditorView, spec: TransactionSpec) => {
+    const scroller = view.scrollDOM;
+    const scrollTop = scroller.scrollTop;
+    const scrollLeft = scroller.scrollLeft;
+
+    view.dispatch(spec);
+
+    requestAnimationFrame(() => {
+        if (!scroller.isConnected) {
+            return;
+        }
+
+        scroller.scrollTop = scrollTop;
+        scroller.scrollLeft = scrollLeft;
+    });
+};
+
 
 interface CodeEditorProps {
     content: string;
@@ -79,9 +96,23 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     const languageConf = useRef(new Compartment());
     const themeConf = useRef(new Compartment());
     const wrapConf = useRef(new Compartment());
+    const zlpConf = useRef(new Compartment());
     const { setCursorPosition, setSelection, clearSelection } = useEditorActions();
     const { currentTheme } = useTheme();
     const { showMenu } = useContextMenu();
+    const contentRef = useRef(content);
+    const filenameRef = useRef(filename);
+    const isMarkdownRef = useRef(isMarkdown);
+    const shouldWrapRef = useRef(shouldWrap);
+    const themeAppearanceRef = useRef(currentTheme.appearance);
+    const editorActionsRef = useRef({ setCursorPosition, setSelection, clearSelection });
+
+    contentRef.current = content;
+    filenameRef.current = filename;
+    isMarkdownRef.current = isMarkdown;
+    shouldWrapRef.current = shouldWrap;
+    themeAppearanceRef.current = currentTheme.appearance;
+    editorActionsRef.current = { setCursorPosition, setSelection, clearSelection };
 
     // Call Graph Inspector State
     const [inspectorData, setInspectorData] = React.useState<{ id: string; name: string } | null>(null);
@@ -162,8 +193,13 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
         if (!editorRef.current) return;
         if (viewRef.current) return;
 
+        const initialContent = contentRef.current;
+        const initialFilename = filenameRef.current;
+        const initialIsMarkdown = isMarkdownRef.current;
+        const initialShouldWrap = shouldWrapRef.current;
+        const initialThemeAppearance = themeAppearanceRef.current;
         const state = EditorState.create({
-            doc: content,
+            doc: initialContent,
             extensions: [
                 // Core editor features
                 lineNumbers(),
@@ -175,16 +211,16 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 rectangularSelection(),
                 crosshairCursor(),
                 // Lint gutter only for code files (not markdown)
-                ...(isMarkdown ? [] : [lintGutter()]),
+                ...(initialIsMarkdown ? [] : [lintGutter()]),
 
                 // Editing features
                 history(),
                 // Bracket matching/closing only for code files
-                ...(isMarkdown ? [] : [bracketMatching(), closeBrackets()]),
-                ...(isMarkdown ? [] : [autocompletion()]),
+                ...(initialIsMarkdown ? [] : [bracketMatching(), closeBrackets()]),
+                ...(initialIsMarkdown ? [] : [autocompletion()]),
                 indentOnInput(),
 
-                themeConf.current.of(getZaguanTheme(currentTheme.appearance === 'dark')),
+                themeConf.current.of(getZaguanTheme(initialThemeAppearance === 'dark')),
 
                 // UX enhancements
                 placeholder("Start typing or paste code here..."),
@@ -206,7 +242,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 aiGlowDecorations(),
 
                 // Line wrapping (enabled for markdown and when explicitly requested)
-                wrapConf.current.of(shouldWrap ? [EditorView.lineWrapping] : []),
+                wrapConf.current.of(initialShouldWrap ? [EditorView.lineWrapping] : []),
 
                 // Layout
                 EditorView.theme({
@@ -217,10 +253,9 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 // Language support (dynamic)
                 languageConf.current.of([]),
 
-                // ZLP Linter and Hover Tooltip (disabled for markdown - not applicable)
-                ...(isMarkdown ? [] : [
-                    zlpLinter(filename || ''),
-                    zlpHoverTooltip(filename || '')
+                zlpConf.current.of(initialIsMarkdown ? [] : [
+                    zlpLinter(initialFilename || ''),
+                    zlpHoverTooltip(initialFilename || '')
                 ]),
 
                 // Keymaps (high precedence for custom bindings)
@@ -256,7 +291,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                         // every keystroke-driven cursor movement. Keep cursor/selection sync for
                         // explicit navigation/selection changes, and skip docChanged+selectionSet
                         // updates while typing in markdown.
-                        if (isMarkdown && update.docChanged) {
+                        if (isMarkdownRef.current && update.docChanged) {
                             return;
                         }
 
@@ -277,11 +312,11 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                                     return;
                                 }
 
-                                setCursorPosition(pending.line, pending.column);
+                                editorActionsRef.current.setCursorPosition(pending.line, pending.column);
                                 if (pending.selectionStartLine !== null && pending.selectionEndLine !== null) {
-                                    setSelection(pending.selectionStartLine, pending.selectionEndLine);
+                                    editorActionsRef.current.setSelection(pending.selectionStartLine, pending.selectionEndLine);
                                 } else {
-                                    clearSelection();
+                                    editorActionsRef.current.clearSelection();
                                 }
                             });
                         }
@@ -296,14 +331,14 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
         });
 
         viewRef.current = view;
-        void reconfigureLanguage(filename);
+        void reconfigureLanguage(initialFilename);
 
         return () => {
             languageRequestIdRef.current += 1;
             view.destroy();
             viewRef.current = null;
         };
-    }, [filename, isMarkdown, reconfigureLanguage, setCursorPosition, setSelection, clearSelection, shouldWrap]);
+    }, [reconfigureLanguage]);
 
     useEffect(() => {
         const view = viewRef.current;
@@ -326,6 +361,18 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     useEffect(() => {
         void reconfigureLanguage(filename);
     }, [filename, reconfigureLanguage]);
+
+    useEffect(() => {
+        const view = viewRef.current;
+        if (!view) return;
+
+        view.dispatch({
+            effects: zlpConf.current.reconfigure(isMarkdown ? [] : [
+                zlpLinter(filename || ''),
+                zlpHoverTooltip(filename || '')
+            ]),
+        });
+    }, [filename, isMarkdown]);
 
     // Handle file switch and content updates
     const lastFilename = useRef(filename);
@@ -408,15 +455,14 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
         if (!view) return;
 
         if (unifiedDiff) {
-            view.dispatch({
+            dispatchPreservingScroll(view, {
                 effects: [
                     setDiffState.of(getDiffStateFromUnifiedDiff(unifiedDiff)),
                     triggerAiGlow.of(undefined),
                 ]
             });
         } else {
-            // Clear diff state when no diff
-            view.dispatch({
+            dispatchPreservingScroll(view, {
                 effects: setDiffState.of(null)
             });
         }
@@ -594,7 +640,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
         ];
 
         showMenu({ x: e.clientX, y: e.clientY }, items);
-    }, [showMenu, t]);
+    }, [filename, showMenu, t]);
 
     return (
         <div className="code-editor-scroll h-full w-full relative" onContextMenu={handleContextMenu}>

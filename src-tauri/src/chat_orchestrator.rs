@@ -1,6 +1,6 @@
 use crate::app_state::AppState;
 use crate::blade_event_scheduler;
-use crate::blade_protocol::ChatMention;
+use crate::blade_protocol::{ChatMention, WorkspaceDiagnostic};
 use crate::chat_manager::DrainResult;
 use crate::post_edit_validation;
 use crate::project_settings;
@@ -105,6 +105,61 @@ fn ensure_non_empty_image_prompt(
     format!("{}\n\n{}", actual_message, fallback)
 }
 
+fn format_workspace_diagnostics(diagnostics: Option<Vec<WorkspaceDiagnostic>>) -> Option<String> {
+    let mut entries = diagnostics
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|diagnostic| {
+            diagnostic.severity.eq_ignore_ascii_case("error")
+                || diagnostic.severity.eq_ignore_ascii_case("warning")
+        })
+        .take(12)
+        .collect::<Vec<_>>();
+
+    if entries.is_empty() {
+        return None;
+    }
+
+    entries.sort_by_key(|diagnostic| {
+        if diagnostic.severity.eq_ignore_ascii_case("error") {
+            0
+        } else {
+            1
+        }
+    });
+
+    let mut output = String::from(
+        "Active workspace diagnostics are present. Treat these as immediate feedback and fix relevant errors before continuing:\n",
+    );
+    for diagnostic in entries {
+        let severity = diagnostic.severity.to_ascii_uppercase();
+        let location = match (&diagnostic.file, diagnostic.line, diagnostic.column) {
+            (Some(file), Some(line), Some(column)) => format!("{}:{}:{}", file, line, column),
+            (Some(file), Some(line), None) => format!("{}:{}", file, line),
+            (Some(file), None, _) => file.clone(),
+            _ => "workspace".to_string(),
+        };
+        output.push_str(&format!(
+            "- {} [{}] {}: {}\n",
+            severity, diagnostic.source, location, diagnostic.message
+        ));
+        if let Some(raw) = diagnostic.raw {
+            let trimmed = raw.trim();
+            if !trimmed.is_empty() && trimmed != diagnostic.message {
+                let preview: String = trimmed.chars().take(1200).collect();
+                output.push_str("  Raw diagnostic:\n");
+                for line in preview.lines().take(12) {
+                    output.push_str("    ");
+                    output.push_str(line);
+                    output.push('\n');
+                }
+            }
+        }
+    }
+
+    Some(output)
+}
+
 fn infer_context_files_from_query(
     state: &State<'_, AppState>,
     query: &str,
@@ -189,6 +244,7 @@ pub async fn handle_send_message<R: Runtime>(
     cursor_column: Option<usize>,
     selection_start_line: Option<usize>,
     selection_end_line: Option<usize>,
+    diagnostics: Option<Vec<WorkspaceDiagnostic>>,
     mentions: Option<Vec<ChatMention>>,
     mode: Option<String>,
     window: tauri::Window<R>,
@@ -258,6 +314,12 @@ pub async fn handle_send_message<R: Runtime>(
         actual_message = format!(
             "[SYSTEM NOTE: The user explicitly referenced these workspace paths: {}]\n\n{}",
             mention_preview, actual_message
+        );
+    }
+    if let Some(diagnostic_feedback) = format_workspace_diagnostics(diagnostics) {
+        actual_message = format!(
+            "[SYSTEM NOTE: {}]\n\n{}",
+            diagnostic_feedback, actual_message
         );
     }
 

@@ -128,6 +128,7 @@ pub async fn dispatch(
                         cursor_column,
                         selection_start,
                         selection_end,
+                        diagnostics,
                     ) = if let Some(ctx) = context {
                         (
                             ctx.active_file,
@@ -136,10 +137,11 @@ pub async fn dispatch(
                             ctx.cursor_column.map(|c| c as usize),
                             ctx.selection_start.map(|l| l as usize),
                             ctx.selection_end.map(|l| l as usize),
+                            Some(ctx.diagnostics),
                         )
                     } else {
                         let state_af = state.active_file.lock().unwrap().clone();
-                        (state_af, None, None, None, None, None)
+                        (state_af, None, None, None, None, None, None)
                     };
 
                     handle_send_message(
@@ -152,6 +154,7 @@ pub async fn dispatch(
                         cursor_column,
                         selection_start,
                         selection_end,
+                        diagnostics,
                         mentions,
                         mode,
                         window.clone(),

@@ -127,6 +127,27 @@ pub struct EditorContext {
     pub cursor_column: Option<u32>,
     pub selection_start: Option<u32>,
     pub selection_end: Option<u32>,
+    #[serde(default)]
+    pub diagnostics: Vec<WorkspaceDiagnostic>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct WorkspaceDiagnostic {
+    pub source: String,
+    pub severity: String,
+    pub message: String,
+    #[serde(default)]
+    pub file: Option<String>,
+    #[serde(default)]
+    pub line: Option<u32>,
+    #[serde(default)]
+    pub column: Option<u32>,
+    #[serde(default)]
+    pub raw: Option<String>,
+    #[serde(default, alias = "terminalId")]
+    pub terminal_id: Option<String>,
+    #[serde(default)]
+    pub timestamp: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
