@@ -753,7 +753,6 @@ export function useChatV2() {
         if (pending.size === 0) {
             return;
         }
-
         setMessages((previousMessages) => {
             let nextMessages = previousMessages;
             let changed = false;
@@ -960,7 +959,8 @@ export function useChatV2() {
                     invoke<boolean>('get_chat_status'),
                 ]);
 
-                replaceMessagesPreservingImagePreviews(ensureMessagesHaveBlocks(history));
+                const migratedHistory = ensureMessagesHaveBlocks(history);
+                replaceMessagesPreservingImagePreviews(migratedHistory);
 
                 if (isStreaming) {
                     dispatch({ type: 'loading/set', loading: true });

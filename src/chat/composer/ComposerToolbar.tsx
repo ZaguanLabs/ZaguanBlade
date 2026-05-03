@@ -1,0 +1,90 @@
+import React from 'react';
+import { Code2, Map as MapIcon, Send, Square } from 'lucide-react';
+import type { ChatMode, ImageAttachment, ModelInfo } from '../../types/chat';
+import { AttachmentControls } from './AttachmentControls';
+import { ModelSelectButton } from './ModelSelectButton';
+import { ScreenshotPickerLauncher } from './ScreenshotPickerLauncher';
+import type { CaptureResult } from '../../types/screenshot';
+
+export const ComposerToolbar: React.FC<{
+    loading?: boolean;
+    disabled?: boolean;
+    canSend: boolean;
+    chatMode: ChatMode;
+    setChatMode: (mode: ChatMode) => void;
+    models: ModelInfo[];
+    selectedModelId: string;
+    setSelectedModelId: (modelId: string) => void;
+    attachments: ImageAttachment[];
+    attachmentError: string | null;
+    onUploadImage: () => void;
+    onRemoveAttachment: (id: string) => void;
+    onCapture: (result: CaptureResult, name: string) => void;
+    onAttachmentError: (message: string) => void;
+    onSubmit: () => void;
+    onStop?: () => void;
+}> = ({
+    loading,
+    disabled,
+    canSend,
+    chatMode,
+    setChatMode,
+    models,
+    selectedModelId,
+    setSelectedModelId,
+    attachments,
+    attachmentError,
+    onUploadImage,
+    onRemoveAttachment,
+    onCapture,
+    onAttachmentError,
+    onSubmit,
+    onStop,
+}) => (
+    <>
+        <div className="flex items-center justify-between gap-2 border-b border-(--border-subtle)/60 px-2 py-1.5">
+            <div className="flex items-center gap-1.5">
+                <ScreenshotPickerLauncher
+                    disabled={disabled}
+                    onUploadImage={onUploadImage}
+                    onCapture={onCapture}
+                    onError={onAttachmentError}
+                />
+                <div className="inline-flex rounded-md border border-(--border-subtle) bg-(--bg-app) p-1">
+                    <button type="button" onClick={() => setChatMode('code')} disabled={disabled} className={`inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] ${chatMode === 'code' ? 'bg-(--accent-primary)/15 text-(--fg-primary)' : 'text-(--fg-tertiary)'}`}>
+                        <Code2 className="h-3 w-3" />
+                        Code
+                    </button>
+                    <button type="button" onClick={() => setChatMode('planning')} disabled={disabled} className={`inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] ${chatMode === 'planning' ? 'bg-sky-500/20 text-sky-100' : 'text-(--fg-tertiary)'}`}>
+                        <MapIcon className="h-3 w-3" />
+                        Plan
+                    </button>
+                </div>
+            </div>
+            <div className="w-[164px] max-w-[46%] shrink-0">
+                <ModelSelectButton
+                    models={models}
+                    selectedModelId={selectedModelId}
+                    setSelectedModelId={setSelectedModelId}
+                    disabled={disabled}
+                />
+            </div>
+        </div>
+        <AttachmentControls
+            attachments={attachments}
+            error={attachmentError}
+            onRemove={onRemoveAttachment}
+        />
+        <button
+            type="button"
+            onClick={loading && !canSend ? onStop : onSubmit}
+            disabled={disabled || (!canSend && !loading)}
+            className={`absolute bottom-8 right-4 z-20 inline-flex h-9 w-9 items-center justify-center rounded-lg border transition-colors ${loading && !canSend
+                ? 'border-red-500/30 bg-red-500/10 text-red-400'
+                : 'border-(--border-subtle) bg-(--bg-surface) text-(--fg-tertiary) hover:text-(--fg-primary)'
+                }`}
+        >
+            {loading && !canSend ? <Square className="h-4 w-4 fill-current" /> : <Send className="h-4 w-4" />}
+        </button>
+    </>
+);

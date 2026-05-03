@@ -9,6 +9,7 @@ import { AppBar } from './AppBar';
 import { GitBranch, Settings, Clock } from 'lucide-react';
 import { useStartupBootstrap } from '../contexts/StartupBootstrapContext';
 import { EditorProvider, useEditorActions } from '../contexts/EditorContext';
+import { useChatPanelV3Flag } from '../contexts/ChatPanelFlagContext';
 import { useUncommittedChanges } from '../hooks/useUncommittedChanges';
 import { useChat } from '../hooks/useChat';
 import { useProjectState, type ProjectState } from '../hooks/useProjectState';
@@ -21,7 +22,8 @@ import { readDebugFlag, readDebugSurfaceFlag } from '../utils/debugFlags';
 import type { ChatMode } from '../types/chat';
 import { recordDebugPerf } from '../utils/debugPerf';
 const ExplorerPanel = React.lazy(() => import('./ExplorerPanel').then(module => ({ default: module.ExplorerPanel })));
-const ChatPanel = React.lazy(() => import('./ChatPanel').then(module => ({ default: module.ChatPanel })));
+const LegacyChatPanel = React.lazy(() => import('./ChatPanel').then(module => ({ default: module.ChatPanel })));
+const ChatPanelV3 = React.lazy(() => import('../chat/rendering/ChatPanel').then(module => ({ default: module.ChatPanel })));
 const GitPanel = React.lazy(() => import('./GitPanel').then(module => ({ default: module.GitPanel })));
 const FileHistoryPanel = React.lazy(() => import('./FileHistoryPanel').then(module => ({ default: module.FileHistoryPanel })));
 const DocumentViewer = React.lazy(() => import('./DocumentViewer').then(module => ({ default: module.DocumentViewer })));
@@ -232,6 +234,7 @@ const AppLayoutInner: React.FC = () => {
     const disableEditorChrome = useMemo(() => readDebugFlag('disableEditorChrome'), []);
     const disableChatChrome = useMemo(() => readDebugFlag('disableChatChrome'), []);
     const disableEditorWidthObserver = useMemo(() => readDebugFlag('disableEditorWidthObserver'), []);
+    const chatPanelV3 = useChatPanelV3Flag();
 
     // Sidebar State
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -953,7 +956,38 @@ const AppLayoutInner: React.FC = () => {
                             className="min-w-[280px] max-w-[800px] flex flex-col z-30 overflow-hidden"
                         >
                             <Suspense fallback={<div className="flex-1 bg-[var(--bg-panel)] h-full w-full" />}>
-                                <ChatPanel
+                                {chatPanelV3 ? <ChatPanelV3
+                                    messages={chat.messages}
+                                    loading={chat.loading}
+                                    error={chat.error}
+                                    sendMessage={chat.sendMessage}
+                                    stopGeneration={handleStopGeneration}
+                                    models={chat.models}
+                                    selectedModelId={chat.selectedModelId}
+                                    setSelectedModelId={chat.setSelectedModelId}
+                                    chatMode={chat.chatMode}
+                                    setChatMode={chat.setChatMode}
+                                    pendingActions={chat.pendingActions}
+                                    pendingApprovalRequest={chat.pendingApprovalRequest}
+                                    waitingForApproval={chat.waitingForApproval}
+                                    approveToolDecision={chat.approveToolDecision}
+                                    respondToApprovalRequest={chat.respondToApprovalRequest}
+                                    approveSingleCommand={chat.approveSingleCommand}
+                                    skipSingleCommand={chat.skipSingleCommand}
+                                    projectId={projectId || "default-project"}
+                                    onLoadConversation={chat.loadConversation}
+                                    researchProgress={researchProgress}
+                                    onNewConversation={chat.newConversation}
+                                    onUndoTool={chat.undoTool}
+                                    onOpenFile={handleOpenChatFile}
+                                    uncommittedChanges={uncommittedChanges}
+                                    onAcceptAllChanges={acceptAllChanges}
+                                    onRejectAllChanges={rejectAllChanges}
+                                    toolActivity={chat.toolActivity}
+                                    activeTodos={chat.activeTodos}
+                                    queuedRequests={chat.messageQueue}
+                                    deleteQueuedRequest={chat.deleteQueuedRequest}
+                                /> : <LegacyChatPanel
                                     messages={chat.messages}
                                     loading={chat.loading}
                                     error={chat.error}
@@ -985,7 +1019,7 @@ const AppLayoutInner: React.FC = () => {
                                     queuedRequests={chat.messageQueue}
                                     deleteQueuedRequest={chat.deleteQueuedRequest}
                                     onImplementPlan={handleImplementPlan}
-                                />
+                                />}
                             </Suspense>
                         </div>
                     )}

@@ -1,0 +1,172 @@
+import React, { useCallback, useState } from 'react';
+import type { ChatMessage as ChatMessageType, ChatMode, ComposerMention, HookApprovalRequest, ImageAttachment, ModelInfo, QueuedRequest, ToolActivityState } from '../../types/chat';
+import type { StructuredAction, TodoItem } from '../../types/events';
+import type { UncommittedChange } from '../../types/uncommitted';
+import { GlobalChangeActions } from '../../components/editor/GlobalChangeActions';
+import { HistoryTab } from '../../components/HistoryTab';
+import { Composer } from '../composer/Composer';
+import { useHistory } from '../../hooks/useHistory';
+import { useCommandExecution } from '../../hooks/useCommandExecution';
+import { ChatHeader } from './ChatHeader';
+import { ChatViewport } from './ChatViewport';
+import { QueueStrip } from './QueueStrip';
+import { RunStatusDock } from './RunStatusDock';
+import { TaskStrip } from './TaskStrip';
+
+interface ResearchProgress {
+    message: string;
+    stage: string;
+    percent: number;
+    isActive: boolean;
+}
+
+interface ChatPanelProps {
+    messages: ChatMessageType[];
+    loading: boolean;
+    error: string | null;
+    sendMessage: (text: string, attachments?: ImageAttachment[], mentions?: ComposerMention[], mode?: ChatMode) => void;
+    stopGeneration: () => void;
+    models: ModelInfo[];
+    selectedModelId: string;
+    setSelectedModelId: (modelId: string) => void;
+    chatMode: ChatMode;
+    setChatMode: (mode: ChatMode) => void;
+    pendingActions: StructuredAction[] | null;
+    pendingApprovalRequest: HookApprovalRequest | null;
+    waitingForApproval: boolean;
+    approveToolDecision: (decision: string) => void;
+    respondToApprovalRequest: (approved: boolean) => void;
+    approveSingleCommand: (callId: string) => void;
+    skipSingleCommand: (callId: string) => void;
+    projectId: string;
+    onLoadConversation: (messages: ChatMessageType[]) => void;
+    researchProgress?: ResearchProgress | null;
+    onNewConversation: () => void;
+    onUndoTool: (toolCallId: string) => void;
+    onOpenFile: (path: string) => void;
+    uncommittedChanges: UncommittedChange[];
+    onAcceptAllChanges: () => void;
+    onRejectAllChanges: () => void;
+    toolActivity?: ToolActivityState | null;
+    activeTodos: TodoItem[];
+    queuedRequests: QueuedRequest[];
+    deleteQueuedRequest: (index: number) => void;
+}
+
+const ChatPanelComponent: React.FC<ChatPanelProps> = ({
+    messages,
+    loading,
+    error,
+    sendMessage,
+    stopGeneration,
+    models,
+    selectedModelId,
+    setSelectedModelId,
+    chatMode,
+    setChatMode,
+    pendingActions,
+    pendingApprovalRequest,
+    waitingForApproval,
+    approveToolDecision,
+    approveSingleCommand,
+    skipSingleCommand,
+    respondToApprovalRequest,
+    projectId,
+    onLoadConversation,
+    researchProgress,
+    onNewConversation,
+    onUndoTool,
+    onOpenFile,
+    uncommittedChanges,
+    onAcceptAllChanges,
+    onRejectAllChanges,
+    toolActivity,
+    activeTodos,
+    queuedRequests,
+    deleteQueuedRequest,
+}) => {
+    const [activeTab, setActiveTab] = useState<'chat' | 'history'>('chat');
+    const [composerPrefill, setComposerPrefill] = useState<QueuedRequest | null>(null);
+    const { loadConversation } = useHistory();
+    const { stopCommandExecution } = useCommandExecution();
+    const canUseAi = models.length > 0;
+
+    const handleNewConversation = useCallback(() => {
+        onNewConversation();
+        setActiveTab('chat');
+    }, [onNewConversation]);
+
+    const handleEditQueuedRequest = useCallback((index: number) => {
+        const request = queuedRequests[index];
+        if (!request) {
+            return;
+        }
+        setComposerPrefill(request);
+        deleteQueuedRequest(index);
+    }, [deleteQueuedRequest, queuedRequests]);
+
+    return (
+        <div className="flex h-full flex-col bg-(--bg-app) font-sans text-(--fg-primary)">
+            <ChatHeader activeTab={activeTab} onTabChange={setActiveTab} onNewConversation={handleNewConversation} />
+
+            {activeTab === 'chat' ? (
+                <ChatViewport
+                    messages={messages}
+                    loading={loading}
+                    pendingActions={pendingActions}
+                    pendingApprovalRequest={pendingApprovalRequest}
+                    toolActivity={toolActivity}
+                    researchProgress={researchProgress}
+                    onApproveCommand={() => approveToolDecision('approve_once')}
+                    onSkipCommand={() => approveToolDecision('reject')}
+                    onApproveSingleCommand={approveSingleCommand}
+                    onSkipSingleCommand={skipSingleCommand}
+                    onApproveApprovalRequest={() => respondToApprovalRequest(true)}
+                    onDenyApprovalRequest={() => respondToApprovalRequest(false)}
+                    onUndoTool={onUndoTool}
+                    onStopCommand={stopCommandExecution}
+                    onOpenFile={onOpenFile}
+                />
+            ) : (
+                <HistoryTab
+                    projectId={projectId}
+                    onSelectConversation={async (sessionId) => {
+                        const conversationMessages = await loadConversation(sessionId);
+                        onLoadConversation(conversationMessages);
+                        setActiveTab('chat');
+                    }}
+                />
+            )}
+
+            <GlobalChangeActions
+                changes={uncommittedChanges}
+                onAcceptAll={onAcceptAllChanges}
+                onRejectAll={onRejectAllChanges}
+            />
+            <TaskStrip todos={activeTodos} />
+            <QueueStrip requests={queuedRequests} onEditRequest={handleEditQueuedRequest} onDeleteRequest={deleteQueuedRequest} />
+            <RunStatusDock
+                loading={loading}
+                waitingForApproval={waitingForApproval}
+                error={error}
+                toolActivity={toolActivity}
+                onStop={stopGeneration}
+            />
+            <Composer
+                onSend={sendMessage}
+                onStop={stopGeneration}
+                loading={loading}
+                models={models}
+                selectedModelId={selectedModelId}
+                setSelectedModelId={setSelectedModelId}
+                chatMode={chatMode}
+                setChatMode={setChatMode}
+                disabled={!canUseAi}
+                prefillRequest={composerPrefill}
+                onPrefillConsumed={() => setComposerPrefill(null)}
+            />
+        </div>
+    );
+};
+
+export const ChatPanel = React.memo(ChatPanelComponent);
