@@ -48,6 +48,15 @@ const getIcon = (name: string | undefined, isDir: boolean, expanded: boolean) =>
     return <FileBox className="w-3.5 h-3.5 text-[var(--fg-tertiary)]" />;
 };
 
+const getParentPath = (path: string) => {
+    const normalized = path.replace(/\/+$/, '');
+    const separatorIndex = normalized.lastIndexOf('/');
+    if (separatorIndex <= 0) {
+        return normalized.startsWith('/') ? '/' : normalized;
+    }
+    return normalized.slice(0, separatorIndex);
+};
+
 export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, activeFile, roots, refreshKey }) => {
     const { t } = useTranslation();
 
@@ -89,9 +98,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
     // Get workspace root path (first root's parent or first root itself)
     const getWorkspaceRoot = useCallback(() => {
         if (roots.length === 0) return null;
-        const firstRoot = roots[0].path;
-        // Return the parent directory of the first root, or the root itself
-        return firstRoot;
+        return getParentPath(roots[0].path);
     }, [roots]);
 
     // Sync roots to cache
@@ -157,7 +164,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
             console.error('[Explorer] Failed to delete:', err);
         }
     };
-    const handlePaste = async (targetFolder: string) => {
+    const handlePaste = useCallback(async (targetFolder: string) => {
         if (!clipboard) return;
 
         const newPath = `${targetFolder}/${clipboard.name}`;
@@ -178,15 +185,18 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
         } catch (err) {
             console.error('[Explorer] Failed to paste:', err);
         }
-    };
+    }, [clipboard]);
 
     // Helper to start inline new item creation in a folder
     const startNewItem = useCallback((folderPath: string, isDir: boolean) => {
         setNewItem({ parentPath: folderPath, isDir, name: '' });
-        // Expand the folder to show the new item input
-        const item = treeRef.current?.getItemInstance(folderPath);
-        if (item && !item.isExpanded()) {
-            item.expand();
+        try {
+            const item = treeRef.current?.getItemInstance(folderPath);
+            if (item && !item.isExpanded()) {
+                item.expand();
+            }
+        } catch {
+            return;
         }
     }, []);
 
@@ -305,7 +315,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
         );
 
         return items;
-    }, [clipboard, startNewItem, t]);
+    }, [clipboard, handlePaste, startNewItem, t]);
 
     // Context menu for item right-click
     const handleContextMenu = useCallback((e: React.MouseEvent, itemId: string, isFolder: boolean, itemName: string) => {
@@ -355,7 +365,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
         ];
 
         showMenu({ x: e.clientX, y: e.clientY }, items);
-    }, [showMenu, clipboard, getWorkspaceRoot, startNewItem, t]);
+    }, [showMenu, clipboard, getWorkspaceRoot, handlePaste, startNewItem, t]);
 
     // Keyboard shortcuts: Ctrl+N (new file), Ctrl+Shift+N (new folder)
     useEffect(() => {
@@ -539,12 +549,13 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
     React.useEffect(() => {
         const invalidatePaths = (pathsToInvalidate: string[]) => {
             const currentTree = treeRef.current;
+            const workspaceRoot = getWorkspaceRoot();
             pathsToInvalidate.forEach(path => {
                 const parentPath = path.substring(0, path.lastIndexOf('/'));
                 itemCache.current.delete(path);
                 pendingRequests.current.delete(parentPath);
 
-                if (parentPath) {
+                if (parentPath && parentPath !== workspaceRoot) {
                     invalidateFolderChildren(currentTree, parentPath);
                 } else {
                     invalidateFolderChildren(currentTree, 'root');
@@ -567,7 +578,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
             unsubscribeDeleted();
             unsubscribeRenamed();
         };
-    }, [invalidateFolderChildren]);
+    }, [getWorkspaceRoot, invalidateFolderChildren]);
 
     // Auto-expand and select active file in the tree
     // NOTE: We intentionally exclude 'tree' from dependencies to prevent infinite loops.
@@ -658,6 +669,36 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                 className="flex-1 overflow-y-auto text-xs select-none outline-none"
                 onContextMenu={handleBackgroundContextMenu}
             >
+                {newItem && newItem.parentPath === getWorkspaceRoot() && (
+                    <div
+                        className="flex items-center gap-1.5 py-1 px-2 relative bg-[var(--bg-surface-hover)]"
+                        style={{ paddingLeft: '8px' }}
+                    >
+                        <span className="w-3" />
+                        {getIcon(newItem.name || (newItem.isDir ? 'folder' : 'file'), newItem.isDir, false)}
+
+                        <input
+                            ref={newItemInputRef}
+                            type="text"
+                            value={newItem.name}
+                            onChange={(e) => setNewItem(prev => prev ? { ...prev, name: e.target.value } : null)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' && newItem.name.trim()) {
+                                    handleCreateFile(newItem.name.trim(), newItem.parentPath, newItem.isDir);
+                                    setNewItem(null);
+                                } else if (e.key === 'Escape') {
+                                    setNewItem(null);
+                                }
+                            }}
+                            onBlur={() => {
+                                setTimeout(() => setNewItem(null), 150);
+                            }}
+                            placeholder={newItem.isDir ? t('fileTree.folderNamePlaceholder') : t('fileTree.fileNamePlaceholder')}
+                            className="bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded px-1 text-xs text-[var(--fg-primary)] outline-none flex-1 min-w-0"
+                            autoFocus
+                        />
+                    </div>
+                )}
                 {tree.getItems().map(item => {
                     const isActiveFile = !item.isFolder() && activeFile === item.getId();
                     // Check if we should show the new item input as first child of this folder

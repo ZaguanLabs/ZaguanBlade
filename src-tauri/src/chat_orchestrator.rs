@@ -129,7 +129,7 @@ fn format_workspace_diagnostics(diagnostics: Option<Vec<WorkspaceDiagnostic>>) -
     });
 
     let mut output = String::from(
-        "Active workspace diagnostics are present. Treat these as immediate feedback and fix relevant errors before continuing:\n",
+        "Heads up, the workspace is currently reporting these diagnostics. Please use them as helpful live feedback and fix any relevant errors before moving on:\n",
     );
     for diagnostic in entries {
         let severity = diagnostic.severity.to_ascii_uppercase();
