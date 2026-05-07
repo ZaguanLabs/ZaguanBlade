@@ -150,7 +150,6 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                 waitingForApproval={waitingForApproval}
                 error={error}
                 toolActivity={toolActivity}
-                onStop={stopGeneration}
             />
             <Composer
                 onSend={sendMessage}

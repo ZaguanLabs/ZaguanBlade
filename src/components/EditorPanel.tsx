@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef, Suspense, useCallback } from 'react
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { watchImmediate } from '@tauri-apps/plugin-fs';
 const MarkdownEditor = React.lazy(() =>
     import('./MarkdownEditor').then((module) => ({ default: module.MarkdownEditor }))
 );
@@ -24,6 +25,12 @@ const CodeEditor = React.lazy(() => import('./CodeEditor'));
 const PdfViewer = React.lazy(() =>
     import('./PdfViewer').then((module) => ({ default: module.PdfViewer }))
 );
+
+const getDirectoryPath = (path: string): string => {
+    const normalized = path.replace(/\\/g, '/');
+    const separatorIndex = normalized.lastIndexOf('/');
+    return separatorIndex > 0 ? normalized.slice(0, separatorIndex) : normalized;
+};
 
 const WelcomePage: React.FC<{
     hasRemoteApiKey?: boolean | null;
@@ -178,6 +185,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     const liveContentRef = useRef(draftContent ?? savedContent ?? '');
     const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const contentStateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const externalFileReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const pendingContentStateRef = useRef<{
         savedContent?: string;
         draftContent?: string;
@@ -220,6 +228,10 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     const isMarkdownFile = activeFile?.endsWith('.md') || activeFile?.endsWith('.markdown') || false;
     const isPdfFile = activeFile?.endsWith('.pdf') || false;
 
+    const getActiveEditorContent = useCallback(() => {
+        return editorRef.current?.getContent() ?? liveContentRef.current;
+    }, []);
+
     const scheduleDocumentSync = useCallback(() => {
         if (!activeFile || isPdfFile) {
             return;
@@ -236,10 +248,10 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         syncTimerRef.current = setTimeout(() => {
             documentVersionRef.current += 1;
             syncedDocumentPathRef.current = activeFile;
-            void EditorFacade.syncDocument(activeFile, liveContentRef.current, documentVersionRef.current);
+            void EditorFacade.syncDocument(activeFile, getActiveEditorContent(), documentVersionRef.current);
             syncTimerRef.current = null;
         }, 180);
-    }, [activeFile, isPdfFile]);
+    }, [activeFile, getActiveEditorContent, isPdfFile]);
 
     const flushPendingContentState = useCallback(() => {
         if (contentStateTimerRef.current) {
@@ -370,6 +382,63 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     }, [activeFile]);
 
     useEffect(() => {
+        if (!activeFile || isPdfFile) {
+            return;
+        }
+
+        const watchedFile = activeFile;
+        const watchedDirectory = getDirectoryPath(watchedFile);
+        let disposed = false;
+        let unwatch: (() => void) | null = null;
+
+        const scheduleExternalReload = () => {
+            if (isDirty) {
+                return;
+            }
+
+            if (externalFileReloadTimerRef.current) {
+                clearTimeout(externalFileReloadTimerRef.current);
+            }
+
+            externalFileReloadTimerRef.current = setTimeout(() => {
+                if (disposed || watchedFile !== activeFile) {
+                    return;
+                }
+
+                awaitingInitialSyncRef.current = false;
+                setReloadTrigger(prev => prev + 1);
+                externalFileReloadTimerRef.current = null;
+            }, 120);
+        };
+
+        watchImmediate(watchedDirectory, (event) => {
+            if (disposed || !event.paths.some(path => pathsMatch(path, watchedFile))) {
+                return;
+            }
+
+            scheduleExternalReload();
+        }).then((dispose) => {
+            if (disposed) {
+                dispose();
+                return;
+            }
+
+            unwatch = dispose;
+        }).catch(error => {
+            console.warn('[EDITOR] Failed to watch file for external changes:', watchedFile, error);
+        });
+
+        return () => {
+            disposed = true;
+            if (externalFileReloadTimerRef.current) {
+                clearTimeout(externalFileReloadTimerRef.current);
+                externalFileReloadTimerRef.current = null;
+            }
+            unwatch?.();
+        };
+    }, [activeFile, isDirty, isPdfFile]);
+
+    useEffect(() => {
         if (!activeFile) return;
 
         const unsubscribe = subscribeBladeEvents((envelope) => {
@@ -410,7 +479,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         return () => {
             unsubscribe();
         };
-    }, [activeFile, t]);
+    }, [activeFile, emitContentStateChange, t]);
 
     useEffect(() => {
         async function loadFile() {
@@ -444,7 +513,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             }
         }
         loadFile();
-    }, [activeFile, isDirty, reloadTrigger]);
+    }, [activeFile, isDirty, reloadTrigger, t]);
 
     useEffect(() => {
         if (!activeFile || isPdfFile) {
@@ -456,7 +525,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         }
 
         const immediateContent = isDirty && draftContent != null ? draftContent : savedContent;
-        const syncSourceContent = isMarkdownFile ? content : liveContentRef.current;
+        const syncSourceContent = getActiveEditorContent();
         if (documentVersionRef.current === 0 && immediateContent != null && syncSourceContent !== immediateContent) {
             return;
         }
@@ -469,7 +538,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 syncTimerRef.current = null;
             }
         };
-    }, [activeFile, content, draftContent, isDirty, savedContent, isMarkdownFile, isPdfFile, scheduleDocumentSync]);
+    }, [activeFile, draftContent, getActiveEditorContent, isDirty, savedContent, isPdfFile, scheduleDocumentSync]);
 
     // Handle pending navigation after content load
     useEffect(() => {
@@ -488,15 +557,16 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     // Handle save (Ctrl+S)
     const handleSave = async (text: string) => {
         if (activeFile) {
+            const currentContent = editorRef.current?.getContent() ?? text;
             try {
                 await BladeDispatcher.file({
                     type: 'Write',
-                    payload: { path: activeFile, content: text }
+                    payload: { path: activeFile, content: currentContent }
                 });
-                baseContentRef.current = text;
-                liveContentRef.current = text;
+                baseContentRef.current = currentContent;
+                liveContentRef.current = currentContent;
                 emitContentStateChange({
-                    savedContent: text,
+                    savedContent: currentContent,
                     draftContent: undefined,
                     isDirty: false,
                 });
@@ -511,11 +581,8 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     const handleContentChange = (nextContent: string) => {
         liveContentRef.current = nextContent;
 
-        if (isMarkdownFile) {
-            setContent(nextContent);
-        } else {
-            scheduleDocumentSync();
-        }
+        setContent(nextContent);
+        scheduleDocumentSync();
 
         const nextIsDirty = nextContent !== baseContentRef.current;
         emitContentStateChange({
@@ -558,6 +625,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 ) : isMarkdownFile ? (
                     <Suspense fallback={<div className="h-full w-full bg-[var(--bg-editor)]" />}>
                         <MarkdownEditor
+                            ref={editorRef}
                             content={content}
                             onChange={handleContentChange}
                             onSave={handleSave}

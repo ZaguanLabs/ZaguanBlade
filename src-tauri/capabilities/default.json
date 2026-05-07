@@ -10,6 +10,8 @@
     "opener:default",
     "shell:default",
     "fs:default",
+    "fs:allow-watch",
+    "fs:allow-unwatch",
     "dialog:default",
     "dialog:allow-save",
     "dialog:allow-open",

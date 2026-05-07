@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { forwardRef, useImperativeHandle, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import CodeEditor, { type CodeEditorHandle } from './CodeEditor';
 import { MarkdownRenderer } from './MarkdownRenderer';
@@ -13,18 +13,26 @@ interface MarkdownEditorProps {
     filename?: string;
 }
 
-export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
+export const MarkdownEditor = forwardRef<CodeEditorHandle, MarkdownEditorProps>(({
     content,
     onChange,
     onSave,
     filename
-}) => {
+}, ref) => {
     const { t } = useTranslation();
     const [mode, setMode] = useState<'edit' | 'view'>('edit');
     const editorRef = React.useRef<CodeEditorHandle>(null);
 
     const { getChangeForFile, acceptFile, rejectFile, refresh } = useUncommittedChanges();
     const change = filename ? getChangeForFile(filename) : undefined;
+
+    useImperativeHandle(ref, () => ({
+        getView: () => editorRef.current?.getView() ?? null,
+        getContent: () => editorRef.current?.getContent() ?? content,
+        setCursor: (line: number, col: number) => {
+            editorRef.current?.setCursor(line, col);
+        },
+    }), [content]);
 
     const handleAccept = async () => {
         if (filename) await acceptFile(filename);
@@ -123,4 +131,4 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
             </div>
         </div>
     );
-};
+});

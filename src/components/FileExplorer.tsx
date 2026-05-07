@@ -57,6 +57,11 @@ const getParentPath = (path: string) => {
     return normalized.slice(0, separatorIndex);
 };
 
+const getBaseName = (path: string) => {
+    const normalized = path.replace(/\/+$/, '');
+    return normalized.slice(normalized.lastIndexOf('/') + 1);
+};
+
 export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, activeFile, roots, refreshKey }) => {
     const { t } = useTranslation();
 
@@ -100,6 +105,48 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
         if (roots.length === 0) return null;
         return getParentPath(roots[0].path);
     }, [roots]);
+
+    const resolveDropTargetFolder = useCallback((target: any) => {
+        if (!target || !('item' in target) || !target.item) {
+            return null;
+        }
+
+        const targetId = target.item.getId();
+        if (targetId === 'root') {
+            return getWorkspaceRoot();
+        }
+
+        if ('childIndex' in target) {
+            return targetId;
+        }
+
+        if (target.item.isFolder()) {
+            return targetId;
+        }
+
+        return getParentPath(targetId);
+    }, [getWorkspaceRoot]);
+
+    const moveItemToFolder = useCallback(async (sourcePath: string, targetFolder: string) => {
+        const sourceName = getBaseName(sourcePath);
+        const sourceParent = getParentPath(sourcePath);
+        const newPath = `${targetFolder}/${sourceName}`;
+
+        if (!sourceName || sourcePath === newPath || sourceParent === targetFolder) {
+            return;
+        }
+
+        if (targetFolder === sourcePath || targetFolder.startsWith(sourcePath + '/')) {
+            console.warn('[Explorer] Cannot move folder into itself');
+            return;
+        }
+
+        await BladeDispatcher.file({
+            type: 'Rename',
+            payload: { old_path: sourcePath, new_path: newPath }
+        });
+        console.debug('[Explorer] Moved via drag:', sourcePath, '->', newPath);
+    }, []);
 
     // Sync roots to cache
     React.useEffect(() => {
@@ -430,36 +477,16 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
         },
 
         onDrop: async (items, target) => {
-            // Handle drag and drop - move files/folders
+            const targetFolder = resolveDropTargetFolder(target);
+            if (!targetFolder) {
+                return;
+            }
+
             for (const item of items) {
                 const sourcePath = item.getId();
-                const sourceName = item.getItemName();
-                
-                // Determine target folder
-                let targetFolder: string;
-                if ('item' in target && target.item) {
-                    targetFolder = target.item.getId();
-                } else {
-                    continue; // Skip if no valid target
-                }
-                
-                const newPath = `${targetFolder}/${sourceName}`;
-                
-                // Don't move to same location
-                if (sourcePath === newPath) continue;
-                
-                // Don't move into itself
-                if (newPath.startsWith(sourcePath + '/')) {
-                    console.warn('[Explorer] Cannot move folder into itself');
-                    continue;
-                }
-                
+
                 try {
-                    await BladeDispatcher.file({
-                        type: 'Rename',
-                        payload: { old_path: sourcePath, new_path: newPath }
-                    });
-                    console.debug('[Explorer] Moved via drag:', sourcePath, '->', newPath);
+                    await moveItemToFolder(sourcePath, targetFolder);
                 } catch (err) {
                     console.error('[Explorer] Failed to move:', err);
                 }

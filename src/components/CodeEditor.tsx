@@ -81,6 +81,7 @@ interface CodeEditorProps {
 
 export interface CodeEditorHandle {
     getView: () => EditorView | null;
+    getContent: () => string;
     /** Set cursor position and scroll into view (line is 1-based, col is 0-based) */
     setCursor: (line: number, col: number) => void;
 }
@@ -151,6 +152,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
     // Expose methods to parent via ref
     useImperativeHandle(ref, () => ({
         getView: () => viewRef.current,
+        getContent: () => viewRef.current?.state.doc.toString() ?? contentRef.current,
         setCursor: (line: number, col: number) => {
             const view = viewRef.current;
             if (!view) return;
