@@ -465,6 +465,7 @@ export function useChatV2() {
     const accumulatedContentRef = useRef<{ id: string; content: string }>({ id: '', content: '' });
     const accumulatedReasoningRef = useRef<{ id: string; content: string }>({ id: '', content: '' });
     const dispatchInFlightRef = useRef(false);
+    const blockedQueuedRequestRef = useRef<QueuedRequest | null>(null);
     const pendingUpdatesRef = useRef<Map<string, {
         content: string;
         reasoning: string;
@@ -1365,29 +1366,12 @@ export function useChatV2() {
             });
 
             unlistenToolCompleted = await listen<ToolExecutionCompletedPayload>('tool-execution-completed', (event) => {
-                const { tool_call_id: toolCallId, success, skipped, tool_name: toolName } = event.payload;
+                const { tool_call_id: toolCallId, success, skipped } = event.payload;
                 const nextStatus: 'complete' | 'error' | 'skipped' = skipped
                     ? 'skipped'
                     : success
                         ? 'complete'
                         : 'error';
-
-                if (toolName === 'run_command') {
-                    const hasCommandExecution = messagesRef.current.some((message) => (
-                        message.commandExecutions?.some((execution) => execution.id === toolCallId)
-                    ));
-
-                    if (!hasCommandExecution) {
-                        pendingRunCommandCompletionStatusRef.current.set(toolCallId, nextStatus);
-                        if (skipped) {
-                            dispatch({
-                                type: 'pending-actions/set',
-                                actions: pendingActionsRef.current?.filter((action) => action.id !== toolCallId) || null,
-                            });
-                        }
-                        return;
-                    }
-                }
 
                 updateMessages((messages) => messages.map((message) => {
                     if (!message.tool_calls?.some((toolCall) => toolCall.id === toolCallId)) {
@@ -1664,7 +1648,7 @@ export function useChatV2() {
         };
     }, [applyDeferredRunCommandCompletion, clearPendingTimers, flushPendingUpdates, flushPendingUpdatesImmediately, queueMessageUpdate, setMessages, setToolActivity, updateMessages, updateToolCallsStatusLocally]);
 
-    const dispatchToBackend = useCallback(async (text: string, attachments?: ImageAttachment[], mentions?: ComposerMention[], mode?: ChatMode) => {
+    const dispatchToBackend = useCallback(async (text: string, attachments?: ImageAttachment[], mentions?: ComposerMention[], mode?: ChatMode): Promise<boolean> => {
         try {
             dispatchInFlightRef.current = true;
             dispatch({ type: 'loading/set', loading: true });
@@ -1688,11 +1672,13 @@ export function useChatV2() {
                 },
             });
             firstDispatchRef.current = false;
+            return true;
         } catch (error) {
             console.error('[useChatV2] Failed to send message:', error);
             dispatchInFlightRef.current = false;
             dispatch({ type: 'error/set', error: error instanceof Error ? error.message : String(error) });
             dispatch({ type: 'loading/set', loading: false });
+            return false;
         }
     }, [requestFreshEditorContext, toChatMentions]);
 
@@ -1700,10 +1686,20 @@ export function useChatV2() {
         if (state.loading || dispatchInFlightRef.current || state.messageQueue.length === 0) {
             return;
         }
-        dispatchInFlightRef.current = true;
         const nextMessage = state.messageQueue[0];
-        dispatch({ type: 'queue/shift' });
-        void dispatchToBackend(nextMessage.text, nextMessage.attachments, nextMessage.mentions, nextMessage.mode);
+        if (blockedQueuedRequestRef.current === nextMessage) {
+            return;
+        }
+        dispatchInFlightRef.current = true;
+        void (async () => {
+            const accepted = await dispatchToBackend(nextMessage.text, nextMessage.attachments, nextMessage.mentions, nextMessage.mode);
+            if (accepted) {
+                blockedQueuedRequestRef.current = null;
+                dispatch({ type: 'queue/shift' });
+            } else {
+                blockedQueuedRequestRef.current = nextMessage;
+            }
+        })();
     }, [dispatchToBackend, state.loading, state.messageQueue]);
 
     const sendMessage = useCallback((text: string, attachments?: ImageAttachment[], mentions?: ComposerMention[], mode?: ChatMode) => {
@@ -1716,6 +1712,7 @@ export function useChatV2() {
             mentions,
         };
         updateMessages((messages) => [...messages, userMessage]);
+        blockedQueuedRequestRef.current = null;
         dispatch({ type: 'queue/enqueue', request: { text, attachments, mentions, mode: requestMode } });
     }, [updateMessages]);
 
@@ -1741,6 +1738,7 @@ export function useChatV2() {
 
         toolChunkCountsRef.current.clear();
         setToolActivity(null);
+        blockedQueuedRequestRef.current = null;
         dispatch({ type: 'pending-actions/set', actions: null });
         dispatch({ type: 'pending-approval-request/set', request: null });
         dispatch({ type: 'waiting-for-approval/set', waiting: false });

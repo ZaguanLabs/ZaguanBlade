@@ -398,8 +398,19 @@ impl ChatManager {
 
     fn to_blade_conversation_messages(
         conversation: &ConversationHistory,
+        exclude_latest_user: bool,
     ) -> Vec<serde_json::Value> {
         let messages = conversation.get_messages();
+        let latest_user_idx = if exclude_latest_user {
+            messages
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, msg)| msg.role == ChatRole::User)
+                .map(|(idx, _)| idx)
+        } else {
+            None
+        };
         let latest_user_with_images_idx = messages
             .iter()
             .enumerate()
@@ -418,6 +429,10 @@ impl ChatManager {
             .iter()
             .enumerate()
             .filter_map(|(idx, msg)| {
+                if latest_user_idx == Some(idx) {
+                    return None;
+                }
+
                 let effective_content = msg.backend_content.as_deref().unwrap_or(&msg.content);
                 let has_content = !effective_content.trim().is_empty();
                 let has_reasoning = msg
@@ -497,7 +512,13 @@ impl ChatManager {
 
     fn sync_ws_conversation_messages(&self, conversation: &ConversationHistory) {
         if let Ok(mut guard) = self.ws_conversation_messages.lock() {
-            *guard = Self::to_blade_conversation_messages(conversation);
+            *guard = Self::to_blade_conversation_messages(conversation, false);
+        }
+    }
+
+    fn sync_ws_conversation_messages_without_latest_user(&self, conversation: &ConversationHistory) {
+        if let Ok(mut guard) = self.ws_conversation_messages.lock() {
+            *guard = Self::to_blade_conversation_messages(conversation, true);
         }
     }
 
@@ -700,8 +721,7 @@ impl ChatManager {
 
         // eprintln!("[CHAT MGR] Starting stream with session_id: {:?}", session_id);
 
-        // RFC-002: Keep a live conversation snapshot for local mode context requests.
-        self.sync_ws_conversation_messages(conversation);
+        self.sync_ws_conversation_messages_without_latest_user(conversation);
         let ws_conversation_messages = self.ws_conversation_messages.clone();
 
         // Convert WebSocket events to ChatEvent channel
@@ -2958,17 +2978,20 @@ impl ChatManager {
 
     /// Request to stop the current streaming response
     pub fn request_stop(&mut self) -> bool {
+        let was_active = self.abort_handle.is_some()
+            || self.streaming
+            || self.rx.is_some()
+            || self.agentic_loop.is_active();
+
         if let Some(handle) = self.abort_handle.take() {
             handle.abort();
-            self.streaming = false;
-            self.rx = None;
-            self.reasoning_parser.reset();
-            // Also stop agentic loop
-            self.agentic_loop.stop("User requested stop");
-            true
-        } else {
-            false
         }
+
+        self.streaming = false;
+        self.rx = None;
+        self.reasoning_parser.reset();
+        self.agentic_loop.stop("User requested stop");
+        was_active
     }
 
     /// Check if a stream can be stopped
@@ -3019,7 +3042,7 @@ mod tests {
         }]);
         conversation.push(user);
 
-        let messages = ChatManager::to_blade_conversation_messages(&conversation);
+        let messages = ChatManager::to_blade_conversation_messages(&conversation, false);
 
         assert_eq!(messages.len(), 1);
         assert_eq!(
@@ -3041,7 +3064,7 @@ mod tests {
         tool.tool_call_id = Some("call-1".to_string());
         conversation.push(tool);
 
-        let messages = ChatManager::to_blade_conversation_messages(&conversation);
+        let messages = ChatManager::to_blade_conversation_messages(&conversation, false);
 
         assert_eq!(messages.len(), 1);
         assert_eq!(
@@ -3058,6 +3081,33 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("call-1")
         );
+    }
+
+    #[test]
+    fn blade_conversation_context_can_exclude_latest_user_turn() {
+        let mut conversation = ConversationHistory::new();
+        conversation.push(ChatMessage::new(ChatRole::User, "Earlier request".to_string()));
+        conversation.push(ChatMessage::new(ChatRole::Assistant, "Earlier answer".to_string()));
+
+        let mut latest = ChatMessage::new(ChatRole::User, "Long latest request about Nagomi".to_string());
+        latest.backend_content = Some("Long latest request about Nagomi with backend notes".to_string());
+        conversation.push(latest);
+
+        let messages = ChatManager::to_blade_conversation_messages(&conversation, true);
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(
+            messages[0].get("content").and_then(|value| value.as_str()),
+            Some("Earlier request")
+        );
+        assert_eq!(
+            messages[1].get("content").and_then(|value| value.as_str()),
+            Some("Earlier answer")
+        );
+        assert!(!messages.iter().any(|message| message
+            .get("content")
+            .and_then(|value| value.as_str())
+            .is_some_and(|content| content.contains("Nagomi"))));
     }
 
     #[test]
