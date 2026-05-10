@@ -652,6 +652,31 @@ export function useChatV2() {
         };
     }, []);
 
+    const mergeEditorSnapshots = useCallback((freshSnapshot: {
+        active_file: string | null;
+        open_files: string[];
+        cursor_line: number | null;
+        cursor_column: number | null;
+        selection_start: number | null;
+        selection_end: number | null;
+    }, cachedSnapshot: ReturnType<typeof getEditorSnapshotRef.current>) => {
+        const activeFile = freshSnapshot.active_file ?? cachedSnapshot.activeFile ?? null;
+        const openFiles = Array.from(new Set([
+            ...(cachedSnapshot.openFiles || []),
+            ...(freshSnapshot.open_files || []),
+            ...(activeFile ? [activeFile] : []),
+        ].filter(Boolean)));
+
+        return {
+            activeFile,
+            openFiles,
+            cursorLine: freshSnapshot.cursor_line ?? cachedSnapshot.cursorLine,
+            cursorColumn: freshSnapshot.cursor_column ?? cachedSnapshot.cursorColumn,
+            selectionStartLine: freshSnapshot.selection_start ?? cachedSnapshot.selectionStartLine,
+            selectionEndLine: freshSnapshot.selection_end ?? cachedSnapshot.selectionEndLine,
+        };
+    }, []);
+
     const requestFreshEditorContext = useCallback(async () => {
         if (!firstDispatchRef.current) {
             return buildEditorContext(getEditorSnapshotRef.current());
@@ -677,18 +702,11 @@ export function useChatV2() {
                 selection_start: number | null;
                 selection_end: number | null;
             } }).payload;
-            return buildEditorContext({
-                activeFile: snapshot.active_file,
-                openFiles: snapshot.open_files,
-                cursorLine: snapshot.cursor_line,
-                cursorColumn: snapshot.cursor_column,
-                selectionStartLine: snapshot.selection_start,
-                selectionEndLine: snapshot.selection_end,
-            });
+            return buildEditorContext(mergeEditorSnapshots(snapshot, getEditorSnapshotRef.current()));
         } catch {
             return buildEditorContext(getEditorSnapshotRef.current());
         }
-    }, [buildEditorContext]);
+    }, [buildEditorContext, mergeEditorSnapshots]);
 
     const syncSelectedModel = useCallback(async (modelId: string, explicit: boolean) => {
         hasExplicitModelRef.current = explicit;
