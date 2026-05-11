@@ -70,6 +70,16 @@ export async function loadLanguageExtension(filename?: string): Promise<Extensio
             return [markdown()];
         }
 
+        case "php":
+        case "phtml":
+        case "php3":
+        case "php4":
+        case "php5":
+        case "phps": {
+            const { php } = await import("@codemirror/lang-php");
+            return [php()];
+        }
+
         case "yaml":
         case "yml": {
             const { yaml } = await import("@codemirror/lang-yaml");
@@ -151,6 +161,13 @@ export function getLanguageName(filename?: string): string {
             return "Markdown";
         case "mdx":
             return "MDX";
+        case "php":
+        case "phtml":
+        case "php3":
+        case "php4":
+        case "php5":
+        case "phps":
+            return "PHP";
         case "yaml":
         case "yml":
             return "YAML";
