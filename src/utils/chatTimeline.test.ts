@@ -3,7 +3,7 @@ import test from 'node:test';
 import { normalizeSplitBlocks } from '../hooks/useChatV2';
 import type { ChatMessage, CommandExecution, ToolCall } from '../types/chat';
 import type { StructuredAction } from '../types/events';
-import { computeStableChatRows, computeStableChatTimelineRows, deriveChatProjection, deriveChatRows, deriveChatTimelineRows, deriveChatTimelineRowsFromProjection, deriveChatWorkEntries, deriveMessageRenderSegments, type ChatActivity, type StableChatRowsState, type StableChatTimelineRowsState } from './chatTimeline';
+import { computeStableChatRows, computeStableChatTimelineRows, deriveChatProjection, deriveChatRows, deriveChatTimelineRows, deriveChatTimelineRowsFromProjection, deriveChatWorkEntries, deriveMessageRenderSegments, stabilizeChatProjection, type ChatActivity, type StableChatRowsState, type StableChatTimelineRowsState } from './chatTimeline';
 import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertToolCallBlockPreservingOrder, moveExistingContentAfterTools, upsertSplitTextBlocks } from './messageBlocks';
 
 function makeToolCall(overrides: Partial<ToolCall> & Pick<ToolCall, 'id'>): ToolCall {
@@ -362,6 +362,55 @@ test('deriveChatTimelineRowsFromProjection uses projection work entry indexes', 
 
     assert.deepEqual(rows.map((row) => row.kind), ['message', 'work_log']);
     assert.equal(rows[1]?.kind === 'work_log' ? rows[1].entries[0] : null, projection.workEntries[0]);
+});
+
+test('stabilizeChatProjection returns previous projection when inputs and work entries are unchanged', () => {
+    const message = makeAssistantMessage({
+        id: 'assistant-stable-projection',
+        content: 'Reading',
+        tool_calls: [
+            makeToolCall({
+                id: 'tool-read',
+                function: { name: 'read_file', arguments: '{"path":"src/main.ts"}' },
+            }),
+        ],
+    });
+    const messages = [message];
+    const activities: ChatActivity[] = [];
+    const firstProjection = deriveChatProjection(messages, activities);
+    const secondProjection = deriveChatProjection(messages, activities);
+
+    const stableProjection = stabilizeChatProjection(secondProjection, firstProjection);
+
+    assert.equal(stableProjection, firstProjection);
+});
+
+test('stabilizeChatProjection reuses unchanged work entry substructures when messages change', () => {
+    const firstMessage = makeAssistantMessage({
+        id: 'assistant-stable-substructure',
+        content: 'Reading',
+        tool_calls: [
+            makeToolCall({
+                id: 'tool-read',
+                function: { name: 'read_file', arguments: '{"path":"src/main.ts"}' },
+            }),
+        ],
+    });
+    const secondMessage = {
+        ...firstMessage,
+        content: 'Reading more',
+    };
+    const firstProjection = deriveChatProjection([firstMessage], []);
+    const secondProjection = deriveChatProjection([secondMessage], []);
+
+    const stableProjection = stabilizeChatProjection(secondProjection, firstProjection);
+
+    assert.notEqual(stableProjection, firstProjection);
+    assert.equal(stableProjection.workEntries[0], firstProjection.workEntries[0]);
+    assert.equal(
+        stableProjection.workEntriesByMessageId.get('assistant-stable-substructure'),
+        firstProjection.workEntriesByMessageId.get('assistant-stable-substructure'),
+    );
 });
 
 test('computeStableChatTimelineRows reuses unchanged work log rows', () => {

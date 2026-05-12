@@ -472,6 +472,53 @@ export function deriveChatProjection(messages: ChatMessageType[], activities: Ch
     };
 }
 
+export function stabilizeChatProjection(projection: ChatProjection, previous: ChatProjection | null | undefined): ChatProjection {
+    if (!previous) {
+        return projection;
+    }
+
+    const previousWorkEntryById = new Map(previous.workEntries.map((entry) => [entry.id, entry]));
+    let workEntriesChanged = projection.workEntries.length !== previous.workEntries.length;
+    const workEntries = projection.workEntries.map((entry, index) => {
+        const previousEntry = previousWorkEntryById.get(entry.id);
+        const nextEntry = previousEntry && areWorkEntryEqual(previousEntry, entry) ? previousEntry : entry;
+        if (!workEntriesChanged && previous.workEntries[index] !== nextEntry) {
+            workEntriesChanged = true;
+        }
+        return nextEntry;
+    });
+
+    const stableWorkEntryById = new Map(workEntries.map((entry) => [entry.id, entry]));
+    let workEntriesByMessageIdChanged = projection.workEntriesByMessageId.size !== previous.workEntriesByMessageId.size;
+    const workEntriesByMessageId = new Map<string, ChatWorkEntry[]>();
+    for (const [messageId, entries] of projection.workEntriesByMessageId) {
+        const stableEntries = entries.map((entry) => stableWorkEntryById.get(entry.id) ?? entry);
+        const previousEntries = previous.workEntriesByMessageId.get(messageId);
+        const nextEntries = previousEntries && areWorkEntriesEqual(previousEntries, stableEntries)
+            ? previousEntries
+            : stableEntries;
+        workEntriesByMessageId.set(messageId, nextEntries);
+        if (!workEntriesByMessageIdChanged && previousEntries !== nextEntries) {
+            workEntriesByMessageIdChanged = true;
+        }
+    }
+
+    if (
+        projection.messages === previous.messages
+        && projection.activities === previous.activities
+        && !workEntriesChanged
+        && !workEntriesByMessageIdChanged
+    ) {
+        return previous;
+    }
+
+    return {
+        ...projection,
+        workEntries: workEntriesChanged ? workEntries : previous.workEntries,
+        workEntriesByMessageId: workEntriesByMessageIdChanged ? workEntriesByMessageId : previous.workEntriesByMessageId,
+    };
+}
+
 export function deriveChatRows(
     messages: ChatMessageType[],
     loading: boolean,
@@ -568,6 +615,19 @@ function areRowsEqual(left: DerivedChatRow, right: DerivedChatRow): boolean {
         && areStructuredActionsEqual(left.pendingActions, right.pendingActions);
 }
 
+function areWorkEntryEqual(left: ChatWorkEntry, right: ChatWorkEntry): boolean {
+    return left.id === right.id
+        && left.messageId === right.messageId
+        && left.source === right.source
+        && left.label === right.label
+        && left.tone === right.tone
+        && left.detail === right.detail
+        && left.command === right.command
+        && left.toolCallId === right.toolCallId
+        && left.commandExecutionId === right.commandExecutionId
+        && left.status === right.status;
+}
+
 function areWorkEntriesEqual(left: ChatWorkEntry[], right: ChatWorkEntry[]): boolean {
     if (left === right) {
         return true;
@@ -577,17 +637,7 @@ function areWorkEntriesEqual(left: ChatWorkEntry[], right: ChatWorkEntry[]): boo
     }
     return left.every((entry, index) => {
         const other = right[index];
-        return !!other
-            && entry.id === other.id
-            && entry.messageId === other.messageId
-            && entry.source === other.source
-            && entry.label === other.label
-            && entry.tone === other.tone
-            && entry.detail === other.detail
-            && entry.command === other.command
-            && entry.toolCallId === other.toolCallId
-            && entry.commandExecutionId === other.commandExecutionId
-            && entry.status === other.status;
+        return !!other && areWorkEntryEqual(entry, other);
     });
 }
 
