@@ -404,9 +404,9 @@ const isLineNumberNearVisibleRanges = (
     ranges: readonly { from: number; to: number }[],
 ): boolean => ranges.some(range => lineNumber >= range.from && lineNumber <= range.to);
 
-const diffDecorationsPlugin = EditorView.decorations.of(
-    (view) => {
-        const state = view.state;
+const diffDecorationsPlugin = EditorView.decorations.compute(
+    [diffStateField],
+    (state) => {
         const diffState = state.field(diffStateField);
         if (!diffState) {
             return Decoration.none;
@@ -414,8 +414,8 @@ const diffDecorationsPlugin = EditorView.decorations.of(
 
         const builder = new RangeSetBuilder<Decoration>();
         const doc = state.doc;
-        const visibleRanges = view.visibleRanges;
-        const visibleLineRanges = getVisibleLineRanges(doc, visibleRanges);
+        const visibleRanges = [{ from: 0, to: doc.length }];
+        const visibleLineRanges = [{ from: 1, to: doc.lines }];
         const diffLines = diffState.lines;
         const simplified = diffState.renderMode === 'simplified';
 
