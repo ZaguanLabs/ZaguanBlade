@@ -5,7 +5,7 @@ import type { ChatMessage as ChatMessageType, HookApprovalRequest, ToolActivityS
 import type { StructuredAction } from '../../types/events';
 import { ChatMessage } from '../../components/ChatMessage';
 import { ProgressIndicator } from '../../components/ProgressIndicator';
-import { computeStableChatTimelineRows, deriveChatTimelineRowsFromProjection, type ChatActivity, type ChatWorkEntry, type StableChatTimelineRowsState } from '../../utils/chatTimeline';
+import { computeStableChatTimelineRows, deriveChatActiveWorkState, deriveChatTimelineRowsFromProjection, type ChatActivity, type ChatWorkEntry, type StableChatTimelineRowsState } from '../../utils/chatTimeline';
 import { FloatingJumpToBottomButton } from './FloatingJumpToBottomButton';
 import { useChatProjection } from './useChatProjection';
 
@@ -148,6 +148,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
     const scrollModeRef = useRef<'following' | 'detached'>('following');
     const stableRowsStateRef = useRef<StableChatTimelineRowsState>({ byKey: new Map(), rows: [] });
     const projection = useChatProjection(messages, chatActivities);
+    const activeWorkState = useMemo(() => deriveChatActiveWorkState(projection), [projection]);
     const rows = useMemo(
         () => {
             const rawRows = deriveChatTimelineRowsFromProjection(projection, loading, pendingActions, pendingApprovalRequest);
@@ -238,7 +239,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
 
                     {rows.map((row) => {
                         if (row.kind === 'work_log') {
-                            const detailsLockedOpen = row.entries.some((entry) => entry.status === 'executing' || entry.status === 'pending')
+                            const detailsLockedOpen = activeWorkState.activeMessageIds.has(row.message.id || row.key)
                                 || !!row.pendingApprovalRequest
                                 || !!row.pendingActions?.length;
                             const messageId = row.message.id || row.key;

@@ -3,7 +3,7 @@ import test from 'node:test';
 import { normalizeSplitBlocks } from '../hooks/useChatV2';
 import type { ChatMessage, CommandExecution, ToolCall } from '../types/chat';
 import type { StructuredAction } from '../types/events';
-import { computeStableChatRows, computeStableChatTimelineRows, deriveChatProjection, deriveChatRows, deriveChatTimelineRows, deriveChatTimelineRowsFromProjection, deriveChatWorkEntries, deriveMessageRenderSegments, stabilizeChatProjection, type ChatActivity, type StableChatRowsState, type StableChatTimelineRowsState } from './chatTimeline';
+import { computeStableChatRows, computeStableChatTimelineRows, deriveChatActiveWorkState, deriveChatProjection, deriveChatRows, deriveChatTimelineRows, deriveChatTimelineRowsFromProjection, deriveChatWorkEntries, deriveMessageRenderSegments, stabilizeChatProjection, type ChatActivity, type StableChatRowsState, type StableChatTimelineRowsState } from './chatTimeline';
 import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertToolCallBlockPreservingOrder, moveExistingContentAfterTools, upsertSplitTextBlocks } from './messageBlocks';
 
 function makeToolCall(overrides: Partial<ToolCall> & Pick<ToolCall, 'id'>): ToolCall {
@@ -411,6 +411,33 @@ test('stabilizeChatProjection reuses unchanged work entry substructures when mes
         stableProjection.workEntriesByMessageId.get('assistant-stable-substructure'),
         firstProjection.workEntriesByMessageId.get('assistant-stable-substructure'),
     );
+});
+
+test('deriveChatActiveWorkState indexes pending and executing work by message', () => {
+    const message = makeAssistantMessage({
+        id: 'assistant-active-work',
+        content: 'Working',
+        tool_calls: [
+            makeToolCall({
+                id: 'tool-active',
+                function: { name: 'read_file', arguments: '{"path":"src/main.ts"}' },
+                status: 'executing',
+            }),
+            makeToolCall({
+                id: 'tool-complete',
+                function: { name: 'grep_search', arguments: '{"query":"foo"}' },
+                status: 'complete',
+            }),
+        ],
+    });
+    const projection = deriveChatProjection([message]);
+
+    const activeWorkState = deriveChatActiveWorkState(projection);
+
+    assert.equal(activeWorkState.activeEntries.length, 1);
+    assert.equal(activeWorkState.activeEntries[0]?.toolCallId, 'tool-active');
+    assert.equal(activeWorkState.activeMessageIds.has('assistant-active-work'), true);
+    assert.equal(activeWorkState.activeEntriesByMessageId.get('assistant-active-work')?.[0]?.toolCallId, 'tool-active');
 });
 
 test('computeStableChatTimelineRows reuses unchanged work log rows', () => {

@@ -71,6 +71,12 @@ export interface ChatProjection {
     workEntriesByMessageId: Map<string, ChatWorkEntry[]>;
 }
 
+export interface ChatActiveWorkState {
+    activeEntries: ChatWorkEntry[];
+    activeEntriesByMessageId: Map<string, ChatWorkEntry[]>;
+    activeMessageIds: Set<string>;
+}
+
 export interface StableChatRowsState {
     byKey: Map<string, DerivedChatRow>;
     rows: DerivedChatRow[];
@@ -516,6 +522,32 @@ export function stabilizeChatProjection(projection: ChatProjection, previous: Ch
         ...projection,
         workEntries: workEntriesChanged ? workEntries : previous.workEntries,
         workEntriesByMessageId: workEntriesByMessageIdChanged ? workEntriesByMessageId : previous.workEntriesByMessageId,
+    };
+}
+
+function isActiveWorkEntry(entry: ChatWorkEntry): boolean {
+    return entry.status === 'executing' || entry.status === 'pending';
+}
+
+export function deriveChatActiveWorkState(projection: ChatProjection): ChatActiveWorkState {
+    const activeEntries = projection.workEntries.filter(isActiveWorkEntry);
+    const activeEntriesByMessageId = new Map<string, ChatWorkEntry[]>();
+    const activeMessageIds = new Set<string>();
+
+    for (const entry of activeEntries) {
+        activeMessageIds.add(entry.messageId);
+        const existingEntries = activeEntriesByMessageId.get(entry.messageId);
+        if (existingEntries) {
+            existingEntries.push(entry);
+        } else {
+            activeEntriesByMessageId.set(entry.messageId, [entry]);
+        }
+    }
+
+    return {
+        activeEntries,
+        activeEntriesByMessageId,
+        activeMessageIds,
     };
 }
 
