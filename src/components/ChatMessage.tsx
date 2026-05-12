@@ -500,6 +500,9 @@ interface ChatMessageProps {
     onStopCommand?: (callId: string) => void;
     onOpenFile?: (path: string) => void;
     registerActivityTarget?: (targetKey: string, element: HTMLDivElement | null) => void;
+    showInlineWorkLog?: boolean;
+    workDetailsVisible?: boolean;
+    onToggleWorkDetails?: () => void;
 }
 
 const ChatMessageComponent: React.FC<ChatMessageProps> = ({
@@ -518,6 +521,9 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     onStopCommand,
     onOpenFile,
     registerActivityTarget,
+    showInlineWorkLog = true,
+    workDetailsVisible,
+    onToggleWorkDetails,
 }) => {
     const { t } = useTranslation();
     const isUser = message.role === 'User';
@@ -591,10 +597,15 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     const detailsLockedOpen = compactWorkEntries.some((entry) => entry.status === 'executing' || entry.status === 'pending')
         || !!pendingApprovalRequest
         || !!pendingActions?.length;
-    const shouldShowDetailedWork = compactWorkEntries.length === 0 || showDetailedWork || detailsLockedOpen;
+    const effectiveShowDetailedWork = workDetailsVisible ?? showDetailedWork;
+    const shouldShowDetailedWork = compactWorkEntries.length === 0 || effectiveShowDetailedWork || detailsLockedOpen;
     const handleToggleWorkDetails = useCallback(() => {
+        if (onToggleWorkDetails) {
+            onToggleWorkDetails();
+            return;
+        }
         setShowDetailedWork((value) => !value);
-    }, []);
+    }, [onToggleWorkDetails]);
     const assistantCardStyle = isAssistant
         ? {
             backgroundColor: 'color-mix(in srgb, var(--bg-panel) 80%, var(--bg-app))',
@@ -824,10 +835,10 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                     <ReferencedPathsDisplay mentions={message.mentions} onOpenFile={onOpenFile} />
                 )}
 
-                {isAssistant && compactWorkEntries.length > 0 && (
+                {showInlineWorkLog && isAssistant && compactWorkEntries.length > 0 && (
                     <CompactWorkLog
                         entries={compactWorkEntries}
-                        showDetails={showDetailedWork}
+                        showDetails={effectiveShowDetailedWork}
                         detailsLockedOpen={detailsLockedOpen}
                         onToggleDetails={handleToggleWorkDetails}
                     />
@@ -1094,6 +1105,8 @@ export const ChatMessage = React.memo(ChatMessageComponent, (prevProps, nextProp
     // Quick bail-out checks for primitive props
     if (prevProps.isContinued !== nextProps.isContinued) return false;
     if (prevProps.isActive !== nextProps.isActive) return false;
+    if (prevProps.showInlineWorkLog !== nextProps.showInlineWorkLog) return false;
+    if (prevProps.workDetailsVisible !== nextProps.workDetailsVisible) return false;
     
     // Message content comparison - the most important check
     const prevMsg = prevProps.message;

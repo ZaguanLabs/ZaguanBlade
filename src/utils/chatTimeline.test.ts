@@ -3,7 +3,7 @@ import test from 'node:test';
 import { normalizeSplitBlocks } from '../hooks/useChatV2';
 import type { ChatMessage, CommandExecution, ToolCall } from '../types/chat';
 import type { StructuredAction } from '../types/events';
-import { computeStableChatRows, deriveChatRows, deriveChatWorkEntries, deriveMessageRenderSegments, type StableChatRowsState } from './chatTimeline';
+import { computeStableChatRows, computeStableChatTimelineRows, deriveChatRows, deriveChatTimelineRows, deriveChatWorkEntries, deriveMessageRenderSegments, type StableChatRowsState, type StableChatTimelineRowsState } from './chatTimeline';
 import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertToolCallBlockPreservingOrder, moveExistingContentAfterTools, upsertSplitTextBlocks } from './messageBlocks';
 
 function makeToolCall(overrides: Partial<ToolCall> & Pick<ToolCall, 'id'>): ToolCall {
@@ -244,6 +244,49 @@ test('deriveChatWorkEntries marks failed command executions as error tone', () =
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.tone, 'error');
     assert.equal(entries[0]?.commandExecutionId, 'cmd-1');
+});
+
+test('deriveChatTimelineRows inserts work log rows after assistant messages with work entries', () => {
+    const message = makeAssistantMessage({
+        id: 'assistant-timeline',
+        content: 'Reading',
+        tool_calls: [
+            makeToolCall({
+                id: 'tool-read',
+                function: { name: 'read_file', arguments: '{"path":"src/main.ts"}' },
+            }),
+        ],
+    });
+
+    const rows = deriveChatTimelineRows([
+        { id: 'user-1', role: 'User', content: 'inspect' },
+        message,
+    ], false, null);
+
+    assert.deepEqual(rows.map((row) => row.kind), ['message', 'message', 'work_log']);
+    assert.equal(rows[2]?.key, 'assistant-timeline:work-log');
+    assert.equal(rows[2]?.kind === 'work_log' ? rows[2].entries[0]?.toolCallId : null, 'tool-read');
+});
+
+test('computeStableChatTimelineRows reuses unchanged work log rows', () => {
+    const message = makeAssistantMessage({
+        id: 'assistant-stable-work',
+        content: 'Reading',
+        tool_calls: [
+            makeToolCall({
+                id: 'tool-read',
+                function: { name: 'read_file', arguments: '{"path":"src/main.ts"}' },
+            }),
+        ],
+    });
+    const firstRows = deriveChatTimelineRows([message], false, null);
+    const firstState = computeStableChatTimelineRows(firstRows, { byKey: new Map(), rows: [] } satisfies StableChatTimelineRowsState);
+    const secondRows = deriveChatTimelineRows([message], false, null);
+    const secondState = computeStableChatTimelineRows(secondRows, firstState);
+
+    assert.equal(secondState, firstState);
+    assert.equal(secondState.rows[0], firstState.rows[0]);
+    assert.equal(secondState.rows[1], firstState.rows[1]);
 });
 
 test('insertToolCallBlockPreservingOrder appends new tool calls after existing assistant text', () => {

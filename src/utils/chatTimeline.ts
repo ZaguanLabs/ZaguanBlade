@@ -15,6 +15,17 @@ export interface DerivedChatMessageRow {
 
 export type DerivedChatRow = DerivedChatMessageRow;
 
+export interface DerivedChatWorkLogRow {
+    kind: 'work_log';
+    key: string;
+    message: ChatMessageType;
+    entries: ChatWorkEntry[];
+    pendingActions?: StructuredAction[];
+    pendingApprovalRequest?: HookApprovalRequest;
+}
+
+export type DerivedChatTimelineRow = DerivedChatMessageRow | DerivedChatWorkLogRow;
+
 export type DerivedActivityGroupItem =
     | { kind: 'tool_call'; id: string; toolCall: ToolCall }
     | { kind: 'command_execution'; id: string; commandExecution: CommandExecution };
@@ -39,6 +50,11 @@ export interface ChatWorkEntry {
 export interface StableChatRowsState {
     byKey: Map<string, DerivedChatRow>;
     rows: DerivedChatRow[];
+}
+
+export interface StableChatTimelineRowsState {
+    byKey: Map<string, DerivedChatTimelineRow>;
+    rows: DerivedChatTimelineRow[];
 }
 
 export interface ChatRowHeightLayout {
@@ -381,6 +397,35 @@ export function deriveChatRows(
     });
 }
 
+export function deriveChatTimelineRows(
+    messages: ChatMessageType[],
+    loading: boolean,
+    pendingActions: StructuredAction[] | null,
+    pendingApprovalRequest?: HookApprovalRequest | null,
+): DerivedChatTimelineRow[] {
+    const messageRows = deriveChatRows(messages, loading, pendingActions, pendingApprovalRequest);
+    const timelineRows: DerivedChatTimelineRow[] = [];
+    for (const row of messageRows) {
+        timelineRows.push(row);
+        if (row.message.role !== 'Assistant') {
+            continue;
+        }
+        const entries = deriveChatWorkEntries([row.message]);
+        if (entries.length === 0) {
+            continue;
+        }
+        timelineRows.push({
+            kind: 'work_log',
+            key: `${row.key}:work-log`,
+            message: row.message,
+            entries,
+            ...(row.pendingActions ? { pendingActions: row.pendingActions } : {}),
+            ...(row.pendingApprovalRequest ? { pendingApprovalRequest: row.pendingApprovalRequest } : {}),
+        });
+    }
+    return timelineRows;
+}
+
 function areStructuredActionsEqual(
     left: StructuredAction[] | undefined,
     right: StructuredAction[] | undefined,
@@ -404,6 +449,47 @@ function areRowsEqual(left: DerivedChatRow, right: DerivedChatRow): boolean {
         && areStructuredActionsEqual(left.pendingActions, right.pendingActions);
 }
 
+function areWorkEntriesEqual(left: ChatWorkEntry[], right: ChatWorkEntry[]): boolean {
+    if (left === right) {
+        return true;
+    }
+    if (left.length !== right.length) {
+        return false;
+    }
+    return left.every((entry, index) => {
+        const other = right[index];
+        return !!other
+            && entry.id === other.id
+            && entry.messageId === other.messageId
+            && entry.source === other.source
+            && entry.label === other.label
+            && entry.tone === other.tone
+            && entry.detail === other.detail
+            && entry.command === other.command
+            && entry.toolCallId === other.toolCallId
+            && entry.commandExecutionId === other.commandExecutionId
+            && entry.status === other.status;
+    });
+}
+
+function areTimelineRowsEqual(
+    left: DerivedChatTimelineRow,
+    right: DerivedChatTimelineRow,
+): boolean {
+    if (left.kind !== right.kind || left.key !== right.key || left.message !== right.message) {
+        return false;
+    }
+    if (left.kind === 'message' && right.kind === 'message') {
+        return areRowsEqual(left, right);
+    }
+    if (left.kind === 'work_log' && right.kind === 'work_log') {
+        return left.pendingApprovalRequest === right.pendingApprovalRequest
+            && areStructuredActionsEqual(left.pendingActions, right.pendingActions)
+            && areWorkEntriesEqual(left.entries, right.entries);
+    }
+    return false;
+}
+
 export function computeStableChatRows(
     rows: DerivedChatRow[],
     previous: StableChatRowsState,
@@ -413,6 +499,25 @@ export function computeStableChatRows(
     const stableRows = rows.map((row, index) => {
         const previousRow = previous.byKey.get(row.key);
         const nextRow = previousRow && areRowsEqual(previousRow, row) ? previousRow : row;
+        nextByKey.set(row.key, nextRow);
+        if (!changed && previous.rows[index] !== nextRow) {
+            changed = true;
+        }
+        return nextRow;
+    });
+
+    return changed ? { byKey: nextByKey, rows: stableRows } : previous;
+}
+
+export function computeStableChatTimelineRows(
+    rows: DerivedChatTimelineRow[],
+    previous: StableChatTimelineRowsState,
+): StableChatTimelineRowsState {
+    const nextByKey = new Map<string, DerivedChatTimelineRow>();
+    let changed = rows.length !== previous.rows.length;
+    const stableRows = rows.map((row, index) => {
+        const previousRow = previous.byKey.get(row.key);
+        const nextRow = previousRow && areTimelineRowsEqual(previousRow, row) ? previousRow : row;
         nextByKey.set(row.key, nextRow);
         if (!changed && previous.rows[index] !== nextRow) {
             changed = true;
