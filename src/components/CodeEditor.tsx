@@ -22,7 +22,7 @@ import {
     diffDecorations,
     diffStateField,
     setDiffState,
-    parseUnifiedDiff,
+    createDiffStateFromUnifiedDiff,
     aiGlowDecorations,
     triggerAiGlow,
     zlpHoverTooltip,
@@ -36,19 +36,10 @@ import { ZLPService } from "../services/zlp";
 import { StructureNode } from "../types/zlp";
 import { GraphInspector } from "./GraphInspector";
 
-
-const getDiffStateFromUnifiedDiff = (unifiedDiff?: string) => {
-    if (!unifiedDiff) return null;
-    return {
-        lines: parseUnifiedDiff(unifiedDiff),
-        originalContent: ''
-    };
-};
-
 const EDITING_AID_MAX_DOC_LENGTH = 500_000;
 
 const replaceEditorDocument = (view: EditorView, content: string, unifiedDiff?: string) => {
-    const diffState = getDiffStateFromUnifiedDiff(unifiedDiff);
+    const diffState = createDiffStateFromUnifiedDiff(unifiedDiff);
     const { main } = view.state.selection;
     const safeAnchor = Math.min(main.anchor, content.length);
     const safeHead = Math.min(main.head, content.length);
@@ -463,7 +454,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
         if (unifiedDiff) {
             dispatchPreservingScroll(view, {
                 effects: [
-                    setDiffState.of(getDiffStateFromUnifiedDiff(unifiedDiff)),
+                    setDiffState.of(createDiffStateFromUnifiedDiff(unifiedDiff)),
                     triggerAiGlow.of(undefined),
                 ]
             });

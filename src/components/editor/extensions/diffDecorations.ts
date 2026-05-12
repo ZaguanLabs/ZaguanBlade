@@ -15,7 +15,11 @@ export interface DiffLine {
 export interface DiffState {
     lines: DiffLine[];
     originalContent: string;
+    renderMode?: 'rich' | 'simplified';
 }
+
+const SIMPLIFIED_DIFF_SOURCE_LENGTH = 1_000_000;
+const SIMPLIFIED_DIFF_LINE_COUNT = 2_500;
 
 // ─── State Effects ───────────────────────────────────────────────────────────
 
@@ -101,6 +105,22 @@ export function parseUnifiedDiff(source: string): DiffLine[] {
     } catch {
         return [];
     }
+}
+
+export function createDiffStateFromUnifiedDiff(source?: string): DiffState | null {
+    if (!source) return null;
+
+    const lines = parseUnifiedDiff(source);
+    const renderMode: DiffState['renderMode'] =
+        source.length > SIMPLIFIED_DIFF_SOURCE_LENGTH || lines.length > SIMPLIFIED_DIFF_LINE_COUNT
+            ? 'simplified'
+            : 'rich';
+
+    return {
+        lines,
+        originalContent: '',
+        renderMode,
+    };
 }
 
 // ─── Character-Level Diff ────────────────────────────────────────────────────
@@ -217,6 +237,57 @@ class RemovedLineWidget extends WidgetType {
     }
 }
 
+class RemovedBlockWidget extends WidgetType {
+    constructor(
+        private readonly count: number,
+        private readonly firstOldLineNum: number | null,
+        private readonly preview: string,
+    ) {
+        super();
+    }
+
+    toDOM(): HTMLElement {
+        const wrapper = document.createElement("div");
+        wrapper.className = "cm-diff-removed-block-widget";
+
+        const gutter = document.createElement("span");
+        gutter.className = "cm-diff-removed-gutter";
+        gutter.textContent = this.firstOldLineNum != null ? String(this.firstOldLineNum) : "";
+        wrapper.appendChild(gutter);
+
+        const sign = document.createElement("span");
+        sign.className = "cm-diff-removed-sign";
+        sign.textContent = "−";
+        wrapper.appendChild(sign);
+
+        const summary = document.createElement("span");
+        summary.className = "cm-diff-removed-block-summary";
+        summary.textContent = `${this.count} removed ${this.count === 1 ? "line" : "lines"}`;
+        wrapper.appendChild(summary);
+
+        const preview = document.createElement("span");
+        preview.className = "cm-diff-removed-block-preview";
+        preview.textContent = this.preview;
+        wrapper.appendChild(preview);
+
+        return wrapper;
+    }
+
+    eq(other: RemovedBlockWidget): boolean {
+        return this.count === other.count
+            && this.firstOldLineNum === other.firstOldLineNum
+            && this.preview === other.preview;
+    }
+
+    get estimatedHeight(): number {
+        return 24;
+    }
+
+    ignoreEvent(): boolean {
+        return true;
+    }
+}
+
 // ─── Gap (Collapsed Unchanged Region) Widget ─────────────────────────────────
 
 class GapWidget extends WidgetType {
@@ -305,9 +376,9 @@ const diffDecorationsPlugin = EditorView.decorations.compute(
         const builder = new RangeSetBuilder<Decoration>();
         const doc = state.doc;
         const diffLines = diffState.lines;
+        const simplified = diffState.renderMode === 'simplified';
 
-        // Pre-compute removed↔added pairs for character-level diffs
-        const pairs = pairRemovedAdded(diffLines);
+        const pairs = simplified ? new Map<number, { removed: DiffLine; added: DiffLine }>() : pairRemovedAdded(diffLines);
         const pairedAddedIndices = new Set<number>();
         for (const [idx] of pairs) {
             pairedAddedIndices.add(idx + 1);
@@ -334,8 +405,7 @@ const diffDecorationsPlugin = EditorView.decorations.compute(
                     deco: addedLineDecoration,
                 });
 
-                // Character-level highlights for paired lines
-                if (pairedAddedIndices.has(i)) {
+                if (!simplified && pairedAddedIndices.has(i)) {
                     const pair = pairs.get(i - 1)!;
                     const { newSpans } = computeCharDiffs(pair.removed.content, pair.added.content);
                     for (const span of newSpans) {
@@ -353,6 +423,56 @@ const diffDecorationsPlugin = EditorView.decorations.compute(
                     }
                 }
             } else if (dl.type === 'removed') {
+                if (simplified) {
+                    let end = i + 1;
+                    while (end < diffLines.length && diffLines[end].type === 'removed') {
+                        end++;
+                    }
+
+                    const removedLines = diffLines.slice(i, end);
+                    let insertBeforeLine: number | null = null;
+                    for (let j = end; j < diffLines.length; j++) {
+                        if (diffLines[j].newLineNum != null) {
+                            insertBeforeLine = diffLines[j].newLineNum;
+                            break;
+                        }
+                    }
+
+                    if (insertBeforeLine == null) {
+                        insertBeforeLine = doc.lines + 1;
+                    }
+
+                    const pos = insertBeforeLine <= doc.lines
+                        ? doc.line(insertBeforeLine).from
+                        : doc.length;
+
+                    const preview = removedLines
+                        .slice(0, 2)
+                        .map(line => line.content.trim())
+                        .filter(Boolean)
+                        .join(" ⏎ ");
+
+                    const widget = Decoration.widget({
+                        widget: new RemovedBlockWidget(
+                            removedLines.length,
+                            removedLines[0]?.oldLineNum ?? null,
+                            preview,
+                        ),
+                        block: true,
+                        side: -1,
+                    });
+
+                    decos.push({
+                        from: pos,
+                        to: pos,
+                        deco: widget,
+                        startSide: getStartSide(widget),
+                    });
+
+                    i = end - 1;
+                    continue;
+                }
+
                 // Find the position in the document where this removed line should appear.
                 // It should appear before the next new-side line number.
                 let insertBeforeLine = dl.newLineNum;
@@ -464,6 +584,20 @@ export const diffTheme = EditorView.baseTheme({
         userSelect: "none",
     },
 
+    ".cm-diff-removed-block-widget": {
+        display: "flex",
+        alignItems: "center",
+        backgroundColor: "var(--editor-diff-removed-bg, rgba(248, 81, 73, 0.14))",
+        borderLeft: "2px solid var(--editor-diff-removed-border, rgba(248, 81, 73, 0.72))",
+        fontFamily: "inherit",
+        fontSize: "inherit",
+        lineHeight: "inherit",
+        minHeight: "1.4em",
+        padding: "0",
+        color: "var(--editor-diff-removed-fg, rgba(228, 228, 231, 0.78))",
+        userSelect: "none",
+    },
+
     // Gutter area in removed line widget
     ".cm-diff-removed-gutter": {
         display: "inline-block",
@@ -493,6 +627,24 @@ export const diffTheme = EditorView.baseTheme({
         textDecorationColor: "var(--editor-diff-removed-strike, rgba(248, 113, 113, 0.82))",
         whiteSpace: "pre",
         overflow: "hidden",
+        paddingRight: "8px",
+    },
+
+    ".cm-diff-removed-block-summary": {
+        flexShrink: "0",
+        fontSize: "0.85em",
+        fontStyle: "italic",
+        color: "var(--editor-diff-removed-sign-fg, rgba(248, 113, 113, 0.9))",
+        paddingRight: "10px",
+    },
+
+    ".cm-diff-removed-block-preview": {
+        flex: "1",
+        minWidth: "0",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        opacity: "0.78",
         paddingRight: "8px",
     },
 

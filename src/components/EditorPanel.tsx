@@ -274,12 +274,6 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         draftContent?: string;
         isDirty: boolean;
     }) => {
-        if (isMarkdownFile) {
-            lastPropagatedDirtyRef.current = state.isDirty;
-            onContentStateChangeRef.current?.(state);
-            return;
-        }
-
         const isFirstDirtyTransition = state.isDirty && !lastPropagatedDirtyRef.current;
 
         if (!state.isDirty) {
@@ -306,7 +300,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         contentStateTimerRef.current = setTimeout(() => {
             flushPendingContentState();
         }, 120);
-    }, [flushPendingContentState, isMarkdownFile]);
+    }, [flushPendingContentState]);
 
     useEffect(() => {
         if (!activeFile) {
@@ -373,6 +367,12 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 clearTimeout(syncTimerRef.current);
                 syncTimerRef.current = null;
             }
+
+            if (contentStateTimerRef.current) {
+                clearTimeout(contentStateTimerRef.current);
+                contentStateTimerRef.current = null;
+            }
+            pendingContentStateRef.current = null;
 
             if (activeFile && syncedDocumentPathRef.current === activeFile) {
                 void EditorFacade.closeDocument(activeFile);
