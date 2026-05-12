@@ -45,6 +45,30 @@ const getDiffStateFromUnifiedDiff = (unifiedDiff?: string) => {
     };
 };
 
+const replaceEditorDocument = (view: EditorView, content: string, unifiedDiff?: string) => {
+    const diffState = getDiffStateFromUnifiedDiff(unifiedDiff);
+    const { main } = view.state.selection;
+    const safeAnchor = Math.min(main.anchor, content.length);
+    const safeHead = Math.min(main.head, content.length);
+
+    view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: content },
+        selection: { anchor: safeAnchor, head: safeHead },
+        effects: [
+            setBaseContent.of(content),
+            setDiffState.of(diffState),
+        ]
+    });
+};
+
+const replaceEditorDocumentIfChanged = (view: EditorView, content: string, unifiedDiff?: string) => {
+    if (view.state.doc.toString() === content) {
+        return;
+    }
+
+    replaceEditorDocument(view, content, unifiedDiff);
+};
+
 const dispatchPreservingScroll = (view: EditorView, spec: TransactionSpec) => {
     const scroller = view.scrollDOM;
     const scrollTop = scroller.scrollTop;
@@ -399,20 +423,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
             lastFilename.current = filename;
             lastExternalContentVersionRef.current = externalContentVersion;
 
-            const diffState = getDiffStateFromUnifiedDiff(unifiedDiff);
-            const { main } = view.state.selection;
-            const safeAnchor = Math.min(main.anchor, content.length);
-            const safeHead = Math.min(main.head, content.length);
-
-            // Replace entire document content
-            view.dispatch({
-                changes: { from: 0, to: view.state.doc.length, insert: content },
-                selection: { anchor: safeAnchor, head: safeHead },
-                effects: [
-                    setBaseContent.of(content), // Initialize virtual buffer with base content
-                    setDiffState.of(diffState),
-                ]
-            });
+            replaceEditorDocument(view, content, unifiedDiff);
 
         } else if (isMarkdown) {
             // Only sync external content changes (e.g., file loaded, external modification)
@@ -422,39 +433,11 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 return;
             }
 
-            const currentDoc = view.state.doc.toString();
-            if (currentDoc !== content) {
-                const diffState = getDiffStateFromUnifiedDiff(unifiedDiff);
-                const { main } = view.state.selection;
-                const safeAnchor = Math.min(main.anchor, content.length);
-                const safeHead = Math.min(main.head, content.length);
-                view.dispatch({
-                    changes: { from: 0, to: view.state.doc.length, insert: content },
-                    selection: { anchor: safeAnchor, head: safeHead },
-                    effects: [
-                        setBaseContent.of(content), // Update base content
-                        setDiffState.of(diffState),
-                    ]
-                });
-            }
+            replaceEditorDocumentIfChanged(view, content, unifiedDiff);
         } else if (!isMarkdown && isExternalContentUpdate) {
             lastExternalContentVersionRef.current = externalContentVersion;
 
-            const currentDoc = view.state.doc.toString();
-            if (currentDoc !== content) {
-                const diffState = getDiffStateFromUnifiedDiff(unifiedDiff);
-                const { main } = view.state.selection;
-                const safeAnchor = Math.min(main.anchor, content.length);
-                const safeHead = Math.min(main.head, content.length);
-                view.dispatch({
-                    changes: { from: 0, to: view.state.doc.length, insert: content },
-                    selection: { anchor: safeAnchor, head: safeHead },
-                    effects: [
-                        setBaseContent.of(content),
-                        setDiffState.of(diffState),
-                    ]
-                });
-            }
+            replaceEditorDocumentIfChanged(view, content, unifiedDiff);
         }
         // Reset the user edit flag after processing
         isUserEditRef.current = false;
