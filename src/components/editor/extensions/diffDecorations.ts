@@ -20,6 +20,8 @@ export interface DiffState {
 
 const SIMPLIFIED_DIFF_SOURCE_LENGTH = 1_000_000;
 const SIMPLIFIED_DIFF_LINE_COUNT = 2_500;
+let cachedUnifiedDiffSource: string | undefined;
+let cachedUnifiedDiffState: DiffState | null = null;
 
 // ─── State Effects ───────────────────────────────────────────────────────────
 
@@ -109,6 +111,9 @@ export function parseUnifiedDiff(source: string): DiffLine[] {
 
 export function createDiffStateFromUnifiedDiff(source?: string): DiffState | null {
     if (!source) return null;
+    if (source === cachedUnifiedDiffSource) {
+        return cachedUnifiedDiffState;
+    }
 
     const lines = parseUnifiedDiff(source);
     const renderMode: DiffState['renderMode'] =
@@ -116,11 +121,13 @@ export function createDiffStateFromUnifiedDiff(source?: string): DiffState | nul
             ? 'simplified'
             : 'rich';
 
-    return {
+    cachedUnifiedDiffSource = source;
+    cachedUnifiedDiffState = {
         lines,
         originalContent: '',
         renderMode,
     };
+    return cachedUnifiedDiffState;
 }
 
 // ─── Character-Level Diff ────────────────────────────────────────────────────
