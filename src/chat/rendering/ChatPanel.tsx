@@ -2,6 +2,7 @@ import React, { useCallback, useState } from 'react';
 import type { ChatMessage as ChatMessageType, ChatMode, ComposerMention, HookApprovalRequest, ImageAttachment, ModelInfo, QueuedRequest, ToolActivityState } from '../../types/chat';
 import type { StructuredAction, TodoItem } from '../../types/events';
 import type { UncommittedChange } from '../../types/uncommitted';
+import type { ChatActivity } from '../../utils/chatTimeline';
 import { GlobalChangeActions } from '../../components/editor/GlobalChangeActions';
 import { HistoryTab } from '../../components/HistoryTab';
 import { Composer } from '../composer/Composer';
@@ -48,6 +49,7 @@ interface ChatPanelProps {
     onAcceptAllChanges: () => void;
     onRejectAllChanges: () => void;
     toolActivity?: ToolActivityState | null;
+    chatActivities?: ChatActivity[];
     activeTodos: TodoItem[];
     queuedRequests: QueuedRequest[];
     deleteQueuedRequest: (index: number) => void;
@@ -81,6 +83,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     onAcceptAllChanges,
     onRejectAllChanges,
     toolActivity,
+    chatActivities,
     activeTodos,
     queuedRequests,
     deleteQueuedRequest,
@@ -116,6 +119,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                     pendingActions={pendingActions}
                     pendingApprovalRequest={pendingApprovalRequest}
                     toolActivity={toolActivity}
+                    chatActivities={chatActivities}
                     researchProgress={researchProgress}
                     onApproveCommand={() => approveToolDecision('approve_once')}
                     onSkipCommand={() => approveToolDecision('reject')}

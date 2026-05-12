@@ -535,9 +535,10 @@ export function deriveChatTimelineRows(
     loading: boolean,
     pendingActions: StructuredAction[] | null,
     pendingApprovalRequest?: HookApprovalRequest | null,
+    activities: ChatActivity[] = [],
 ): DerivedChatTimelineRow[] {
     return deriveChatTimelineRowsFromProjection(
-        deriveChatProjection(messages),
+        deriveChatProjection(messages, activities),
         loading,
         pendingActions,
         pendingApprovalRequest,

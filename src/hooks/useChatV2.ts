@@ -11,10 +11,12 @@ import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertTo
 import { EventNames, type ApprovalRequestPayload, type ChatDonePayload, type ChatErrorPayload, type ContextLengthExceededPayload, type MessageTooLargePayload, type RequestConfirmationPayload, type StructuredAction, type ToolExecutionCompletedPayload, type TodoItem } from '../types/events';
 import type { ChatMention } from '../types/blade';
 import type { ChatImage, ChatMessage, ChatMode, ComposerMention, CommandExecution, HookApprovalRequest, ImageAttachment, MessageBlock, ModelInfo, QueuedRequest, StreamingState, ToolActivityState, ToolCall } from '../types/chat';
+import type { ChatActivity } from '../utils/chatTimeline';
 import { buildContextLengthSystemMessage, buildMessageTooLargeSystemMessage, formatChatErrorPayload } from '../utils/localizedEvents';
 
 const TOOL_ACTIVITY_DISPATCH_INTERVAL_MS = 120;
 const MESSAGE_COMPLETION_GRACE_MS = 1200;
+const MAX_CHAT_ACTIVITY_HISTORY = 200;
 const STREAM_DEBUG_ENABLED = false;
 const MODEL_CACHE_STORAGE_KEY = 'zblade.chat.models.v1';
 
@@ -247,6 +249,7 @@ type ChatState = {
     pendingApprovalRequest: HookApprovalRequest | null;
     waitingForApproval: boolean;
     toolActivity: ToolActivityState | null;
+    chatActivities: ChatActivity[];
     activeTodos: TodoItem[];
     messageQueue: QueuedRequest[];
 };
@@ -263,6 +266,8 @@ type ChatAction =
     | { type: 'pending-approval-request/set'; request: HookApprovalRequest | null }
     | { type: 'waiting-for-approval/set'; waiting: boolean }
     | { type: 'tool-activity/set'; activity: ToolActivityState | null }
+    | { type: 'chat-activity/upsert'; activity: ChatActivity }
+    | { type: 'chat-activity/clear' }
     | { type: 'todos/set'; todos: TodoItem[] }
     | { type: 'queue/enqueue'; request: QueuedRequest }
     | { type: 'queue/shift' }
@@ -280,6 +285,7 @@ const initialState: ChatState = {
     pendingApprovalRequest: null,
     waitingForApproval: false,
     toolActivity: null,
+    chatActivities: [],
     activeTodos: [],
     messageQueue: [],
 };
@@ -311,6 +317,20 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
                 return state;
             }
             return { ...state, toolActivity: action.activity };
+        case 'chat-activity/upsert': {
+            const existingIndex = state.chatActivities.findIndex((activity) => activity.id === action.activity.id);
+            if (existingIndex >= 0) {
+                const nextActivities = [...state.chatActivities];
+                nextActivities[existingIndex] = action.activity;
+                return { ...state, chatActivities: nextActivities };
+            }
+            return {
+                ...state,
+                chatActivities: [...state.chatActivities, action.activity].slice(-MAX_CHAT_ACTIVITY_HISTORY),
+            };
+        }
+        case 'chat-activity/clear':
+            return state.chatActivities.length === 0 ? state : { ...state, chatActivities: [] };
         case 'todos/set':
             return { ...state, activeTodos: action.todos };
         case 'queue/enqueue':
@@ -1626,6 +1646,21 @@ export function useChatV2() {
                         startedAt: tracked.startedAt,
                         lastChunkAt: tracked.lastChunkAt,
                     });
+                    dispatch({
+                        type: 'chat-activity/upsert',
+                        activity: {
+                            id: key,
+                            kind: 'tool',
+                            toolName,
+                            action,
+                            ...(toolCallId ? { toolCallId } : {}),
+                            ...(filePath ? { filePath } : {}),
+                            detail: filePath || action,
+                            status: action === 'streaming' ? 'executing' : 'complete',
+                            startedAt: tracked.startedAt,
+                            updatedAt: tracked.lastChunkAt,
+                        },
+                    });
 
                     if (action !== 'streaming') {
                         toolChunkCountsRef.current.delete(key);
@@ -1860,6 +1895,7 @@ export function useChatV2() {
             resetStreamingState();
             firstDispatchRef.current = true;
             dispatch({ type: 'messages/replace', messages: [] });
+            dispatch({ type: 'chat-activity/clear' });
             dispatch({ type: 'todos/set', todos: [] });
             dispatch({ type: 'queue/clear' });
             dispatch({ type: 'pending-actions/set', actions: null });
@@ -1882,6 +1918,7 @@ export function useChatV2() {
         resetStreamingState();
         firstDispatchRef.current = true;
         replaceMessagesPreservingImagePreviews(messages);
+        dispatch({ type: 'chat-activity/clear' });
         dispatch({ type: 'todos/set', todos: [] });
         dispatch({ type: 'queue/clear' });
         dispatch({ type: 'pending-actions/set', actions: null });
@@ -1930,6 +1967,7 @@ export function useChatV2() {
         setConversation,
         loadConversation,
         toolActivity: state.toolActivity,
+        chatActivities: state.chatActivities,
         activeTodos: state.activeTodos,
         setActiveTodos,
         messageQueue: state.messageQueue,

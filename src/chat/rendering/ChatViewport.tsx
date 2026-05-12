@@ -5,7 +5,7 @@ import type { ChatMessage as ChatMessageType, HookApprovalRequest, ToolActivityS
 import type { StructuredAction } from '../../types/events';
 import { ChatMessage } from '../../components/ChatMessage';
 import { ProgressIndicator } from '../../components/ProgressIndicator';
-import { computeStableChatTimelineRows, deriveChatTimelineRows, type ChatWorkEntry, type StableChatTimelineRowsState } from '../../utils/chatTimeline';
+import { computeStableChatTimelineRows, deriveChatTimelineRows, type ChatActivity, type ChatWorkEntry, type StableChatTimelineRowsState } from '../../utils/chatTimeline';
 import { FloatingJumpToBottomButton } from './FloatingJumpToBottomButton';
 
 const FOLLOW_BOTTOM_THRESHOLD_PX = 48;
@@ -24,6 +24,7 @@ interface ChatViewportProps {
     pendingActions: StructuredAction[] | null;
     pendingApprovalRequest: HookApprovalRequest | null;
     toolActivity?: ToolActivityState | null;
+    chatActivities?: ChatActivity[];
     researchProgress?: ResearchProgress | null;
     onApproveCommand?: () => void;
     onSkipCommand?: () => void;
@@ -126,6 +127,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
     pendingActions,
     pendingApprovalRequest,
     toolActivity,
+    chatActivities = [],
     researchProgress,
     onApproveCommand,
     onSkipCommand,
@@ -146,12 +148,12 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
     const stableRowsStateRef = useRef<StableChatTimelineRowsState>({ byKey: new Map(), rows: [] });
     const rows = useMemo(
         () => {
-            const rawRows = deriveChatTimelineRows(messages, loading, pendingActions, pendingApprovalRequest);
+            const rawRows = deriveChatTimelineRows(messages, loading, pendingActions, pendingApprovalRequest, chatActivities);
             const stableRowsState = computeStableChatTimelineRows(rawRows, stableRowsStateRef.current);
             stableRowsStateRef.current = stableRowsState;
             return stableRowsState.rows;
         },
-        [loading, messages, pendingActions, pendingApprovalRequest],
+        [chatActivities, loading, messages, pendingActions, pendingApprovalRequest],
     );
     const activeMessage = rows.find((row) => row.kind === 'message' && row.isActive)?.message;
     const showProgressIndicator = Boolean(researchProgress?.isActive);

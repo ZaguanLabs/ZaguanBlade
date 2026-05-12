@@ -119,6 +119,7 @@ function useNoopChat() {
         setConversation: setMessages,
         loadConversation,
         toolActivity: null,
+        chatActivities: [],
         activeTodos,
         setActiveTodos,
         messageQueue,
@@ -984,6 +985,7 @@ const AppLayoutInner: React.FC = () => {
                                     onAcceptAllChanges={acceptAllChanges}
                                     onRejectAllChanges={rejectAllChanges}
                                     toolActivity={chat.toolActivity}
+                                    chatActivities={chat.chatActivities}
                                     activeTodos={chat.activeTodos}
                                     queuedRequests={chat.messageQueue}
                                     deleteQueuedRequest={chat.deleteQueuedRequest}
