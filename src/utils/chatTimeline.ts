@@ -47,6 +47,13 @@ export interface ChatWorkEntry {
     status?: ToolCall['status'];
 }
 
+export interface ChatProjection {
+    messages: ChatMessageType[];
+    messageById: Map<string, ChatMessageType>;
+    workEntries: ChatWorkEntry[];
+    workEntriesByMessageId: Map<string, ChatWorkEntry[]>;
+}
+
 export interface StableChatRowsState {
     byKey: Map<string, DerivedChatRow>;
     rows: DerivedChatRow[];
@@ -368,6 +375,29 @@ export function deriveChatWorkEntries(messages: ChatMessageType[]): ChatWorkEntr
     return entries;
 }
 
+export function deriveChatProjection(messages: ChatMessageType[]): ChatProjection {
+    const messageById = new Map<string, ChatMessageType>();
+    const workEntriesByMessageId = new Map<string, ChatWorkEntry[]>();
+    const workEntries: ChatWorkEntry[] = [];
+
+    messages.forEach((message, index) => {
+        const messageId = message.id || `${message.role}-${index}`;
+        messageById.set(messageId, message);
+        const messageWorkEntries = deriveChatWorkEntries([message]);
+        if (messageWorkEntries.length > 0) {
+            workEntriesByMessageId.set(messageId, messageWorkEntries);
+            workEntries.push(...messageWorkEntries);
+        }
+    });
+
+    return {
+        messages,
+        messageById,
+        workEntries,
+        workEntriesByMessageId,
+    };
+}
+
 export function deriveChatRows(
     messages: ChatMessageType[],
     loading: boolean,
@@ -397,20 +427,20 @@ export function deriveChatRows(
     });
 }
 
-export function deriveChatTimelineRows(
-    messages: ChatMessageType[],
+export function deriveChatTimelineRowsFromProjection(
+    projection: ChatProjection,
     loading: boolean,
     pendingActions: StructuredAction[] | null,
     pendingApprovalRequest?: HookApprovalRequest | null,
 ): DerivedChatTimelineRow[] {
-    const messageRows = deriveChatRows(messages, loading, pendingActions, pendingApprovalRequest);
+    const messageRows = deriveChatRows(projection.messages, loading, pendingActions, pendingApprovalRequest);
     const timelineRows: DerivedChatTimelineRow[] = [];
     for (const row of messageRows) {
         timelineRows.push(row);
         if (row.message.role !== 'Assistant') {
             continue;
         }
-        const entries = deriveChatWorkEntries([row.message]);
+        const entries = projection.workEntriesByMessageId.get(row.message.id || row.key) ?? [];
         if (entries.length === 0) {
             continue;
         }
@@ -424,6 +454,20 @@ export function deriveChatTimelineRows(
         });
     }
     return timelineRows;
+}
+
+export function deriveChatTimelineRows(
+    messages: ChatMessageType[],
+    loading: boolean,
+    pendingActions: StructuredAction[] | null,
+    pendingApprovalRequest?: HookApprovalRequest | null,
+): DerivedChatTimelineRow[] {
+    return deriveChatTimelineRowsFromProjection(
+        deriveChatProjection(messages),
+        loading,
+        pendingActions,
+        pendingApprovalRequest,
+    );
 }
 
 function areStructuredActionsEqual(

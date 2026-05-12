@@ -3,7 +3,7 @@ import test from 'node:test';
 import { normalizeSplitBlocks } from '../hooks/useChatV2';
 import type { ChatMessage, CommandExecution, ToolCall } from '../types/chat';
 import type { StructuredAction } from '../types/events';
-import { computeStableChatRows, computeStableChatTimelineRows, deriveChatRows, deriveChatTimelineRows, deriveChatWorkEntries, deriveMessageRenderSegments, type StableChatRowsState, type StableChatTimelineRowsState } from './chatTimeline';
+import { computeStableChatRows, computeStableChatTimelineRows, deriveChatProjection, deriveChatRows, deriveChatTimelineRows, deriveChatTimelineRowsFromProjection, deriveChatWorkEntries, deriveMessageRenderSegments, type StableChatRowsState, type StableChatTimelineRowsState } from './chatTimeline';
 import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertToolCallBlockPreservingOrder, moveExistingContentAfterTools, upsertSplitTextBlocks } from './messageBlocks';
 
 function makeToolCall(overrides: Partial<ToolCall> & Pick<ToolCall, 'id'>): ToolCall {
@@ -266,6 +266,48 @@ test('deriveChatTimelineRows inserts work log rows after assistant messages with
     assert.deepEqual(rows.map((row) => row.kind), ['message', 'message', 'work_log']);
     assert.equal(rows[2]?.key, 'assistant-timeline:work-log');
     assert.equal(rows[2]?.kind === 'work_log' ? rows[2].entries[0]?.toolCallId : null, 'tool-read');
+});
+
+test('deriveChatProjection indexes messages and work entries separately', () => {
+    const message = makeAssistantMessage({
+        id: 'assistant-projection',
+        content: 'Reading',
+        tool_calls: [
+            makeToolCall({
+                id: 'tool-read',
+                function: { name: 'read_file', arguments: '{"path":"src/main.ts"}' },
+            }),
+        ],
+    });
+
+    const projection = deriveChatProjection([
+        { id: 'user-1', role: 'User', content: 'inspect' },
+        message,
+    ]);
+
+    assert.equal(projection.messages.length, 2);
+    assert.equal(projection.messageById.get('assistant-projection'), message);
+    assert.equal(projection.workEntries.length, 1);
+    assert.equal(projection.workEntriesByMessageId.get('assistant-projection')?.[0]?.toolCallId, 'tool-read');
+});
+
+test('deriveChatTimelineRowsFromProjection uses projection work entry indexes', () => {
+    const message = makeAssistantMessage({
+        id: 'assistant-projected-timeline',
+        content: 'Reading',
+        tool_calls: [
+            makeToolCall({
+                id: 'tool-read',
+                function: { name: 'read_file', arguments: '{"path":"src/main.ts"}' },
+            }),
+        ],
+    });
+    const projection = deriveChatProjection([message]);
+
+    const rows = deriveChatTimelineRowsFromProjection(projection, false, null);
+
+    assert.deepEqual(rows.map((row) => row.kind), ['message', 'work_log']);
+    assert.equal(rows[1]?.kind === 'work_log' ? rows[1].entries[0] : null, projection.workEntries[0]);
 });
 
 test('computeStableChatTimelineRows reuses unchanged work log rows', () => {
