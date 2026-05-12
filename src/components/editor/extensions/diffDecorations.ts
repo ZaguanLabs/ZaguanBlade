@@ -404,26 +404,24 @@ const isLineNumberNearVisibleRanges = (
     ranges: readonly { from: number; to: number }[],
 ): boolean => ranges.some(range => lineNumber >= range.from && lineNumber <= range.to);
 
-const diffDecorationsPlugin = EditorView.decorations.compute(
-    [diffStateField],
-    (state) => {
-        const diffState = state.field(diffStateField);
-        if (!diffState) {
-            return Decoration.none;
-        }
+function buildDiffDecorations(state: { doc: { length: number; lines: number; line(lineNumber: number): { from: number; to: number } }; field<T>(field: StateField<T>, require?: boolean): T }): DecorationSet {
+    const diffState = state.field(diffStateField, false);
+    if (!diffState) {
+        return Decoration.none;
+    }
 
-        const builder = new RangeSetBuilder<Decoration>();
-        const doc = state.doc;
-        const visibleRanges = [{ from: 0, to: doc.length }];
-        const visibleLineRanges = [{ from: 1, to: doc.lines }];
-        const diffLines = diffState.lines;
-        const simplified = diffState.renderMode === 'simplified';
+    const builder = new RangeSetBuilder<Decoration>();
+    const doc = state.doc;
+    const visibleRanges = [{ from: 0, to: doc.length }];
+    const visibleLineRanges = [{ from: 1, to: doc.lines }];
+    const diffLines = diffState.lines;
+    const simplified = diffState.renderMode === 'simplified';
 
-        const pairs = simplified ? new Map<number, { removed: DiffLine; added: DiffLine }>() : pairRemovedAdded(diffLines);
-        const pairedAddedIndices = new Set<number>();
-        for (const [idx] of pairs) {
-            pairedAddedIndices.add(idx + 1);
-        }
+    const pairs = simplified ? new Map<number, { removed: DiffLine; added: DiffLine }>() : pairRemovedAdded(diffLines);
+    const pairedAddedIndices = new Set<number>();
+    for (const [idx] of pairs) {
+        pairedAddedIndices.add(idx + 1);
+    }
 
         // Use each decoration's actual startSide and sort by (from, startSide, to).
         // This avoids relying on hardcoded startSide guesses across CM versions.
@@ -618,9 +616,32 @@ const diffDecorationsPlugin = EditorView.decorations.compute(
             builder.add(d.from, d.to, d.deco);
         }
 
-        return builder.finish();
-    }
-);
+    return builder.finish();
+}
+
+const diffDecorationsField = StateField.define<DecorationSet>({
+    create() {
+        return Decoration.none;
+    },
+
+    update(decorations, tr) {
+        let diffChanged = false;
+        for (const effect of tr.effects) {
+            if (effect.is(setDiffState) || effect.is(clearDiff)) {
+                diffChanged = true;
+                break;
+            }
+        }
+
+        if (diffChanged || tr.docChanged) {
+            return buildDiffDecorations(tr.state);
+        }
+
+        return decorations;
+    },
+
+    provide: field => EditorView.decorations.from(field),
+});
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 
@@ -756,7 +777,7 @@ export const diffTheme = EditorView.baseTheme({
 export function diffDecorations() {
     return [
         diffStateField,
-        diffDecorationsPlugin,
+        diffDecorationsField,
         diffTheme
     ];
 }
