@@ -8,7 +8,7 @@ import { CommandApprovalCard } from './CommandApprovalCard';
 import { HookApprovalCard } from './HookApprovalCard';
 import { useContextMenu, ContextMenuItem } from './ui/ContextMenu';
 import { MarkdownRenderer, StreamingMarkdownRenderer } from './MarkdownRenderer';
-import { deriveMessageRenderSegments, type DerivedActivityGroupItem } from '../utils/chatTimeline';
+import { deriveChatWorkEntries, deriveMessageRenderSegments, type ChatWorkEntry, type DerivedActivityGroupItem } from '../utils/chatTimeline';
 
 const REVERTIBLE_TOOLS = new Set([
     'apply_patch',
@@ -298,13 +298,84 @@ const ReferencedPathsDisplay: React.FC<{
 type ActivityGroupItem =
     DerivedActivityGroupItem;
 
-function getToolActivityTargetKey(toolCallId: string): string {
-    return `tool:${toolCallId}`;
+function getApprovalActivityTargetKey(id: string): string {
+    return `approval:${id}`;
 }
 
-function getApprovalActivityTargetKey(actionId: string): string {
-    return `approval:${actionId}`;
+function getToolActivityTargetKey(id: string): string {
+    return `tool:${id}`;
 }
+
+function compactWorkEntryToneClass(entry: ChatWorkEntry): string {
+    if (entry.status === 'executing' || entry.status === 'pending') {
+        return 'bg-(--accent-primary)';
+    }
+    if (entry.tone === 'error') {
+        return 'bg-(--accent-error)';
+    }
+    return 'bg-(--accent-green)';
+}
+
+const CompactWorkLog: React.FC<{ entries: ChatWorkEntry[] }> = React.memo(({ entries }) => {
+    const [isExpanded, setIsExpanded] = useState(false);
+    if (entries.length === 0) {
+        return null;
+    }
+
+    const visibleEntries = isExpanded ? entries : entries.slice(0, 3);
+    const hiddenCount = entries.length - visibleEntries.length;
+
+    return (
+        <div className="mb-2 rounded-lg border border-(--border-subtle) bg-(--bg-surface)/45 px-2.5 py-2">
+            <button
+                type="button"
+                className="flex w-full items-center justify-between gap-3 text-left"
+                onClick={() => setIsExpanded((value) => !value)}
+            >
+                <span className="flex min-w-0 items-center gap-2">
+                    <Terminal className="h-3.5 w-3.5 shrink-0 text-(--fg-tertiary)" />
+                    <span className="text-[9px] font-semibold uppercase tracking-[0.16em] text-(--fg-tertiary)">
+                        Work log ({entries.length})
+                    </span>
+                    {!isExpanded && (
+                        <span className="min-w-0 truncate text-[10px] text-(--fg-secondary)">
+                            {entries.slice(0, 2).map((entry) => entry.label).join(', ')}
+                        </span>
+                    )}
+                </span>
+                {isExpanded ? (
+                    <ChevronDown className="h-3.5 w-3.5 shrink-0 text-(--fg-tertiary)" />
+                ) : (
+                    <ChevronRight className="h-3.5 w-3.5 shrink-0 text-(--fg-tertiary)" />
+                )}
+            </button>
+            {(isExpanded || entries.length > 3) && (
+                <div className="mt-1.5 space-y-1">
+                    {visibleEntries.map((entry) => (
+                        <div key={entry.id} className="flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5">
+                            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${compactWorkEntryToneClass(entry)}`} />
+                            <span className="shrink-0 text-[10px] font-medium text-(--fg-secondary)">
+                                {entry.label}
+                            </span>
+                            {entry.detail && (
+                                <span className="min-w-0 truncate text-[10px] font-mono text-(--fg-tertiary)" title={entry.detail}>
+                                    {entry.detail}
+                                </span>
+                            )}
+                        </div>
+                    ))}
+                    {!isExpanded && hiddenCount > 0 && (
+                        <div className="px-1 text-[10px] text-(--fg-tertiary)">
+                            +{hiddenCount} more
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+});
+
+CompactWorkLog.displayName = 'CompactWorkLog';
 
 const ActivityGroupDisplay: React.FC<{
     items: ActivityGroupItem[];
@@ -440,13 +511,6 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     const isAssistant = message.role === 'Assistant';
     const { showMenu } = useContextMenu();
 
-    // Don't render Tool messages separately - they're shown in the tool call display
-    // UNLESS this is a standalone tool message not handled by the previous assistant message.
-    // However, for the "Single Turn" view, we rely on the Assistant message containing the calls.
-    if (isTool) {
-        return null;
-    }
-
     const hasReasoning = !!message.reasoning || message.blocks?.some(b => b.type === 'reasoning');
     const stream = message.streaming;
     const hasChunkCounter = isAssistant && !!stream && stream.seq > 0;
@@ -503,6 +567,10 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     const renderSegments = useMemo(
         () => deriveMessageRenderSegments(message, pendingActions),
         [message, pendingActions]
+    );
+    const compactWorkEntries = useMemo(
+        () => isAssistant ? deriveChatWorkEntries([message]) : [],
+        [isAssistant, message],
     );
     const assistantCardStyle = isAssistant
         ? {
@@ -642,6 +710,13 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
         showMenu({ x: e.clientX, y: e.clientY }, items);
     }, [message, isUser, isAssistant, showMenu, t]);
 
+    // Don't render Tool messages separately - they're shown in the tool call display
+    // UNLESS this is a standalone tool message not handled by the previous assistant message.
+    // However, for the "Single Turn" view, we rely on the Assistant message containing the calls.
+    if (isTool) {
+        return null;
+    }
+
     return (
         <div
             className={`group px-1.5 ${isContinued ? 'pt-0 pb-0.5' : 'pt-1.5 pb-1.5'} ${isTool ? 'opacity-70' : ''}`}
@@ -724,6 +799,10 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
 
                 {isUser && message.mentions && message.mentions.length > 0 && (
                     <ReferencedPathsDisplay mentions={message.mentions} onOpenFile={onOpenFile} />
+                )}
+
+                {isAssistant && compactWorkEntries.length > 0 && (
+                    <CompactWorkLog entries={compactWorkEntries} />
                 )}
 
                 {/* Thinking indicator for slow models - show when active but no content yet */}
