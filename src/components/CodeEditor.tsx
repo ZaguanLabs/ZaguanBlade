@@ -20,7 +20,6 @@ import {
     setBaseContent,
     scrollPastEnd,
     diffDecorations,
-    diffStateField,
     setDiffState,
     createDiffStateFromUnifiedDiff,
     aiGlowDecorations,
