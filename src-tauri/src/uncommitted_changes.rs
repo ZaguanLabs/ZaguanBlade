@@ -101,13 +101,15 @@ impl UncommittedChangeTracker {
         history_service: &HistoryService,
     ) -> Result<UncommittedChange, String> {
         let change = {
-            let mut changes = self.changes.lock().unwrap();
-            changes.remove(id)
+            let changes = self.changes.lock().unwrap();
+            changes.get(id).cloned()
         };
 
         match change {
             Some(c) => {
                 history_service.revert_to(&c.snapshot_id)?;
+                let mut changes = self.changes.lock().unwrap();
+                changes.remove(id);
                 Ok(c)
             }
             None => Err(format!("Change not found: {}", id)),
@@ -120,21 +122,18 @@ impl UncommittedChangeTracker {
         history_service: &HistoryService,
     ) -> Result<UncommittedChange, String> {
         let change = {
-            let mut changes = self.changes.lock().unwrap();
-            let id = changes
+            let changes = self.changes.lock().unwrap();
+            changes
                 .values()
                 .find(|c| &c.file_path == path)
-                .map(|c| c.id.clone());
-            if let Some(id) = id {
-                changes.remove(&id)
-            } else {
-                None
-            }
+                .cloned()
         };
 
         match change {
             Some(c) => {
                 history_service.revert_to(&c.snapshot_id)?;
+                let mut changes = self.changes.lock().unwrap();
+                changes.remove(&c.id);
                 Ok(c)
             }
             None => Err(format!("No uncommitted change for path: {:?}", path)),
@@ -146,8 +145,8 @@ impl UncommittedChangeTracker {
         history_service: &HistoryService,
     ) -> Result<Vec<UncommittedChange>, String> {
         let all_changes = {
-            let mut changes = self.changes.lock().unwrap();
-            changes.drain().map(|(_, v)| v).collect::<Vec<_>>()
+            let changes = self.changes.lock().unwrap();
+            changes.values().cloned().collect::<Vec<_>>()
         };
 
         let mut rejected = Vec::new();
@@ -161,6 +160,10 @@ impl UncommittedChangeTracker {
         }
 
         if errors.is_empty() {
+            let mut changes = self.changes.lock().unwrap();
+            for change in &rejected {
+                changes.remove(&change.id);
+            }
             Ok(rejected)
         } else {
             Err(format!("Some reverts failed: {}", errors.join(", ")))

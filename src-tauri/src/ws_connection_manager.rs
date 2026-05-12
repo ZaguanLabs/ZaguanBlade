@@ -491,6 +491,12 @@ impl WsConnectionManager {
             .await
     }
 
+    pub async fn send_stop_generation(&self, session_id: String) -> Result<(), String> {
+        let client_lock = self.client.lock().await;
+        let client = client_lock.as_ref().ok_or("Not connected")?;
+        client.send_stop_generation(session_id).await
+    }
+
     /// Send conversation context
     pub async fn send_conversation_context(
         &self,

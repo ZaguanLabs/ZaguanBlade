@@ -7,7 +7,6 @@ import { ProgressIndicator } from '../../components/ProgressIndicator';
 import type { ChatActivity } from '../../utils/chatTimeline';
 import { FloatingJumpToBottomButton } from './FloatingJumpToBottomButton';
 import { useChatTimelineRows } from './useChatTimelineRows';
-import { WorkLogTimelineRow } from './WorkLogTimelineRow';
 
 const FOLLOW_BOTTOM_THRESHOLD_PX = 48;
 const DETACH_BOTTOM_THRESHOLD_PX = 140;
@@ -60,9 +59,8 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
     const scrollRef = useRef<HTMLDivElement>(null);
     const bottomRef = useRef<HTMLDivElement>(null);
     const [scrollMode, setScrollMode] = useState<'following' | 'detached'>('following');
-    const [visibleWorkDetailsByMessageId, setVisibleWorkDetailsByMessageId] = useState<Record<string, boolean>>({});
     const scrollModeRef = useRef<'following' | 'detached'>('following');
-    const { rows, activeWorkState } = useChatTimelineRows({
+    const { rows } = useChatTimelineRows({
         messages,
         activities: chatActivities,
         loading,
@@ -112,13 +110,6 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
         setStableScrollMode('following');
     }, [setStableScrollMode]);
 
-    const toggleWorkDetails = useCallback((messageId: string) => {
-        setVisibleWorkDetailsByMessageId((previous) => ({
-            ...previous,
-            [messageId]: !previous[messageId],
-        }));
-    }, []);
-
     useEffect(() => {
         if (scrollMode !== 'following') {
             return;
@@ -150,22 +141,9 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
 
                     {rows.map((row) => {
                         if (row.kind === 'work_log') {
-                            const detailsLockedOpen = activeWorkState.activeMessageIds.has(row.message.id || row.key)
-                                || !!row.pendingApprovalRequest
-                                || !!row.pendingActions?.length;
-                            const messageId = row.message.id || row.key;
-                            return (
-                                <WorkLogTimelineRow
-                                    key={row.key}
-                                    entries={row.entries}
-                                    showDetails={!!visibleWorkDetailsByMessageId[messageId]}
-                                    detailsLockedOpen={detailsLockedOpen}
-                                    onToggleDetails={() => toggleWorkDetails(messageId)}
-                                />
-                            );
+                            return null;
                         }
 
-                        const messageId = row.message.id || row.key;
                         return (
                             <ChatMessage
                                 key={row.key}
@@ -183,9 +161,8 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                                 onUndoTool={onUndoTool}
                                 onStopCommand={onStopCommand}
                                 onOpenFile={onOpenFile}
-                                showInlineWorkLog={false}
-                                workDetailsVisible={!!visibleWorkDetailsByMessageId[messageId]}
-                                onToggleWorkDetails={() => toggleWorkDetails(messageId)}
+                                showInlineWorkLog={true}
+                                workDetailsVisible={true}
                             />
                         );
                     })}

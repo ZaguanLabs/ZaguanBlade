@@ -184,7 +184,17 @@ pub async fn save_conversation(state: State<'_, AppState>, app: AppHandle) -> Re
 #[tauri::command]
 pub fn stop_generation(state: State<'_, AppState>, app_handle: tauri::AppHandle) -> bool {
     let mut mgr = state.chat_manager.lock().unwrap();
+    let stop_signal_target = mgr.stop_signal_target();
     let stopped = mgr.request_stop();
+    drop(mgr);
+
+    if let Some((ws_client, session_id)) = stop_signal_target {
+        tauri::async_runtime::spawn(async move {
+            if let Err(error) = ws_client.send_stop_generation(session_id).await {
+                eprintln!("[STOP] Failed to send stop_generation to zcoderd: {}", error);
+            }
+        });
+    }
 
     // Clear any pending command batch when stopping
     let mut batch_guard = state.pending_batch.lock().unwrap();

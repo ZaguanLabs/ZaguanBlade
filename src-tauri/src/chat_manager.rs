@@ -752,9 +752,6 @@ impl ChatManager {
                     // Some providers may emit the same content as both reasoning and text chunks.
                     // Keep the latest reasoning chunk so we can skip an immediate duplicate text chunk.
                     let mut last_reasoning_chunk: Option<String> = None;
-                    // Track the first output_index we see to filter parallel streams
-                    // (OpenAI Responses API can emit multiple output items simultaneously)
-                    let mut accepted_output_index: Option<i64> = None;
                     while let Some(event) = ws_rx.recv().await {
                         match event {
                             crate::blade_ws_client::BladeWsEvent::Connected { .. } => {
@@ -802,16 +799,9 @@ impl ChatManager {
                             }
                             crate::blade_ws_client::BladeWsEvent::TextChunk {
                                 content: text,
-                                output_index,
+                                output_index: _,
                                 phase,
                             } => {
-                                if let Some(idx) = output_index {
-                                    if accepted_output_index.is_none() {
-                                        accepted_output_index = Some(idx);
-                                    } else if accepted_output_index != Some(idx) {
-                                        continue;
-                                    }
-                                }
                                 if phase.as_deref() == Some("commentary") {
                                     last_reasoning_chunk = Some(text.clone());
                                     saw_content = true;
@@ -828,16 +818,9 @@ impl ChatManager {
                             }
                             crate::blade_ws_client::BladeWsEvent::ReasoningChunk {
                                 content: text,
-                                output_index,
+                                output_index: _,
                                 phase: _,
                             } => {
-                                if let Some(idx) = output_index {
-                                    if accepted_output_index.is_none() {
-                                        accepted_output_index = Some(idx);
-                                    } else if accepted_output_index != Some(idx) {
-                                        continue;
-                                    }
-                                }
                                 last_reasoning_chunk = Some(text.clone());
                                 saw_content = true;
                                 let _ = tx.send_reasoning_chunk(text);
@@ -847,7 +830,6 @@ impl ChatManager {
                                 name,
                                 arguments,
                             } => {
-                                accepted_output_index = None;
                                 last_reasoning_chunk = None;
                                 // eprintln!("[CHAT MGR] Tool call: {}", name);
                                 saw_content = true;
@@ -866,7 +848,6 @@ impl ChatManager {
                             crate::blade_ws_client::BladeWsEvent::ToolResultAck {
                                 pending_count: _pending_count,
                             } => {
-                                accepted_output_index = None;
                                 last_reasoning_chunk = None;
                                 // zcoderd acknowledged our tool result but is waiting for more
                                 // This is informational - keep connection alive and wait for real response
@@ -900,7 +881,6 @@ impl ChatManager {
                                 message,
                                 decision,
                             } => {
-                                accepted_output_index = None;
                                 last_reasoning_chunk = None;
                                 let _ = tx.send(ChatEvent::ApprovalRequest(
                                     crate::protocol::ApprovalRequest {
@@ -920,7 +900,6 @@ impl ChatManager {
                                 finish_reason,
                                 recoverable,
                             } => {
-                                accepted_output_index = None;
                                 last_reasoning_chunk = None;
                                 // eprintln!("[CHAT MGR] Chat done: {} (recoverable: {:?})", finish_reason, recoverable);
                                 saw_chat_done = true;
@@ -2992,6 +2971,10 @@ impl ChatManager {
         self.reasoning_parser.reset();
         self.agentic_loop.stop("User requested stop");
         was_active
+    }
+
+    pub fn stop_signal_target(&self) -> Option<(Arc<BladeWsClient>, String)> {
+        Some((self.ws_client.as_ref()?.clone(), self.session_id.clone()?))
     }
 
     /// Check if a stream can be stopped
