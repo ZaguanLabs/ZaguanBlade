@@ -1,7 +1,7 @@
 "use client";
 import React, { useEffect, useRef, forwardRef, useImperativeHandle, useCallback } from "react";
 import { useTranslation } from 'react-i18next';
-import { EditorState, Compartment, Prec, type TransactionSpec } from "@codemirror/state";
+import { EditorState, Compartment, Prec, type Extension, type TransactionSpec } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightActiveLine, drawSelection, dropCursor, rectangularSelection, crosshairCursor, placeholder, highlightSpecialChars } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { bracketMatching, indentOnInput, foldGutter, foldKeymap } from "@codemirror/language";
@@ -69,6 +69,19 @@ const replaceEditorDocumentIfChanged = (view: EditorView, content: string, unifi
     replaceEditorDocument(view, content, unifiedDiff);
 };
 
+const getEditingAidExtensions = (isMarkdown: boolean): Extension[] => {
+    if (isMarkdown) {
+        return [];
+    }
+
+    return [
+        lintGutter(),
+        bracketMatching(),
+        closeBrackets(),
+        autocompletion(),
+    ];
+};
+
 const dispatchPreservingScroll = (view: EditorView, spec: TransactionSpec) => {
     const scroller = view.scrollDOM;
     const scrollTop = scroller.scrollTop;
@@ -115,13 +128,14 @@ export interface CodeEditorHandle {
 const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onContentChange, onDocumentChange, onSave, filename, externalContentVersion = 0, highlightLines, onNavigate, lineWrap, unifiedDiff }, ref) => {
     const { t } = useTranslation();
     // Auto-enable line wrap for markdown files
-    const isMarkdown = filename?.endsWith('.md') || filename?.endsWith('.markdown');
+    const isMarkdown = filename?.endsWith('.md') || filename?.endsWith('.markdown') || false;
     const shouldWrap = lineWrap ?? isMarkdown;
     const editorRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     const languageConf = useRef(new Compartment());
     const themeConf = useRef(new Compartment());
     const wrapConf = useRef(new Compartment());
+    const editingAidConf = useRef(new Compartment());
     const zlpConf = useRef(new Compartment());
     const { setCursorPosition, setSelection, clearSelection } = useEditorActions();
     const { currentTheme } = useTheme();
@@ -241,14 +255,10 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 dropCursor(),
                 rectangularSelection(),
                 crosshairCursor(),
-                // Lint gutter only for code files (not markdown)
-                ...(initialIsMarkdown ? [] : [lintGutter()]),
+                editingAidConf.current.of(getEditingAidExtensions(initialIsMarkdown)),
 
                 // Editing features
                 history(),
-                // Bracket matching/closing only for code files
-                ...(initialIsMarkdown ? [] : [bracketMatching(), closeBrackets()]),
-                ...(initialIsMarkdown ? [] : [autocompletion()]),
                 indentOnInput(),
 
                 themeConf.current.of(getZaguanTheme(initialThemeAppearance === 'dark')),
@@ -392,6 +402,15 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
             effects: wrapConf.current.reconfigure(shouldWrap ? [EditorView.lineWrapping] : []),
         });
     }, [shouldWrap]);
+
+    useEffect(() => {
+        const view = viewRef.current;
+        if (!view) return;
+
+        view.dispatch({
+            effects: editingAidConf.current.reconfigure(getEditingAidExtensions(isMarkdown)),
+        });
+    }, [isMarkdown]);
 
     useEffect(() => {
         void reconfigureLanguage(filename);
