@@ -23,6 +23,19 @@ export type DerivedRenderSegment =
     | { kind: 'block'; block: MessageBlock; index: number }
     | { kind: 'activity_group'; id: string; items: DerivedActivityGroupItem[] };
 
+export interface ChatWorkEntry {
+    id: string;
+    messageId: string;
+    source: 'tool_call' | 'command_execution';
+    label: string;
+    tone: 'tool' | 'error' | 'info';
+    detail?: string;
+    command?: string;
+    toolCallId?: string;
+    commandExecutionId?: string;
+    status?: ToolCall['status'];
+}
+
 export interface StableChatRowsState {
     byKey: Map<string, DerivedChatRow>;
     rows: DerivedChatRow[];
@@ -228,6 +241,115 @@ export function deriveMessageRenderSegments(
     }
 
     return segments;
+}
+
+function parseToolArguments(value: string): Record<string, unknown> | null {
+    try {
+        const parsed = JSON.parse(value);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? parsed as Record<string, unknown>
+            : null;
+    } catch {
+        return null;
+    }
+}
+
+function humanizeToolName(value: string): string {
+    const words = value
+        .replace(/[_-]+/g, ' ')
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean);
+    if (words.length === 0) {
+        return 'Tool call';
+    }
+    return words.map((word) => `${word.charAt(0).toUpperCase()}${word.slice(1)}`).join(' ');
+}
+
+function firstStringField(record: Record<string, unknown> | null, fields: string[]): string | undefined {
+    if (!record) {
+        return undefined;
+    }
+    for (const field of fields) {
+        const value = record[field];
+        if (typeof value === 'string' && value.trim().length > 0) {
+            return value.trim();
+        }
+    }
+    return undefined;
+}
+
+function deriveToolCallWorkEntry(messageId: string, toolCall: ToolCall): ChatWorkEntry {
+    const name = toolCall.function.name;
+    const args = parseToolArguments(toolCall.function.arguments);
+    const command = name === 'run_command'
+        ? firstStringField(args, ['command', 'cmd'])
+        : undefined;
+    const detail = command
+        ?? firstStringField(args, ['path', 'file_path', 'relative_path', 'query', 'pattern'])
+        ?? (toolCall.result && toolCall.result.trim().length > 0 ? toolCall.result.trim().split(/\r?\n/, 1)[0] : undefined);
+    const tone = toolCall.status === 'error' || toolCall.status === 'skipped' ? 'error' : 'tool';
+
+    return {
+        id: `tool:${toolCall.id}`,
+        messageId,
+        source: 'tool_call',
+        label: command ? 'Run command' : humanizeToolName(name),
+        tone,
+        ...(detail ? { detail } : {}),
+        ...(command ? { command } : {}),
+        toolCallId: toolCall.id,
+        status: toolCall.status,
+    };
+}
+
+function deriveCommandExecutionWorkEntry(messageId: string, execution: CommandExecution): ChatWorkEntry {
+    const tone = execution.exitCode === 0 ? 'tool' : 'error';
+    return {
+        id: `command:${execution.id}`,
+        messageId,
+        source: 'command_execution',
+        label: 'Ran command',
+        tone,
+        detail: execution.command,
+        command: execution.command,
+        commandExecutionId: execution.id,
+    };
+}
+
+export function deriveChatWorkEntries(messages: ChatMessageType[]): ChatWorkEntry[] {
+    const entries: ChatWorkEntry[] = [];
+    for (const message of messages) {
+        if (message.role !== 'Assistant' || !message.id) {
+            continue;
+        }
+
+        const segments = deriveMessageRenderSegments(message);
+        const hasOrderedActivitySegments = segments.some((segment) => segment.kind === 'activity_group');
+        if (hasOrderedActivitySegments) {
+            for (const segment of segments) {
+                if (segment.kind !== 'activity_group') {
+                    continue;
+                }
+                for (const item of segment.items) {
+                    if (item.kind === 'tool_call') {
+                        entries.push(deriveToolCallWorkEntry(message.id, item.toolCall));
+                    } else {
+                        entries.push(deriveCommandExecutionWorkEntry(message.id, item.commandExecution));
+                    }
+                }
+            }
+            continue;
+        }
+
+        for (const toolCall of message.tool_calls || []) {
+            entries.push(deriveToolCallWorkEntry(message.id, toolCall));
+        }
+        for (const execution of message.commandExecutions || []) {
+            entries.push(deriveCommandExecutionWorkEntry(message.id, execution));
+        }
+    }
+    return entries;
 }
 
 export function deriveChatRows(

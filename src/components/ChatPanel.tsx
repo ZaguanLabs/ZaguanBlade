@@ -16,7 +16,7 @@ import { TaskPanel } from './TaskPanel';
 import { QueuePanel } from './QueuePanel';
 import { AgentRunStatusBar } from './AgentRunStatusBar';
 import type { UncommittedChange } from '../types/uncommitted';
-import { deriveChatRows, estimateChatRowHeight, findFirstUnvirtualizedChatRowIndex } from '../utils/chatTimeline';
+import { computeStableChatRows, deriveChatRows, estimateChatRowHeight, findFirstUnvirtualizedChatRowIndex, type StableChatRowsState } from '../utils/chatTimeline';
 import { recordDebugPerf } from '../utils/debugPerf';
 
 const VIRTUALIZATION_OVERSCAN_PX = 720;
@@ -262,6 +262,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     const rowElementsRef = useRef(new Map<string, HTMLDivElement>());
     const activityElementsRef = useRef(new Map<string, HTMLDivElement>());
     const jumpHighlightTimersRef = useRef(new WeakMap<HTMLElement, number>());
+    const stableRowsStateRef = useRef<StableChatRowsState>({ byKey: new Map(), rows: [] });
     const [pendingRowJumpKey, setPendingRowJumpKey] = useState<string | null>(null);
     const [pendingActivityJumpKey, setPendingActivityJumpKey] = useState<string | null>(null);
     const taskPanelRef = useRef<HTMLDivElement>(null);
@@ -412,7 +413,12 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     const lastMessageBlockCount = lastMessage?.blocks?.length ?? 0;
     const shouldShowPendingResponseIndicator = (loading || !!toolActivity) && !waitingForApproval && lastMessage?.role !== 'Assistant';
     const chatRows = useMemo(
-        () => deriveChatRows(messages, loading, pendingActions, pendingApprovalRequest),
+        () => {
+            const rawRows = deriveChatRows(messages, loading, pendingActions, pendingApprovalRequest);
+            const stableRowsState = computeStableChatRows(rawRows, stableRowsStateRef.current);
+            stableRowsStateRef.current = stableRowsState;
+            return stableRowsState.rows;
+        },
         [loading, messages, pendingActions, pendingApprovalRequest],
     );
     const firstUnvirtualizedRowIndex = useMemo(

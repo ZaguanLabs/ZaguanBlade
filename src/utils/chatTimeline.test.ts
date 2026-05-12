@@ -3,7 +3,7 @@ import test from 'node:test';
 import { normalizeSplitBlocks } from '../hooks/useChatV2';
 import type { ChatMessage, CommandExecution, ToolCall } from '../types/chat';
 import type { StructuredAction } from '../types/events';
-import { computeStableChatRows, deriveChatRows, deriveMessageRenderSegments, type StableChatRowsState } from './chatTimeline';
+import { computeStableChatRows, deriveChatRows, deriveChatWorkEntries, deriveMessageRenderSegments, type StableChatRowsState } from './chatTimeline';
 import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertToolCallBlockPreservingOrder, moveExistingContentAfterTools, upsertSplitTextBlocks } from './messageBlocks';
 
 function makeToolCall(overrides: Partial<ToolCall> & Pick<ToolCall, 'id'>): ToolCall {
@@ -169,6 +169,81 @@ test('deriveMessageRenderSegments keeps pending run_command tool calls in the ti
 
     assert.equal(segments.length, 1);
     assert.equal(segments[0]?.kind, 'activity_group');
+});
+
+test('deriveChatWorkEntries creates compact entries from ordered activity blocks', () => {
+    const toolCall = makeToolCall({
+        id: 'tool-1',
+        function: { name: 'run_command', arguments: '{"command":"bun run build"}' },
+        status: 'executing',
+    });
+    const commandExecution = makeCommandExecution({
+        id: 'tool-1',
+        command: 'bun run build',
+        exitCode: 0,
+    });
+    const message = makeAssistantMessage({
+        id: 'assistant-work',
+        content: 'Running the build',
+        tool_calls: [toolCall],
+        commandExecutions: [commandExecution],
+        blocks: [
+            { type: 'tool_call', id: 'tool-1' },
+            { type: 'command_execution', id: 'tool-1' },
+        ],
+    });
+
+    const entries = deriveChatWorkEntries([message]);
+
+    assert.deepEqual(
+        entries.map((entry) => `${entry.source}:${entry.label}:${entry.command}`),
+        [
+            'tool_call:Run command:bun run build',
+            'command_execution:Ran command:bun run build',
+        ],
+    );
+    assert.equal(entries[0]?.status, 'executing');
+    assert.equal(entries[0]?.messageId, 'assistant-work');
+});
+
+test('deriveChatWorkEntries falls back to message tool arrays when blocks are absent', () => {
+    const message = makeAssistantMessage({
+        id: 'assistant-fallback',
+        content: 'Read the file',
+        tool_calls: [
+            makeToolCall({
+                id: 'tool-read',
+                function: { name: 'read_file', arguments: '{"path":"src/main.ts"}' },
+            }),
+        ],
+    });
+
+    const entries = deriveChatWorkEntries([message]);
+
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0]?.label, 'Read File');
+    assert.equal(entries[0]?.detail, 'src/main.ts');
+    assert.equal(entries[0]?.toolCallId, 'tool-read');
+});
+
+test('deriveChatWorkEntries marks failed command executions as error tone', () => {
+    const message = makeAssistantMessage({
+        id: 'assistant-error',
+        content: 'Command failed',
+        commandExecutions: [
+            makeCommandExecution({
+                id: 'cmd-1',
+                command: 'bun run lint',
+                exitCode: 1,
+            }),
+        ],
+    });
+
+    const entries = deriveChatWorkEntries([message]);
+
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0]?.tone, 'error');
+    assert.equal(entries[0]?.commandExecutionId, 'cmd-1');
 });
 
 test('insertToolCallBlockPreservingOrder appends new tool calls after existing assistant text', () => {
