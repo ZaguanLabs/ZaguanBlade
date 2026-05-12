@@ -107,7 +107,7 @@ export const MarkdownEditor = forwardRef<CodeEditorHandle, MarkdownEditorProps>(
                         <CodeEditor
                             ref={editorRef}
                             content={content}
-                            onChange={onChange}
+                            onContentChange={onChange}
                             onSave={onSave}
                             filename={filename}
                             unifiedDiff={change?.unified_diff}

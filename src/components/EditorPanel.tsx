@@ -578,44 +578,41 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         }
     };
 
-    const handleContentChange = (nextContent?: string) => {
-        if (nextContent == null && !isMarkdownFile) {
-            scheduleDocumentSync();
+    const handleEditorDocumentChange = () => {
+        scheduleDocumentSync();
 
-            if (!lastPropagatedDirtyRef.current) {
-                pendingContentStateRef.current = {
-                    savedContent: baseContentRef.current,
-                    draftContent: undefined,
-                    isDirty: true,
-                };
-                flushPendingContentState();
-            }
-
-            if (contentStateTimerRef.current) {
-                clearTimeout(contentStateTimerRef.current);
-            }
-
-            contentStateTimerRef.current = setTimeout(() => {
-                contentStateTimerRef.current = null;
-                const nextText = getActiveEditorContent();
-                liveContentRef.current = nextText;
-                const nextIsDirty = nextText !== baseContentRef.current;
-                pendingContentStateRef.current = {
-                    savedContent: nextIsDirty ? baseContentRef.current : nextText,
-                    draftContent: nextIsDirty ? nextText : undefined,
-                    isDirty: nextIsDirty,
-                };
-                flushPendingContentState();
-            }, 120);
-            return;
+        if (!lastPropagatedDirtyRef.current) {
+            pendingContentStateRef.current = {
+                savedContent: baseContentRef.current,
+                draftContent: undefined,
+                isDirty: true,
+            };
+            flushPendingContentState();
         }
 
-        const nextText = nextContent ?? getActiveEditorContent();
+        if (contentStateTimerRef.current) {
+            clearTimeout(contentStateTimerRef.current);
+        }
+
+        contentStateTimerRef.current = setTimeout(() => {
+            contentStateTimerRef.current = null;
+            const nextText = getActiveEditorContent();
+            liveContentRef.current = nextText;
+            const nextIsDirty = nextText !== baseContentRef.current;
+            pendingContentStateRef.current = {
+                savedContent: nextIsDirty ? baseContentRef.current : nextText,
+                draftContent: nextIsDirty ? nextText : undefined,
+                isDirty: nextIsDirty,
+            };
+            flushPendingContentState();
+        }, 120);
+    };
+
+    const handleMarkdownContentChange = (nextContent: string) => {
+        const nextText = nextContent;
         liveContentRef.current = nextText;
 
-        if (isMarkdownFile) {
-            setContent(nextText);
-        }
+        setContent(nextText);
         scheduleDocumentSync();
 
         const nextIsDirty = nextText !== baseContentRef.current;
@@ -661,7 +658,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                         <MarkdownEditor
                             ref={editorRef}
                             content={content}
-                            onChange={(nextContent) => handleContentChange(nextContent)}
+                            onChange={handleMarkdownContentChange}
                             onSave={handleSave}
                             filename={activeFile}
                         />
@@ -671,7 +668,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                         editorRef={editorRef}
                         content={content}
                         externalContentVersion={externalContentVersionRef.current}
-                        onDocumentChange={() => handleContentChange()}
+                        onDocumentChange={handleEditorDocumentChange}
                         handleSave={handleSave}
                         activeFile={activeFile}
                         highlightLines={highlightLines}
