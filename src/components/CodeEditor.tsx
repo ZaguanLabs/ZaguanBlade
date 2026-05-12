@@ -325,8 +325,8 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                         // Markdown typing can feel sluggish when we push context updates for
                         // every keystroke-driven cursor movement. Keep cursor/selection sync for
                         // explicit navigation/selection changes, and skip docChanged+selectionSet
-                        // updates while typing in markdown.
-                        if (isMarkdownRef.current && update.docChanged) {
+                        // updates while typing.
+                        if (update.docChanged && update.state.selection.main.empty) {
                             return;
                         }
 
