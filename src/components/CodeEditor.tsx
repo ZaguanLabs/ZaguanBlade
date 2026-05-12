@@ -45,6 +45,8 @@ const getDiffStateFromUnifiedDiff = (unifiedDiff?: string) => {
     };
 };
 
+const EDITING_AID_MAX_DOC_LENGTH = 500_000;
+
 const replaceEditorDocument = (view: EditorView, content: string, unifiedDiff?: string) => {
     const diffState = getDiffStateFromUnifiedDiff(unifiedDiff);
     const { main } = view.state.selection;
@@ -69,8 +71,8 @@ const replaceEditorDocumentIfChanged = (view: EditorView, content: string, unifi
     replaceEditorDocument(view, content, unifiedDiff);
 };
 
-const getEditingAidExtensions = (isMarkdown: boolean): Extension[] => {
-    if (isMarkdown) {
+const getEditingAidExtensions = (isMarkdown: boolean, docLength: number): Extension[] => {
+    if (isMarkdown || docLength > EDITING_AID_MAX_DOC_LENGTH) {
         return [];
     }
 
@@ -255,7 +257,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 dropCursor(),
                 rectangularSelection(),
                 crosshairCursor(),
-                editingAidConf.current.of(getEditingAidExtensions(initialIsMarkdown)),
+                editingAidConf.current.of(getEditingAidExtensions(initialIsMarkdown, initialContent.length)),
 
                 // Editing features
                 history(),
@@ -408,9 +410,9 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
         if (!view) return;
 
         view.dispatch({
-            effects: editingAidConf.current.reconfigure(getEditingAidExtensions(isMarkdown)),
+            effects: editingAidConf.current.reconfigure(getEditingAidExtensions(isMarkdown, content.length)),
         });
-    }, [isMarkdown]);
+    }, [content.length, isMarkdown]);
 
     useEffect(() => {
         void reconfigureLanguage(filename);
