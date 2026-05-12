@@ -316,7 +316,12 @@ function compactWorkEntryToneClass(entry: ChatWorkEntry): string {
     return 'bg-(--accent-green)';
 }
 
-const CompactWorkLog: React.FC<{ entries: ChatWorkEntry[] }> = React.memo(({ entries }) => {
+const CompactWorkLog: React.FC<{
+    entries: ChatWorkEntry[];
+    showDetails: boolean;
+    detailsLockedOpen: boolean;
+    onToggleDetails: () => void;
+}> = React.memo(({ entries, showDetails, detailsLockedOpen, onToggleDetails }) => {
     const [isExpanded, setIsExpanded] = useState(false);
     if (entries.length === 0) {
         return null;
@@ -371,6 +376,16 @@ const CompactWorkLog: React.FC<{ entries: ChatWorkEntry[] }> = React.memo(({ ent
                     )}
                 </div>
             )}
+            <div className="mt-1.5 flex items-center justify-end">
+                <button
+                    type="button"
+                    className="rounded-md px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-(--fg-tertiary) transition-colors hover:text-(--fg-secondary) disabled:cursor-default disabled:opacity-60"
+                    onClick={onToggleDetails}
+                    disabled={detailsLockedOpen}
+                >
+                    {detailsLockedOpen ? 'Details visible' : showDetails ? 'Hide details' : 'Show details'}
+                </button>
+            </div>
         </div>
     );
 });
@@ -510,6 +525,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     const isTool = message.role === 'Tool';
     const isAssistant = message.role === 'Assistant';
     const { showMenu } = useContextMenu();
+    const [showDetailedWork, setShowDetailedWork] = useState(false);
 
     const hasReasoning = !!message.reasoning || message.blocks?.some(b => b.type === 'reasoning');
     const stream = message.streaming;
@@ -572,6 +588,13 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
         () => isAssistant ? deriveChatWorkEntries([message]) : [],
         [isAssistant, message],
     );
+    const detailsLockedOpen = compactWorkEntries.some((entry) => entry.status === 'executing' || entry.status === 'pending')
+        || !!pendingApprovalRequest
+        || !!pendingActions?.length;
+    const shouldShowDetailedWork = compactWorkEntries.length === 0 || showDetailedWork || detailsLockedOpen;
+    const handleToggleWorkDetails = useCallback(() => {
+        setShowDetailedWork((value) => !value);
+    }, []);
     const assistantCardStyle = isAssistant
         ? {
             backgroundColor: 'color-mix(in srgb, var(--bg-panel) 80%, var(--bg-app))',
@@ -802,7 +825,12 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                 )}
 
                 {isAssistant && compactWorkEntries.length > 0 && (
-                    <CompactWorkLog entries={compactWorkEntries} />
+                    <CompactWorkLog
+                        entries={compactWorkEntries}
+                        showDetails={showDetailedWork}
+                        detailsLockedOpen={detailsLockedOpen}
+                        onToggleDetails={handleToggleWorkDetails}
+                    />
                 )}
 
                 {/* Thinking indicator for slow models - show when active but no content yet */}
@@ -827,6 +855,9 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                             return renderSegments.map((segment, segmentIndex) => {
                                 const previousSegment = segmentIndex > 0 ? renderSegments[segmentIndex - 1] : null;
                                 if (segment.kind === 'activity_group') {
+                                    if (!shouldShowDetailedWork) {
+                                        return null;
+                                    }
                                     return (
                                         <ActivityGroupDisplay
                                             key={segment.id}
@@ -889,7 +920,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                         })()}
 
                         {/* Legacy: Render commandExecutions that don't have block entries (backward compat) */}
-                        {message.commandExecutions && message.commandExecutions.length > 0 && (
+                        {shouldShowDetailedWork && message.commandExecutions && message.commandExecutions.length > 0 && (
                             (() => {
                                 const blockIds = new Set((message.blocks || []).filter(b => b.type === 'command_execution').map(b => b.id));
                                 const orphanedCmds = message.commandExecutions.filter(c => !blockIds.has(c.id));
@@ -948,7 +979,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                         {renderTextContent(initialText)}
                                     </div>
                                 )}
-                                {hasToolCalls && (
+                                {hasToolCalls && shouldShowDetailedWork && (
                                     <div className="mb-3 space-y-2">
                                         {toolCalls
                                             .map((call, idx) => {
@@ -1017,7 +1048,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                         {renderTextContent(finalText)}
                                     </div>
                                 )}
-                                {message.commandExecutions && message.commandExecutions.length > 0 && (
+                                {shouldShowDetailedWork && message.commandExecutions && message.commandExecutions.length > 0 && (
                                     <div className="mt-3 space-y-2">
                                         {message.commandExecutions.map((cmd, idx) => (
                                             <CommandOutputDisplay
@@ -1076,12 +1107,23 @@ export const ChatMessage = React.memo(ChatMessageComponent, (prevProps, nextProp
     const nextMentionSignature = (nextMsg.mentions || []).map((mention) => `${mention.kind}:${mention.path}:${mention.is_dir}`).join('|');
     if (prevMentionSignature !== nextMentionSignature) return false;
     if (prevMsg.tool_calls?.length !== nextMsg.tool_calls?.length) return false;
+    if (prevMsg.commandExecutions?.length !== nextMsg.commandExecutions?.length) return false;
     if (prevMsg.blocks?.length !== nextMsg.blocks?.length) return false;
     
     // Check tool call statuses (important for showing execution state)
     if (prevMsg.tool_calls && nextMsg.tool_calls) {
         for (let i = 0; i < prevMsg.tool_calls.length; i++) {
             if (prevMsg.tool_calls[i].status !== nextMsg.tool_calls[i].status) return false;
+            if (prevMsg.tool_calls[i].result !== nextMsg.tool_calls[i].result) return false;
+            if (prevMsg.tool_calls[i].function.name !== nextMsg.tool_calls[i].function.name) return false;
+            if (prevMsg.tool_calls[i].function.arguments !== nextMsg.tool_calls[i].function.arguments) return false;
+        }
+    }
+    if (prevMsg.commandExecutions && nextMsg.commandExecutions) {
+        for (let i = 0; i < prevMsg.commandExecutions.length; i++) {
+            if (prevMsg.commandExecutions[i].command !== nextMsg.commandExecutions[i].command) return false;
+            if (prevMsg.commandExecutions[i].exitCode !== nextMsg.commandExecutions[i].exitCode) return false;
+            if (prevMsg.commandExecutions[i].output !== nextMsg.commandExecutions[i].output) return false;
         }
     }
     
