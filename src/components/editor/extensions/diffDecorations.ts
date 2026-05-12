@@ -383,6 +383,20 @@ const isLineNearVisibleRanges = (
     && line.from <= range.to + DIFF_DECORATION_VIEWPORT_MARGIN
 );
 
+const getVisibleLineRanges = (
+    doc: { length: number; lineAt(pos: number): { number: number } },
+    ranges: readonly { from: number; to: number }[],
+): { from: number; to: number }[] => ranges.map(range => {
+    const from = doc.lineAt(Math.max(0, range.from - DIFF_DECORATION_VIEWPORT_MARGIN)).number;
+    const to = doc.lineAt(Math.min(doc.length, range.to + DIFF_DECORATION_VIEWPORT_MARGIN)).number;
+    return { from, to };
+});
+
+const isLineNumberNearVisibleRanges = (
+    lineNumber: number,
+    ranges: readonly { from: number; to: number }[],
+): boolean => ranges.some(range => lineNumber >= range.from && lineNumber <= range.to);
+
 const diffDecorationsPlugin = EditorView.decorations.of(
     (view) => {
         const state = view.state;
@@ -394,6 +408,7 @@ const diffDecorationsPlugin = EditorView.decorations.of(
         const builder = new RangeSetBuilder<Decoration>();
         const doc = state.doc;
         const visibleRanges = view.visibleRanges;
+        const visibleLineRanges = getVisibleLineRanges(doc, visibleRanges);
         const diffLines = diffState.lines;
         const simplified = diffState.renderMode === 'simplified';
 
@@ -414,6 +429,9 @@ const diffDecorationsPlugin = EditorView.decorations.of(
             const dl = diffLines[i];
 
             if (dl.type === 'added' && dl.newLineNum != null && dl.newLineNum <= doc.lines) {
+                if (!isLineNumberNearVisibleRanges(dl.newLineNum, visibleLineRanges)) {
+                    continue;
+                }
                 const line = doc.line(dl.newLineNum);
                 if (!isLineNearVisibleRanges(line, visibleRanges)) {
                     continue;
@@ -462,6 +480,10 @@ const diffDecorationsPlugin = EditorView.decorations.of(
 
                     if (insertBeforeLine == null) {
                         insertBeforeLine = doc.lines + 1;
+                    }
+                    if (!isLineNumberNearVisibleRanges(Math.min(insertBeforeLine, doc.lines), visibleLineRanges)) {
+                        i = end - 1;
+                        continue;
                     }
 
                     const pos = insertBeforeLine <= doc.lines
@@ -517,6 +539,9 @@ const diffDecorationsPlugin = EditorView.decorations.of(
                 if (insertBeforeLine == null) {
                     insertBeforeLine = doc.lines + 1;
                 }
+                if (!isLineNumberNearVisibleRanges(Math.min(insertBeforeLine, doc.lines), visibleLineRanges)) {
+                    continue;
+                }
 
                 const pos = insertBeforeLine <= doc.lines
                     ? doc.line(insertBeforeLine).from
@@ -552,6 +577,10 @@ const diffDecorationsPlugin = EditorView.decorations.of(
                         gapBeforeLine = diffLines[j].newLineNum;
                         break;
                     }
+                }
+
+                if (gapBeforeLine != null && !isLineNumberNearVisibleRanges(gapBeforeLine, visibleLineRanges)) {
+                    continue;
                 }
 
                 const pos = gapBeforeLine != null && gapBeforeLine <= doc.lines
