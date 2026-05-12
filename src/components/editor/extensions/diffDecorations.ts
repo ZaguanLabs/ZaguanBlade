@@ -365,9 +365,27 @@ function pairRemovedAdded(diffLines: DiffLine[]): Map<number, { removed: DiffLin
     return pairs;
 }
 
-const diffDecorationsPlugin = EditorView.decorations.compute(
-    [diffStateField],
-    (state) => {
+const DIFF_DECORATION_VIEWPORT_MARGIN = 2_000;
+
+const isPositionNearVisibleRanges = (
+    pos: number,
+    ranges: readonly { from: number; to: number }[],
+): boolean => ranges.some(range =>
+    pos >= Math.max(0, range.from - DIFF_DECORATION_VIEWPORT_MARGIN)
+    && pos <= range.to + DIFF_DECORATION_VIEWPORT_MARGIN
+);
+
+const isLineNearVisibleRanges = (
+    line: { from: number; to: number },
+    ranges: readonly { from: number; to: number }[],
+): boolean => ranges.some(range =>
+    line.to >= Math.max(0, range.from - DIFF_DECORATION_VIEWPORT_MARGIN)
+    && line.from <= range.to + DIFF_DECORATION_VIEWPORT_MARGIN
+);
+
+const diffDecorationsPlugin = EditorView.decorations.of(
+    (view) => {
+        const state = view.state;
         const diffState = state.field(diffStateField);
         if (!diffState) {
             return Decoration.none;
@@ -375,6 +393,7 @@ const diffDecorationsPlugin = EditorView.decorations.compute(
 
         const builder = new RangeSetBuilder<Decoration>();
         const doc = state.doc;
+        const visibleRanges = view.visibleRanges;
         const diffLines = diffState.lines;
         const simplified = diffState.renderMode === 'simplified';
 
@@ -396,6 +415,9 @@ const diffDecorationsPlugin = EditorView.decorations.compute(
 
             if (dl.type === 'added' && dl.newLineNum != null && dl.newLineNum <= doc.lines) {
                 const line = doc.line(dl.newLineNum);
+                if (!isLineNearVisibleRanges(line, visibleRanges)) {
+                    continue;
+                }
 
                 // Line-level decoration (green background)
                 decos.push({
@@ -445,6 +467,10 @@ const diffDecorationsPlugin = EditorView.decorations.compute(
                     const pos = insertBeforeLine <= doc.lines
                         ? doc.line(insertBeforeLine).from
                         : doc.length;
+                    if (!isPositionNearVisibleRanges(pos, visibleRanges)) {
+                        i = end - 1;
+                        continue;
+                    }
 
                     const preview = removedLines
                         .slice(0, 2)
@@ -495,6 +521,9 @@ const diffDecorationsPlugin = EditorView.decorations.compute(
                 const pos = insertBeforeLine <= doc.lines
                     ? doc.line(insertBeforeLine).from
                     : doc.length;
+                if (!isPositionNearVisibleRanges(pos, visibleRanges)) {
+                    continue;
+                }
 
                 // Compute character highlights if this removed line is paired with an added line
                 let charHighlights: CharDiff[] = [];
@@ -528,6 +557,9 @@ const diffDecorationsPlugin = EditorView.decorations.compute(
                 const pos = gapBeforeLine != null && gapBeforeLine <= doc.lines
                     ? doc.line(gapBeforeLine).from
                     : doc.length;
+                if (!isPositionNearVisibleRanges(pos, visibleRanges)) {
+                    continue;
+                }
 
                 decos.push({
                     from: pos,
