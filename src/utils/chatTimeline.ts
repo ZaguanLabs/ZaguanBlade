@@ -23,6 +23,11 @@ export type DerivedRenderSegment =
     | { kind: 'block'; block: MessageBlock; index: number }
     | { kind: 'activity_group'; id: string; items: DerivedActivityGroupItem[] };
 
+export interface StableChatRowsState {
+    byKey: Map<string, DerivedChatRow>;
+    rows: DerivedChatRow[];
+}
+
 export interface ChatRowHeightLayout {
     viewportWidthPx?: number | null;
 }
@@ -252,4 +257,46 @@ export function deriveChatRows(
             ...(showPendingApprovalRequest ? { pendingApprovalRequest } : {}),
         };
     });
+}
+
+function areStructuredActionsEqual(
+    left: StructuredAction[] | undefined,
+    right: StructuredAction[] | undefined,
+): boolean {
+    if (left === right) {
+        return true;
+    }
+    if (!left || !right || left.length !== right.length) {
+        return false;
+    }
+    return left.every((action, index) => action === right[index]);
+}
+
+function areRowsEqual(left: DerivedChatRow, right: DerivedChatRow): boolean {
+    return left.kind === right.kind
+        && left.key === right.key
+        && left.message === right.message
+        && left.isContinued === right.isContinued
+        && left.isActive === right.isActive
+        && left.pendingApprovalRequest === right.pendingApprovalRequest
+        && areStructuredActionsEqual(left.pendingActions, right.pendingActions);
+}
+
+export function computeStableChatRows(
+    rows: DerivedChatRow[],
+    previous: StableChatRowsState,
+): StableChatRowsState {
+    const nextByKey = new Map<string, DerivedChatRow>();
+    let changed = rows.length !== previous.rows.length;
+    const stableRows = rows.map((row, index) => {
+        const previousRow = previous.byKey.get(row.key);
+        const nextRow = previousRow && areRowsEqual(previousRow, row) ? previousRow : row;
+        nextByKey.set(row.key, nextRow);
+        if (!changed && previous.rows[index] !== nextRow) {
+            changed = true;
+        }
+        return nextRow;
+    });
+
+    return changed ? { byKey: nextByKey, rows: stableRows } : previous;
 }

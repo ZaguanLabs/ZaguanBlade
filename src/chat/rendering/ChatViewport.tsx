@@ -4,7 +4,7 @@ import type { ChatMessage as ChatMessageType, HookApprovalRequest, ToolActivityS
 import type { StructuredAction } from '../../types/events';
 import { ChatMessage } from '../../components/ChatMessage';
 import { ProgressIndicator } from '../../components/ProgressIndicator';
-import { deriveChatRows } from '../../utils/chatTimeline';
+import { computeStableChatRows, deriveChatRows, type StableChatRowsState } from '../../utils/chatTimeline';
 import { FloatingJumpToBottomButton } from './FloatingJumpToBottomButton';
 
 const FOLLOW_BOTTOM_THRESHOLD_PX = 48;
@@ -57,8 +57,14 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
     const bottomRef = useRef<HTMLDivElement>(null);
     const [scrollMode, setScrollMode] = useState<'following' | 'detached'>('following');
     const scrollModeRef = useRef<'following' | 'detached'>('following');
+    const stableRowsStateRef = useRef<StableChatRowsState>({ byKey: new Map(), rows: [] });
     const rows = useMemo(
-        () => deriveChatRows(messages, loading, pendingActions, pendingApprovalRequest),
+        () => {
+            const rawRows = deriveChatRows(messages, loading, pendingActions, pendingApprovalRequest);
+            const stableRowsState = computeStableChatRows(rawRows, stableRowsStateRef.current);
+            stableRowsStateRef.current = stableRowsState;
+            return stableRowsState.rows;
+        },
         [loading, messages, pendingActions, pendingApprovalRequest],
     );
     const activeMessage = rows.find((row) => row.isActive)?.message;

@@ -3,7 +3,7 @@ import test from 'node:test';
 import { normalizeSplitBlocks } from '../hooks/useChatV2';
 import type { ChatMessage, CommandExecution, ToolCall } from '../types/chat';
 import type { StructuredAction } from '../types/events';
-import { deriveChatRows, deriveMessageRenderSegments } from './chatTimeline';
+import { computeStableChatRows, deriveChatRows, deriveMessageRenderSegments, type StableChatRowsState } from './chatTimeline';
 import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertToolCallBlockPreservingOrder, moveExistingContentAfterTools, upsertSplitTextBlocks } from './messageBlocks';
 
 function makeToolCall(overrides: Partial<ToolCall> & Pick<ToolCall, 'id'>): ToolCall {
@@ -88,6 +88,38 @@ test('deriveChatRows falls back to the latest assistant message when no tool cal
 
     assert.equal(rows[1]?.pendingActions, undefined);
     assert.equal(rows[2]?.pendingActions?.[0]?.id, 'missing-call');
+});
+
+test('computeStableChatRows reuses unchanged row objects', () => {
+    const messages: ChatMessage[] = [
+        { id: 'user-1', role: 'User', content: 'hi' },
+        makeAssistantMessage({ id: 'assistant-1', content: 'hello' }),
+    ];
+    const initialRows = deriveChatRows(messages, false, null);
+    const initialState: StableChatRowsState = { byKey: new Map(), rows: [] };
+    const firstState = computeStableChatRows(initialRows, initialState);
+    const nextRows = deriveChatRows(messages, false, null);
+    const secondState = computeStableChatRows(nextRows, firstState);
+
+    assert.equal(secondState, firstState);
+    assert.equal(secondState.rows[0], firstState.rows[0]);
+    assert.equal(secondState.rows[1], firstState.rows[1]);
+});
+
+test('computeStableChatRows replaces only rows whose derived fields changed', () => {
+    const messages: ChatMessage[] = [
+        { id: 'user-1', role: 'User', content: 'hi' },
+        makeAssistantMessage({ id: 'assistant-1', content: 'hello' }),
+    ];
+    const initialRows = deriveChatRows(messages, false, null);
+    const firstState = computeStableChatRows(initialRows, { byKey: new Map(), rows: [] });
+    const activeRows = deriveChatRows(messages, true, null);
+    const secondState = computeStableChatRows(activeRows, firstState);
+
+    assert.notEqual(secondState, firstState);
+    assert.equal(secondState.rows[0], firstState.rows[0]);
+    assert.notEqual(secondState.rows[1], firstState.rows[1]);
+    assert.equal(secondState.rows[1]?.isActive, true);
 });
 
 test('deriveMessageRenderSegments groups tool calls and command executions together', () => {
