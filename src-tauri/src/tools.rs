@@ -384,8 +384,9 @@ impl ToolResult {
 mod tests {
     use super::{
         apply_multi_patch_to_string, apply_patch_to_string, apply_semantic_patch_with_service,
-        execute_tool, grep_search, parse_grep_timeout_ms, stage_semantic_patch_writes, PatchHunk,
-        SemanticPatchWrite, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS, GREP_TIMEOUT_MIN_MS,
+        apply_semantic_patch_writes_with_service, execute_tool, grep_search, parse_grep_timeout_ms,
+        stage_semantic_patch_writes, PatchHunk, SemanticPatchWrite, GREP_TIMEOUT_DEFAULT_MS,
+        GREP_TIMEOUT_MAX_MS, GREP_TIMEOUT_MIN_MS,
     };
     use crate::semantic_patch::{InsertPosition, PatchOperation, PatchTarget, SemanticPatch};
     use crate::symbol_index::SymbolStore;
@@ -726,6 +727,54 @@ mod tests {
                 .get_file_content("move_target.ts")
                 .expect("get indexed target"),
             "const before = 0;\nfunction first() { return 1; }\nconst after = 1;\n"
+        );
+    }
+
+    #[test]
+    fn semantic_patch_pre_commit_hook_runs_before_disk_mutation() {
+        let workspace = tempdir().expect("tempdir");
+        let db_path = workspace.path().join("symbols.db");
+        let store = Arc::new(SymbolStore::new(&db_path).expect("symbol store"));
+        let service = Arc::new(
+            crate::language_service::LanguageService::new(workspace.path().to_path_buf(), store)
+                .expect("language service"),
+        );
+
+        let file_path = workspace.path().join("replace_target.ts");
+        fs::write(&file_path, "function oldName() { return 1; }\n").expect("write target");
+        service.index_file("replace_target.ts").expect("index target");
+
+        let patch = SemanticPatch {
+            id: "pre-commit-before-mutation".to_string(),
+            description: "Replace symbol".to_string(),
+            file_path: "replace_target.ts".to_string(),
+            operation: PatchOperation::Replace,
+            target: PatchTarget::Symbol {
+                name: "oldName".to_string(),
+                symbol_type: Some(crate::tree_sitter::SymbolType::Function),
+            },
+            content: Some("function newName() { return 2; }\n".to_string()),
+            confidence: 1.0,
+        };
+
+        let mut observed_disk_content = String::new();
+        let writes = apply_semantic_patch_writes_with_service(
+            workspace.path(),
+            &service,
+            &patch,
+            |pending_writes| {
+                assert_eq!(pending_writes.len(), 1);
+                observed_disk_content =
+                    fs::read_to_string(&pending_writes[0].abs_path).expect("read pre-commit file");
+            },
+        )
+        .expect("apply semantic patch");
+
+        assert_eq!(writes.len(), 1);
+        assert_eq!(observed_disk_content, "function oldName() { return 1; }\n");
+        assert_eq!(
+            fs::read_to_string(&file_path).expect("read committed file"),
+            "function newName() { return 2; }\n\n"
         );
     }
 
@@ -2543,14 +2592,19 @@ fn rollback_semantic_patch_writes(
     cleanup_semantic_patch_stage_files(staged_writes);
 }
 
-fn apply_semantic_patch_with_service(
+fn apply_semantic_patch_writes_with_service<F>(
     workspace_root: &Path,
     service: &std::sync::Arc<crate::language_service::LanguageService>,
     patch: &crate::semantic_patch::SemanticPatch,
-) -> Result<Vec<String>, String> {
+    before_commit: F,
+) -> Result<Vec<SemanticPatchWrite>, String>
+where
+    F: FnOnce(&[SemanticPatchWrite]),
+{
     let applier = crate::semantic_patch::PatchApplier::new(service.clone());
     let result = applier.apply(patch).map_err(|error| error.to_string())?;
     let writes = collect_semantic_patch_writes(workspace_root, result)?;
+    before_commit(&writes);
     let staged_writes = stage_semantic_patch_writes(writes)?;
     let mut applied_count = 0usize;
 
@@ -2586,7 +2640,19 @@ fn apply_semantic_patch_with_service(
     cleanup_semantic_patch_backups(&staged_writes);
     Ok(staged_writes
         .into_iter()
-        .map(|staged| staged.write.file_path)
+        .map(|staged| staged.write)
+        .collect())
+}
+
+#[cfg(test)]
+fn apply_semantic_patch_with_service(
+    workspace_root: &Path,
+    service: &std::sync::Arc<crate::language_service::LanguageService>,
+    patch: &crate::semantic_patch::SemanticPatch,
+) -> Result<Vec<String>, String> {
+    Ok(apply_semantic_patch_writes_with_service(workspace_root, service, patch, |_| {})?
+        .into_iter()
+        .map(|write| write.file_path)
         .collect())
 }
 
@@ -2625,6 +2691,115 @@ fn sync_after_tool_write<R: tauri::Runtime>(
     }
 }
 
+struct ToolWriteTracking {
+    change_id: String,
+    snapshot_id: String,
+    base_content: String,
+}
+
+fn prepare_tool_write_tracking<R: tauri::Runtime>(
+    app_handle: Option<&tauri::AppHandle<R>>,
+    change_id: &str,
+    abs_path: &Path,
+    original_content: &str,
+) -> Option<ToolWriteTracking> {
+    let handle = app_handle?;
+    use tauri::Manager;
+    let state = handle.state::<crate::app_state::AppState>();
+
+    if let Some(existing_change) = state.uncommitted_changes.get_by_path(&abs_path.to_path_buf()) {
+        let base_content = state
+            .history_service()
+            .ok()
+            .and_then(|history_service| {
+                history_service
+                    .get_snapshot_content(&existing_change.snapshot_id)
+                    .ok()
+            })
+            .unwrap_or_else(|| original_content.to_string());
+        return Some(ToolWriteTracking {
+            change_id: existing_change.id,
+            snapshot_id: existing_change.snapshot_id,
+            base_content,
+        });
+    }
+
+    if !abs_path.exists() {
+        return None;
+    }
+
+    let history_service = match state.history_service() {
+        Ok(service) => service,
+        Err(error) => {
+            eprintln!(
+                "[HISTORY] Failed to initialize history service for {}: {}",
+                abs_path.display(),
+                error
+            );
+            return None;
+        }
+    };
+
+    match history_service.create_snapshot(abs_path, Some(change_id.to_string())) {
+        Ok(entry) => {
+            use tauri::Emitter;
+            let snapshot_id = entry.id.clone();
+            let _ = handle.emit(
+                crate::events::event_names::HISTORY_ENTRY_ADDED,
+                crate::events::HistoryEntryAddedPayload { entry },
+            );
+            Some(ToolWriteTracking {
+                change_id: change_id.to_string(),
+                snapshot_id,
+                base_content: original_content.to_string(),
+            })
+        }
+        Err(error) => {
+            eprintln!(
+                "[HISTORY] Failed to create snapshot for {}: {}",
+                abs_path.display(),
+                error
+            );
+            None
+        }
+    }
+}
+
+fn track_tool_write<R: tauri::Runtime>(
+    app_handle: Option<&tauri::AppHandle<R>>,
+    abs_path: &Path,
+    tracking: Option<ToolWriteTracking>,
+) {
+    let Some(handle) = app_handle else {
+        return;
+    };
+    let Some(tracking) = tracking else {
+        return;
+    };
+
+    use tauri::Manager;
+    let state = handle.state::<crate::app_state::AppState>();
+    let new_content = fs::read_to_string(abs_path).unwrap_or_default();
+    let diff = crate::uncommitted_changes::generate_unified_diff(&tracking.base_content, &new_content);
+    let (added, removed) = crate::uncommitted_changes::count_diff_stats(&diff);
+
+    let uncommitted = crate::uncommitted_changes::UncommittedChange {
+        id: tracking.change_id,
+        file_path: abs_path.to_path_buf(),
+        snapshot_id: tracking.snapshot_id,
+        unified_diff: diff,
+        added_lines: added,
+        removed_lines: removed,
+        timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64,
+        file_modified_ms: crate::uncommitted_changes::file_modified_ms(&abs_path.to_path_buf()),
+    };
+
+    state.uncommitted_changes.track(uncommitted);
+}
+
 fn apply_edit_tool<R: tauri::Runtime>(
     workspace_root: &Path,
     args: &HashMap<String, serde_json::Value>,
@@ -2637,12 +2812,45 @@ fn apply_edit_tool<R: tauri::Runtime>(
                 Err(err) => return ToolResult::err(err),
             };
 
-            return match apply_semantic_patch_with_service(workspace_root, &service, &patch) {
-                Ok(paths) => {
+            let mut tracking = Vec::<(PathBuf, Option<ToolWriteTracking>)>::new();
+            return match apply_semantic_patch_writes_with_service(
+                workspace_root,
+                &service,
+                &patch,
+                |writes| {
+                    tracking = writes
+                        .iter()
+                        .map(|write| {
+                            (
+                                write.abs_path.clone(),
+                                prepare_tool_write_tracking(
+                                    app_handle,
+                                    &patch.id,
+                                    &write.abs_path,
+                                    &write.original_content,
+                                ),
+                            )
+                        })
+                        .collect();
+                },
+            ) {
+                Ok(writes) => {
                     if let Some(handle) = app_handle {
+                        for (abs_path, item) in tracking {
+                            track_tool_write(app_handle, &abs_path, item);
+                            crate::file_state_sync::sync_from_disk_after_write(handle, &abs_path);
+                        }
+                        let paths = writes
+                            .iter()
+                            .map(|write| write.file_path.clone())
+                            .collect::<Vec<_>>();
                         emit_change_applied_for_paths(handle, &patch.id, &paths);
                     }
 
+                    let paths = writes
+                        .into_iter()
+                        .map(|write| write.file_path)
+                        .collect::<Vec<_>>();
                     ToolResult::ok(format!("Applied semantic patch to {}", paths.join(", ")))
                 }
                 Err(err) => ToolResult::err(err),
@@ -2665,6 +2873,8 @@ fn apply_edit_tool<R: tauri::Runtime>(
         Ok(s) => s,
         Err(e) => return ToolResult::err(e.to_string()),
     };
+    let change_id = get_str_arg(args, &["id", "change_id", "tool_call_id"])
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     // Check for new multi-patch format first
     if let Some(patches_value) = args.get("patches") {
@@ -2708,19 +2918,28 @@ fn apply_edit_tool<R: tauri::Runtime>(
 
             // Apply multi-patch atomically
             match apply_multi_patch_to_string(&content, &patches) {
-                Ok(new_content) => match fs::write(&abs, new_content.as_bytes()) {
-                    Ok(()) => {
-                        sync_after_tool_write(app_handle, "apply_patch", &abs, &path);
-                        let count = patches.len();
-                        ToolResult::ok(format!(
-                            "Applied {} patch{} atomically to {}",
-                            count,
-                            if count == 1 { "" } else { "es" },
-                            path
-                        ))
+                Ok(new_content) => {
+                    let tracking = prepare_tool_write_tracking(
+                        app_handle,
+                        &change_id,
+                        &abs,
+                        &content,
+                    );
+                    match fs::write(&abs, new_content.as_bytes()) {
+                        Ok(()) => {
+                            track_tool_write(app_handle, &abs, tracking);
+                            sync_after_tool_write(app_handle, &change_id, &abs, &path);
+                            let count = patches.len();
+                            ToolResult::ok(format!(
+                                "Applied {} patch{} atomically to {}",
+                                count,
+                                if count == 1 { "" } else { "es" },
+                                path
+                            ))
+                        }
+                        Err(e) => ToolResult::err(format!("Failed to write file: {}", e)),
                     }
-                    Err(e) => ToolResult::err(format!("Failed to write file: {}", e)),
-                },
+                }
                 Err(e) => ToolResult::err(e),
             }
         } else {
@@ -2738,13 +2957,22 @@ fn apply_edit_tool<R: tauri::Runtime>(
         };
 
         match apply_patch_to_string(&content, &old_text, &new_text) {
-            Ok(new_content) => match fs::write(&abs, new_content.as_bytes()) {
-                Ok(()) => {
-                    sync_after_tool_write(app_handle, "apply_patch", &abs, &path);
-                    ToolResult::ok(format!("Applied edit to {}", path))
+            Ok(new_content) => {
+                let tracking = prepare_tool_write_tracking(
+                    app_handle,
+                    &change_id,
+                    &abs,
+                    &content,
+                );
+                match fs::write(&abs, new_content.as_bytes()) {
+                    Ok(()) => {
+                        track_tool_write(app_handle, &abs, tracking);
+                        sync_after_tool_write(app_handle, &change_id, &abs, &path);
+                        ToolResult::ok(format!("Applied edit to {}", path))
+                    }
+                    Err(e) => ToolResult::err(e.to_string()),
                 }
-                Err(e) => ToolResult::err(e.to_string()),
-            },
+            }
             Err(e) => {
                 // Provide helpful debugging info
                 let _preview_len = 200.min(content.len());
