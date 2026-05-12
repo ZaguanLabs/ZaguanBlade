@@ -1,13 +1,13 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, ChevronRight, Terminal } from 'lucide-react';
 import type { ChatMessage as ChatMessageType, HookApprovalRequest, ToolActivityState } from '../../types/chat';
 import type { StructuredAction } from '../../types/events';
 import { ChatMessage } from '../../components/ChatMessage';
 import { ProgressIndicator } from '../../components/ProgressIndicator';
-import { type ChatActivity, type ChatWorkEntry } from '../../utils/chatTimeline';
+import type { ChatActivity } from '../../utils/chatTimeline';
 import { FloatingJumpToBottomButton } from './FloatingJumpToBottomButton';
 import { useChatTimelineRows } from './useChatTimelineRows';
+import { WorkLogTimelineRow } from './WorkLogTimelineRow';
 
 const FOLLOW_BOTTOM_THRESHOLD_PX = 48;
 const DETACH_BOTTOM_THRESHOLD_PX = 140;
@@ -37,90 +37,6 @@ interface ChatViewportProps {
     onStopCommand?: (toolCallId: string) => void;
     onOpenFile?: (path: string) => void;
 }
-
-function workEntryToneClass(entry: ChatWorkEntry): string {
-    if (entry.status === 'executing' || entry.status === 'pending') {
-        return 'bg-(--accent-primary)';
-    }
-    if (entry.tone === 'error') {
-        return 'bg-(--accent-error)';
-    }
-    return 'bg-(--accent-green)';
-}
-
-const WorkLogTimelineRow: React.FC<{
-    entries: ChatWorkEntry[];
-    showDetails: boolean;
-    detailsLockedOpen: boolean;
-    onToggleDetails: () => void;
-}> = React.memo(({ entries, showDetails, detailsLockedOpen, onToggleDetails }) => {
-    const [isExpanded, setIsExpanded] = useState(false);
-    const visibleEntries = isExpanded ? entries : entries.slice(0, 4);
-    const hiddenCount = entries.length - visibleEntries.length;
-
-    return (
-        <div className="px-4 pb-2">
-            <div className="ml-8 rounded-xl border border-(--border-subtle) bg-(--bg-surface)/45 px-3 py-2">
-                <button
-                    type="button"
-                    className="flex w-full items-center justify-between gap-3 text-left"
-                    onClick={() => setIsExpanded((value) => !value)}
-                >
-                    <span className="flex min-w-0 items-center gap-2">
-                        <Terminal className="h-3.5 w-3.5 shrink-0 text-(--fg-tertiary)" />
-                        <span className="text-[9px] font-semibold uppercase tracking-[0.16em] text-(--fg-tertiary)">
-                            Work log ({entries.length})
-                        </span>
-                        {!isExpanded && (
-                            <span className="min-w-0 truncate text-[10px] text-(--fg-secondary)">
-                                {entries.slice(0, 2).map((entry) => entry.label).join(', ')}
-                            </span>
-                        )}
-                    </span>
-                    {isExpanded ? (
-                        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-(--fg-tertiary)" />
-                    ) : (
-                        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-(--fg-tertiary)" />
-                    )}
-                </button>
-                {(isExpanded || entries.length > 4) && (
-                    <div className="mt-1.5 space-y-1">
-                        {visibleEntries.map((entry) => (
-                            <div key={entry.id} className="flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5">
-                                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${workEntryToneClass(entry)}`} />
-                                <span className="shrink-0 text-[10px] font-medium text-(--fg-secondary)">
-                                    {entry.label}
-                                </span>
-                                {entry.detail && (
-                                    <span className="min-w-0 truncate text-[10px] font-mono text-(--fg-tertiary)" title={entry.detail}>
-                                        {entry.detail}
-                                    </span>
-                                )}
-                            </div>
-                        ))}
-                        {!isExpanded && hiddenCount > 0 && (
-                            <div className="px-1 text-[10px] text-(--fg-tertiary)">
-                                +{hiddenCount} more
-                            </div>
-                        )}
-                    </div>
-                )}
-                <div className="mt-1.5 flex items-center justify-end">
-                    <button
-                        type="button"
-                        className="rounded-md px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-(--fg-tertiary) transition-colors hover:text-(--fg-secondary) disabled:cursor-default disabled:opacity-60"
-                        onClick={onToggleDetails}
-                        disabled={detailsLockedOpen}
-                    >
-                        {detailsLockedOpen ? 'Details visible' : showDetails ? 'Hide details' : 'Show details'}
-                    </button>
-                </div>
-            </div>
-        </div>
-    );
-});
-
-WorkLogTimelineRow.displayName = 'WorkLogTimelineRow';
 
 export const ChatViewport: React.FC<ChatViewportProps> = ({
     messages,
