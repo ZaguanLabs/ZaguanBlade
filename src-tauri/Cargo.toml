@@ -15,10 +15,10 @@ name = "zblade_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.6.0", features = [] }
+tauri-build = { version = "2.6.1", features = [] }
 
 [dependencies]
-tauri = { version = "2.11.0", features = [] }
+tauri = { version = "2.11.1", features = [] }
 tauri-plugin-opener = "2.5.4"
 tauri-plugin-fs = "2.5.1"
 tauri-plugin-dialog = "2.7.1"
@@ -26,8 +26,8 @@ tauri-plugin-shell = "2.3.5"
 tauri-plugin-notification = "2.3.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-reqwest = { version = "0.13", features = ["json", "stream"] }
-tokio = { version = "1.52.1", features = ["full"] }
+reqwest = { version = "0.13.3", features = ["json", "stream"] }
+tokio = { version = "1.52.3", features = ["full"] }
 chrono = { version = "0.4", features = ["clock", "serde"] }
 futures = "0.3"
 regex = "1.12.2"
@@ -45,7 +45,7 @@ glob = "0.3"
 rusqlite = { version = "0.39", features = ["bundled"] }
 notify = "8"
 ignore = "0.4"
-diffy = "0.4"
+diffy = "0.5.0"
 similar = "3.1.0"
 gix = "0.83.0"
 bstr = "1.12.1"
