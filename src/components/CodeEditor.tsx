@@ -104,7 +104,6 @@ const dispatchPreservingScroll = (view: EditorView, spec: TransactionSpec) => {
 
 interface CodeEditorProps {
     content: string;
-    onContentChange?: (val: string) => void;
     onDocumentChange?: () => void;
     onSave?: (val: string) => void;
     filename?: string;
@@ -127,7 +126,7 @@ export interface CodeEditorHandle {
 }
 
 
-const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onContentChange, onDocumentChange, onSave, filename, externalContentVersion = 0, highlightLines, onNavigate, lineWrap, unifiedDiff }, ref) => {
+const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onDocumentChange, onSave, filename, externalContentVersion = 0, highlightLines, onNavigate, lineWrap, unifiedDiff }, ref) => {
     const { t } = useTranslation();
     // Auto-enable line wrap for markdown files
     const isMarkdown = filename?.endsWith('.md') || filename?.endsWith('.markdown') || false;
@@ -173,14 +172,10 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
 
     // Ref to capture the latest onSave callback (avoids stale closure in keymap)
     const onSaveRef = useRef(onSave);
-    const onContentChangeRef = useRef(onContentChange);
     const onDocumentChangeRef = useRef(onDocumentChange);
     useEffect(() => {
         onSaveRef.current = onSave;
     }, [onSave]);
-    useEffect(() => {
-        onContentChangeRef.current = onContentChange;
-    }, [onContentChange]);
     useEffect(() => {
         onDocumentChangeRef.current = onDocumentChange;
     }, [onDocumentChange]);
@@ -326,15 +321,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                 EditorView.updateListener.of((update) => {
                     if (update.docChanged) {
                         isUserEditRef.current = true;
-                        if (isMarkdownRef.current) {
-                            if (onContentChangeRef.current) {
-                                onContentChangeRef.current(update.state.doc.toString());
-                            } else {
-                                onDocumentChangeRef.current?.();
-                            }
-                        } else {
-                            onDocumentChangeRef.current?.();
-                        }
+                        onDocumentChangeRef.current?.();
                     }
 
                     if (update.selectionSet) {
