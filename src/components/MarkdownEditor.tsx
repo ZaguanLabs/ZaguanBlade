@@ -8,19 +8,21 @@ import { FileChangeBar } from './editor/FileChangeBar';
 
 interface MarkdownEditorProps {
     content: string;
-    onChange: (val: string) => void;
+    onDocumentChange?: () => void;
     onSave?: (val: string) => void;
     filename?: string;
 }
 
 export const MarkdownEditor = forwardRef<CodeEditorHandle, MarkdownEditorProps>(({
     content,
-    onChange,
+    onDocumentChange,
     onSave,
     filename
 }, ref) => {
     const { t } = useTranslation();
     const [mode, setMode] = useState<'edit' | 'view'>('edit');
+    const [previewContent, setPreviewContent] = useState(content);
+    const previewContentRef = React.useRef(content);
     const editorRef = React.useRef<CodeEditorHandle>(null);
 
     const { getChangeForFile, acceptFile, rejectFile, refresh } = useUncommittedChanges();
@@ -28,11 +30,29 @@ export const MarkdownEditor = forwardRef<CodeEditorHandle, MarkdownEditorProps>(
 
     useImperativeHandle(ref, () => ({
         getView: () => editorRef.current?.getView() ?? null,
-        getContent: () => editorRef.current?.getContent() ?? content,
+        getContent: () => editorRef.current?.getContent() ?? previewContentRef.current,
         setCursor: (line: number, col: number) => {
             editorRef.current?.setCursor(line, col);
         },
-    }), [content]);
+    }), []);
+
+    React.useEffect(() => {
+        if (mode === 'edit') {
+            previewContentRef.current = content;
+            setPreviewContent(content);
+        }
+    }, [content, mode]);
+
+    const switchMode = React.useCallback(() => {
+        if (mode === 'edit') {
+            const nextPreviewContent = editorRef.current?.getContent() ?? previewContentRef.current;
+            previewContentRef.current = nextPreviewContent;
+            setPreviewContent(nextPreviewContent);
+            setMode('view');
+        } else {
+            setMode('edit');
+        }
+    }, [mode]);
 
     const handleAccept = async () => {
         if (filename) await acceptFile(filename);
@@ -53,13 +73,13 @@ export const MarkdownEditor = forwardRef<CodeEditorHandle, MarkdownEditorProps>(
             // Ctrl+E to toggle between Edit and View mode
             if (e.ctrlKey && e.key === 'e' && !e.shiftKey) {
                 e.preventDefault();
-                setMode(prev => prev === 'edit' ? 'view' : 'edit');
+                switchMode();
             }
         };
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, []);
+    }, [switchMode]);
 
     return (
         <div className="h-full flex flex-col bg-(--editor-bg)">
@@ -73,7 +93,7 @@ export const MarkdownEditor = forwardRef<CodeEditorHandle, MarkdownEditorProps>(
 
                 <div className="flex items-center gap-1 rounded-md p-0.5" style={{ backgroundColor: 'color-mix(in srgb, var(--markdown-inline-code-bg) 80%, transparent)' }}>
                     <button
-                        onClick={() => setMode(mode === 'edit' ? 'view' : 'edit')}
+                        onClick={switchMode}
                         className={`flex items-center gap-2 px-3 py-1 rounded text-xs font-medium transition-all ${mode === 'edit'
                                 ? 'shadow-sm border text-(--markdown-heading) border-(--markdown-border) bg-(--markdown-inline-code-bg)'
                                 : 'shadow-sm border border-(--accent-primary) text-(--markdown-link)'
@@ -107,7 +127,7 @@ export const MarkdownEditor = forwardRef<CodeEditorHandle, MarkdownEditorProps>(
                         <CodeEditor
                             ref={editorRef}
                             content={content}
-                            onContentChange={onChange}
+                            onDocumentChange={onDocumentChange}
                             onSave={onSave}
                             filename={filename}
                             unifiedDiff={change?.unified_diff}
@@ -123,7 +143,7 @@ export const MarkdownEditor = forwardRef<CodeEditorHandle, MarkdownEditorProps>(
                 ) : (
                     <div className="h-full overflow-y-auto px-8 py-6 pb-[35vh] bg-(--editor-bg)" style={{ scrollPaddingBottom: '35vh' }}>
                         <div className="max-w-4xl mx-auto">
-                            <MarkdownRenderer content={content} />
+                            <MarkdownRenderer content={previewContent} />
                         </div>
                         <div aria-hidden="true" className="h-[35vh]" />
                     </div>

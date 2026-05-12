@@ -608,21 +608,6 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         }, 120);
     };
 
-    const handleMarkdownContentChange = (nextContent: string) => {
-        const nextText = nextContent;
-        liveContentRef.current = nextText;
-
-        setContent(nextText);
-        scheduleDocumentSync();
-
-        const nextIsDirty = nextText !== baseContentRef.current;
-        emitContentStateChange({
-            savedContent: nextIsDirty ? baseContentRef.current : nextText,
-            draftContent: nextIsDirty ? nextText : undefined,
-            isDirty: nextIsDirty,
-        });
-    };
-
     const handleNavigate = (path: string, line: number, character: number) => {
         console.debug("Navigating to:", path, line, character);
         setActiveFile(path);
@@ -658,7 +643,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                         <MarkdownEditor
                             ref={editorRef}
                             content={content}
-                            onChange={handleMarkdownContentChange}
+                            onDocumentChange={handleEditorDocumentChange}
                             onSave={handleSave}
                             filename={activeFile}
                         />

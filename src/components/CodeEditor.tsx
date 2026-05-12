@@ -327,7 +327,11 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onC
                     if (update.docChanged) {
                         isUserEditRef.current = true;
                         if (isMarkdownRef.current) {
-                            onContentChangeRef.current?.(update.state.doc.toString());
+                            if (onContentChangeRef.current) {
+                                onContentChangeRef.current(update.state.doc.toString());
+                            } else {
+                                onDocumentChangeRef.current?.();
+                            }
                         } else {
                             onDocumentChangeRef.current?.();
                         }
