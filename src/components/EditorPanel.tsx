@@ -578,16 +578,50 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         }
     };
 
-    const handleContentChange = (nextContent: string) => {
-        liveContentRef.current = nextContent;
+    const handleContentChange = (nextContent?: string) => {
+        if (nextContent == null && !isMarkdownFile) {
+            scheduleDocumentSync();
 
-        setContent(nextContent);
+            if (!lastPropagatedDirtyRef.current) {
+                pendingContentStateRef.current = {
+                    savedContent: baseContentRef.current,
+                    draftContent: undefined,
+                    isDirty: true,
+                };
+                flushPendingContentState();
+            }
+
+            if (contentStateTimerRef.current) {
+                clearTimeout(contentStateTimerRef.current);
+            }
+
+            contentStateTimerRef.current = setTimeout(() => {
+                contentStateTimerRef.current = null;
+                const nextText = getActiveEditorContent();
+                liveContentRef.current = nextText;
+                const nextIsDirty = nextText !== baseContentRef.current;
+                pendingContentStateRef.current = {
+                    savedContent: nextIsDirty ? baseContentRef.current : nextText,
+                    draftContent: nextIsDirty ? nextText : undefined,
+                    isDirty: nextIsDirty,
+                };
+                flushPendingContentState();
+            }, 120);
+            return;
+        }
+
+        const nextText = nextContent ?? getActiveEditorContent();
+        liveContentRef.current = nextText;
+
+        if (isMarkdownFile) {
+            setContent(nextText);
+        }
         scheduleDocumentSync();
 
-        const nextIsDirty = nextContent !== baseContentRef.current;
+        const nextIsDirty = nextText !== baseContentRef.current;
         emitContentStateChange({
-            savedContent: nextIsDirty ? baseContentRef.current : nextContent,
-            draftContent: nextIsDirty ? nextContent : undefined,
+            savedContent: nextIsDirty ? baseContentRef.current : nextText,
+            draftContent: nextIsDirty ? nextText : undefined,
             isDirty: nextIsDirty,
         });
     };
@@ -627,7 +661,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                         <MarkdownEditor
                             ref={editorRef}
                             content={content}
-                            onChange={handleContentChange}
+                            onChange={(nextContent) => handleContentChange(nextContent)}
                             onSave={handleSave}
                             filename={activeFile}
                         />
@@ -637,7 +671,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                         editorRef={editorRef}
                         content={content}
                         externalContentVersion={externalContentVersionRef.current}
-                        setContent={handleContentChange}
+                        onDocumentChange={() => handleContentChange()}
                         handleSave={handleSave}
                         activeFile={activeFile}
                         highlightLines={highlightLines}
@@ -657,7 +691,7 @@ interface EditorWithChangeBarProps {
     editorRef: React.RefObject<CodeEditorHandle | null>;
     content: string;
     externalContentVersion: number;
-    setContent: (content: string) => void;
+    onDocumentChange: () => void;
     handleSave: (text: string) => void;
     activeFile: string;
     highlightLines?: { startLine: number; endLine: number } | null;
@@ -669,7 +703,7 @@ function EditorWithChangeBar({
     editorRef,
     content,
     externalContentVersion,
-    setContent,
+    onDocumentChange,
     handleSave,
     activeFile,
     highlightLines,
@@ -700,7 +734,7 @@ function EditorWithChangeBar({
                     ref={editorRef}
                     content={content}
                     externalContentVersion={externalContentVersion}
-                    onChange={setContent}
+                    onDocumentChange={onDocumentChange}
                     onSave={handleSave}
                     filename={activeFile}
                     highlightLines={highlightLines || undefined}
