@@ -37,7 +37,7 @@ export type DerivedRenderSegment =
 export interface ChatWorkEntry {
     id: string;
     messageId: string;
-    source: 'tool_call' | 'command_execution';
+    source: 'tool_call' | 'command_execution' | 'activity';
     label: string;
     tone: 'tool' | 'error' | 'info';
     detail?: string;
@@ -47,9 +47,26 @@ export interface ChatWorkEntry {
     status?: ToolCall['status'];
 }
 
+export interface ChatActivity {
+    id: string;
+    kind: 'tool';
+    toolName: string;
+    action: string;
+    messageId?: string;
+    toolCallId?: string;
+    filePath?: string;
+    detail?: string;
+    command?: string;
+    status?: ToolCall['status'];
+    startedAt?: number;
+    updatedAt?: number;
+}
+
 export interface ChatProjection {
     messages: ChatMessageType[];
     messageById: Map<string, ChatMessageType>;
+    activities: ChatActivity[];
+    activityById: Map<string, ChatActivity>;
     workEntries: ChatWorkEntry[];
     workEntriesByMessageId: Map<string, ChatWorkEntry[]>;
 }
@@ -340,6 +357,37 @@ function deriveCommandExecutionWorkEntry(messageId: string, execution: CommandEx
     };
 }
 
+function findActivityMessageId(activity: ChatActivity, messages: ChatMessageType[]): string | null {
+    if (activity.messageId) {
+        return activity.messageId;
+    }
+    if (activity.toolCallId) {
+        const owner = messages.find((message) => message.tool_calls?.some((toolCall) => toolCall.id === activity.toolCallId));
+        if (owner?.id) {
+            return owner.id;
+        }
+    }
+    const lastAssistant = [...messages].reverse().find((message) => message.role === 'Assistant' && message.id);
+    return lastAssistant?.id ?? null;
+}
+
+function deriveActivityWorkEntry(activity: ChatActivity, messageId: string): ChatWorkEntry {
+    const command = activity.command;
+    const detail = command ?? activity.detail ?? activity.filePath ?? activity.action;
+    const tone = activity.status === 'error' || activity.status === 'skipped' ? 'error' : 'info';
+    return {
+        id: `activity:${activity.id}`,
+        messageId,
+        source: 'activity',
+        label: command ? 'Run command' : humanizeToolName(activity.toolName),
+        tone,
+        ...(detail ? { detail } : {}),
+        ...(command ? { command } : {}),
+        ...(activity.toolCallId ? { toolCallId: activity.toolCallId } : {}),
+        ...(activity.status ? { status: activity.status } : {}),
+    };
+}
+
 export function deriveChatWorkEntries(messages: ChatMessageType[]): ChatWorkEntry[] {
     const entries: ChatWorkEntry[] = [];
     for (const message of messages) {
@@ -375,8 +423,16 @@ export function deriveChatWorkEntries(messages: ChatMessageType[]): ChatWorkEntr
     return entries;
 }
 
-export function deriveChatProjection(messages: ChatMessageType[]): ChatProjection {
+function hasEquivalentToolWorkEntry(entries: ChatWorkEntry[], entry: ChatWorkEntry): boolean {
+    return !!entry.toolCallId && entries.some((candidate) =>
+        candidate.toolCallId === entry.toolCallId
+        && candidate.source !== 'activity'
+    );
+}
+
+export function deriveChatProjection(messages: ChatMessageType[], activities: ChatActivity[] = []): ChatProjection {
     const messageById = new Map<string, ChatMessageType>();
+    const activityById = new Map<string, ChatActivity>();
     const workEntriesByMessageId = new Map<string, ChatWorkEntry[]>();
     const workEntries: ChatWorkEntry[] = [];
 
@@ -390,9 +446,27 @@ export function deriveChatProjection(messages: ChatMessageType[]): ChatProjectio
         }
     });
 
+    for (const activity of activities) {
+        activityById.set(activity.id, activity);
+        const messageId = findActivityMessageId(activity, messages);
+        if (!messageId) {
+            continue;
+        }
+        const activityEntry = deriveActivityWorkEntry(activity, messageId);
+        const existingEntries = workEntriesByMessageId.get(messageId) ?? [];
+        if (hasEquivalentToolWorkEntry(existingEntries, activityEntry)) {
+            continue;
+        }
+        const nextEntries = [...existingEntries, activityEntry];
+        workEntriesByMessageId.set(messageId, nextEntries);
+        workEntries.push(activityEntry);
+    }
+
     return {
         messages,
         messageById,
+        activities,
+        activityById,
         workEntries,
         workEntriesByMessageId,
     };

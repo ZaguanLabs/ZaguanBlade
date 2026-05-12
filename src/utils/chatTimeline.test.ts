@@ -3,7 +3,7 @@ import test from 'node:test';
 import { normalizeSplitBlocks } from '../hooks/useChatV2';
 import type { ChatMessage, CommandExecution, ToolCall } from '../types/chat';
 import type { StructuredAction } from '../types/events';
-import { computeStableChatRows, computeStableChatTimelineRows, deriveChatProjection, deriveChatRows, deriveChatTimelineRows, deriveChatTimelineRowsFromProjection, deriveChatWorkEntries, deriveMessageRenderSegments, type StableChatRowsState, type StableChatTimelineRowsState } from './chatTimeline';
+import { computeStableChatRows, computeStableChatTimelineRows, deriveChatProjection, deriveChatRows, deriveChatTimelineRows, deriveChatTimelineRowsFromProjection, deriveChatWorkEntries, deriveMessageRenderSegments, type ChatActivity, type StableChatRowsState, type StableChatTimelineRowsState } from './chatTimeline';
 import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertToolCallBlockPreservingOrder, moveExistingContentAfterTools, upsertSplitTextBlocks } from './messageBlocks';
 
 function makeToolCall(overrides: Partial<ToolCall> & Pick<ToolCall, 'id'>): ToolCall {
@@ -289,6 +289,60 @@ test('deriveChatProjection indexes messages and work entries separately', () => 
     assert.equal(projection.messageById.get('assistant-projection'), message);
     assert.equal(projection.workEntries.length, 1);
     assert.equal(projection.workEntriesByMessageId.get('assistant-projection')?.[0]?.toolCallId, 'tool-read');
+});
+
+test('deriveChatProjection merges explicit activity work entries', () => {
+    const message = makeAssistantMessage({
+        id: 'assistant-activity',
+        content: 'Working',
+    });
+    const activity: ChatActivity = {
+        id: 'activity-1',
+        kind: 'tool',
+        toolName: 'grep_search',
+        action: 'searching',
+        messageId: 'assistant-activity',
+        detail: 'src/**/*.ts',
+        status: 'executing',
+    };
+
+    const projection = deriveChatProjection([message], [activity]);
+
+    assert.equal(projection.activities.length, 1);
+    assert.equal(projection.activityById.get('activity-1'), activity);
+    assert.equal(projection.workEntries.length, 1);
+    assert.equal(projection.workEntries[0]?.source, 'activity');
+    assert.equal(projection.workEntries[0]?.label, 'Grep Search');
+    assert.equal(projection.workEntriesByMessageId.get('assistant-activity')?.[0]?.detail, 'src/**/*.ts');
+});
+
+test('deriveChatProjection avoids duplicating activity entries for known tool calls', () => {
+    const message = makeAssistantMessage({
+        id: 'assistant-activity-dedupe',
+        content: 'Reading',
+        tool_calls: [
+            makeToolCall({
+                id: 'tool-read',
+                function: { name: 'read_file', arguments: '{"path":"src/main.ts"}' },
+            }),
+        ],
+    });
+    const activity: ChatActivity = {
+        id: 'activity-tool-read',
+        kind: 'tool',
+        toolName: 'read_file',
+        action: 'reading',
+        toolCallId: 'tool-read',
+        filePath: 'src/main.ts',
+        status: 'executing',
+    };
+
+    const projection = deriveChatProjection([message], [activity]);
+
+    assert.equal(projection.activityById.get('activity-tool-read'), activity);
+    assert.equal(projection.workEntries.length, 1);
+    assert.equal(projection.workEntries[0]?.source, 'tool_call');
+    assert.equal(projection.workEntries[0]?.toolCallId, 'tool-read');
 });
 
 test('deriveChatTimelineRowsFromProjection uses projection work entry indexes', () => {
