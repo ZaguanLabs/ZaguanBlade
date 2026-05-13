@@ -113,6 +113,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
 
     const isComplete = status === 'complete';
     const isVisuallyComplete = isComplete && shouldFadeComplete;
+    const canStopRunCommand = isRunCommand && onStopCommand && (status === 'executing' || status === 'pending');
 
     // Get friendly tool name
     const getFriendlyToolName = (name: string, args?: Record<string, unknown>): string => {
@@ -399,17 +400,18 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                     </div>
                 </div>
                 <div className="flex items-center gap-1.5">
-                    {isRunCommand && status === 'executing' && onStopCommand && (
+                    {canStopRunCommand && (
                         <button
                             onClick={(e) => {
                                 e.stopPropagation();
                                 onStopCommand();
                             }}
-                            className="inline-flex h-5 w-5 items-center justify-center rounded text-(--accent-error) transition-colors hover:opacity-80"
+                            className="inline-flex h-6 items-center gap-1 rounded-md border border-(--accent-error)/45 px-1.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-(--accent-error) transition-colors hover:bg-(--accent-error)/10"
                             title={t('toolCall.stopCommand')}
                             aria-label={t('toolCall.stopCommand')}
                         >
-                            <StopCircle className="h-3.5 w-3.5" />
+                            <StopCircle className="h-3 w-3" />
+                            {t('common.stop', { defaultValue: 'Stop' })}
                         </button>
                     )}
                     <span className={`text-[9px] font-semibold uppercase tracking-[0.14em] ${status === 'complete' ? 'text-(--accent-green)' :

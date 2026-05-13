@@ -373,7 +373,7 @@ export function useCommandExecution() {
                 pending.terminalTitle,
                 pending.cwd,
                 command,
-                false,
+                true,
                 false,
                 pending.command,
             );
