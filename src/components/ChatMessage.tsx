@@ -9,6 +9,7 @@ import { HookApprovalCard } from './HookApprovalCard';
 import { useContextMenu, ContextMenuItem } from './ui/ContextMenu';
 import { MarkdownRenderer, StreamingMarkdownRenderer } from './MarkdownRenderer';
 import { deriveChatWorkEntries, deriveMessageRenderSegments, type ChatWorkEntry, type DerivedActivityGroupItem } from '../utils/chatTimeline';
+import { getCopyableMessageContent } from '../utils/chatMessageCopy';
 
 const REVERTIBLE_TOOLS = new Set([
     'apply_patch',
@@ -678,6 +679,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
             backgroundColor: 'color-mix(in srgb, var(--border-default) 88%, transparent)'
         }
         : undefined;
+    const copyableMessageContent = getCopyableMessageContent(message);
 
     // Context menu for chat messages
     const handleContextMenu = useCallback((e: React.MouseEvent) => {
@@ -692,7 +694,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                 shortcut: 'Ctrl+C',
                 onClick: async () => {
                     try {
-                        await navigator.clipboard.writeText(message.content);
+                        await navigator.clipboard.writeText(copyableMessageContent);
                     } catch (err) {
                         console.error('[Context] Failed to copy:', err);
                     }
@@ -704,8 +706,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                 icon: <MessageSquare className="w-4 h-4" />,
                 onClick: async () => {
                     try {
-                        const markdown = `**${message.role}:**\n\n${message.content}`;
-                        await navigator.clipboard.writeText(markdown);
+                        await navigator.clipboard.writeText(copyableMessageContent);
                     } catch (err) {
                         console.error('[Context] Failed to copy:', err);
                     }
@@ -742,7 +743,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
         }
 
         showMenu({ x: e.clientX, y: e.clientY }, items);
-    }, [message, isUser, isAssistant, showMenu, t]);
+    }, [copyableMessageContent, isUser, isAssistant, showMenu, t]);
 
     // Don't render Tool messages separately - they're shown in the tool call display
     // UNLESS this is a standalone tool message not handled by the previous assistant message.
