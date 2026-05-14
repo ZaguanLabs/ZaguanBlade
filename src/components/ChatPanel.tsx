@@ -6,6 +6,7 @@ import { useHistory } from '../hooks/useHistory';
 import type { ChatMessage as ChatMessageType, ChatMode, ComposerMention, HookApprovalRequest, ImageAttachment, ModelInfo, QueuedRequest, ToolActivityState } from '../types/chat';
 
 import type { StructuredAction, TodoItem } from '../types/events';
+import { isNearChatBottom, shouldDetachChatAutoScrollOnWheel } from '../utils/chatScroll';
 import { ChatMessage } from './ChatMessage';
 import { ChatTabBar } from './ChatTabBar';
 import { CommandCenter } from './CommandCenter';
@@ -672,7 +673,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
             }
         }
 
-        const isBottom = Math.abs(target.scrollHeight - target.scrollTop - target.clientHeight) < SCROLL_BOTTOM_THRESHOLD_PX;
+        const isBottom = isNearChatBottom(target.scrollHeight, target.scrollTop, target.clientHeight, SCROLL_BOTTOM_THRESHOLD_PX);
         isUserAtBottomRef.current = isBottom;
         const nextShowScrollToBottom = !isBottom && messageCount > 0;
         if (showScrollToBottomRef.current !== nextShowScrollToBottom) {
@@ -680,6 +681,20 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
             setShowScrollToBottom(nextShowScrollToBottom);
         }
     }, [messageCount, scheduleVisibleVirtualRangeUpdate]);
+
+    const handleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+        const target = e.currentTarget;
+        if (!shouldDetachChatAutoScrollOnWheel(e.deltaY, target.scrollTop)) {
+            return;
+        }
+
+        isUserAtBottomRef.current = false;
+        isSentinelVisibleRef.current = false;
+        if (!showScrollToBottomRef.current && messageCount > 0) {
+            showScrollToBottomRef.current = true;
+            setShowScrollToBottom(true);
+        }
+    }, [messageCount]);
 
     const registerRowElement = useCallback((rowKey: string, element: HTMLDivElement | null) => {
         if (element) {
@@ -887,6 +902,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                     ref={scrollContainerRef}
                     className="relative flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent"
                     onScroll={handleScroll}
+                    onWheel={handleWheel}
                 >
                     <div className="mx-auto flex w-full max-w-none flex-col gap-0.5 px-0.5 py-4 md:px-1">
                         {messages.length === 0 && (

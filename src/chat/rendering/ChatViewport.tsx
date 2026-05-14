@@ -7,6 +7,7 @@ import { ProgressIndicator } from '../../components/ProgressIndicator';
 import type { ChatActivity } from '../../utils/chatTimeline';
 import { FloatingJumpToBottomButton } from './FloatingJumpToBottomButton';
 import { useChatTimelineRows } from './useChatTimelineRows';
+import { shouldDetachChatAutoScrollOnWheel } from '../../utils/chatScroll';
 
 const FOLLOW_BOTTOM_THRESHOLD_PX = 48;
 const DETACH_BOTTOM_THRESHOLD_PX = 140;
@@ -98,6 +99,17 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
         }
     }, [getDistanceFromBottom, setStableScrollMode]);
 
+    const handleWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
+        const element = scrollRef.current;
+        if (!element) {
+            return;
+        }
+
+        if (shouldDetachChatAutoScrollOnWheel(event.deltaY, element.scrollTop)) {
+            setStableScrollMode('detached');
+        }
+    }, [setStableScrollMode]);
+
     const scrollToBottom = useCallback(() => {
         const element = scrollRef.current;
         if (!element) {
@@ -122,7 +134,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
 
     return (
         <div className="relative min-h-0 flex-1">
-            <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent">
+            <div ref={scrollRef} onScroll={handleScroll} onWheel={handleWheel} className="h-full overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent">
                 <div className="mx-auto flex w-full max-w-none flex-col gap-0.5 px-0.5 py-4 md:px-1">
                     {messages.length === 0 && (
                         <div className="mx-4 mt-10 rounded-2xl border border-(--border-subtle) bg-(--bg-surface)/70 px-6 py-8 text-center shadow-[0_24px_80px_rgba(0,0,0,0.25)]">
