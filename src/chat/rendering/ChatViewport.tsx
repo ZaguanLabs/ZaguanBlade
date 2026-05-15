@@ -173,7 +173,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                                 onUndoTool={onUndoTool}
                                 onStopCommand={onStopCommand}
                                 onOpenFile={onOpenFile}
-                                showInlineWorkLog={true}
+                                showInlineWorkLog={false}
                                 workDetailsVisible={true}
                             />
                         );
