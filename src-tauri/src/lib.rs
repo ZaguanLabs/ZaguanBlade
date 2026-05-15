@@ -8,7 +8,6 @@ pub mod blade_event_scheduler;
 pub mod blade_protocol;
 pub mod blade_ws_client;
 pub mod buffer_snapshot;
-pub mod chat;
 pub mod chat_manager;
 pub mod chat_orchestrator;
 pub mod commands;
