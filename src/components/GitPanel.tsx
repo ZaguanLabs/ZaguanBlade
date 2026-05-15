@@ -167,10 +167,10 @@ export const GitPanel: React.FC<GitPanelProps> = ({
 
     // Get status indicator color based on file state
     const getStatusColor = (file: GitFileStatus) => {
-        if (file.untracked) return 'text-green-400'; // New/untracked files in green
-        if (file.conflicted) return 'text-red-400';
-        if (file.staged) return 'text-emerald-400';
-        return 'text-amber-400'; // Modified unstaged
+        if (file.untracked) return 'text-(--accent-mention)'; // New/untracked files in green
+        if (file.conflicted) return 'text-(--state-danger)';
+        if (file.staged) return 'text-(--accent-mention)';
+        return 'text-(--accent-warning)'; // Modified unstaged
     };
 
     const shouldStrikeFileName = (file: GitFileStatus) => {
@@ -181,12 +181,12 @@ export const GitPanel: React.FC<GitPanelProps> = ({
 
     // File row component for compact display
     const FileRow = ({ file, isStaged }: { file: GitFileStatus; isStaged: boolean }) => (
-        <div className="group flex items-center gap-1 py-0.5 px-1 rounded hover:bg-[var(--bg-surface-hover)] text-[11px]">
+        <div className="group flex items-center gap-1 py-0.5 px-1 rounded-[calc(var(--panel-radius)*0.4)] hover:bg-(--bg-surface-hover) text-[11px]">
             <span className={`font-mono w-5 shrink-0 ${getStatusColor(file)}`}>
                 {file.statusCode}
             </span>
             <span
-                className={`truncate flex-1 cursor-pointer ${file.untracked ? 'text-green-400/80' : 'text-[var(--fg-primary)]'} ${shouldStrikeFileName(file) ? 'line-through decoration-red-400/70 text-[var(--fg-tertiary)]' : ''}`}
+                className={`truncate flex-1 cursor-pointer ${file.untracked ? 'text-(--accent-mention)/80' : 'text-(--fg-primary)'} ${shouldStrikeFileName(file) ? 'line-through decoration-(--state-danger) text-(--fg-tertiary)' : ''}`}
                 onClick={() => toggleDiff(file)}
                 title={file.path}
             >
@@ -195,7 +195,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
             <div className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 transition-opacity">
                 {isStaged ? (
                     <button
-                        className="p-0.5 rounded hover:bg-[var(--bg-surface)] text-[var(--fg-tertiary)] hover:text-[var(--fg-primary)]"
+                        className="p-0.5 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface) text-(--fg-tertiary) hover:text-(--fg-primary)"
                         onClick={() => runAction(`unstage-${file.path}`, () => onUnstageFile(file.path))}
                         disabled={busyAction === `unstage-${file.path}`}
                         title={t('git.unstage')}
@@ -204,7 +204,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                     </button>
                 ) : (
                     <button
-                        className="p-0.5 rounded hover:bg-[var(--bg-surface)] text-[var(--fg-tertiary)] hover:text-[var(--fg-primary)]"
+                        className="p-0.5 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface) text-(--fg-tertiary) hover:text-(--fg-primary)"
                         onClick={() => runAction(`stage-${file.path}`, () => onStageFile(file.path))}
                         disabled={busyAction === `stage-${file.path}`}
                         title={t('git.stage')}
@@ -217,13 +217,13 @@ export const GitPanel: React.FC<GitPanelProps> = ({
     );
 
     return (
-        <div className="h-full bg-[var(--bg-panel)] border-r border-[var(--border-subtle)] flex flex-col text-[var(--fg-secondary)]">
+        <div className="h-full bg-(--bg-panel) border-r border-(--border-subtle) flex flex-col text-(--fg-secondary)">
             {/* Header */}
-            <div className="h-9 px-4 flex items-center bg-[var(--bg-panel)] border-b border-[var(--border-subtle)] text-[10px] uppercase tracking-wider font-semibold select-none justify-between text-[var(--fg-secondary)]">
+            <div className="h-9 px-4 flex items-center bg-(--bg-panel) border-b border-(--border-subtle) text-[10px] uppercase tracking-wider font-semibold select-none justify-between text-(--fg-secondary)">
                 <span>{t('git.sourceControlTitle')}</span>
                 <button
                     onClick={() => runAction('refresh', async () => onRefresh())}
-                    className="hover:text-[var(--fg-primary)] transition-colors"
+                    className="hover:text-(--fg-primary) transition-colors"
                     title={t('fileTree.refresh')}
                 >
                     <RefreshCw className={`w-3 h-3 ${busyAction === 'refresh' ? 'animate-spin' : ''}`} />
@@ -232,7 +232,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
 
             <div className="flex-1 min-h-0 flex flex-col">
                 {!isRepo && (
-                    <div className="p-4 text-[var(--fg-secondary)] italic text-xs">{t('git.notRepository')}</div>
+                    <div className="p-4 text-(--fg-secondary) italic text-xs">{t('git.notRepository')}</div>
                 )}
 
                 {isRepo && (
@@ -240,19 +240,19 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                         {/* Top section: commit box + changes — always scrollable */}
                         <div className="flex-1 min-h-0 overflow-y-auto">
                         {/* Commit Box - At the top, always visible */}
-                        <div className="p-3 border-b border-[var(--border-subtle)] bg-[var(--bg-surface)]/50">
+                        <div className="p-3 border-b border-(--border-subtle) bg-(--bg-surface)/50">
                             {/* Branch info inline */}
                             <div className="flex items-center justify-between mb-2 text-[10px]">
                                 <div className="flex items-center gap-2">
-                                    <span className="text-[var(--fg-secondary)]">{t('git.branchLabel')}</span>
-                                    <span className="text-[var(--fg-primary)] font-medium">
+                                    <span className="text-(--fg-secondary)">{t('git.branchLabel')}</span>
+                                    <span className="text-(--fg-primary) font-medium">
                                         {status?.branch ?? t('git.detachedHead')}
                                     </span>
                                 </div>
                                 {(status?.ahead ?? 0) > 0 || (status?.behind ?? 0) > 0 ? (
-                                    <div className="flex items-center gap-1 text-[var(--fg-tertiary)]">
-                                        {status?.ahead ? <span className="text-green-400">↑{status.ahead}</span> : null}
-                                        {status?.behind ? <span className="text-amber-400">↓{status.behind}</span> : null}
+                                    <div className="flex items-center gap-1 text-(--fg-tertiary)">
+                                        {status?.ahead ? <span className="text-(--accent-mention)">↑{status.ahead}</span> : null}
+                                        {status?.behind ? <span className="text-(--accent-warning)">↓{status.behind}</span> : null}
                                     </div>
                                 ) : null}
                             </div>
@@ -261,7 +261,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                             <textarea
                                 ref={commitTextareaRef}
                                 rows={5}
-                                className="w-full min-h-[96px] max-h-[180px] overflow-y-auto bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg p-2.5 text-[11px] text-[var(--fg-primary)] placeholder-[var(--fg-secondary)] resize-none focus:outline-none focus:border-[var(--accent-primary)]/50 focus:ring-1 focus:ring-[var(--accent-primary)]/20 transition-all"
+                                className="w-full min-h-[96px] max-h-[180px] overflow-y-auto bg-(--bg-surface) border border-(--border-default) rounded-[calc(var(--panel-radius)*0.75)] p-2.5 text-[11px] text-(--fg-primary) placeholder-(--fg-secondary) resize-none focus:outline-none focus:border-(--accent-ai) focus:ring-1 focus:ring-(--accent-ai)/20 transition-all"
                                 placeholder={t('git.commitMessagePlaceholder')}
                                 value={commitMessage}
                                 onChange={e => {
@@ -274,10 +274,10 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                             <div className="flex items-center gap-2 mt-2">
                                 {/* Generate button - always visible */}
                                 <button
-                                    className={`flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-md transition-all font-medium border ${
+                                    className={`flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-[calc(var(--panel-radius)*0.55)] transition-all font-medium border ${
                                         busyAction === 'generate-message' || changedCount === 0
-                                            ? 'border-[var(--border-subtle)] text-[var(--fg-tertiary)] cursor-not-allowed opacity-50'
-                                            : 'border-[var(--border-default)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)]'
+                                            ? 'border-(--border-subtle) text-(--fg-tertiary) cursor-not-allowed opacity-50'
+                                            : 'border-(--border-default) text-(--fg-secondary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover)'
                                     }`}
                                     disabled={busyAction === 'generate-message' || changedCount === 0}
                                     onClick={() =>
@@ -297,27 +297,27 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                 {/* Dynamic Commit/Push button */}
                                 {showPushButton ? (
                                     <button
-                                        className={`relative flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-md transition-all duration-300 font-medium overflow-hidden ${
+                                        className={`relative flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-[calc(var(--panel-radius)*0.55)] transition-all duration-300 font-medium overflow-hidden ${
                                             pushSuccess ? 'scale-[1.02]' : ''
                                         } ${
                                             isPushing || pushSuccess ? 'cursor-not-allowed' : ''
                                         }`}
                                         style={{
                                             backgroundColor: pushSuccess
-                                                ? 'var(--accent-secondary)'
+                                                ? 'var(--accent-mention)'
                                                 : isPushing
-                                                    ? 'color-mix(in srgb, var(--accent-primary) 18%, var(--bg-surface))'
-                                                    : 'var(--accent-primary)',
+                                                    ? 'color-mix(in srgb, var(--accent-ai) 18%, var(--bg-surface))'
+                                                    : 'var(--accent-ai)',
                                             color: pushSuccess
                                                 ? 'var(--fg-bright)'
                                                 : isPushing
                                                     ? 'var(--fg-primary)'
                                                     : 'var(--fg-bright)',
                                             border: isPushing
-                                                ? '1px solid color-mix(in srgb, var(--accent-primary) 40%, var(--border-default))'
+                                                ? '1px solid color-mix(in srgb, var(--accent-ai) 40%, var(--border-default))'
                                                 : '1px solid transparent',
                                             boxShadow: pushSuccess
-                                                ? '0 0 0 1px color-mix(in srgb, var(--accent-secondary) 24%, transparent), var(--shadow-md)'
+                                                ? '0 0 0 1px color-mix(in srgb, var(--accent-mention) 24%, transparent), var(--shadow-md)'
                                                 : isPushing
                                                     ? 'inset 0 1px 0 color-mix(in srgb, var(--fg-bright) 12%, transparent)'
                                                     : 'var(--shadow-sm)',
@@ -340,8 +340,8 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                                 className="absolute -top-1.5 -right-1.5 flex items-center justify-center w-3.5 h-3.5 rounded-full text-[8px] font-bold animate-pulse"
                                                 style={{
                                                     backgroundColor: 'var(--bg-surface)',
-                                                    color: 'var(--accent-primary)',
-                                                    boxShadow: '0 0 0 1px color-mix(in srgb, var(--accent-primary) 22%, transparent)',
+                                                    color: 'var(--accent-ai)',
+                                                    boxShadow: '0 0 0 1px color-mix(in srgb, var(--accent-ai) 22%, transparent)',
                                                 }}
                                             >
                                                 {status.ahead}
@@ -349,11 +349,11 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                         )}
                                         {/* Animated left-to-right progress fill while pushing */}
                                         {isPushing && (
-                                            <div className="absolute inset-0 overflow-hidden rounded-md pointer-events-none">
+                                            <div className="absolute inset-0 overflow-hidden rounded-[calc(var(--panel-radius)*0.55)] pointer-events-none">
                                                 <div
                                                     className="absolute inset-y-0 left-0"
                                                     style={{
-                                                        background: 'linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 82%, transparent), color-mix(in srgb, var(--accent-secondary) 78%, transparent), color-mix(in srgb, var(--accent-purple) 76%, transparent))',
+                                                        background: 'linear-gradient(90deg, color-mix(in srgb, var(--accent-ai) 82%, transparent), color-mix(in srgb, var(--accent-mention) 78%, transparent), color-mix(in srgb, var(--accent-purple) 76%, transparent))',
                                                         width: '100%',
                                                         transformOrigin: 'left center',
                                                         animation: 'push-fill-sweep 1.2s ease-out infinite',
@@ -383,10 +383,10 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                     </button>
                                 ) : (
                                     <button
-                                        className={`flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-md transition-all font-medium ${
+                                        className={`flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-[calc(var(--panel-radius)*0.55)] transition-all font-medium ${
                                             busyAction === 'commit' || !canCommit
-                                                ? 'bg-[var(--bg-surface)] text-[var(--fg-tertiary)] cursor-not-allowed'
-                                                : 'bg-[var(--accent-primary)] text-white hover:bg-[var(--accent-primary)]/80'
+                                                ? 'bg-(--bg-surface) text-(--fg-tertiary) cursor-not-allowed'
+                                                : 'bg-(--accent-ai) text-(--fg-bright) hover:brightness-110'
                                         }`}
                                         disabled={busyAction === 'commit' || !canCommit}
                                         onClick={() =>
@@ -422,7 +422,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
 
                             {/* Preflight warning (e.g., detached HEAD) */}
                             {preflightWarning && (
-                                <div className="flex items-center gap-1.5 text-[10px] text-amber-400 mt-2 p-2 bg-amber-400/10 rounded-md">
+                                <div className="flex items-center gap-1.5 text-[10px] text-(--accent-warning) mt-2 p-2 bg-[color-mix(in_srgb,var(--accent-warning)_10%,transparent)] rounded-[calc(var(--panel-radius)*0.55)]">
                                     <AlertTriangle className="w-3 h-3 shrink-0" />
                                     <span>{preflightWarning}</span>
                                 </div>
@@ -430,7 +430,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
 
                             {/* Contextual hints */}
                             {stagedCount === 0 && changedCount > 0 && (
-                                <div className="text-[10px] text-[var(--fg-tertiary)] mt-2 italic">
+                                <div className="text-[10px] text-(--fg-tertiary) mt-2 italic">
                                     {t('git.unstagedCommitHint')}
                                 </div>
                             )}
@@ -439,27 +439,27 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                         {/* Changes section */}
                         <div>
                             {changedCount === 0 ? (
-                                <div className="p-4 text-[var(--fg-secondary)] italic text-xs text-center">
+                                <div className="p-4 text-(--fg-secondary) italic text-xs text-center">
                                     {t('git.workingTreeClean')}
                                 </div>
                             ) : (
                                 <div className="text-xs">
                                     {/* Staged Changes */}
-                                    <div className="border-b border-[var(--border-subtle)]">
+                                    <div className="border-b border-(--border-subtle)">
                                         <button
-                                            className="w-full flex items-center justify-between px-3 py-2 hover:bg-[var(--bg-surface-hover)] transition-colors"
+                                            className="w-full flex items-center justify-between px-3 py-2 hover:bg-(--bg-surface-hover) transition-colors"
                                             onClick={() => setStagedExpanded(!stagedExpanded)}
                                         >
-                                            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-[var(--fg-secondary)] font-semibold">
+                                            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-(--fg-secondary) font-semibold">
                                                 {stagedExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                                                 {t('git.stagedSection')}
-                                                <span className="text-emerald-400 font-normal normal-case">
+                                                <span className="text-(--accent-mention) font-normal normal-case">
                                                     ({stagedFiles.length})
                                                 </span>
                                             </div>
                                             {stagedFiles.length > 0 && (
                                                 <button
-                                                    className="text-[10px] px-2 py-0.5 rounded text-[var(--fg-tertiary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]"
+                                                    className="text-[10px] px-2 py-0.5 rounded-[calc(var(--panel-radius)*0.45)] text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--bg-surface)"
                                                     onClick={(e) => {
                                                         e.stopPropagation();
                                                         runAction('unstage-all', () => onUnstageAll());
@@ -476,11 +476,11 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                                     <React.Fragment key={`staged-${file.path}`}>
                                                         <FileRow file={file} isStaged={true} />
                                                         {diffs[file.path]?.expanded && (
-                                                            <div className="ml-6 mr-2 mb-1 rounded bg-[var(--bg-app)] border border-[var(--border-subtle)] p-2 text-[10px] font-mono whitespace-pre-wrap overflow-x-auto max-h-48 overflow-y-auto">
-                                                                {diffs[file.path]?.loading && <div className="text-[var(--fg-tertiary)]">{t('common.loading')}</div>}
-                                                                {diffs[file.path]?.error && <div className="text-[var(--accent-error)]">{diffs[file.path]?.error}</div>}
+                                                            <div className="ml-6 mr-2 mb-1 rounded-[calc(var(--panel-radius)*0.55)] bg-(--bg-app) border border-(--border-subtle) p-2 text-[10px] font-mono whitespace-pre-wrap overflow-x-auto max-h-48 overflow-y-auto">
+                                                                {diffs[file.path]?.loading && <div className="text-(--fg-tertiary)">{t('common.loading')}</div>}
+                                                                {diffs[file.path]?.error && <div className="text-(--state-danger)">{diffs[file.path]?.error}</div>}
                                                                 {!diffs[file.path]?.loading && !diffs[file.path]?.error && (
-                                                                    <pre className="text-[var(--fg-secondary)]">{diffs[file.path]?.staged || t('git.noChanges')}</pre>
+                                                                    <pre className="text-(--fg-secondary)">{diffs[file.path]?.staged || t('git.noChanges')}</pre>
                                                                 )}
                                                             </div>
                                                         )}
@@ -493,19 +493,19 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                     {/* Unstaged/Untracked Changes */}
                                     <div>
                                         <button
-                                            className="w-full flex items-center justify-between px-3 py-2 hover:bg-[var(--bg-surface-hover)] transition-colors"
+                                            className="w-full flex items-center justify-between px-3 py-2 hover:bg-(--bg-surface-hover) transition-colors"
                                             onClick={() => setUnstagedExpanded(!unstagedExpanded)}
                                         >
-                                            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-[var(--fg-secondary)] font-semibold">
+                                            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-(--fg-secondary) font-semibold">
                                                 {unstagedExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                                                 {t('git.changes')}
-                                                <span className="text-amber-400 font-normal normal-case">
+                                                <span className="text-(--accent-warning) font-normal normal-case">
                                                     ({unstagedFiles.length})
                                                 </span>
                                             </div>
                                             {unstagedFiles.length > 0 && (
                                                 <button
-                                                    className="text-[10px] px-2 py-0.5 rounded text-[var(--fg-tertiary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]"
+                                                    className="text-[10px] px-2 py-0.5 rounded-[calc(var(--panel-radius)*0.45)] text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--bg-surface)"
                                                     onClick={(e) => {
                                                         e.stopPropagation();
                                                         runAction('stage-all', () => onStageAll());
@@ -522,11 +522,11 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                                     <React.Fragment key={`unstaged-${file.path}`}>
                                                         <FileRow file={file} isStaged={false} />
                                                         {diffs[file.path]?.expanded && !file.untracked && (
-                                                            <div className="ml-6 mr-2 mb-1 rounded bg-[var(--bg-app)] border border-[var(--border-subtle)] p-2 text-[10px] font-mono whitespace-pre-wrap overflow-x-auto max-h-48 overflow-y-auto">
-                                                                {diffs[file.path]?.loading && <div className="text-[var(--fg-tertiary)]">{t('common.loading')}</div>}
-                                                                {diffs[file.path]?.error && <div className="text-[var(--accent-error)]">{diffs[file.path]?.error}</div>}
+                                                            <div className="ml-6 mr-2 mb-1 rounded-[calc(var(--panel-radius)*0.55)] bg-(--bg-app) border border-(--border-subtle) p-2 text-[10px] font-mono whitespace-pre-wrap overflow-x-auto max-h-48 overflow-y-auto">
+                                                                {diffs[file.path]?.loading && <div className="text-(--fg-tertiary)">{t('common.loading')}</div>}
+                                                                {diffs[file.path]?.error && <div className="text-(--state-danger)">{diffs[file.path]?.error}</div>}
                                                                 {!diffs[file.path]?.loading && !diffs[file.path]?.error && (
-                                                                    <pre className="text-[var(--fg-secondary)]">{diffs[file.path]?.unstaged || t('git.noChanges')}</pre>
+                                                                    <pre className="text-(--fg-secondary)">{diffs[file.path]?.unstaged || t('git.noChanges')}</pre>
                                                                 )}
                                                             </div>
                                                         )}
@@ -547,7 +547,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
 
                 {/* Error display */}
                 {(error || filesError || actionError) && (
-                    <div className="p-3 text-[10px] text-[var(--accent-error)] break-all border-t border-[var(--border-subtle)] bg-[var(--accent-error)]/5">
+                    <div className="p-3 text-[10px] text-(--state-danger) break-all border-t border-(--border-subtle) bg-[color-mix(in_srgb,var(--state-danger)_5%,transparent)]">
                         {error || filesError || actionError}
                     </div>
                 )}

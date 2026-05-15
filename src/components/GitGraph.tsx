@@ -214,53 +214,53 @@ const CommitTooltip: React.FC<CommitTooltipProps> = ({ entry, remoteUrl, onCopy,
                 <img
                     src={getLocalAvatar(entry.authorName, entry.authorEmail)}
                     alt=""
-                    className="w-6 h-6 rounded-full bg-[var(--bg-surface)]"
+                    className="w-6 h-6 rounded-full bg-(--bg-surface)"
                 />
                 <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="font-semibold text-[var(--fg-primary)]">{entry.authorName}</span>
-                    <span className="text-[var(--fg-tertiary)]">⏱</span>
-                    <span className="text-[var(--fg-tertiary)]">{entry.relativeDate}</span>
-                    <span className="text-[var(--fg-tertiary)]">({formattedDate})</span>
+                    <span className="font-semibold text-(--fg-primary)">{entry.authorName}</span>
+                    <span className="text-(--fg-tertiary)">⏱</span>
+                    <span className="text-(--fg-tertiary)">{entry.relativeDate}</span>
+                    <span className="text-(--fg-tertiary)">({formattedDate})</span>
                 </div>
             </div>
 
             {/* Commit message */}
-            <div className="text-[var(--fg-primary)] mb-2 leading-relaxed">
+            <div className="text-(--fg-primary) mb-2 leading-relaxed">
                 {entry.subject}
             </div>
 
             {/* Stats */}
             {entry.filesChanged > 0 && (
-                <div className="text-[var(--fg-secondary)] mb-2">
+                <div className="text-(--fg-secondary) mb-2">
                     {t('gitGraph.filesChanged', { count: entry.filesChanged })}
-                    {entry.insertions > 0 && <>, <span className="text-green-400">{t('gitGraph.insertions', { count: entry.insertions })}</span></>}
-                    {entry.deletions > 0 && <>, <span className="text-red-400">{t('gitGraph.deletions', { count: entry.deletions })}</span></>}
+                    {entry.insertions > 0 && <>, <span className="text-(--accent-mention)">{t('gitGraph.insertions', { count: entry.insertions })}</span></>}
+                    {entry.deletions > 0 && <>, <span className="text-(--state-danger)">{t('gitGraph.deletions', { count: entry.deletions })}</span></>}
                 </div>
             )}
 
             {/* Hash + Open on GitHub */}
-            <div className="flex items-center gap-2 pt-1 border-t border-[var(--border-subtle)]">
-                <span className="text-[var(--fg-tertiary)]">◇</span>
+            <div className="flex items-center gap-2 pt-1 border-t border-(--border-subtle)">
+                <span className="text-(--fg-tertiary)">◇</span>
                 <button
-                    className="font-mono text-[var(--accent-primary)] hover:underline cursor-pointer flex items-center gap-1"
+                    className="font-mono text-(--accent-ai) hover:underline cursor-pointer flex items-center gap-1"
                     onClick={(e) => { e.stopPropagation(); onCopy(entry.hash); }}
                     title={t('gitGraph.copyFullCommitHash')}
                 >
                     {entry.shortHash}
                     {copied ? (
-                        <Check className="w-3 h-3 text-green-400" />
+                        <Check className="w-3 h-3 text-(--accent-mention)" />
                     ) : (
                         <Copy className="w-3 h-3 opacity-60" />
                     )}
                 </button>
                 {commitUrl && (
                     <>
-                        <span className="text-[var(--fg-tertiary)]">|</span>
+                        <span className="text-(--fg-tertiary)">|</span>
                         <a
                             href={commitUrl}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-[var(--accent-primary)] hover:underline flex items-center gap-1"
+                            className="text-(--accent-ai) hover:underline flex items-center gap-1"
                             onClick={(e) => e.stopPropagation()}
                         >
                             <ExternalLink className="w-3 h-3" />
@@ -307,7 +307,7 @@ export const GitGraph: React.FC<GitGraphProps> = ({ expanded, onToggle }) => {
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [t]);
 
     useEffect(() => {
         if (expanded && entries.length === 0) {
@@ -367,10 +367,10 @@ export const GitGraph: React.FC<GitGraphProps> = ({ expanded, onToggle }) => {
         <div className={`flex flex-col ${expanded ? 'basis-1/2 shrink-0 grow-0 min-h-0' : ''}`}>
             {/* Header */}
             <button
-                className="w-full flex items-center gap-1.5 px-3 py-2 hover:bg-[var(--bg-surface-hover)] transition-colors border-t border-[var(--border-subtle)] shrink-0"
+                className="w-full flex items-center gap-1.5 px-3 py-2 hover:bg-(--bg-surface-hover) transition-colors border-t border-(--border-subtle) shrink-0"
                 onClick={onToggle}
             >
-                <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-[var(--fg-secondary)] font-semibold">
+                <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-(--fg-secondary) font-semibold">
                     {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                     {t('gitGraph.title')}
                 </div>
@@ -379,13 +379,13 @@ export const GitGraph: React.FC<GitGraphProps> = ({ expanded, onToggle }) => {
             {expanded && (
                 <div ref={containerRef} className="relative flex-1 min-h-0 overflow-y-auto">
                     {loading && (
-                        <div className="p-3 text-[10px] text-[var(--fg-tertiary)] italic">{t('gitGraph.loadingCommits')}</div>
+                        <div className="p-3 text-[10px] text-(--fg-tertiary) italic">{t('gitGraph.loadingCommits')}</div>
                     )}
                     {error && (
-                        <div className="p-3 text-[10px] text-[var(--accent-error)]">{error}</div>
+                        <div className="p-3 text-[10px] text-(--state-danger)">{error}</div>
                     )}
                     {!loading && !error && entries.length === 0 && (
-                        <div className="p-3 text-[10px] text-[var(--fg-tertiary)] italic">{t('gitGraph.noCommits')}</div>
+                        <div className="p-3 text-[10px] text-(--fg-tertiary) italic">{t('gitGraph.noCommits')}</div>
                     )}
                     {!loading && entries.length > 0 && (
                         <div className="pb-2">
@@ -405,14 +405,14 @@ export const GitGraph: React.FC<GitGraphProps> = ({ expanded, onToggle }) => {
                                         key={entry.hash}
                                         ref={(el) => { if (el) rowRefs.current.set(index, el); }}
                                         className={`flex items-center gap-0 px-2 py-[3px] cursor-default select-none transition-colors ${
-                                            isHovered ? 'bg-[var(--bg-surface-hover)]' : ''
+                                            isHovered ? 'bg-(--bg-surface-hover)' : ''
                                         }`}
                                         onMouseEnter={() => handleMouseEnter(index)}
                                         onMouseLeave={handleMouseLeave}
                                     >
                                         {/* Graph column: vertical line + dot */}
                                         <div
-                                            className="relative flex-shrink-0"
+                                            className="relative shrink-0"
                                             style={{ width: graphColumnWidth, height: 22 }}
                                         >
                                             {/* Vertical lanes above current commit */}
@@ -456,7 +456,7 @@ export const GitGraph: React.FC<GitGraphProps> = ({ expanded, onToggle }) => {
 
                                         {/* Commit message + refs */}
                                         <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[11px]">
-                                            <span className="truncate text-[var(--fg-primary)]" title={entry.subject}>
+                                            <span className="truncate text-(--fg-primary)" title={entry.subject}>
                                                 {entry.subject}
                                             </span>
 
@@ -471,8 +471,8 @@ export const GitGraph: React.FC<GitGraphProps> = ({ expanded, onToggle }) => {
                                                         key={ref_}
                                                         className={`inline-flex items-center gap-0.5 px-1.5 py-0 rounded-full text-[9px] font-medium whitespace-nowrap ${
                                                             isHead
-                                                                ? 'bg-green-600/20 text-green-400 border border-green-600/30'
-                                                                : 'bg-blue-600/20 text-blue-400 border border-blue-600/30'
+                                                                ? 'bg-[color-mix(in_srgb,var(--accent-mention)_18%,transparent)] text-(--accent-mention) border border-[color-mix(in_srgb,var(--accent-mention)_30%,transparent)]'
+                                                                : 'bg-[color-mix(in_srgb,var(--accent-ai)_16%,transparent)] text-(--accent-ai) border border-[color-mix(in_srgb,var(--accent-ai)_28%,transparent)]'
                                                         }`}
                                                     >
                                                         {isHead && <GitCommit className="w-2.5 h-2.5" />}
@@ -485,7 +485,7 @@ export const GitGraph: React.FC<GitGraphProps> = ({ expanded, onToggle }) => {
                                             {tagRefs.map((tag) => (
                                                 <span
                                                     key={tag}
-                                                    className="inline-flex items-center px-1.5 py-0 rounded-full text-[9px] font-medium whitespace-nowrap bg-amber-600/20 text-amber-400 border border-amber-600/30"
+                                                    className="inline-flex items-center px-1.5 py-0 rounded-full text-[9px] font-medium whitespace-nowrap bg-[color-mix(in_srgb,var(--accent-warning)_18%,transparent)] text-(--accent-warning) border border-[color-mix(in_srgb,var(--accent-warning)_30%,transparent)]"
                                                 >
                                                     {tag}
                                                 </span>
@@ -500,7 +500,7 @@ export const GitGraph: React.FC<GitGraphProps> = ({ expanded, onToggle }) => {
                     {/* Hover tooltip */}
                     {hoveredIndex !== null && tooltipPos && entries[hoveredIndex] && (
                         <div
-                            className="absolute z-50 bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg shadow-xl"
+                            className="absolute z-50 bg-(--bg-surface) border border-(--border-default) rounded-[calc(var(--panel-radius)*0.75)] shadow-(--shadow-lg)"
                             style={{
                                 top: tooltipPos.top,
                                 left: tooltipPos.left,
