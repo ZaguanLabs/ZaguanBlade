@@ -34,18 +34,18 @@ interface FileExplorerProps {
 }
 
 const getIcon = (name: string | undefined, isDir: boolean, expanded: boolean) => {
-    if (!name) return <FileBox className="w-3.5 h-3.5 text-[var(--fg-tertiary)]" />;
+    if (!name) return <FileBox className="w-3.5 h-3.5 text-(--fg-tertiary)" />;
 
     if (isDir) {
         return expanded
-            ? <Folder className="w-3.5 h-3.5 text-[var(--fg-secondary)] fill-[var(--fg-secondary)]/20" />
-            : <Folder className="w-3.5 h-3.5 text-[var(--fg-tertiary)]" />;
+            ? <Folder className="w-3.5 h-3.5 text-(--fg-secondary) fill-(--fg-secondary)/20" />
+            : <Folder className="w-3.5 h-3.5 text-(--fg-tertiary)" />;
     }
-    if (name.endsWith('.rs')) return <FileCode className="w-3.5 h-3.5 text-orange-600/80" />;
-    if (name.endsWith('.tsx') || name.endsWith('.ts')) return <FileCode className="w-3.5 h-3.5 text-blue-500/80" />;
-    if (name.endsWith('.json') || name.endsWith('.toml')) return <FileCode className="w-3.5 h-3.5 text-yellow-500/80" />;
-    if (name.endsWith('.md')) return <FileText className="w-3.5 h-3.5 text-[var(--fg-secondary)]" />;
-    return <FileBox className="w-3.5 h-3.5 text-[var(--fg-tertiary)]" />;
+    if (name.endsWith('.rs')) return <FileCode className="w-3.5 h-3.5 text-(--syntax-number)" />;
+    if (name.endsWith('.tsx') || name.endsWith('.ts')) return <FileCode className="w-3.5 h-3.5 text-(--syntax-type)" />;
+    if (name.endsWith('.json') || name.endsWith('.toml')) return <FileCode className="w-3.5 h-3.5 text-(--accent-warning)" />;
+    if (name.endsWith('.md')) return <FileText className="w-3.5 h-3.5 text-(--fg-secondary)" />;
+    return <FileBox className="w-3.5 h-3.5 text-(--fg-tertiary)" />;
 };
 
 const getParentPath = (path: string) => {
@@ -681,12 +681,12 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
     return (
         <div className="flex flex-col h-full w-full">
             {/* Search Bar */}
-            <div className="px-2 py-2 border-b border-[var(--border-subtle)] flex items-center gap-2">
-                <Search className="w-3 h-3 text-[var(--fg-tertiary)]" />
+            <div className="px-2 py-2 border-b border-(--border-subtle) flex items-center gap-2">
+                <Search className="w-3 h-3 text-(--fg-tertiary)" />
                 <input
                     type="text"
                     placeholder={t('fileTree.searchPlaceholder')}
-                    className="bg-transparent border-none outline-none text-xs w-full text-[var(--fg-primary)] placeholder-[var(--fg-tertiary)]"
+                    className="bg-transparent border-none outline-none text-xs w-full text-(--fg-primary) placeholder-(--fg-tertiary)"
                     onChange={(e) => tree.setSearch(e.target.value)}
                 />
             </div>
@@ -698,7 +698,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
             >
                 {newItem && newItem.parentPath === getWorkspaceRoot() && (
                     <div
-                        className="flex items-center gap-1.5 py-1 px-2 relative bg-[var(--bg-surface-hover)]"
+                        className="flex items-center gap-1.5 py-1 px-2 relative bg-(--bg-surface-hover)"
                         style={{ paddingLeft: '8px' }}
                     >
                         <span className="w-3" />
@@ -721,7 +721,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                                 setTimeout(() => setNewItem(null), 150);
                             }}
                             placeholder={newItem.isDir ? t('fileTree.folderNamePlaceholder') : t('fileTree.fileNamePlaceholder')}
-                            className="bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded px-1 text-xs text-[var(--fg-primary)] outline-none flex-1 min-w-0"
+                            className="bg-(--bg-surface) border border-(--border-focus) rounded-[calc(var(--panel-radius)*0.4)] px-1 text-xs text-(--fg-primary) outline-none flex-1 min-w-0"
                             autoFocus
                         />
                     </div>
@@ -741,12 +741,12 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                                 data-tree-item
                                 className={`group flex items-center gap-1.5 py-1 px-2 cursor-pointer relative
                                     ${isActiveFile
-                                        ? 'bg-[var(--bg-selection)] text-[var(--accent-secondary)]'
+                                        ? 'bg-(--bg-selection) text-(--accent-secondary)'
                                         : item.isSelected()
-                                            ? 'bg-[var(--bg-selection)]/60 text-[var(--fg-primary)]'
-                                        : 'text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)]'
+                                            ? 'bg-(--bg-selection)/60 text-(--fg-primary)'
+                                        : 'text-(--fg-secondary) hover:bg-(--bg-surface-hover)'
                                     }
-                                    ${item.isFocused() ? 'ring-1 ring-inset ring-[var(--border-focus)]' : ''}
+                                    ${item.isFocused() ? 'ring-1 ring-inset ring-(--border-focus)' : ''}
                                 `}
                                 style={{ paddingLeft: `${(item.getItemMeta().level) * 12 + 8}px` }}
                                 onClick={(e) => {
@@ -770,27 +770,27 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                                 {Array.from({ length: item.getItemMeta().level }).map((_, i) => (
                                     <div
                                         key={i}
-                                        className="absolute top-0 bottom-0 w-px bg-[var(--border-subtle)]/20"
+                                        className="absolute top-0 bottom-0 w-px bg-(--border-subtle)/20"
                                         style={{ left: `${i * 12 + 11}px` }}
                                     />
                                 ))}
 
                                 <span className={`transition-transform duration-200 ${item.isExpanded() ? 'rotate-90' : ''}`}>
-                                    {item.isFolder() ? <ChevronRight className="w-3 h-3 text-[var(--fg-tertiary)] group-hover:text-[var(--fg-secondary)] transition-colors" /> : <span className="w-3" />}
+                                    {item.isFolder() ? <ChevronRight className="w-3 h-3 text-(--fg-tertiary) group-hover:text-(--fg-secondary) transition-colors" /> : <span className="w-3" />}
                                 </span>
 
                                 {getIcon(item.getItemName(), item.isFolder(), item.isExpanded())}
 
                                 {/* Loading indicator */}
                                 {item.isLoading?.() && (
-                                    <Loader2 className="w-3 h-3 text-[var(--fg-tertiary)] animate-spin" />
+                                    <Loader2 className="w-3 h-3 text-(--fg-tertiary) animate-spin" />
                                 )}
 
                                 {/* Inline rename input or item name */}
                                 {item.isRenaming?.() ? (
                                     <input
                                         {...(item.getRenameInputProps?.() || {})}
-                                        className="bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded px-1 text-xs text-[var(--fg-primary)] outline-none flex-1 min-w-0"
+                                        className="bg-(--bg-surface) border border-(--border-focus) rounded-[calc(var(--panel-radius)*0.4)] px-1 text-xs text-(--fg-primary) outline-none flex-1 min-w-0"
                                         autoFocus
                                     />
                                 ) : (
@@ -803,14 +803,14 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                             {/* Inline new item input - shows as first child of expanded folder */}
                             {showNewItemInput && (
                                 <div
-                                    className="flex items-center gap-1.5 py-1 px-2 relative bg-[var(--bg-surface-hover)]"
+                                    className="flex items-center gap-1.5 py-1 px-2 relative bg-(--bg-surface-hover)"
                                     style={{ paddingLeft: `${(item.getItemMeta().level + 1) * 12 + 8}px` }}
                                 >
                                     {/* Indentation Guides */}
                                     {Array.from({ length: item.getItemMeta().level + 1 }).map((_, i) => (
                                         <div
                                             key={i}
-                                            className="absolute top-0 bottom-0 w-px bg-[var(--border-subtle)]/20"
+                                            className="absolute top-0 bottom-0 w-px bg-(--border-subtle)/20"
                                             style={{ left: `${i * 12 + 11}px` }}
                                         />
                                     ))}
@@ -836,7 +836,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                                             setTimeout(() => setNewItem(null), 150);
                                         }}
                                         placeholder={newItem.isDir ? t('fileTree.folderNamePlaceholder') : t('fileTree.fileNamePlaceholder')}
-                                        className="bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded px-1 text-xs text-[var(--fg-primary)] outline-none flex-1 min-w-0"
+                                        className="bg-(--bg-surface) border border-(--border-focus) rounded-[calc(var(--panel-radius)*0.4)] px-1 text-xs text-(--fg-primary) outline-none flex-1 min-w-0"
                                         autoFocus
                                     />
                                 </div>
@@ -848,13 +848,13 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                 {/* Drag line for drag-and-drop */}
                 <div 
                     style={tree.getDragLineStyle?.()} 
-                    className="h-0.5 bg-[var(--accent-primary)] pointer-events-none relative"
+                    className="h-0.5 bg-(--accent-ai) pointer-events-none relative"
                 >
-                    <div className="absolute left-0 top-[-3px] h-2 w-2 bg-[var(--bg-panel)] border-2 border-[var(--accent-primary)] rounded-full" />
+                    <div className="absolute left-0 top-[-3px] h-2 w-2 bg-(--bg-panel) border-2 border-(--accent-ai) rounded-full" />
                 </div>
 
                 {tree.getItems().length === 0 && (
-                    <div className="p-4 text-[var(--fg-tertiary)] italic">
+                    <div className="p-4 text-(--fg-tertiary) italic">
                         {roots.length > 0 ? t('fileTree.loadingTree') : t('fileTree.waitingForWorkspace')}
                     </div>
                 )}
