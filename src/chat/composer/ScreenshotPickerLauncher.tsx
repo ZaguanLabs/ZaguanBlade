@@ -122,9 +122,9 @@ export const ScreenshotPickerLauncher: React.FC<{
                     disabled={disabled}
                     aria-haspopup="menu"
                     aria-expanded={menuOpen}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-md border border-(--border-subtle) bg-(--bg-app) px-2 text-[11px] font-medium text-(--fg-secondary) shadow-sm transition-colors hover:border-(--border-focus) hover:text-(--fg-primary) disabled:opacity-40"
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md border border-(--border-subtle) bg-(--bg-app) px-2 text-[11px] font-medium text-(--fg-secondary) shadow-(--shadow-sm) transition-colors hover:border-[color-mix(in_srgb,var(--accent-ai)_32%,transparent)] hover:text-(--fg-primary) disabled:opacity-40"
                 >
-                    <span className="inline-flex h-4 w-4 items-center justify-center rounded-sm bg-(--accent-primary)/15 text-(--accent-primary)">
+                    <span className="inline-flex h-4 w-4 items-center justify-center rounded-sm bg-[color-mix(in_srgb,var(--accent-ai)_14%,transparent)] text-(--accent-ai)">
                         <Plus className="h-3 w-3" />
                     </span>
                     Actions
@@ -133,7 +133,7 @@ export const ScreenshotPickerLauncher: React.FC<{
                 {menuOpen && (
                     <div
                         role="menu"
-                        className="absolute bottom-full left-0 z-50 mb-2 w-60 overflow-hidden rounded-lg border border-(--border-subtle) bg-(--bg-surface) p-1.5 shadow-xl shadow-black/35"
+                        className="absolute bottom-full left-0 z-50 mb-2 w-60 overflow-hidden rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-surface) p-1.5 shadow-(--shadow-lg)"
                     >
                         <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wider text-(--fg-tertiary)">
                             Capture
@@ -144,7 +144,7 @@ export const ScreenshotPickerLauncher: React.FC<{
                             onClick={() => runAction(() => void start('window'))}
                             className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-(--fg-secondary) transition-colors hover:bg-(--bg-app) hover:text-(--fg-primary)"
                         >
-                            <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-(--border-subtle) bg-(--bg-app)">
+                            <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-(--border-subtle) bg-(--bg-app) text-(--accent-ai)">
                                 <Monitor className="h-3.5 w-3.5" />
                             </span>
                             <span className="min-w-0">
@@ -158,7 +158,7 @@ export const ScreenshotPickerLauncher: React.FC<{
                             onClick={() => runAction(() => void start('region'))}
                             className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-(--fg-secondary) transition-colors hover:bg-(--bg-app) hover:text-(--fg-primary)"
                         >
-                            <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-(--border-subtle) bg-(--bg-app)">
+                            <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-(--border-subtle) bg-(--bg-app) text-(--accent-planning)">
                                 <ScanLine className="h-3.5 w-3.5" />
                             </span>
                             <span className="min-w-0">
@@ -176,7 +176,7 @@ export const ScreenshotPickerLauncher: React.FC<{
                             onClick={() => runAction(onUploadImage)}
                             className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-(--fg-secondary) transition-colors hover:bg-(--bg-app) hover:text-(--fg-primary)"
                         >
-                            <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-(--border-subtle) bg-(--bg-app)">
+                            <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-(--border-subtle) bg-(--bg-app) text-(--accent-mention)">
                                 <ImageUp className="h-3.5 w-3.5" />
                             </span>
                             <span className="min-w-0">

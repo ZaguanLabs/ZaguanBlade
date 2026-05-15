@@ -69,10 +69,10 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
 
     const getModelIcon = (id: string) => {
         const lower = id.toLowerCase();
-        if (lower.includes('gpt')) return <Sparkles className="w-3 h-3 text-green-400" />;
-        if (lower.includes('claude')) return <BrainCircuit className="w-3 h-3 text-orange-400" />;
-        if (lower.includes('gemini')) return <Cpu className="w-3 h-3 text-blue-400" />;
-        return <Box className="w-3 h-3 text-zinc-400" />;
+        if (lower.includes('gpt')) return <Sparkles className="w-3 h-3 text-(--accent-ai)" />;
+        if (lower.includes('claude')) return <BrainCircuit className="w-3 h-3 text-(--accent-planning)" />;
+        if (lower.includes('gemini')) return <Cpu className="w-3 h-3 text-(--accent-mention)" />;
+        return <Box className="w-3 h-3 text-(--fg-tertiary)" />;
     };
 
     const renderModelItem = (model: ModelInfo) => {
@@ -91,7 +91,7 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
                 className={`
                     group flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left transition-colors duration-150 focus:outline-none
                     ${isSelected
-                        ? 'bg-[color-mix(in_srgb,var(--accent-primary)_12%,var(--bg-surface))] text-(--fg-primary)'
+                        ? 'bg-[color-mix(in_srgb,var(--accent-ai)_12%,var(--bg-surface))] text-(--fg-primary)'
                         : 'text-(--fg-secondary) hover:bg-(--bg-surface-hover) focus:bg-(--bg-surface-hover)'
                     }
                 `}
@@ -104,7 +104,7 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
                         {model.name}
                     </div>
                 </div>
-                <div className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center ${isSelected ? 'text-(--accent-primary)' : 'text-transparent group-hover:text-(--fg-tertiary)'}`}>
+                <div className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center ${isSelected ? 'text-(--accent-ai)' : 'text-transparent group-hover:text-(--fg-tertiary)'}`}>
                     <Check className="h-3 w-3" />
                 </div>
             </button>
