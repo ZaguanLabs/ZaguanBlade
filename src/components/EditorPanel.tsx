@@ -82,7 +82,7 @@ const WelcomePage: React.FC<{
     }, [hasRemoteApiKey]);
 
     return (
-        <div className="h-full flex flex-col items-center justify-center bg-[var(--bg-editor)] text-center p-8 animate-in fade-in duration-300">
+        <div className="h-full flex flex-col items-center justify-center bg-(--bg-editor) text-center p-8 animate-in fade-in duration-(--transition-slow)">
             <div className="max-w-xl w-full">
                 <div className="mb-8 flex justify-center">
                     <img
@@ -93,10 +93,10 @@ const WelcomePage: React.FC<{
                     />
                 </div>
 
-                <h1 className="text-3xl font-bold text-[var(--fg-primary)] mb-3 tracking-tight">
+                <h1 className="text-3xl font-bold text-(--fg-primary) mb-3 tracking-tight">
                     {t('editor.landing.title')}
                 </h1>
-                <p className="text-[var(--fg-secondary)] text-lg mb-8 leading-relaxed">
+                <p className="text-(--fg-secondary) text-lg mb-8 leading-relaxed">
                     {t('editor.landing.subtitle')}
                 </p>
 
@@ -105,7 +105,7 @@ const WelcomePage: React.FC<{
                         <>
                             <button
                                 onClick={() => openSettingsSection('localai')}
-                                className="flex items-center justify-center gap-2 w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium transition-colors shadow-lg shadow-emerald-900/20"
+                                className="flex items-center justify-center gap-2 w-full py-3 px-4 bg-(--accent-mention) text-(--fg-bright) rounded-[calc(var(--panel-radius)*0.65)] font-medium transition-opacity shadow-(--shadow-md) hover:opacity-90"
                             >
                                 <Server className="w-4 h-4" />
                                 {t('editor.landing.useLocalAi')}
@@ -113,7 +113,7 @@ const WelcomePage: React.FC<{
 
                             <button
                                 onClick={() => openSettingsSection('account')}
-                                className="flex items-center justify-center gap-2 w-full py-3 px-4 bg-[var(--bg-surface)] hover:bg-[var(--bg-surface-hover)] border border-[var(--border-subtle)] hover:border-[var(--border-focus)] text-[var(--fg-primary)] rounded-lg font-medium transition-all"
+                                className="flex items-center justify-center gap-2 w-full py-3 px-4 bg-(--bg-surface) hover:bg-(--bg-surface-hover) border border-(--border-subtle) hover:border-(--border-focus) text-(--fg-primary) rounded-[calc(var(--panel-radius)*0.65)] font-medium transition-all"
                             >
                                 <Cloud className="w-4 h-4" />
                                 {t('editor.landing.useCloudModels')}
@@ -123,7 +123,7 @@ const WelcomePage: React.FC<{
                                 href={hasApiKey ? "https://zaguanai.com/dashboard" : "https://zaguanai.com/pricing"}
                                 target="_blank"
                                 rel="noreferrer"
-                                className="flex items-center justify-center gap-2 w-full py-2 px-4 rounded-lg font-medium transition-all text-[var(--fg-secondary)] hover:text-[var(--fg-primary)]"
+                                className="flex items-center justify-center gap-2 w-full py-2 px-4 rounded-[calc(var(--panel-radius)*0.55)] font-medium transition-all text-(--fg-secondary) hover:text-(--fg-primary)"
                             >
                                 {t('editor.landing.manageSubscription')}
                                 <ArrowRight className="w-4 h-4 opacity-70" />
@@ -132,8 +132,8 @@ const WelcomePage: React.FC<{
                     )}
                 </div>
 
-                <div className="mt-12 pt-8 border-t border-[var(--border-subtle)]">
-                    <p className="text-xs text-[var(--fg-tertiary)]">
+                <div className="mt-12 pt-8 border-t border-(--border-subtle)">
+                    <p className="text-xs text-(--fg-tertiary)">
                         {t('editor.landing.noApiKey')}
                         <br />
                         {t('editor.landing.localPrivacy')}
@@ -619,27 +619,27 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     }
 
     return (
-        <div className="h-full flex flex-col relative bg-[var(--bg-app)]">
+        <div className="h-full flex flex-col relative bg-(--bg-app)">
             {activeFile && !isPdfFile && (
                 <Breadcrumb filePath={activeFile} workspaceRoot={workspaceRoot || undefined} />
             )}
             {loading && !isPdfFile && (
-                <div className="absolute inset-0 bg-black/50 z-10 flex items-center justify-center">
-                    <div className="animate-spin w-5 h-5 border-2 border-emerald-500 border-t-transparent rounded-full" />
+                <div className="absolute inset-0 bg-[color-mix(in_srgb,var(--bg-app)_72%,transparent)] z-10 flex items-center justify-center">
+                    <div className="animate-spin w-5 h-5 border-2 border-(--accent-mention) border-t-transparent rounded-full" />
                 </div>
             )}
             {error && !isPdfFile && (
-                <div className="bg-red-900/50 text-red-200 p-2 text-xs font-mono">
+                <div className="bg-[color-mix(in_srgb,var(--state-danger)_16%,var(--bg-app))] text-(--state-danger) p-2 text-xs font-mono">
                     {error}
                 </div>
             )}
             <div className="flex-1 min-h-0 relative">
                 {isPdfFile ? (
-                    <Suspense fallback={<div className="h-full w-full bg-[var(--bg-editor)]" />}>
+                    <Suspense fallback={<div className="h-full w-full bg-(--bg-editor)" />}>
                         <PdfViewer filePath={activeFile} />
                     </Suspense>
                 ) : isMarkdownFile ? (
-                    <Suspense fallback={<div className="h-full w-full bg-[var(--bg-editor)]" />}>
+                    <Suspense fallback={<div className="h-full w-full bg-(--bg-editor)" />}>
                         <MarkdownEditor
                             ref={editorRef}
                             content={content}
@@ -711,7 +711,7 @@ function EditorWithChangeBar({
 
     return (
         <div className="relative h-full w-full">
-            <Suspense fallback={<div className="h-full w-full bg-[var(--bg-editor)]" />}>
+            <Suspense fallback={<div className="h-full w-full bg-(--bg-editor)" />}>
                 <CodeEditor
                     ref={editorRef}
                     content={content}
