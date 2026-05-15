@@ -167,11 +167,11 @@ export const AppBar: React.FC<AppBarProps> = ({
 
     return (
         <div
-            className="h-9 flex items-stretch select-none relative z-[51] shrink-0"
+            className="h-9 flex items-stretch select-none relative z-51 shrink-0"
             style={{
                 backgroundColor: 'var(--bg-panel)',
                 borderBottom: '1px solid var(--border-default)',
-                boxShadow: '0 1px 0 rgba(255,255,255,0.02), 0 6px 18px rgba(0,0,0,0.22)',
+                boxShadow: 'var(--shadow-sm)',
             }}
         >
             {/* Left: File Menu */}
@@ -182,8 +182,8 @@ export const AppBar: React.FC<AppBarProps> = ({
                             onClick={handleFileMenuClick}
                             className={`flex items-center gap-1 px-3 h-9 text-[11px] font-medium transition-colors ${
                                 fileMenuOpen
-                                    ? 'bg-[var(--bg-surface)] text-[var(--fg-primary)]'
-                                    : 'text-[var(--fg-tertiary)] hover:bg-[var(--bg-surface)] hover:text-[var(--fg-secondary)]'
+                                    ? 'bg-(--bg-surface) text-(--fg-primary)'
+                                    : 'text-(--fg-tertiary) hover:bg-(--bg-surface) hover:text-(--fg-secondary)'
                             }`}
                         >
                             {t('app.menu.file')}
@@ -192,52 +192,44 @@ export const AppBar: React.FC<AppBarProps> = ({
 
                         {fileMenuOpen && (
                             <div
-                                className="absolute top-full left-0 mt-0.5 min-w-[180px] py-1.5 border rounded-lg z-[100]"
-                                style={{
-                                    backgroundColor: 'var(--bg-surface)',
-                                    borderColor: 'var(--border-focus)',
-                                    boxShadow: '0 8px 30px rgba(0, 0, 0, 0.5)',
-                                }}
+                                className="absolute top-full left-0 z-100 mt-0.5 min-w-[180px] rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-surface) py-1.5 shadow-(--shadow-lg)"
                             >
                                 <button
                                     onClick={() => {
                                         setFileMenuOpen(false);
                                         window.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, bubbles: true }));
                                     }}
-                                    className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] transition-colors"
+                                    className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-primary) transition-colors hover:bg-(--bg-surface-hover)"
                                 >
                                     <span>{t('fileTree.newFile')}</span>
-                                    <span className="text-[10px] text-[var(--fg-tertiary)] font-mono">Ctrl+N</span>
+                                    <span className="text-[10px] text-(--fg-tertiary) font-mono">Ctrl+N</span>
                                 </button>
                                 <button
-                                    onClick={() => { setFileMenuOpen(false); }}
-                                    className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] transition-colors"
+                                    disabled
+                                    className="w-full flex cursor-not-allowed items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-tertiary) opacity-55"
                                 >
                                     <span>{t('fileTree.openFolder')}...</span>
-                                    <span className="text-[10px] text-[var(--fg-tertiary)] font-mono">Ctrl+O</span>
                                 </button>
-                                <div className="my-1.5 mx-2 h-px" style={{ backgroundColor: 'var(--border-subtle)' }} />
+                                <div className="my-1.5 mx-2 h-px bg-(--border-subtle)" />
                                 <button
-                                    onClick={() => { setFileMenuOpen(false); }}
-                                    className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] transition-colors"
+                                    disabled
+                                    className="w-full flex cursor-not-allowed items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-tertiary) opacity-55"
                                 >
                                     <span>{t('common.save')}</span>
-                                    <span className="text-[10px] text-[var(--fg-tertiary)] font-mono">Ctrl+S</span>
                                 </button>
                                 <button
-                                    onClick={() => { setFileMenuOpen(false); }}
-                                    className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] transition-colors"
+                                    disabled
+                                    className="w-full flex cursor-not-allowed items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-tertiary) opacity-55"
                                 >
                                     <span>{t('common.saveAs')}</span>
-                                    <span className="text-[10px] text-[var(--fg-tertiary)] font-mono">Ctrl+Shift+S</span>
                                 </button>
-                                <div className="my-1.5 mx-2 h-px" style={{ backgroundColor: 'var(--border-subtle)' }} />
+                                <div className="my-1.5 mx-2 h-px bg-(--border-subtle)" />
                                 <button
                                     onClick={() => { setFileMenuOpen(false); appWindow.close(); }}
-                                    className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] transition-colors"
+                                    className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-primary) transition-colors hover:bg-(--bg-surface-hover)"
                                 >
                                     <span>{t('common.exit')}</span>
-                                    <span className="text-[10px] text-[var(--fg-tertiary)] font-mono">Alt+F4</span>
+                                    <span className="text-[10px] text-(--fg-tertiary) font-mono">Alt+F4</span>
                                 </button>
                             </div>
                         )}
@@ -273,11 +265,11 @@ export const AppBar: React.FC<AppBarProps> = ({
                                     group flex items-center gap-1.5 px-3 h-[33px] cursor-pointer
                                     transition-colors relative whitespace-nowrap shrink-0 text-xs
                                     ${isActive
-                                        ? 'text-[var(--fg-primary)]'
-                                        : 'text-[var(--fg-tertiary)] hover:text-[var(--fg-secondary)]'
+                                        ? 'text-(--fg-primary)'
+                                        : 'text-(--fg-tertiary) hover:text-(--fg-secondary)'
                                     }
                                     ${isDragging ? 'opacity-50' : ''}
-                                    ${isDropTarget ? 'border-l-2 border-l-[var(--accent-primary)]' : ''}
+                                    ${isDropTarget ? 'border-l-2 border-l-(--accent-primary)' : ''}
                                 `}
                                 style={{
                                     backgroundColor: isActive
@@ -287,7 +279,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                                 }}
                             >
                                 {tab.isEphemeral ? (
-                                    <FileText className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-[var(--accent-warning)]' : 'text-[var(--fg-tertiary)]'}`} />
+                                    <FileText className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-(--accent-warning)' : 'text-(--fg-tertiary)'}`} />
                                 ) : (
                                     <span className={color}>{icon}</span>
                                 )}
@@ -319,7 +311,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                                         e.stopPropagation();
                                         onTabClose?.(tab.id);
                                     }}
-                                    className={`${isActive ? 'opacity-60' : 'opacity-0'} group-hover:opacity-60 hover:!opacity-100 hover:bg-[var(--bg-surface)] rounded p-0.5 transition-all ml-0.5`}
+                                    className={`${isActive ? 'opacity-60' : 'opacity-0'} group-hover:opacity-60 hover:opacity-100! hover:bg-(--bg-surface) rounded p-0.5 transition-all ml-0.5`}
                                 >
                                     <X className="w-3 h-3" />
                                 </button>
@@ -358,14 +350,14 @@ export const AppBar: React.FC<AppBarProps> = ({
                 <div className="flex items-center gap-1 pr-1 shrink-0">
                     <button
                         onClick={handleMinimize}
-                        className="h-7 w-7 rounded-md flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[var(--bg-surface)] hover:text-[var(--fg-secondary)] active:scale-95 transition-all duration-150"
+                        className="h-7 w-7 rounded-md flex items-center justify-center text-(--fg-tertiary) hover:bg-(--bg-surface) hover:text-(--fg-secondary) active:scale-95 transition-all duration-150"
                         title={t('windowControls.minimize')}
                     >
                         <Minus className="w-3.5 h-3.5" strokeWidth={1.8} />
                     </button>
                     <button
                         onClick={handleMaximizeRestore}
-                        className="h-7 w-7 rounded-md flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[var(--bg-surface)] hover:text-[var(--fg-secondary)] active:scale-95 transition-all duration-150"
+                        className="h-7 w-7 rounded-md flex items-center justify-center text-(--fg-tertiary) hover:bg-(--bg-surface) hover:text-(--fg-secondary) active:scale-95 transition-all duration-150"
                         title={isMaximized ? t('windowControls.restore') : t('windowControls.maximize')}
                     >
                         {isMaximized ? (
@@ -376,7 +368,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                     </button>
                     <button
                         onClick={handleClose}
-                        className="h-7 w-7 rounded-md flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[#c42b1c] hover:text-white active:scale-95 transition-all duration-150"
+                        className="h-7 w-7 rounded-md flex items-center justify-center text-(--fg-tertiary) hover:bg-(--state-danger) hover:text-(--fg-bright) active:scale-95 transition-all duration-150"
                         title={t('windowControls.close')}
                     >
                         <X className="w-3.5 h-3.5" strokeWidth={1.8} />
