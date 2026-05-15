@@ -71,18 +71,18 @@ export const StorageSetupModal: React.FC<StorageSetupModalProps> = ({
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center">
+        <div className="fixed inset-0 z-9999 flex items-center justify-center">
             {/* Backdrop */}
             <div className="absolute inset-0 bg-black/70" />
 
             {/* Modal */}
-            <div className="relative bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded-xl shadow-2xl w-full max-w-2xl mx-4 animate-in fade-in zoom-in-95 duration-200">
+            <div className="relative bg-(--bg-surface) border border-(--border-focus) rounded-(--panel-radius) shadow-(--shadow-xl) w-full max-w-2xl mx-4 animate-in fade-in zoom-in-95 duration-(--transition-base) overflow-hidden">
                 {/* Header */}
                 <div className="px-8 pt-8 pb-4">
-                    <h2 className="text-2xl font-bold text-[var(--fg-primary)]">
+                    <h2 className="text-2xl font-bold text-(--fg-primary)">
                         {t('storageSetup.title')}
                     </h2>
-                    <p className="mt-2 text-[var(--fg-secondary)]">
+                    <p className="mt-2 text-(--fg-secondary)">
                         {t('storageSetup.description')}
                     </p>
                 </div>
@@ -92,31 +92,31 @@ export const StorageSetupModal: React.FC<StorageSetupModalProps> = ({
                     {/* Local Storage Option */}
                     <button
                         onClick={() => setSelectedMode('local')}
-                        className={`w-full p-5 rounded-lg border-2 text-left transition-all ${
+                        className={`w-full p-5 rounded-[calc(var(--panel-radius)+2px)] border-2 text-left transition-all ${
                             selectedMode === 'local'
-                                ? 'border-emerald-500 bg-emerald-500/10'
-                                : 'border-[var(--border-subtle)] hover:border-[var(--border-focus)] hover:bg-[var(--bg-surface-hover)]'
+                                ? 'border-[color-mix(in_srgb,var(--accent-mention)_72%,var(--border-focus))] bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)] shadow-(--shadow-sm)'
+                                : 'border-(--border-subtle) hover:border-(--border-focus) hover:bg-(--bg-surface-hover)'
                         }`}
                     >
                         <div className="flex items-start gap-4">
-                            <div className={`p-3 rounded-lg ${
-                                selectedMode === 'local' ? 'bg-emerald-500/20' : 'bg-[var(--bg-surface-hover)]'
+                            <div className={`p-3 rounded-[calc(var(--panel-radius)*0.75)] ${
+                                selectedMode === 'local' ? 'bg-[color-mix(in_srgb,var(--accent-mention)_18%,transparent)]' : 'bg-(--bg-surface-hover)'
                             }`}>
                                 <HardDrive className={`w-6 h-6 ${
-                                    selectedMode === 'local' ? 'text-emerald-400' : 'text-[var(--fg-tertiary)]'
+                                    selectedMode === 'local' ? 'text-(--accent-mention)' : 'text-(--fg-tertiary)'
                                 }`} />
                             </div>
                             <div className="flex-1">
                                 <div className="flex items-center gap-2">
-                                    <h3 className="font-semibold text-[var(--fg-primary)]">{t('storageSetup.localTitle')}</h3>
-                                    <span className="px-2 py-0.5 text-xs font-medium bg-emerald-500/20 text-emerald-400 rounded">
+                                    <h3 className="font-semibold text-(--fg-primary)">{t('storageSetup.localTitle')}</h3>
+                                    <span className="px-2 py-0.5 text-xs font-medium bg-[color-mix(in_srgb,var(--accent-mention)_18%,transparent)] text-(--accent-mention) rounded-[calc(var(--panel-radius)*0.45)]">
                                         {t('common.recommended')}
                                     </span>
                                 </div>
-                                <p className="mt-1 text-sm text-[var(--fg-secondary)]">
+                                <p className="mt-1 text-sm text-(--fg-secondary)">
                                     {t('storageSetup.localDescription')}
                                 </p>
-                                <div className="mt-3 flex items-center gap-4 text-xs text-[var(--fg-tertiary)]">
+                                <div className="mt-3 flex items-center gap-4 text-xs text-(--fg-tertiary)">
                                     <span className="flex items-center gap-1">
                                         <Shield className="w-3.5 h-3.5" /> {t('storageSetup.localCodePrivate')}
                                     </span>
@@ -131,26 +131,26 @@ export const StorageSetupModal: React.FC<StorageSetupModalProps> = ({
                     {/* Server Storage Option */}
                     <button
                         onClick={() => setSelectedMode('server')}
-                        className={`w-full p-5 rounded-lg border-2 text-left transition-all ${
+                        className={`w-full p-5 rounded-[calc(var(--panel-radius)+2px)] border-2 text-left transition-all ${
                             selectedMode === 'server'
-                                ? 'border-blue-500 bg-blue-500/10'
-                                : 'border-[var(--border-subtle)] hover:border-[var(--border-focus)] hover:bg-[var(--bg-surface-hover)]'
+                                ? 'border-[color-mix(in_srgb,var(--accent-planning)_72%,var(--border-focus))] bg-[color-mix(in_srgb,var(--accent-planning)_10%,transparent)] shadow-(--shadow-sm)'
+                                : 'border-(--border-subtle) hover:border-(--border-focus) hover:bg-(--bg-surface-hover)'
                         }`}
                     >
                         <div className="flex items-start gap-4">
-                            <div className={`p-3 rounded-lg ${
-                                selectedMode === 'server' ? 'bg-blue-500/20' : 'bg-[var(--bg-surface-hover)]'
+                            <div className={`p-3 rounded-[calc(var(--panel-radius)*0.75)] ${
+                                selectedMode === 'server' ? 'bg-[color-mix(in_srgb,var(--accent-planning)_18%,transparent)]' : 'bg-(--bg-surface-hover)'
                             }`}>
                                 <Cloud className={`w-6 h-6 ${
-                                    selectedMode === 'server' ? 'text-blue-400' : 'text-[var(--fg-tertiary)]'
+                                    selectedMode === 'server' ? 'text-(--accent-planning)' : 'text-(--fg-tertiary)'
                                 }`} />
                             </div>
                             <div className="flex-1">
-                                <h3 className="font-semibold text-[var(--fg-primary)]">{t('storageSetup.serverTitle')}</h3>
-                                <p className="mt-1 text-sm text-[var(--fg-secondary)]">
+                                <h3 className="font-semibold text-(--fg-primary)">{t('storageSetup.serverTitle')}</h3>
+                                <p className="mt-1 text-sm text-(--fg-secondary)">
                                     {t('storageSetup.serverDescription')}
                                 </p>
-                                <div className="mt-3 flex items-center gap-4 text-xs text-[var(--fg-tertiary)]">
+                                <div className="mt-3 flex items-center gap-4 text-xs text-(--fg-tertiary)">
                                     <span className="flex items-center gap-1">
                                         <Zap className="w-3.5 h-3.5" /> {t('storageSetup.serverFasterResponses')}
                                     </span>
@@ -165,20 +165,20 @@ export const StorageSetupModal: React.FC<StorageSetupModalProps> = ({
 
                 {/* Error */}
                 {error && (
-                    <div className="mx-8 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-sm text-red-400">
+                    <div className="mx-8 p-3 bg-[color-mix(in_srgb,var(--state-danger)_10%,transparent)] border border-[color-mix(in_srgb,var(--state-danger)_30%,transparent)] rounded-[calc(var(--panel-radius)*0.75)] text-sm text-(--state-danger)">
                         {error}
                     </div>
                 )}
 
                 {/* Footer */}
                 <div className="px-8 py-6 flex items-center justify-between">
-                    <p className="text-xs text-[var(--fg-tertiary)]">
+                    <p className="text-xs text-(--fg-tertiary)">
                         {t('storageSetup.changeLater')}
                     </p>
                     <button
                         onClick={handleSetup}
                         disabled={isSettingUp}
-                        className="flex items-center gap-2 px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="flex items-center gap-2 px-6 py-2.5 bg-(--accent-ai) text-(--fg-bright) font-medium rounded-[calc(var(--panel-radius)*0.65)] transition-colors hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         {isSettingUp ? (
                             <>
