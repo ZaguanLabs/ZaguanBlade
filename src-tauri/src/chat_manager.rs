@@ -335,6 +335,7 @@ pub struct ChatManager {
     stream_xml_tool_fallback: bool,
     stream_auto_start_loop_on_tools: bool,
     pending_done_without_tools: bool,
+    stop_requested: bool,
     pub last_finish_reason: Option<String>,
     composite_tools_enabled: bool,
     ws_conversation_messages: Arc<Mutex<Vec<serde_json::Value>>>,
@@ -378,6 +379,7 @@ impl ChatManager {
             stream_xml_tool_fallback: false,
             stream_auto_start_loop_on_tools: false,
             pending_done_without_tools: false,
+            stop_requested: false,
             last_finish_reason: None,
             composite_tools_enabled: true,
             ws_conversation_messages: Arc::new(Mutex::new(Vec::new())),
@@ -577,6 +579,7 @@ impl ChatManager {
         self.updated_assistant_message = None;
         self.message_seq = 0; // v1.1: reset sequence counter for new message
         self.pending_done_without_tools = false;
+        self.stop_requested = false;
         self.last_finish_reason = None;
         self.composite_tools_enabled = composite_tools_enabled;
 
@@ -2968,9 +2971,14 @@ impl ChatManager {
 
         self.streaming = false;
         self.rx = None;
+        self.stop_requested = true;
         self.reasoning_parser.reset();
         self.agentic_loop.stop("User requested stop");
         was_active
+    }
+
+    pub fn stop_requested(&self) -> bool {
+        self.stop_requested
     }
 
     pub fn stop_signal_target(&self) -> Option<(Arc<BladeWsClient>, String)> {
@@ -3094,8 +3102,20 @@ mod tests {
     }
 
     #[test]
+    fn request_stop_sets_explicit_stop_flag() {
+        let mut chat_manager = ChatManager::new(50);
+
+        assert!(!chat_manager.stop_requested());
+        chat_manager.request_stop();
+        assert!(chat_manager.stop_requested());
+    }
+
+    #[test]
     fn test_start_stream_adds_assistant_placeholder() {
         let mut chat_manager = ChatManager::new(50);
+        chat_manager.request_stop();
+        assert!(chat_manager.stop_requested());
+
         let mut conversation = ConversationHistory::new();
         conversation.push(ChatMessage::new(ChatRole::User, "Test".to_string()));
 
@@ -3126,6 +3146,11 @@ mod tests {
                 None, // storage_mode
                 None, // mode
                 true,
+            );
+
+            assert!(
+                !chat_manager.stop_requested(),
+                "Starting a new turn should clear any stale stop flag"
             );
 
             // Verify conversation has Assistant placeholder
