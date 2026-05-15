@@ -35,10 +35,10 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ models, selectedId
 
     const getModelIcon = (id: string) => {
         const lower = id.toLowerCase();
-        if (lower.includes('gpt')) return <Sparkles className="w-3.5 h-3.5 text-green-400" />;
-        if (lower.includes('claude')) return <BrainCircuit className="w-3.5 h-3.5 text-orange-400" />;
-        if (lower.includes('gemini')) return <Cpu className="w-3.5 h-3.5 text-blue-400" />;
-        return <Box className="w-3.5 h-3.5 text-zinc-400" />;
+        if (lower.includes('gpt')) return <Sparkles className="w-3.5 h-3.5 text-(--accent-mention)" />;
+        if (lower.includes('claude')) return <BrainCircuit className="w-3.5 h-3.5 text-(--accent-warning)" />;
+        if (lower.includes('gemini')) return <Cpu className="w-3.5 h-3.5 text-(--accent-planning)" />;
+        return <Box className="w-3.5 h-3.5 text-(--fg-tertiary)" />;
     };
 
     const renderModelItem = (model: ModelInfo) => {
@@ -57,7 +57,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ models, selectedId
                 <div className="flex items-start gap-3">
                     <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-[calc(var(--panel-radius)-6px)] border ${
                         isSelected
-                            ? 'border-(--accent-primary) bg-[color-mix(in_srgb,var(--accent-primary)_14%,var(--bg-app))]'
+                            ? 'border-(--accent-ai) bg-[color-mix(in_srgb,var(--accent-ai)_14%,var(--bg-app))]'
                             : 'border-(--border-subtle) bg-(--bg-app)'
                     }`}>
                         {getModelIcon(model.id)}
@@ -74,7 +74,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ models, selectedId
                     </div>
                     <div className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border ${
                         isSelected
-                            ? 'border-(--accent-primary) bg-[color-mix(in_srgb,var(--accent-primary)_16%,transparent)] text-(--accent-primary)'
+                            ? 'border-(--accent-ai) bg-[color-mix(in_srgb,var(--accent-ai)_16%,transparent)] text-(--accent-ai)'
                             : 'border-(--border-default) bg-(--bg-app) text-(--fg-tertiary)'
                     }`}>
                         <Check className={`h-3.5 w-3.5 transition-opacity duration-150 ${isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-45'}`} />
@@ -94,13 +94,13 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ models, selectedId
                     w-full flex items-center justify-between px-3 py-1.5 
                     bg-(--bg-surface) hover:bg-(--bg-surface-hover)
                     border border-(--border-subtle) hover:border-(--border-default)
-                    rounded transition-all duration-200 group
-                    ${isOpen ? 'ring-1 ring-(--accent-primary)/50 border-(--accent-primary)/50' : ''}
+                    rounded-[calc(var(--panel-radius)*0.45)] transition-all duration-200 group
+                    ${isOpen ? 'ring-1 ring-(--accent-ai)/50 border-(--accent-ai)/50' : ''}
                     ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
                 `}
             >
                 <div className="flex items-center gap-2 overflow-hidden">
-                    <div className="shrink-0 p-0.5 rounded bg-(--bg-app)/50 border border-(--border-subtle)">
+                    <div className="shrink-0 p-0.5 rounded-[calc(var(--panel-radius)*0.25)] bg-(--bg-app)/50 border border-(--border-subtle)">
                         {selectedModel ? getModelIcon(selectedModel.id) : <Box className="w-3 h-3" />}
                     </div>
                     <div className="flex flex-col items-start min-w-0">
