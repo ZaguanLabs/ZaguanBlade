@@ -575,13 +575,13 @@ const ThemeGrid: React.FC<{
                         onClick={() => onChange(theme.id)}
                         className={`rounded-[calc(var(--panel-radius)+2px)] border p-3 text-left transition-[border-color,background-color,box-shadow] duration-200 focus:outline-none ${
                             isSelected
-                                ? 'border-(--accent-primary) bg-[color-mix(in_srgb,var(--accent-primary)_10%,var(--bg-surface))] shadow-[0_0_0_1px_color-mix(in_srgb,var(--accent-primary)_24%,transparent)]'
+                                ? 'border-(--accent-ai) bg-[color-mix(in_srgb,var(--accent-ai)_10%,var(--bg-surface))] shadow-(--shadow-sm)'
                                 : 'border-(--border-default) bg-(--bg-surface) hover:border-(--border-focus) hover:bg-(--bg-surface-hover)'
                         }`}
                     >
                         <div className="flex items-center justify-between gap-2 mb-2">
                             <span className="text-[12px] font-semibold text-(--fg-primary) truncate">{getThemeI18nLabel(t, theme)}</span>
-                            {isSelected && <Check className="h-3.5 w-3.5 shrink-0 text-(--accent-primary)" />}
+                            {isSelected && <Check className="h-3.5 w-3.5 shrink-0 text-(--accent-ai)" />}
                         </div>
                         <div className="flex gap-1">
                             <div className="h-3 flex-1 rounded-sm border border-(--border-subtle)" style={{ backgroundColor: theme.tokens['--bg-app'] }} />
@@ -622,7 +622,7 @@ const ConfigurationSettings: React.FC<ConfigurationSettingsProps> = ({ settings,
                 />
 
                 <div className="flex items-center gap-2 text-[11px] text-(--fg-tertiary)">
-                    <span className="h-2 w-2 rounded-full bg-(--accent-primary)" />
+                    <span className="h-2 w-2 rounded-full bg-(--accent-ai)" />
                     <span>{t('settings.configurationSection.themeScopeHelp')}</span>
                 </div>
             </div>
@@ -644,7 +644,7 @@ const ConfigurationSettings: React.FC<ConfigurationSettingsProps> = ({ settings,
                         <select
                             value={settings.language}
                             onChange={(e) => onChange({ language: e.target.value as AppLanguage })}
-                            className="w-full appearance-none rounded-[calc(var(--panel-radius)+2px)] border border-(--border-default) bg-(--bg-surface) px-3 py-2 pr-9 text-sm text-(--fg-primary) transition-[border-color,background-color] duration-200 focus:border-(--accent-primary) focus:outline-none hover:bg-(--bg-surface-hover) cursor-pointer"
+                            className="w-full appearance-none rounded-[calc(var(--panel-radius)+2px)] border border-(--border-default) bg-(--bg-surface) px-3 py-2 pr-9 text-sm text-(--fg-primary) transition-[border-color,background-color] duration-200 focus:border-(--accent-ai) focus:outline-none hover:bg-(--bg-surface-hover) cursor-pointer"
                         >
                             {supportedAppLanguages.map((lang) => (
                                 <option key={lang} value={lang}>{t(languageI18nKey[lang])}</option>
@@ -657,7 +657,7 @@ const ConfigurationSettings: React.FC<ConfigurationSettingsProps> = ({ settings,
                 </div>
 
                 <div className="flex items-center gap-2 text-[11px] text-(--fg-tertiary)">
-                    <span className="h-2 w-2 rounded-full bg-(--accent-primary)" />
+                    <span className="h-2 w-2 rounded-full bg-(--accent-ai)" />
                     <span>{t('settings.configurationSection.languageSaveHint')}</span>
                 </div>
             </div>
@@ -913,8 +913,8 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
     return (
         <div className="space-y-6">
             <div>
-                <h3 className="text-base font-semibold text-[var(--fg-primary)] mb-1">{t('settings.storage.title')}</h3>
-                <p className="text-sm text-[var(--fg-tertiary)] mb-4">
+                <h3 className="text-base font-semibold text-(--fg-primary) mb-1">{t('settings.storage.title')}</h3>
+                <p className="text-sm text-(--fg-tertiary) mb-4">
                     {t('settings.storage.description')}
                 </p>
 
@@ -922,80 +922,80 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
                     {/* Local Storage Option */}
                     <button
                         onClick={() => onChange({ mode: 'local' })}
-                        className={`relative p-4 border text-left transition-all ${settings.mode === 'local'
-                            ? 'border-[var(--border-focus)] bg-[color-mix(in_srgb,var(--bg-active)_78%,transparent)]'
-                            : 'border-[var(--border-default)] hover:border-[var(--border-focus)] bg-[color-mix(in_srgb,var(--bg-panel)_86%,var(--bg-editor))]'
+                        className={`relative rounded-[calc(var(--panel-radius)+2px)] p-4 border text-left transition-all ${settings.mode === 'local'
+                            ? 'border-(--border-focus) bg-[color-mix(in_srgb,var(--bg-active)_78%,transparent)] shadow-(--shadow-sm)'
+                            : 'border-(--border-default) hover:border-(--border-focus) bg-[color-mix(in_srgb,var(--bg-panel)_86%,var(--bg-editor))]'
                             }`}
                     >
                         <div className="flex items-center gap-3 mb-3">
-                            <div className={`p-2 ${settings.mode === 'local' ? 'bg-[color-mix(in_srgb,var(--accent-primary)_22%,transparent)]' : 'bg-[var(--bg-surface)]'}`}>
-                                <HardDrive className={`w-5 h-5 ${settings.mode === 'local' ? 'text-[var(--accent-primary)]' : 'text-[var(--fg-secondary)]'}`} />
+                            <div className={`rounded-[calc(var(--panel-radius)*0.55)] p-2 ${settings.mode === 'local' ? 'bg-[color-mix(in_srgb,var(--accent-ai)_22%,transparent)]' : 'bg-(--bg-surface)'}`}>
+                                <HardDrive className={`w-5 h-5 ${settings.mode === 'local' ? 'text-(--accent-ai)' : 'text-(--fg-secondary)'}`} />
                             </div>
                             <div>
-                                <div className="font-medium text-[var(--fg-primary)]">{t('settings.storage.local')}</div>
-                                <div className="text-xs text-[var(--fg-tertiary)]">{t('settings.storage.localSubtitle')}</div>
+                                <div className="font-medium text-(--fg-primary)">{t('settings.storage.local')}</div>
+                                <div className="text-xs text-(--fg-tertiary)">{t('settings.storage.localSubtitle')}</div>
                             </div>
                         </div>
-                        <ul className="text-xs text-[var(--fg-secondary)] space-y-1">
+                        <ul className="text-xs text-(--fg-secondary) space-y-1">
                             <li className="flex items-center gap-1.5">
-                                <ChevronRight className="w-3 h-3 text-[var(--accent-primary)]" />
+                                <ChevronRight className="w-3 h-3 text-(--accent-ai)" />
                                 {t('settings.storage.localBullet1')}
                             </li>
                             <li className="flex items-center gap-1.5">
-                                <ChevronRight className="w-3 h-3 text-[var(--accent-primary)]" />
+                                <ChevronRight className="w-3 h-3 text-(--accent-ai)" />
                                 {t('settings.storage.localBullet2')}
                             </li>
                             <li className="flex items-center gap-1.5">
-                                <ChevronRight className="w-3 h-3 text-[var(--accent-primary)]" />
+                                <ChevronRight className="w-3 h-3 text-(--accent-ai)" />
                                 {t('settings.storage.localBullet3')}
                             </li>
                         </ul>
                         {settings.mode === 'local' && (
-                            <div className="absolute top-2 right-2 w-2 h-2 bg-[var(--accent-primary)]" />
+                            <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-(--accent-ai)" />
                         )}
                     </button>
 
                     {/* Server Storage Option */}
                     <button
                         onClick={() => onChange({ mode: 'server' })}
-                        className={`relative p-4 border text-left transition-all ${settings.mode === 'server'
-                            ? 'border-[var(--border-focus)] bg-[color-mix(in_srgb,var(--bg-active)_78%,transparent)]'
-                            : 'border-[var(--border-default)] hover:border-[var(--border-focus)] bg-[color-mix(in_srgb,var(--bg-panel)_86%,var(--bg-editor))]'
+                        className={`relative rounded-[calc(var(--panel-radius)+2px)] p-4 border text-left transition-all ${settings.mode === 'server'
+                            ? 'border-(--border-focus) bg-[color-mix(in_srgb,var(--bg-active)_78%,transparent)] shadow-(--shadow-sm)'
+                            : 'border-(--border-default) hover:border-(--border-focus) bg-[color-mix(in_srgb,var(--bg-panel)_86%,var(--bg-editor))]'
                             }`}
                     >
                         <div className="flex items-center gap-3 mb-3">
-                            <div className={`p-2 ${settings.mode === 'server' ? 'bg-[color-mix(in_srgb,var(--accent-primary)_22%,transparent)]' : 'bg-[var(--bg-surface)]'}`}>
-                                <Server className={`w-5 h-5 ${settings.mode === 'server' ? 'text-[var(--accent-primary)]' : 'text-[var(--fg-secondary)]'}`} />
+                            <div className={`rounded-[calc(var(--panel-radius)*0.55)] p-2 ${settings.mode === 'server' ? 'bg-[color-mix(in_srgb,var(--accent-ai)_22%,transparent)]' : 'bg-(--bg-surface)'}`}>
+                                <Server className={`w-5 h-5 ${settings.mode === 'server' ? 'text-(--accent-ai)' : 'text-(--fg-secondary)'}`} />
                             </div>
                             <div>
-                                <div className="font-medium text-[var(--fg-primary)]">{t('settings.storage.server')}</div>
-                                <div className="text-xs text-[var(--fg-tertiary)]">{t('settings.storage.serverSubtitle')}</div>
+                                <div className="font-medium text-(--fg-primary)">{t('settings.storage.server')}</div>
+                                <div className="text-xs text-(--fg-tertiary)">{t('settings.storage.serverSubtitle')}</div>
                             </div>
                         </div>
-                        <ul className="text-xs text-[var(--fg-secondary)] space-y-1">
+                        <ul className="text-xs text-(--fg-secondary) space-y-1">
                             <li className="flex items-center gap-1.5">
-                                <ChevronRight className="w-3 h-3 text-[var(--accent-primary)]" />
+                                <ChevronRight className="w-3 h-3 text-(--accent-ai)" />
                                 {t('settings.storage.serverBullet1')}
                             </li>
                             <li className="flex items-center gap-1.5">
-                                <ChevronRight className="w-3 h-3 text-[var(--accent-primary)]" />
+                                <ChevronRight className="w-3 h-3 text-(--accent-ai)" />
                                 {t('settings.storage.serverBullet2')}
                             </li>
                             <li className="flex items-center gap-1.5">
-                                <ChevronRight className="w-3 h-3 text-[var(--accent-primary)]" />
+                                <ChevronRight className="w-3 h-3 text-(--accent-ai)" />
                                 {t('settings.storage.serverBullet3')}
                             </li>
                         </ul>
                         {settings.mode === 'server' && (
-                            <div className="absolute top-2 right-2 w-2 h-2 bg-[var(--accent-primary)]" />
+                            <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-(--accent-ai)" />
                         )}
                     </button>
                 </div>
 
                 {/* Info box */}
-                <div className="mt-4 p-3 bg-[var(--bg-surface)] border border-[var(--border-default)] flex gap-3">
-                    <Info className="w-4 h-4 text-[var(--fg-tertiary)] shrink-0 mt-0.5" />
-                    <p className="text-xs text-[var(--fg-tertiary)]">
+                <div className="mt-4 p-3 bg-(--bg-surface) border border-(--border-default) rounded-[calc(var(--panel-radius)*0.75)] flex gap-3">
+                    <Info className="w-4 h-4 text-(--fg-tertiary) shrink-0 mt-0.5" />
+                    <p className="text-xs text-(--fg-tertiary)">
                         {settings.mode === 'local'
                             ? t('settings.storage.localInfo')
                             : t('settings.storage.serverInfo')}
@@ -1005,10 +1005,10 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
 
             {/* Sync Metadata Toggle (only for local mode) */}
             {settings.mode === 'local' && (
-                <div className="flex items-center justify-between py-3 border-t border-[var(--border-subtle)]">
+                <div className="flex items-center justify-between py-3 border-t border-(--border-subtle)">
                     <div>
-                        <div className="text-sm font-medium text-[var(--fg-primary)]">{t('settings.storage.syncMetadata')}</div>
-                        <div className="text-xs text-[var(--fg-tertiary)]">
+                        <div className="text-sm font-medium text-(--fg-primary)">{t('settings.storage.syncMetadata')}</div>
+                        <div className="text-xs text-(--fg-tertiary)">
                             {t('settings.storage.syncMetadataDescription')}
                         </div>
                     </div>
@@ -1020,11 +1020,11 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
             )}
 
             {/* Cache Settings */}
-            <div className="border-t border-[var(--border-subtle)] pt-4">
+            <div className="border-t border-(--border-subtle) pt-4">
                 <div className="flex items-center justify-between mb-3">
                     <div>
-                        <div className="text-sm font-medium text-[var(--fg-primary)]">{t('settings.storage.enableCache')}</div>
-                        <div className="text-xs text-[var(--fg-tertiary)]">
+                        <div className="text-sm font-medium text-(--fg-primary)">{t('settings.storage.enableCache')}</div>
+                        <div className="text-xs text-(--fg-tertiary)">
                             {t('settings.storage.cacheDescription')}
                         </div>
                     </div>
@@ -1036,7 +1036,7 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
 
                 {settings.cache.enabled && (
                     <div className="mt-3">
-                        <label className="text-xs text-[var(--fg-secondary)] mb-1 block">
+                        <label className="text-xs text-(--fg-secondary) mb-1 block">
                             {t('settings.storage.maxCacheSize', { size: settings.cache.maxSizeMb })}
                         </label>
                         <input
@@ -1046,9 +1046,9 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
                             step="10"
                             value={settings.cache.maxSizeMb}
                             onChange={(e) => onChange({ cache: { ...settings.cache, maxSizeMb: parseInt(e.target.value) } })}
-                            className="w-full h-1.5 bg-[var(--bg-app)] rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                            className="w-full h-1.5 bg-(--bg-app) rounded-full appearance-none cursor-pointer accent-(--accent-ai)"
                         />
-                        <div className="flex justify-between text-[10px] text-[var(--fg-tertiary)] mt-1">
+                        <div className="flex justify-between text-[10px] text-(--fg-tertiary) mt-1">
                             <span>10 MB</span>
                             <span>500 MB</span>
                         </div>
@@ -1071,15 +1071,15 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, a
     return (
         <div className="space-y-6">
             <div>
-                <h3 className="text-base font-semibold text-[var(--fg-primary)] mb-1">{t('settings.context.title')}</h3>
-                <p className="text-sm text-[var(--fg-tertiary)] mb-4">
+                <h3 className="text-base font-semibold text-(--fg-primary) mb-1">{t('settings.context.title')}</h3>
+                <p className="text-sm text-(--fg-tertiary) mb-4">
                     {t('settings.context.description')}
                 </p>
             </div>
 
             {/* Max Tokens */}
             <div>
-                <label className="text-sm font-medium text-[var(--fg-primary)] mb-2 block">
+                <label className="text-sm font-medium text-(--fg-primary) mb-2 block">
                     {t('settings.context.maxContextTokens', { count: settings.maxTokens })}
                 </label>
                 <input
@@ -1089,23 +1089,23 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, a
                     step="1000"
                     value={settings.maxTokens}
                     onChange={(e) => onChange({ maxTokens: parseInt(e.target.value) })}
-                    className="w-full h-1.5 bg-[var(--bg-app)] rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                    className="w-full h-1.5 bg-(--bg-app) rounded-full appearance-none cursor-pointer accent-(--accent-ai)"
                 />
-                <div className="flex justify-between text-[10px] text-[var(--fg-tertiary)] mt-1">
+                <div className="flex justify-between text-[10px] text-(--fg-tertiary) mt-1">
                     <span>2K</span>
                     <span>32K</span>
                 </div>
-                <p className="text-xs text-[var(--fg-tertiary)] mt-2">
+                <p className="text-xs text-(--fg-tertiary) mt-2">
                     {t('settings.context.tokenHelp')}
                 </p>
             </div>
 
             {/* Compression */}
-            <div className="border-t border-[var(--border-subtle)] pt-4">
+            <div className="border-t border-(--border-subtle) pt-4">
                 <div className="flex items-center justify-between mb-3">
                     <div>
-                        <div className="text-sm font-medium text-[var(--fg-primary)]">{t('settings.context.enableCompression')}</div>
-                        <div className="text-xs text-[var(--fg-tertiary)]">
+                        <div className="text-sm font-medium text-(--fg-primary)">{t('settings.context.enableCompression')}</div>
+                        <div className="text-xs text-(--fg-tertiary)">
                             {t('settings.context.compressionDescription')}
                         </div>
                     </div>
@@ -1117,13 +1117,13 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, a
 
                 {settings.compression.enabled && (
                     <div className="mt-4 space-y-2">
-                        <label className="text-xs text-[var(--fg-secondary)] block">{t('settings.context.compressionModel')}</label>
+                        <label className="text-xs text-(--fg-secondary) block">{t('settings.context.compressionModel')}</label>
                         <div className="flex gap-3">
                             <button
                                 onClick={() => onChange({ compression: { ...settings.compression, model: 'remote' } })}
-                                className={`flex-1 px-3 py-2 rounded-md text-sm transition-colors ${settings.compression.model === 'remote'
-                                    ? 'bg-[var(--accent-primary)] text-white'
-                                    : 'bg-[var(--bg-surface)] text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)]'
+                                className={`flex-1 px-3 py-2 rounded-[calc(var(--panel-radius)*0.65)] text-sm transition-colors ${settings.compression.model === 'remote'
+                                    ? 'bg-(--accent-ai) text-(--fg-bright)'
+                                    : 'bg-(--bg-surface) text-(--fg-secondary) hover:bg-(--bg-surface-hover)'
                                     }`}
                             >
                                 <Cloud className="w-4 h-4 inline-block mr-2" />
@@ -1131,16 +1131,16 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, a
                             </button>
                             <button
                                 onClick={() => onChange({ compression: { ...settings.compression, model: 'local' } })}
-                                className={`flex-1 px-3 py-2 rounded-md text-sm transition-colors ${settings.compression.model === 'local'
-                                    ? 'bg-[var(--accent-primary)] text-white'
-                                    : 'bg-[var(--bg-surface)] text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)]'
+                                className={`flex-1 px-3 py-2 rounded-[calc(var(--panel-radius)*0.65)] text-sm transition-colors ${settings.compression.model === 'local'
+                                    ? 'bg-(--accent-ai) text-(--fg-bright)'
+                                    : 'bg-(--bg-surface) text-(--fg-secondary) hover:bg-(--bg-surface-hover)'
                                     }`}
                             >
                                 <HardDrive className="w-4 h-4 inline-block mr-2" />
                                 {t('settings.context.compressionLocal')}
                             </button>
                         </div>
-                        <p className="text-xs text-[var(--fg-tertiary)]">
+                        <p className="text-xs text-(--fg-tertiary)">
                             {settings.compression.model === 'remote'
                                 ? t('settings.context.compressionRemoteHelp')
                                 : t('settings.context.compressionLocalHelp')}
@@ -1150,11 +1150,11 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, a
             </div>
 
             {/* Gitignore Files */}
-            <div className="border-t border-[var(--border-subtle)] pt-4">
+            <div className="border-t border-(--border-subtle) pt-4">
                 <div className="flex items-center justify-between">
                     <div>
-                        <div className="text-sm font-medium text-[var(--fg-primary)]">{t('settings.context.allowGitignored')}</div>
-                        <div className="text-xs text-[var(--fg-tertiary)]">
+                        <div className="text-sm font-medium text-(--fg-primary)">{t('settings.context.allowGitignored')}</div>
+                        <div className="text-xs text-(--fg-tertiary)">
                             {t('settings.context.allowGitignoredDescription')}
                         </div>
                     </div>
@@ -1163,7 +1163,7 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, a
                         onChange={onAllowGitIgnoredFilesChange}
                     />
                 </div>
-                <p className="text-xs text-[var(--fg-tertiary)] mt-2">
+                <p className="text-xs text-(--fg-tertiary) mt-2">
                     {allowGitIgnoredFiles
                         ? t('settings.context.gitignoredEnabledHelp')
                         : t('settings.context.gitignoredDisabledHelp')}
@@ -1183,8 +1183,8 @@ const PrivacySettings: React.FC<PrivacySettingsProps> = ({ settings, onChange })
     return (
         <div className="space-y-6">
             <div>
-                <h3 className="text-base font-semibold text-[var(--fg-primary)] mb-1">{t('settings.privacy.title')}</h3>
-                <p className="text-sm text-[var(--fg-tertiary)] mb-4">
+                <h3 className="text-base font-semibold text-(--fg-primary) mb-1">{t('settings.privacy.title')}</h3>
+                <p className="text-sm text-(--fg-tertiary) mb-4">
                     {t('settings.privacy.description')}
                 </p>
             </div>
@@ -1192,18 +1192,18 @@ const PrivacySettings: React.FC<PrivacySettingsProps> = ({ settings, onChange })
             {/* Telemetry */}
             <div className="flex items-center justify-between py-3">
                 <div>
-                    <div className="text-sm font-medium text-[var(--fg-primary)]">{t('settings.privacy.usageTelemetry')}</div>
-                    <div className="text-xs text-[var(--fg-tertiary)]">
+                    <div className="text-sm font-medium text-(--fg-primary)">{t('settings.privacy.usageTelemetry')}</div>
+                    <div className="text-xs text-(--fg-tertiary)">
                         {t('settings.privacy.noTelemetry')}
                     </div>
                 </div>
             </div>
 
-            <div className="p-3 bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded-lg">
+            <div className="p-3 bg-(--bg-app) border border-(--border-subtle) rounded-[calc(var(--panel-radius)*0.75)]">
                 <div className="flex gap-3">
-                    <Shield className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                    <div className="text-xs text-[var(--fg-tertiary)]">
-                        <p className="font-medium text-[var(--fg-secondary)] mb-1">{t('settings.privacy.codeNeverShared')}</p>
+                    <Shield className="w-4 h-4 text-(--accent-mention) shrink-0 mt-0.5" />
+                    <div className="text-xs text-(--fg-tertiary)">
+                        <p className="font-medium text-(--fg-secondary) mb-1">{t('settings.privacy.codeNeverShared')}</p>
                         <p>
                             {t('settings.privacy.telemetryDetail')}
                         </p>
@@ -1224,8 +1224,8 @@ const EditorSettings: React.FC<EditorSettingsProps> = ({ settings, onChange }) =
     return (
         <div className="space-y-6">
             <div>
-                <h3 className="text-base font-semibold text-[var(--fg-primary)] mb-1">{t('settings.editorSection.title')}</h3>
-                <p className="text-sm text-[var(--fg-tertiary)] mb-4">
+                <h3 className="text-base font-semibold text-(--fg-primary) mb-1">{t('settings.editorSection.title')}</h3>
+                <p className="text-sm text-(--fg-tertiary) mb-4">
                     {t('settings.editorSection.description')}
                 </p>
             </div>
@@ -1259,7 +1259,7 @@ const AboutSettings: React.FC = () => {
 
     return (
         <div className="space-y-6">
-            <div className="border border-[var(--border-default)] p-5 bg-[color-mix(in_srgb,var(--bg-panel)_88%,var(--bg-editor))]">
+            <div className="border border-(--border-default) rounded-[calc(var(--panel-radius)+2px)] p-5 bg-[color-mix(in_srgb,var(--bg-panel)_88%,var(--bg-editor))] shadow-(--shadow-sm)">
                 <div className="flex items-center gap-4">
                     <img
                         src={zbladeLogoUrl}
@@ -1268,60 +1268,60 @@ const AboutSettings: React.FC = () => {
                         draggable={false}
                     />
                     <div>
-                        <div className="text-lg font-semibold text-[var(--fg-primary)]">{t('settings.aboutSection.appName')}</div>
-                        <div className="text-sm text-[var(--fg-secondary)]">{t('settings.aboutSection.appTagline')}</div>
-                        <div className="text-xs text-[var(--fg-tertiary)] mt-1">{t('settings.aboutSection.version', { version })}</div>
+                        <div className="text-lg font-semibold text-(--fg-primary)">{t('settings.aboutSection.appName')}</div>
+                        <div className="text-sm text-(--fg-secondary)">{t('settings.aboutSection.appTagline')}</div>
+                        <div className="text-xs text-(--fg-tertiary) mt-1">{t('settings.aboutSection.version', { version })}</div>
                     </div>
                 </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="border border-[var(--border-default)] p-3 bg-[var(--bg-surface)]">
-                    <div className="text-[10px] uppercase tracking-wider text-[var(--fg-tertiary)] mb-1">{t('settings.aboutSection.runtime')}</div>
-                    <div className="text-sm text-[var(--fg-primary)]">{t('settings.aboutSection.runtimeValue')}</div>
+                <div className="border border-(--border-default) rounded-[calc(var(--panel-radius)*0.75)] p-3 bg-(--bg-surface)">
+                    <div className="text-[10px] uppercase tracking-wider text-(--fg-tertiary) mb-1">{t('settings.aboutSection.runtime')}</div>
+                    <div className="text-sm text-(--fg-primary)">{t('settings.aboutSection.runtimeValue')}</div>
                 </div>
-                <div className="border border-[var(--border-default)] p-3 bg-[var(--bg-surface)]">
-                    <div className="text-[10px] uppercase tracking-wider text-[var(--fg-tertiary)] mb-1">{t('settings.aboutSection.engine')}</div>
-                    <div className="text-sm text-[var(--fg-primary)]">{t('settings.aboutSection.engineValue')}</div>
+                <div className="border border-(--border-default) rounded-[calc(var(--panel-radius)*0.75)] p-3 bg-(--bg-surface)">
+                    <div className="text-[10px] uppercase tracking-wider text-(--fg-tertiary) mb-1">{t('settings.aboutSection.engine')}</div>
+                    <div className="text-sm text-(--fg-primary)">{t('settings.aboutSection.engineValue')}</div>
                 </div>
-                <div className="border border-[var(--border-default)] p-3 bg-[var(--bg-surface)]">
-                    <div className="text-[10px] uppercase tracking-wider text-[var(--fg-tertiary)] mb-1">{t('settings.aboutSection.mode')}</div>
-                    <div className="text-sm text-[var(--fg-primary)]">{t('settings.aboutSection.modeValue')}</div>
+                <div className="border border-(--border-default) rounded-[calc(var(--panel-radius)*0.75)] p-3 bg-(--bg-surface)">
+                    <div className="text-[10px] uppercase tracking-wider text-(--fg-tertiary) mb-1">{t('settings.aboutSection.mode')}</div>
+                    <div className="text-sm text-(--fg-primary)">{t('settings.aboutSection.modeValue')}</div>
                 </div>
             </div>
 
-            <div className="border border-[var(--border-default)] p-4 bg-[var(--bg-surface)] space-y-3">
-                <div className="text-sm font-medium text-[var(--fg-primary)]">{t('settings.aboutSection.tidbits')}</div>
-                <ul className="space-y-2 text-sm text-[var(--fg-secondary)]">
+            <div className="border border-(--border-default) rounded-[calc(var(--panel-radius)+2px)] p-4 bg-(--bg-surface) space-y-3">
+                <div className="text-sm font-medium text-(--fg-primary)">{t('settings.aboutSection.tidbits')}</div>
+                <ul className="space-y-2 text-sm text-(--fg-secondary)">
                     <li className="flex items-start gap-2">
-                        <span className="w-1.5 h-1.5 mt-2 bg-[var(--accent-primary)]" />
+                        <span className="w-1.5 h-1.5 mt-2 rounded-full bg-(--accent-ai)" />
                         <span>
                             {t('settings.aboutSection.website')}:{' '}
-                            <a href="https://zblade.dev/" target="_blank" rel="noreferrer" className="text-[var(--accent-primary)] hover:brightness-110">
+                            <a href="https://zblade.dev/" target="_blank" rel="noreferrer" className="text-(--accent-ai) hover:brightness-110">
                                 zblade.dev
                             </a>
                         </span>
                     </li>
                     <li className="flex items-start gap-2">
-                        <span className="w-1.5 h-1.5 mt-2 bg-[var(--accent-primary)]" />
+                        <span className="w-1.5 h-1.5 mt-2 rounded-full bg-(--accent-ai)" />
                         <span>
                             {t('settings.aboutSection.github')}:{' '}
-                            <a href="https://github.com/ZaguanLabs/ZaguanBlade" target="_blank" rel="noreferrer" className="text-[var(--accent-primary)] hover:brightness-110">
+                            <a href="https://github.com/ZaguanLabs/ZaguanBlade" target="_blank" rel="noreferrer" className="text-(--accent-ai) hover:brightness-110">
                                 ZaguanLabs/ZaguanBlade
                             </a>
                         </span>
                     </li>
                     <li className="flex items-start gap-2">
-                        <span className="w-1.5 h-1.5 mt-2 bg-[var(--accent-primary)]" />
+                        <span className="w-1.5 h-1.5 mt-2 rounded-full bg-(--accent-ai)" />
                         <span>
                             {t('settings.aboutSection.support')}:{' '}
-                            <a href="https://github.com/ZaguanLabs/ZaguanBlade/issues" target="_blank" rel="noreferrer" className="text-[var(--accent-primary)] hover:brightness-110">
+                            <a href="https://github.com/ZaguanLabs/ZaguanBlade/issues" target="_blank" rel="noreferrer" className="text-(--accent-ai) hover:brightness-110">
                                 {t('settings.aboutSection.githubIssues')}
                             </a>
                         </span>
                     </li>
                 </ul>
-                <p className="text-xs text-[var(--fg-tertiary)] pt-1 border-t border-[var(--border-subtle)]">
+                <p className="text-xs text-(--fg-tertiary) pt-1 border-t border-(--border-subtle)">
                     {t('settings.aboutSection.prsWelcome')}
                 </p>
             </div>
@@ -1340,7 +1340,7 @@ const Toggle: React.FC<ToggleProps> = ({ checked, onChange }) => {
             role="switch"
             aria-checked={checked}
             onClick={() => onChange(!checked)}
-            className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 ${checked ? 'bg-[var(--accent-primary)]' : 'bg-[var(--bg-app)]'
+            className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-(--accent-ai) focus-visible:ring-offset-2 ${checked ? 'bg-(--accent-ai)' : 'bg-(--bg-app)'
                 }`}
         >
             <span
@@ -1363,26 +1363,26 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ settings, onChange })
     return (
         <div className="space-y-6">
             <div>
-                <h3 className="text-base font-semibold text-[var(--fg-primary)] mb-1">{t('settings.account.title')}</h3>
-                <p className="text-sm text-[var(--fg-tertiary)] mb-4">
+                <h3 className="text-base font-semibold text-(--fg-primary) mb-1">{t('settings.account.title')}</h3>
+                <p className="text-sm text-(--fg-tertiary) mb-4">
                     {t('settings.account.description')}
                 </p>
             </div>
 
-            <div className={`border p-4 mb-6 ${settings.apiKey ? 'bg-[color-mix(in_srgb,var(--accent-primary)_10%,transparent)] border-[var(--border-focus)]' : 'bg-[var(--bg-surface)] border-[var(--border-default)]'}`}>
+            <div className={`border rounded-[calc(var(--panel-radius)+2px)] p-4 mb-6 ${settings.apiKey ? 'bg-[color-mix(in_srgb,var(--accent-ai)_10%,transparent)] border-(--border-focus)' : 'bg-(--bg-surface) border-(--border-default)'}`}>
                 <div className="flex gap-4">
-                    <div className={`p-3 h-fit ${settings.apiKey ? 'bg-[color-mix(in_srgb,var(--accent-primary)_22%,transparent)]' : 'bg-[var(--bg-editor)]'}`}>
+                    <div className={`p-3 h-fit rounded-[calc(var(--panel-radius)*0.65)] ${settings.apiKey ? 'bg-[color-mix(in_srgb,var(--accent-ai)_22%,transparent)]' : 'bg-(--bg-editor)'}`}>
                         {settings.apiKey ? (
-                            <CheckCircle2 className="w-6 h-6 text-[var(--accent-primary)]" />
+                            <CheckCircle2 className="w-6 h-6 text-(--accent-ai)" />
                         ) : (
-                            <Key className="w-6 h-6 text-[var(--accent-primary)]" />
+                            <Key className="w-6 h-6 text-(--accent-ai)" />
                         )}
                     </div>
                     <div className="flex-1">
-                        <h4 className="font-medium text-[var(--fg-primary)] mb-1">
+                        <h4 className="font-medium text-(--fg-primary) mb-1">
                             {settings.apiKey ? t('settings.account.activeSubscription') : t('settings.account.zaguanPro')}
                         </h4>
-                        <p className="text-sm text-[var(--fg-secondary)] mb-3">
+                        <p className="text-sm text-(--fg-secondary) mb-3">
                             {settings.apiKey
                                 ? t('settings.account.subscriptionActive')
                                 : t('settings.account.subscriptionNeeded')}
@@ -1391,7 +1391,7 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ settings, onChange })
                             href={settings.apiKey ? "https://zaguanai.com/dashboard" : "https://zaguanai.com/pricing"}
                             target="_blank"
                             rel="noreferrer"
-                            className="text-sm text-[var(--accent-primary)] hover:brightness-110 font-medium"
+                            className="text-sm text-(--accent-ai) hover:brightness-110 font-medium"
                         >
                             {settings.apiKey ? t('settings.account.manageSubscription') : t('settings.account.getSubscription')}
                         </a>
@@ -1400,7 +1400,7 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ settings, onChange })
             </div>
 
             <div className="space-y-2">
-                <label className="text-sm font-medium text-[var(--fg-primary)] block">
+                <label className="text-sm font-medium text-(--fg-primary) block">
                     {t('settings.apiKey')}
                 </label>
                 <div className="flex gap-2">
@@ -1410,12 +1410,12 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ settings, onChange })
                             value={settings.apiKey}
                             onChange={(e) => onChange({ apiKey: e.target.value })}
                             placeholder={t('settings.apiKeyPlaceholder')}
-                            className="w-full bg-[var(--bg-surface)] border border-[var(--border-default)] py-2 pl-3 pr-10 text-sm text-[var(--fg-primary)] focus:outline-none focus:border-[var(--accent-primary)] placeholder-[var(--fg-tertiary)]"
+                            className="w-full rounded-[calc(var(--panel-radius)*0.65)] bg-(--bg-surface) border border-(--border-default) py-2 pl-3 pr-10 text-sm text-(--fg-primary) focus:outline-none focus:border-(--accent-ai) placeholder-(--fg-tertiary)"
                         />
                         <button
                             type="button"
                             onClick={() => setShowKey(!showKey)}
-                            className="absolute right-3 top-2 text-[var(--fg-tertiary)] hover:text-[var(--fg-secondary)]"
+                            className="absolute right-3 top-2 text-(--fg-tertiary) hover:text-(--fg-secondary)"
                         >
                             {showKey ? (
                                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" /><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" /><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" /><line x1="2" x2="22" y1="2" y2="22" /></svg>
