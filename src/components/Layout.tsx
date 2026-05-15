@@ -500,9 +500,14 @@ const AppLayoutInner: React.FC = () => {
         const titleParts = ['Zaguán Blade'];
         if (projectName) titleParts.push(projectName);
         if (activeFilename) titleParts.push(activeFilename);
-        appWindow.setTitle(titleParts.join(' - ')).catch((err) => {
-            console.error('[Layout] Failed to set window title:', err);
+        const title = titleParts.join(' - ');
+        invoke('set_window_title', { title }).catch((err) => {
+            console.error('[Layout] Failed to set native window title:', err);
+            appWindow.setTitle(title).catch((fallbackErr) => {
+                console.error('[Layout] Failed to set window title:', fallbackErr);
+            });
         });
+        document.title = title;
     }, [appWindow, projectName, activeFilename]);
 
     useEffect(() => {

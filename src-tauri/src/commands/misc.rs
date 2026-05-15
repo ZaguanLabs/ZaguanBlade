@@ -4,7 +4,6 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 use tauri::AppHandle;
-#[cfg(feature = "devtools")]
 use tauri::Manager;
 
 #[tauri::command]
@@ -38,6 +37,14 @@ pub fn log_frontend(message: String) {
 #[tauri::command]
 pub fn frontend_shell_ready(app: AppHandle) {
     crate::startup::ensure_post_ui_startup(&app);
+}
+
+#[tauri::command]
+pub fn set_window_title(app: AppHandle, title: String) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    window.set_title(&title).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
