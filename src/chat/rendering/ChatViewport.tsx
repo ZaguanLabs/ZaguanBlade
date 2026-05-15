@@ -8,6 +8,7 @@ import type { ChatActivity } from '../../utils/chatTimeline';
 import { FloatingJumpToBottomButton } from './FloatingJumpToBottomButton';
 import { useChatTimelineRows } from './useChatTimelineRows';
 import { shouldDetachChatAutoScrollOnWheel } from '../../utils/chatScroll';
+import zbladeAppIcon from '../../assets/zblade-app-icon.png';
 
 const FOLLOW_BOTTOM_THRESHOLD_PX = 48;
 const DETACH_BOTTOM_THRESHOLD_PX = 140;
@@ -137,9 +138,9 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
             <div ref={scrollRef} onScroll={handleScroll} onWheel={handleWheel} className="h-full overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent">
                 <div className="mx-auto flex w-full max-w-none flex-col gap-0.5 px-0.5 py-4 md:px-1">
                     {messages.length === 0 && (
-                        <div className="mx-4 mt-10 rounded-2xl border border-(--border-subtle) bg-(--bg-surface)/70 px-6 py-8 text-center shadow-[0_24px_80px_rgba(0,0,0,0.25)]">
-                            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-emerald-500/20 bg-emerald-500/10 text-2xl shadow-[0_0_40px_rgba(16,185,129,0.15)]">
-                                BL
+                        <div className="mx-4 mt-10 rounded-(--panel-radius) border border-(--border-subtle) bg-(--bg-surface)/70 px-6 py-8 text-center shadow-(--panel-shadow)">
+                            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-[calc(var(--panel-radius)*0.9)] border border-[color-mix(in_srgb,var(--accent-ai)_24%,transparent)] bg-[color-mix(in_srgb,var(--accent-ai)_10%,transparent)] shadow-[0_0_40px_color-mix(in_srgb,var(--accent-ai)_15%,transparent)]">
+                                <img src={zbladeAppIcon} alt="" className="h-9 w-9 object-contain" draggable={false} />
                             </div>
                             <h2 className="text-sm font-semibold uppercase tracking-[0.24em] text-(--fg-secondary)">{t('app.name')}</h2>
                             <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-(--fg-tertiary)">
@@ -181,8 +182,8 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
 
                     {showPendingResponse && (
                         <div className="px-4 py-3">
-                            <div className="inline-flex max-w-full items-center gap-3 rounded-2xl border border-emerald-500/15 bg-(--bg-surface)/70 px-4 py-3 text-[11px] font-medium text-(--fg-secondary)">
-                                <span className="h-2 w-2 rounded-full bg-emerald-400/80" />
+                            <div className="inline-flex max-w-full items-center gap-3 rounded-[calc(var(--panel-radius)*0.9)] border border-[color-mix(in_srgb,var(--accent-ai)_18%,transparent)] bg-(--bg-surface)/70 px-4 py-3 text-[11px] font-medium text-(--fg-secondary)">
+                                <span className="h-2 w-2 rounded-full bg-(--accent-ai)" />
                                 <span className="truncate">{toolActivity?.action ?? t('chat.assistantResponding')}</span>
                             </div>
                         </div>

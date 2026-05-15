@@ -9,6 +9,6 @@ export const AttachmentControls: React.FC<{
 }> = ({ attachments, error, onRemove }) => (
     <>
         <ImageAttachmentBar attachments={attachments} onRemove={onRemove} />
-        {error && <div className="px-2 pb-1 pt-1 text-[10px] text-red-400">{error}</div>}
+        {error && <div className="px-2 pb-1 pt-1 text-[10px] text-(--state-danger)">{error}</div>}
     </>
 );

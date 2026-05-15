@@ -121,9 +121,9 @@ export const Composer: React.FC<ComposerProps> = ({
     const activeMentionChips = useMemo(() => collectMentions(text, selectedMentions), [selectedMentions, text]);
 
     return (
-        <div className="shrink-0 border-t border-(--border-subtle) bg-(--bg-app)">
+        <div className="shrink-0 border-t border-(--border-subtle) bg-(--bg-panel)">
             <div className="px-2 pb-2 pt-2">
-                <div className={`relative rounded-xl border bg-(--bg-surface)/85 shadow-[0_16px_44px_rgba(0,0,0,0.22)] ${chatMode === 'planning' ? 'border-sky-500/35' : 'border-(--border-subtle)'}`}>
+                <div className={`relative rounded-[calc(var(--panel-radius)*0.9)] border bg-(--bg-surface)/85 shadow-(--shadow-md) ${chatMode === 'planning' ? 'border-[color-mix(in_srgb,var(--accent-planning)_42%,transparent)]' : 'border-(--border-subtle)'}`}>
                     <ComposerToolbar
                         loading={loading}
                         disabled={disabled}
@@ -145,7 +145,7 @@ export const Composer: React.FC<ComposerProps> = ({
                     {activeMentionChips.length > 0 && (
                         <div className="flex flex-wrap gap-1.5 px-2 pb-1">
                             {activeMentionChips.map((mention) => (
-                                <span key={mention.path} className="inline-flex max-w-full rounded-md border border-emerald-500/20 bg-emerald-500/8 px-2 py-1 text-[10px] text-emerald-200">
+                                <span key={mention.path} className="inline-flex max-w-full rounded-md border border-[color-mix(in_srgb,var(--accent-mention)_24%,transparent)] bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)] px-2 py-1 text-[10px] text-(--accent-mention)">
                                     @{mention.path}
                                 </span>
                             ))}

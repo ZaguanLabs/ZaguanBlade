@@ -686,7 +686,7 @@ const AppLayoutInner: React.FC = () => {
                         style={{
                             width: '46px',
                             backgroundColor: 'var(--bg-panel)',
-                            borderRadius: '0',
+                            borderRadius: 'var(--panel-radius)',
                             border: '1px solid var(--border-default)',
                             boxShadow: 'var(--panel-shadow)',
                         }}
@@ -696,7 +696,7 @@ const AppLayoutInner: React.FC = () => {
                         title={t('activityBar.explorer')}
                         aria-label={t('activityBar.explorer')}
                         className={`relative p-2 rounded-md cursor-pointer transition-all duration-[var(--transition-fast)] ${isSidebarOpen && activeSidebar === 'explorer'
-                            ? 'text-[var(--fg-bright)] bg-[var(--bg-surface)]'
+                            ? 'text-[var(--fg-primary)] bg-[var(--bg-surface)]'
                             : 'text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]'}
                         `}
                     >
@@ -712,7 +712,7 @@ const AppLayoutInner: React.FC = () => {
                         title={t('activityBar.git')}
                         aria-label={t('activityBar.git')}
                         className={`relative p-2 rounded-md cursor-pointer transition-all duration-[var(--transition-fast)] ${isSidebarOpen && activeSidebar === 'git'
-                            ? 'text-[var(--fg-bright)] bg-[var(--bg-surface)]'
+                            ? 'text-[var(--fg-primary)] bg-[var(--bg-surface)]'
                             : 'text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]'}
                         `}
                     >
@@ -731,7 +731,7 @@ const AppLayoutInner: React.FC = () => {
                         title={t('activityBar.fileHistory')}
                         aria-label={t('activityBar.fileHistory')}
                         className={`relative p-2 rounded-md cursor-pointer transition-all duration-[var(--transition-fast)] ${isSidebarOpen && activeSidebar === 'history'
-                            ? 'text-[var(--fg-bright)] bg-[var(--bg-surface)]'
+                            ? 'text-[var(--fg-primary)] bg-[var(--bg-surface)]'
                             : 'text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]'}
                         `}
                     >
@@ -772,7 +772,7 @@ const AppLayoutInner: React.FC = () => {
                         `}
                         style={{
                             left: disableActivityBar ? 'var(--panel-gap)' : 'calc(46px + 2 * var(--panel-gap))',
-                            borderRadius: '0',
+                            borderRadius: 'var(--panel-radius)',
                             border: '1px solid var(--border-default)',
                             boxShadow: isSidebarOpen ? 'var(--panel-shadow)' : 'none',
                             zIndex: 200,
@@ -955,7 +955,7 @@ const AppLayoutInner: React.FC = () => {
                             } : {
                                 width: chatPanelWidth,
                                 backgroundColor: 'var(--bg-panel)',
-                                borderRadius: '0',
+                                borderRadius: 'var(--panel-radius)',
                                 border: '1px solid var(--border-default)',
                                 boxShadow: 'var(--panel-shadow)',
                             }}
@@ -1041,7 +1041,7 @@ const AppLayoutInner: React.FC = () => {
                     height: '24px',
                     backgroundColor: 'var(--bg-panel)',
                     margin: '0 var(--panel-gap) var(--panel-gap)',
-                    borderRadius: '0',
+                    borderRadius: 'var(--panel-radius)',
                     border: '1px solid var(--border-default)',
                     boxShadow: 'var(--panel-shadow)',
                 }}
@@ -1054,7 +1054,7 @@ const AppLayoutInner: React.FC = () => {
                 </div>
                 <div className="flex items-center gap-4 opacity-70">
                     {(disableEditorSurface || disableTerminalSurface || disableChatSurface) && (
-                        <span className="text-amber-400">
+                        <span className="text-(--accent-warning)">
                             debug:
                             {disableEditorSurface ? ' editor-off' : ''}
                             {disableTerminalSurface ? ' terminal-off' : ''}
@@ -1063,7 +1063,7 @@ const AppLayoutInner: React.FC = () => {
                     )}
                     {/* Saving Indicator */}
                     {isClosing && (
-                        <span className="text-emerald-500 animate-pulse font-semibold">{t('statusBar.saving')}</span>
+                        <span className="text-(--accent-secondary) animate-pulse font-semibold">{t('statusBar.saving')}</span>
                     )}
                     <span>{t('editor.encoding')}</span>
                     <span>{(() => {
@@ -1131,7 +1131,7 @@ const MinimalShellLayout: React.FC = () => {
                     height: '24px',
                     backgroundColor: 'var(--bg-panel)',
                     margin: '0 var(--panel-gap) var(--panel-gap)',
-                    borderRadius: '0',
+                    borderRadius: 'var(--panel-radius)',
                     border: '1px solid var(--border-default)',
                     boxShadow: 'var(--panel-shadow)',
                 }}
