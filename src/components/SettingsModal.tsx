@@ -409,7 +409,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
     ];
 
     return (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-6">
+        <div className="fixed inset-0 z-9999 flex items-center justify-center p-6">
             {/* Backdrop */}
             <div
                 className="absolute inset-0 bg-black/72"
@@ -417,16 +417,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
             />
 
             {/* Modal */}
-            <div className="relative w-full max-w-[980px] h-[min(760px,92vh)] flex flex-col animate-in fade-in zoom-in-95 duration-150 border border-[var(--border-default)] bg-[var(--bg-panel)] shadow-[0_26px_80px_rgba(0,0,0,0.55)] overflow-hidden">
+            <div className="relative w-full max-w-[980px] h-[min(760px,92vh)] flex flex-col animate-in fade-in zoom-in-95 duration-150 rounded-(--panel-radius) border border-(--border-default) bg-(--bg-panel) shadow-(--shadow-xl) overflow-hidden">
                 {/* Header */}
-                <div className="flex items-start justify-between px-6 py-4 border-b border-[var(--border-default)] bg-[color-mix(in_srgb,var(--bg-panel)_82%,var(--bg-surface))]">
+                <div className="flex items-start justify-between px-6 py-4 border-b border-(--border-default) bg-[color-mix(in_srgb,var(--bg-panel)_82%,var(--bg-surface))]">
                     <div>
-                        <h2 className="text-lg font-semibold text-[var(--fg-primary)]">{t('settings.title')}</h2>
-                        <p className="text-xs text-[var(--fg-tertiary)] mt-0.5">{t('settings.subtitle')}</p>
+                        <h2 className="text-lg font-semibold text-(--fg-primary)">{t('settings.title')}</h2>
+                        <p className="text-xs text-(--fg-tertiary) mt-0.5">{t('settings.subtitle')}</p>
                     </div>
                     <button
                         onClick={onClose}
-                        className="p-1.5 text-[var(--fg-tertiary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] transition-colors"
+                        className="rounded-md p-1.5 text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover) transition-colors"
                     >
                         <X className="w-5 h-5" />
                     </button>
@@ -435,35 +435,35 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                 {/* Content */}
                 <div className="flex flex-1 overflow-hidden">
                     {/* Sidebar */}
-                    <div className="w-56 border-r border-[var(--border-default)] py-3 px-2 bg-[color-mix(in_srgb,var(--bg-app)_82%,var(--bg-panel))]">
+                    <div className="w-56 border-r border-(--border-default) py-3 px-2 bg-[color-mix(in_srgb,var(--bg-app)_82%,var(--bg-panel))]">
                         {sections.map(section => (
                             <button
                                 key={section.id}
                                 onClick={() => setActiveSection(section.id)}
-                                className={`w-full flex items-center justify-between gap-3 px-3 py-2.5 text-sm transition-colors border ${activeSection === section.id
-                                    ? 'bg-[var(--bg-active)] text-[var(--fg-primary)] border-[var(--border-focus)]'
-                                    : 'text-[var(--fg-secondary)] border-transparent hover:bg-[var(--bg-surface)] hover:text-[var(--fg-primary)]'
+                                className={`w-full flex items-center justify-between gap-3 rounded-[calc(var(--panel-radius)*0.65)] px-3 py-2.5 text-sm transition-colors border ${activeSection === section.id
+                                    ? 'bg-(--bg-active) text-(--fg-primary) border-(--border-focus)'
+                                    : 'text-(--fg-secondary) border-transparent hover:bg-(--bg-surface) hover:text-(--fg-primary)'
                                     }`}
                             >
                                 <span className="flex items-center gap-2.5">
                                     {section.icon}
                                     {section.label}
                                 </span>
-                                {activeSection === section.id && <ChevronRight className="w-3.5 h-3.5 text-[var(--accent-primary)]" />}
+                                {activeSection === section.id && <ChevronRight className="w-3.5 h-3.5 text-(--accent-ai)" />}
                             </button>
                         ))}
                     </div>
 
                     {/* Main Content */}
-                    <div className="flex-1 overflow-y-auto p-6 bg-[var(--bg-editor)]">
+                    <div className="flex-1 overflow-y-auto p-6 bg-(--bg-editor)">
                         {isLoading ? (
                             <div className="flex items-center justify-center h-full">
-                                <Loader2 className="w-6 h-6 text-[var(--fg-tertiary)] animate-spin" />
+                                <Loader2 className="w-6 h-6 text-(--fg-tertiary) animate-spin" />
                             </div>
                         ) : (
                             <>
                                 {error && (
-                                    <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-sm text-red-400">
+                                    <div className="mb-4 rounded-[calc(var(--panel-radius)*0.75)] border border-[color-mix(in_srgb,var(--state-danger)_32%,transparent)] bg-[color-mix(in_srgb,var(--state-danger)_10%,transparent)] p-3 text-sm text-(--state-danger)">
                                         {error}
                                     </div>
                                 )}
@@ -522,21 +522,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                 </div>
 
                 {/* Footer */}
-                <div className="flex items-center justify-between gap-3 px-6 py-3 border-t border-[var(--border-default)] bg-[color-mix(in_srgb,var(--bg-panel)_84%,var(--bg-surface))]">
-                    <div className="text-xs text-[var(--fg-tertiary)]">
+                <div className="flex items-center justify-between gap-3 px-6 py-3 border-t border-(--border-default) bg-[color-mix(in_srgb,var(--bg-panel)_84%,var(--bg-surface))]">
+                    <div className="text-xs text-(--fg-tertiary)">
                         {hasChanges ? t('settings.unsavedChangesNotice') : t('settings.allChangesSaved')}
                     </div>
                     <div className="flex items-center gap-2">
                         <button
                             onClick={onClose}
-                            className="px-4 py-2 text-sm font-medium text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] transition-colors"
+                            className="rounded-[calc(var(--panel-radius)*0.65)] px-4 py-2 text-sm font-medium text-(--fg-secondary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover) transition-colors"
                         >
                             {t('common.cancel')}
                         </button>
                         <button
                             onClick={handleSave}
                             disabled={!hasChanges || isSaving}
-                            className="px-4 py-2 text-sm font-medium bg-[var(--accent-primary)] hover:brightness-110 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                            className="flex items-center gap-2 rounded-[calc(var(--panel-radius)*0.65)] bg-(--accent-ai) px-4 py-2 text-sm font-medium text-(--fg-bright) transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                             {isSaving && <Loader2 className="w-4 h-4 animate-spin" />}
                             {isSaving ? t('statusBar.saving') : t('settings.saveChanges')}
@@ -746,18 +746,18 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
     return (
         <div className="space-y-6">
             <div>
-                <h3 className="text-base font-semibold text-[var(--fg-primary)] mb-1">{t('settings.localAi.title')}</h3>
-                <p className="text-sm text-[var(--fg-tertiary)] mb-4">
+                <h3 className="text-base font-semibold text-(--fg-primary) mb-1">{t('settings.localAi.title')}</h3>
+                <p className="text-sm text-(--fg-tertiary) mb-4">
                     {t('settings.localAi.description')}
                 </p>
             </div>
 
             {/* Ollama Section */}
-            <div className="border border-[var(--border-default)] p-4 space-y-4 bg-[color-mix(in_srgb,var(--bg-panel)_88%,var(--bg-editor))]">
+            <div className="border border-(--border-default) rounded-[calc(var(--panel-radius)+2px)] p-4 space-y-4 bg-[color-mix(in_srgb,var(--bg-panel)_88%,var(--bg-editor))] shadow-(--shadow-sm)">
                 <div className="flex items-center justify-between">
                     <div>
-                        <div className="text-sm font-medium text-[var(--fg-primary)]">{t('settings.ollama.title')}</div>
-                        <div className="text-xs text-[var(--fg-tertiary)]">
+                        <div className="text-sm font-medium text-(--fg-primary)">{t('settings.ollama.title')}</div>
+                        <div className="text-xs text-(--fg-tertiary)">
                             {t('settings.ollama.description')}
                         </div>
                     </div>
@@ -768,14 +768,14 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                 </div>
 
                 <div className="space-y-2">
-                    <label className="text-xs text-[var(--fg-secondary)] block">{t('settings.serverUrl')}</label>
+                    <label className="text-xs text-(--fg-secondary) block">{t('settings.serverUrl')}</label>
                     <input
                         type="text"
                         value={settings.ollamaUrl}
                         onChange={(e) => onChange({ ollamaUrl: e.target.value })}
                         placeholder={t('settings.ollama.urlPlaceholder')}
                         disabled={!settings.ollamaEnabled}
-                        className="w-full bg-[var(--bg-surface)] border border-[var(--border-default)] py-2 px-3 text-sm text-[var(--fg-primary)] focus:outline-none focus:border-[var(--accent-primary)] placeholder-[var(--fg-tertiary)] disabled:opacity-60"
+                        className="w-full rounded-[calc(var(--panel-radius)*0.65)] bg-(--bg-surface) border border-(--border-default) py-2 px-3 text-sm text-(--fg-primary) focus:outline-none focus:border-(--accent-ai) placeholder-(--fg-tertiary) disabled:opacity-60"
                     />
                 </div>
 
@@ -784,7 +784,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                         type="button"
                         onClick={handleTestOllamaConnection}
                         disabled={!settings.ollamaEnabled || isTestingOllama}
-                        className="px-3 py-1.5 text-xs font-medium border border-[var(--border-default)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="rounded-[calc(var(--panel-radius)*0.55)] px-3 py-1.5 text-xs font-medium border border-(--border-default) text-(--fg-secondary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover) disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         {isTestingOllama ? t('settings.testing') : t('settings.testConnection')}
                     </button>
@@ -792,15 +792,15 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                         type="button"
                         onClick={handleRefreshOllamaModels}
                         disabled={!settings.ollamaEnabled || isRefreshingOllama}
-                        className="px-3 py-1.5 text-xs font-medium border border-[var(--border-default)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="rounded-[calc(var(--panel-radius)*0.55)] px-3 py-1.5 text-xs font-medium border border-(--border-default) text-(--fg-secondary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover) disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         {isRefreshingOllama ? t('settings.refreshing') : t('settings.refreshModels')}
                     </button>
                     {ollamaTestMessage && (
                         <span
                             className={`text-xs ${ollamaTestResult === 'success'
-                                ? 'text-emerald-400'
-                                : 'text-red-400'
+                                ? 'text-(--accent-mention)'
+                                : 'text-(--state-danger)'
                                 }`}
                         >
                             {ollamaTestMessage}
@@ -810,11 +810,11 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
             </div>
 
             {/* Ollama Cloud Section */}
-            <div className="border border-[var(--border-default)] p-4 space-y-4 bg-[color-mix(in_srgb,var(--bg-panel)_88%,var(--bg-editor))]">
+            <div className="border border-(--border-default) rounded-[calc(var(--panel-radius)+2px)] p-4 space-y-4 bg-[color-mix(in_srgb,var(--bg-panel)_88%,var(--bg-editor))] shadow-(--shadow-sm)">
                 <div className="flex items-center justify-between">
                     <div>
-                        <div className="text-sm font-medium text-[var(--fg-primary)]">{t('settings.ollamaCloud.title')}</div>
-                        <div className="text-xs text-[var(--fg-tertiary)]">
+                        <div className="text-sm font-medium text-(--fg-primary)">{t('settings.ollamaCloud.title')}</div>
+                        <div className="text-xs text-(--fg-tertiary)">
                             {t('settings.ollamaCloud.description')}
                         </div>
                     </div>
@@ -825,27 +825,27 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                 </div>
 
                 <div className="space-y-2">
-                    <label className="text-xs text-[var(--fg-secondary)] block">{t('settings.apiKey')}</label>
+                    <label className="text-xs text-(--fg-secondary) block">{t('settings.apiKey')}</label>
                     <input
                         type="password"
                         value={settings.ollamaCloudApiKey}
                         onChange={(e) => onChange({ ollamaCloudApiKey: e.target.value })}
                         placeholder={t('settings.apiKeyPlaceholder')}
                         disabled={!settings.ollamaCloudEnabled}
-                        className="w-full bg-[var(--bg-surface)] border border-[var(--border-default)] py-2 px-3 text-sm text-[var(--fg-primary)] focus:outline-none focus:border-[var(--accent-primary)] placeholder-[var(--fg-tertiary)] disabled:opacity-60"
+                        className="w-full rounded-[calc(var(--panel-radius)*0.65)] bg-(--bg-surface) border border-(--border-default) py-2 px-3 text-sm text-(--fg-primary) focus:outline-none focus:border-(--accent-ai) placeholder-(--fg-tertiary) disabled:opacity-60"
                     />
-                    <p className="text-xs text-[var(--fg-tertiary)] mt-1">
+                    <p className="text-xs text-(--fg-tertiary) mt-1">
                         {t('settings.ollamaCloud.apiKeyHelp')}
                     </p>
                 </div>
             </div>
 
             {/* OpenAI-compatible Section */}
-            <div className="border border-[var(--border-default)] p-4 space-y-4 bg-[color-mix(in_srgb,var(--bg-panel)_88%,var(--bg-editor))]">
+            <div className="border border-(--border-default) rounded-[calc(var(--panel-radius)+2px)] p-4 space-y-4 bg-[color-mix(in_srgb,var(--bg-panel)_88%,var(--bg-editor))] shadow-(--shadow-sm)">
                 <div className="flex items-center justify-between">
                     <div>
-                        <div className="text-sm font-medium text-[var(--fg-primary)]">{t('settings.openaiCompat.title')}</div>
-                        <div className="text-xs text-[var(--fg-tertiary)]">
+                        <div className="text-sm font-medium text-(--fg-primary)">{t('settings.openaiCompat.title')}</div>
+                        <div className="text-xs text-(--fg-tertiary)">
                             {t('settings.openaiCompat.description')}
                         </div>
                     </div>
@@ -856,16 +856,16 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                 </div>
 
                 <div className="space-y-2">
-                    <label className="text-xs text-[var(--fg-secondary)] block">{t('settings.serverUrl')}</label>
+                    <label className="text-xs text-(--fg-secondary) block">{t('settings.serverUrl')}</label>
                     <input
                         type="text"
                         value={settings.openaiCompatUrl}
                         onChange={(e) => onChange({ openaiCompatUrl: e.target.value })}
                         placeholder={t('settings.openaiCompat.urlPlaceholder')}
                         disabled={!settings.openaiCompatEnabled}
-                        className="w-full bg-[var(--bg-surface)] border border-[var(--border-default)] py-2 px-3 text-sm text-[var(--fg-primary)] focus:outline-none focus:border-[var(--accent-primary)] placeholder-[var(--fg-tertiary)] disabled:opacity-60"
+                        className="w-full rounded-[calc(var(--panel-radius)*0.65)] bg-(--bg-surface) border border-(--border-default) py-2 px-3 text-sm text-(--fg-primary) focus:outline-none focus:border-(--accent-ai) placeholder-(--fg-tertiary) disabled:opacity-60"
                     />
-                    <p className="text-xs text-[var(--fg-tertiary)] mt-1">
+                    <p className="text-xs text-(--fg-tertiary) mt-1">
                         {t('settings.openaiCompat.apiKeyHelp')}
                     </p>
                 </div>
@@ -875,7 +875,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                         type="button"
                         onClick={handleTestOpenAIConnection}
                         disabled={!settings.openaiCompatEnabled || isTestingOpenAI}
-                        className="px-3 py-1.5 text-xs font-medium border border-[var(--border-default)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="rounded-[calc(var(--panel-radius)*0.55)] px-3 py-1.5 text-xs font-medium border border-(--border-default) text-(--fg-secondary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover) disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         {isTestingOpenAI ? t('settings.testing') : t('settings.testConnection')}
                     </button>
@@ -883,15 +883,15 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                         type="button"
                         onClick={handleRefreshOpenAIModels}
                         disabled={!settings.openaiCompatEnabled || isRefreshingOpenAI}
-                        className="px-3 py-1.5 text-xs font-medium border border-[var(--border-default)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="rounded-[calc(var(--panel-radius)*0.55)] px-3 py-1.5 text-xs font-medium border border-(--border-default) text-(--fg-secondary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover) disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         {isRefreshingOpenAI ? t('settings.refreshing') : t('settings.refreshModels')}
                     </button>
                     {openaiTestMessage && (
                         <span
                             className={`text-xs ${openaiTestResult === 'success'
-                                ? 'text-emerald-400'
-                                : 'text-red-400'
+                                ? 'text-(--accent-mention)'
+                                : 'text-(--state-danger)'
                                 }`}
                         >
                             {openaiTestMessage}
