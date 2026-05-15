@@ -23,7 +23,7 @@ export const FileHistoryPanel: React.FC<FileHistoryPanelProps> = ({ activeFile }
 
     if (!activeFile) {
         return (
-            <div className="flex flex-col items-center justify-center h-full text-[var(--fg-tertiary)] p-4 text-center">
+            <div className="flex flex-col items-center justify-center h-full text-(--fg-tertiary) p-4 text-center">
                 <Clock className="w-8 h-8 opacity-20 mb-2" />
                 <p className="text-sm">{t('fileHistory.noFileSelected')}</p>
             </div>
@@ -31,12 +31,12 @@ export const FileHistoryPanel: React.FC<FileHistoryPanelProps> = ({ activeFile }
     }
 
     if (loading && history.length === 0) {
-        return <div className="p-4 text-xs text-[var(--fg-tertiary)]">{t('fileHistory.loading')}</div>;
+        return <div className="p-4 text-xs text-(--fg-tertiary)">{t('fileHistory.loading')}</div>;
     }
 
     if (history.length === 0) {
         return (
-            <div className="flex flex-col items-center justify-center h-full text-[var(--fg-tertiary)] p-4 text-center">
+            <div className="flex flex-col items-center justify-center h-full text-(--fg-tertiary) p-4 text-center">
                 <Clock className="w-8 h-8 opacity-20 mb-2" />
                 <p className="text-sm">{t('fileHistory.empty')}</p>
             </div>
@@ -44,17 +44,17 @@ export const FileHistoryPanel: React.FC<FileHistoryPanelProps> = ({ activeFile }
     }
 
     return (
-        <div className="flex flex-col h-full bg-[var(--bg-panel)] w-full">
-            <div className="p-3 border-b border-[var(--border-subtle)] font-medium text-xs uppercase tracking-wider text-[var(--fg-secondary)] flex items-center gap-2 select-none">
+        <div className="flex flex-col h-full bg-(--bg-panel) w-full">
+            <div className="p-3 border-b border-(--border-subtle) font-medium text-xs uppercase tracking-wider text-(--fg-secondary) flex items-center gap-2 select-none">
                 <Clock className="w-3 h-3" />
                 <span>{t('fileHistory.title')}</span>
             </div>
 
             <div className="flex-1 overflow-y-auto p-2 space-y-2">
                 {history.map((entry) => (
-                    <div key={entry.id} className="group p-2 rounded bg-[var(--bg-surface)] border border-[var(--border-subtle)] hover:border-[var(--border-focus)] transition-all">
+                    <div key={entry.id} className="group p-2 rounded-[calc(var(--panel-radius)*0.65)] bg-(--bg-surface) border border-(--border-subtle) hover:border-(--border-focus) transition-all">
                         <div className="flex justify-between items-center mb-1">
-                            <span className="text-xs font-medium text-[var(--fg-primary)] opacity-90">
+                            <span className="text-xs font-medium text-(--fg-primary) opacity-90">
                                 {formatTime(entry.timestamp)}
                             </span>
                             <button
@@ -64,12 +64,12 @@ export const FileHistoryPanel: React.FC<FileHistoryPanelProps> = ({ activeFile }
                                     }
                                 }}
                                 title={t('fileHistory.revertToVersion')}
-                                className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-[var(--bg-app)] rounded transition-opacity text-[var(--fg-link)] hover:text-amber-400"
+                                className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-(--bg-app) rounded-[calc(var(--panel-radius)*0.45)] transition-opacity text-(--accent-ai) hover:text-(--accent-warning)"
                             >
                                 <RotateCcw className="w-3.5 h-3.5" />
                             </button>
                         </div>
-                        <div className="text-[10px] font-mono text-[var(--fg-tertiary)] truncate" title={entry.id}>
+                        <div className="text-[10px] font-mono text-(--fg-tertiary) truncate" title={entry.id}>
                             {t('fileHistory.snapshotId', { id: entry.id.substring(0, 8) })}
                         </div>
                     </div>
