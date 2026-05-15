@@ -35,21 +35,20 @@ export const FeatureMenu: React.FC<FeatureMenuProps> = ({ onScreenshot, onUpload
                 type="button"
                 onClick={() => !disabled && setIsOpen((prev) => !prev)}
                 disabled={disabled}
-                className={`flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-app)] px-1.5 py-1 text-[10px] font-medium text-[var(--fg-secondary)] transition-colors ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:border-[var(--accent-primary)]/25 hover:bg-[var(--bg-surface-hover)]/50 hover:text-[var(--fg-primary)]'}`}
+                className={`flex items-center gap-1 rounded-[calc(var(--panel-radius)*0.4)] border border-(--border-subtle) bg-(--bg-app) px-1.5 py-1 text-[10px] font-medium text-(--fg-secondary) transition-colors ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:border-(--accent-ai)/25 hover:bg-(--bg-surface-hover)/50 hover:text-(--fg-primary)'}`}
             >
-                <div className="flex h-4 w-4 items-center justify-center rounded-sm border border-[var(--border-subtle)] bg-[var(--bg-surface)]">
-                    <Plus className="h-2.5 w-2.5 text-[var(--accent-primary)]" />
+                <div className="flex h-4 w-4 items-center justify-center rounded-[calc(var(--panel-radius)*0.25)] border border-(--border-subtle) bg-(--bg-surface)">
+                    <Plus className="h-2.5 w-2.5 text-(--accent-ai)" />
                 </div>
                 <span>{t('common.add')}</span>
-                <ChevronDown className={`h-2.5 w-2.5 text-[var(--fg-tertiary)] transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
+                <ChevronDown className={`h-2.5 w-2.5 text-(--fg-tertiary) transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
             </button>
 
             {isOpen && (
                 <div
-                    className="absolute bottom-full left-0 z-[120] mb-1.5 w-44 overflow-hidden rounded-lg border border-[var(--border-focus)] bg-[var(--bg-surface)] py-0.5 shadow-[0_16px_40px_rgba(0,0,0,0.35)]"
-                    style={{ boxShadow: '0 8px 30px rgba(0, 0, 0, 0.4), 0 0 1px rgba(255, 255, 255, 0.1)' }}
+                    className="absolute bottom-full left-0 z-120 mb-1.5 w-44 overflow-hidden rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-focus) bg-(--bg-surface) py-0.5 shadow-(--shadow-lg)"
                 >
-                    <div className="px-2 py-1 text-[8px] uppercase tracking-[0.16em] text-[var(--fg-tertiary)]">
+                    <div className="px-2 py-1 text-[8px] uppercase tracking-[0.16em] text-(--fg-tertiary)">
                         {t('screenshot.featureMenu.captureSection')}
                     </div>
                     <button
@@ -58,10 +57,10 @@ export const FeatureMenu: React.FC<FeatureMenuProps> = ({ onScreenshot, onUpload
                             onScreenshot('window');
                             setIsOpen(false);
                         }}
-                        className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-[10px] text-[var(--fg-secondary)] transition-colors hover:bg-[var(--bg-surface-hover)] hover:text-[var(--fg-primary)]"
+                        className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-[10px] text-(--fg-secondary) transition-colors hover:bg-(--bg-surface-hover) hover:text-(--fg-primary)"
                     >
-                        <div className="flex h-6 w-6 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-app)]">
-                            <Monitor className="h-3 w-3 text-[var(--accent-primary)]" />
+                        <div className="flex h-6 w-6 items-center justify-center rounded-[calc(var(--panel-radius)*0.45)] border border-(--border-subtle) bg-(--bg-app)">
+                            <Monitor className="h-3 w-3 text-(--accent-ai)" />
                         </div>
                         <span>{t('screenshot.featureMenu.captureWindow')}</span>
                     </button>
@@ -71,15 +70,15 @@ export const FeatureMenu: React.FC<FeatureMenuProps> = ({ onScreenshot, onUpload
                             onScreenshot('region');
                             setIsOpen(false);
                         }}
-                        className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-[10px] text-[var(--fg-secondary)] transition-colors hover:bg-[var(--bg-surface-hover)] hover:text-[var(--fg-primary)]"
+                        className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-[10px] text-(--fg-secondary) transition-colors hover:bg-(--bg-surface-hover) hover:text-(--fg-primary)"
                     >
-                        <div className="flex h-6 w-6 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-app)]">
-                            <Scan className="h-3 w-3 text-[var(--accent-primary)]" />
+                        <div className="flex h-6 w-6 items-center justify-center rounded-[calc(var(--panel-radius)*0.45)] border border-(--border-subtle) bg-(--bg-app)">
+                            <Scan className="h-3 w-3 text-(--accent-ai)" />
                         </div>
                         <span>{t('screenshot.featureMenu.captureRegion')}</span>
                     </button>
-                    <div className="my-0.5 border-t border-[var(--border-subtle)]/30" />
-                    <div className="px-2 py-1 text-[8px] uppercase tracking-[0.16em] text-[var(--fg-tertiary)]">
+                    <div className="my-0.5 border-t border-(--border-subtle)/30" />
+                    <div className="px-2 py-1 text-[8px] uppercase tracking-[0.16em] text-(--fg-tertiary)">
                         {t('screenshot.featureMenu.attachSection')}
                     </div>
                     <button
@@ -88,10 +87,10 @@ export const FeatureMenu: React.FC<FeatureMenuProps> = ({ onScreenshot, onUpload
                             onUploadImage();
                             setIsOpen(false);
                         }}
-                        className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-[10px] text-[var(--fg-secondary)] transition-colors hover:bg-[var(--bg-surface-hover)] hover:text-[var(--fg-primary)]"
+                        className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-[10px] text-(--fg-secondary) transition-colors hover:bg-(--bg-surface-hover) hover:text-(--fg-primary)"
                     >
-                        <div className="flex h-6 w-6 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-app)]">
-                            <ImageUp className="h-3 w-3 text-[var(--accent-primary)]" />
+                        <div className="flex h-6 w-6 items-center justify-center rounded-[calc(var(--panel-radius)*0.45)] border border-(--border-subtle) bg-(--bg-app)">
+                            <ImageUp className="h-3 w-3 text-(--accent-ai)" />
                         </div>
                         <span>{t('screenshot.featureMenu.uploadImage')}</span>
                     </button>
