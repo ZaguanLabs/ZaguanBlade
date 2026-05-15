@@ -178,11 +178,10 @@ const ContextMenuPortal: React.FC = () => {
     return (
         <div
             ref={menuRef}
-            className="fixed z-[9999] min-w-[180px] max-w-[280px] py-1.5 bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded-lg shadow-xl animate-in fade-in zoom-in-95 duration-100"
+            className="fixed z-9999 min-w-[180px] max-w-[280px] py-1.5 bg-(--bg-surface) border border-(--border-focus) rounded-[calc(var(--panel-radius)*0.75)] shadow-(--shadow-lg) animate-in fade-in zoom-in-95 duration-(--transition-fast) overflow-hidden"
             style={{
                 left: adjustedPosition.x,
                 top: adjustedPosition.y,
-                boxShadow: '0 8px 30px rgba(0, 0, 0, 0.4), 0 0 1px rgba(255, 255, 255, 0.1)',
             }}
         >
             {state.items.map((item, index) => {
@@ -190,7 +189,7 @@ const ContextMenuPortal: React.FC = () => {
                     return (
                         <div
                             key={`divider-${index}`}
-                            className="my-1.5 mx-2 h-px bg-[var(--border-subtle)]"
+                            className="my-1.5 mx-2 h-px bg-(--border-subtle)"
                         />
                     );
                 }
@@ -206,12 +205,12 @@ const ContextMenuPortal: React.FC = () => {
                         className={`
                             w-full flex items-center gap-3 px-3 py-1.5 text-left text-[13px] transition-colors
                             ${item.disabled
-                                ? 'text-[var(--fg-tertiary)] cursor-not-allowed'
+                                ? 'text-(--fg-tertiary) cursor-not-allowed'
                                 : item.danger
-                                    ? 'text-[var(--accent-error)] hover:bg-[var(--accent-error)]/10'
-                                    : 'text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)]'
+                                    ? 'text-(--state-danger) hover:bg-[color-mix(in_srgb,var(--state-danger)_10%,transparent)]'
+                                    : 'text-(--fg-primary) hover:bg-(--bg-surface-hover)'
                             }
-                            ${isActive && !item.disabled ? 'bg-[var(--bg-surface-hover)]' : ''}
+                            ${isActive && !item.disabled ? 'bg-(--bg-surface-hover)' : ''}
                         `}
                     >
                         {/* Icon */}
@@ -226,7 +225,7 @@ const ContextMenuPortal: React.FC = () => {
 
                         {/* Shortcut */}
                         {item.shortcut && (
-                            <span className="text-[11px] text-[var(--fg-tertiary)] font-mono">
+                            <span className="text-[11px] text-(--fg-tertiary) font-mono">
                                 {item.shortcut}
                             </span>
                         )}
