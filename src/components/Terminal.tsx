@@ -503,7 +503,7 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
     return (
         <div
             ref={terminalRef}
-            className="terminal-host w-full h-full bg-[var(--term-bg)]"
+            className="terminal-host w-full h-full bg-(--term-bg)"
             style={{ overflow: "hidden" }}
             onContextMenu={handleContextMenu}
         />

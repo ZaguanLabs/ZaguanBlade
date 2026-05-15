@@ -214,12 +214,12 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(({
 
             {/* Tabs Sidebar (Right side like VSCode default or requested image) */}
             <div
-                className="w-48 bg-[var(--bg-app)] border-l border-[var(--border-default)] shadow-[var(--shadow-md)] flex flex-col"
+                className="w-48 bg-(--bg-app) border-l border-(--border-default) shadow-(--shadow-md) flex flex-col"
                 onContextMenu={suppressContextMenu}
             >
-                <div className="p-2 text-xs font-semibold text-[var(--fg-tertiary)] uppercase tracking-wider flex items-center justify-between">
+                <div className="p-2 text-xs font-semibold text-(--fg-tertiary) uppercase tracking-wider flex items-center justify-between">
                     <span>{t('terminal.terminals')}</span>
-                    <button onClick={addTerminal} className="hover:text-[var(--fg-primary)] transition-colors">
+                    <button onClick={addTerminal} className="hover:text-(--fg-primary) transition-colors">
                         <Plus className="w-4 h-4" />
                     </button>
                 </div>
@@ -231,9 +231,9 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(({
                             onClick={() => setActiveId(term.id)}
                             className="group flex items-center justify-between px-3 py-2 cursor-pointer text-sm border-l-2 transition-colors"
                             style={{
-                                borderLeftColor: activeId === term.id ? 'var(--accent-primary)' : 'transparent',
+                                borderLeftColor: activeId === term.id ? 'var(--accent-ai)' : 'transparent',
                                 backgroundColor: activeId === term.id
-                                    ? 'color-mix(in srgb, var(--accent-primary) 16%, var(--bg-surface))'
+                                    ? 'color-mix(in srgb, var(--accent-ai) 16%, var(--bg-surface))'
                                     : 'transparent',
                                 color: activeId === term.id ? 'var(--fg-primary)' : 'var(--fg-secondary)',
                             }}
@@ -245,7 +245,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(({
                             {terminals.length > 1 && (
                                 <button
                                     onClick={(e) => closeTerminal(e, term.id)}
-                                    className="opacity-0 group-hover:opacity-100 rounded p-0.5 transition-colors hover:bg-(--bg-surface-hover)"
+                                    className="opacity-0 group-hover:opacity-100 rounded-[calc(var(--panel-radius)*0.35)] p-0.5 transition-colors hover:bg-(--bg-surface-hover)"
                                 >
                                     <X className="w-3 h-3" />
                                 </button>
