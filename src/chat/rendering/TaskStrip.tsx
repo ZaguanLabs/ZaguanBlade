@@ -1,6 +1,7 @@
 import React from 'react';
 import { CheckCircle2, Circle, Loader2 } from 'lucide-react';
 import type { TodoItem } from '../../types/events';
+import { StatusStripFrame } from './StatusStripFrame';
 
 export const TaskStrip: React.FC<{ todos: TodoItem[] }> = ({ todos }) => {
     if (todos.length === 0) {
@@ -8,18 +9,16 @@ export const TaskStrip: React.FC<{ todos: TodoItem[] }> = ({ todos }) => {
     }
 
     return (
-        <div className="shrink-0 border-t border-(--border-subtle) bg-(--bg-app) px-3 py-2">
-            <div className="space-y-1 rounded-lg border border-(--border-subtle) bg-(--bg-surface)/60 px-3 py-2">
-                {todos.map((todo, index) => {
-                    const Icon = todo.status === 'completed' ? CheckCircle2 : todo.status === 'in_progress' ? Loader2 : Circle;
-                    return (
-                        <div key={`${todo.content}:${index}`} className="flex items-center gap-2 text-[11px] text-(--fg-secondary)">
-                            <Icon className={`h-3.5 w-3.5 ${todo.status === 'in_progress' ? 'animate-spin text-(--accent-primary)' : ''}`} />
-                            <span className={todo.status === 'completed' ? 'line-through opacity-70' : ''}>{todo.content}</span>
-                        </div>
-                    );
-                })}
-            </div>
-        </div>
+        <StatusStripFrame label="Plan" count={todos.length} tone="ai">
+            {todos.map((todo, index) => {
+                const Icon = todo.status === 'completed' ? CheckCircle2 : todo.status === 'in_progress' ? Loader2 : Circle;
+                return (
+                    <div key={`${todo.content}:${index}`} className="flex items-center gap-2 text-[11px] text-(--fg-secondary)">
+                        <Icon className={`h-3.5 w-3.5 ${todo.status === 'in_progress' ? 'animate-spin text-(--accent-ai)' : todo.status === 'completed' ? 'text-(--accent-mention)' : 'text-(--fg-tertiary)'}`} />
+                        <span className={todo.status === 'completed' ? 'line-through opacity-70' : ''}>{todo.content}</span>
+                    </div>
+                );
+            })}
+        </StatusStripFrame>
     );
 };
