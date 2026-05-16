@@ -5,6 +5,7 @@ import type { WindowInfo } from '../types/screenshot';
 import { ScrollArea } from './ui/ScrollArea';
 import { Surface } from './ui/Surface';
 import { ListRow } from './ui/ListRow';
+import { IconButton } from './ui/IconButton';
 
 interface WindowPickerProps {
     isOpen: boolean;
@@ -42,12 +43,11 @@ export const WindowPicker: React.FC<WindowPickerProps> = ({
                         <div className="text-sm font-semibold text-(--fg-primary)">{resolvedTitle}</div>
                         <div className="text-xs text-(--fg-tertiary)">{resolvedSubtitle}</div>
                     </div>
-                    <button
+                    <IconButton
                         onClick={onCancel}
-                        className="p-1 text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover) rounded-[calc(var(--panel-radius)*0.35)] transition"
                     >
                         <X className="w-4 h-4" />
-                    </button>
+                    </IconButton>
                 </div>
                 <ScrollArea className="max-h-[360px] p-2">
                     {loading && (

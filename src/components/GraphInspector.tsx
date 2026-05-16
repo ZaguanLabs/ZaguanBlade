@@ -6,6 +6,7 @@ import { ZLPGraphResponse, CallGraphNode, CallGraphEdge } from '../types/zlp';
 import { formatUnknownBackendError } from '../utils/backendErrors';
 import { ScrollArea } from './ui/ScrollArea';
 import { Surface } from './ui/Surface';
+import { IconButton } from './ui/IconButton';
 
 interface GraphInspectorProps {
     symbolId: string;
@@ -114,12 +115,11 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
                     <Network className="w-4 h-4 text-(--accent-ai)" />
                     <span className="truncate max-w-[180px]">{symbolName}</span>
                 </div>
-                <button
+                <IconButton
                     onClick={onClose}
-                    className="p-1 hover:bg-(--bg-surface-hover) rounded-[calc(var(--panel-radius)*0.35)] text-(--fg-tertiary) hover:text-(--fg-primary) transition-colors"
                 >
                     <X className="w-4 h-4" />
-                </button>
+                </IconButton>
             </div>
 
             {/* Content */}

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { ListOrdered, Pencil, Trash2 } from 'lucide-react';
 import type { QueuedRequest } from '../types/chat';
 import { ScrollArea } from './ui/ScrollArea';
+import { IconButton } from './ui/IconButton';
 
 interface QueuePanelProps {
     requests: QueuedRequest[];
@@ -43,22 +44,22 @@ const QueuePanelComponent: React.FC<QueuePanelProps> = ({ requests, onEditReques
                                 {preview}
                             </span>
                             <div className="flex items-center gap-1 shrink-0">
-                                <button
-                                    type="button"
+                                <IconButton
+                                    size="xs"
+                                    tone="muted"
                                     onClick={() => onEditRequest(index)}
-                                    className="p-0.5 rounded text-zinc-500 hover:text-(--fg-primary) hover:bg-(--bg-surface-hover) transition-colors"
                                     title={t('chat.queue.editQueuedRequest')}
                                 >
                                     <Pencil className="w-3 h-3" />
-                                </button>
-                                <button
-                                    type="button"
+                                </IconButton>
+                                <IconButton
+                                    size="xs"
+                                    tone="danger"
                                     onClick={() => onDeleteRequest(index)}
-                                    className="p-0.5 rounded text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
                                     title={t('chat.queue.deleteQueuedRequest')}
                                 >
                                     <Trash2 className="w-3 h-3" />
-                                </button>
+                                </IconButton>
                             </div>
                         </div>
                     );
