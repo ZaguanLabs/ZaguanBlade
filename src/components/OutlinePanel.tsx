@@ -71,7 +71,7 @@ const OutlineItem: React.FC<{
             >
                 {hasChildren ? (
                     <span
-                        className={`transition-transform cursor-pointer hover:text-(--fg-primary) p-0.5 rounded-sm ${expanded ? 'rotate-90' : ''}`}
+                        className={`transition-transform cursor-pointer hover:text-(--fg-primary) p-0.5 rounded-[calc(var(--panel-radius)*0.25)] ${expanded ? 'rotate-90' : ''}`}
                         onClick={toggleExpand}
                     >
                         <ChevronRight className="w-3 h-3 text-(--fg-tertiary)" />

@@ -4,12 +4,12 @@ import type { ChatWorkEntry } from '../../utils/chatTimeline';
 
 function workEntryToneClass(entry: ChatWorkEntry): string {
     if (entry.status === 'executing' || entry.status === 'pending') {
-        return 'bg-(--accent-primary)';
+        return 'bg-(--accent-ai)';
     }
     if (entry.tone === 'error') {
-        return 'bg-(--accent-error)';
+        return 'bg-(--state-danger)';
     }
-    return 'bg-(--accent-green)';
+    return 'bg-(--accent-mention)';
 }
 
 interface WorkLogTimelineRowProps {
@@ -26,7 +26,7 @@ export const WorkLogTimelineRow: React.FC<WorkLogTimelineRowProps> = React.memo(
 
     return (
         <div className="px-4 pb-2">
-            <div className="ml-8 rounded-xl border border-(--border-subtle) bg-(--bg-surface)/45 px-3 py-2">
+            <div className="ml-8 rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-surface)/45 px-3 py-2">
                 <button
                     type="button"
                     className="flex w-full items-center justify-between gap-3 text-left"
@@ -52,7 +52,7 @@ export const WorkLogTimelineRow: React.FC<WorkLogTimelineRowProps> = React.memo(
                 {(isExpanded || entries.length > 4) && (
                     <div className="mt-1.5 space-y-1">
                         {visibleEntries.map((entry) => (
-                            <div key={entry.id} className="flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5">
+                            <div key={entry.id} className="flex min-w-0 items-center gap-2 rounded-[calc(var(--panel-radius)*0.35)] px-1 py-0.5">
                                 <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${workEntryToneClass(entry)}`} />
                                 <span className="shrink-0 text-[10px] font-medium text-(--fg-secondary)">
                                     {entry.label}
@@ -74,7 +74,7 @@ export const WorkLogTimelineRow: React.FC<WorkLogTimelineRowProps> = React.memo(
                 <div className="mt-1.5 flex items-center justify-end">
                     <button
                         type="button"
-                        className="rounded-md px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-(--fg-tertiary) transition-colors hover:text-(--fg-secondary) disabled:cursor-default disabled:opacity-60"
+                        className="rounded-[calc(var(--panel-radius)*0.35)] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-(--fg-tertiary) transition-colors hover:text-(--fg-secondary) disabled:cursor-default disabled:opacity-60"
                         onClick={onToggleDetails}
                         disabled={detailsLockedOpen}
                     >

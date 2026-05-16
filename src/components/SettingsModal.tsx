@@ -585,10 +585,10 @@ const ThemeGrid: React.FC<{
                             {isSelected && <Check className="h-3.5 w-3.5 shrink-0 text-(--accent-ai)" />}
                         </div>
                         <div className="flex gap-1">
-                            <div className="h-3 flex-1 rounded-sm border border-(--border-subtle)" style={{ backgroundColor: theme.tokens['--bg-app'] }} />
-                            <div className="h-3 flex-1 rounded-sm border border-(--border-subtle)" style={{ backgroundColor: theme.tokens['--bg-panel'] }} />
-                            <div className="h-3 flex-1 rounded-sm border border-(--border-subtle)" style={{ backgroundColor: theme.tokens['--bg-surface'] }} />
-                            <div className="h-3 w-6 shrink-0 rounded-sm border border-(--border-subtle)" style={{ backgroundColor: theme.tokens['--accent-primary'] }} />
+                            <div className="h-3 flex-1 rounded-[calc(var(--panel-radius)*0.25)] border border-(--border-subtle)" style={{ backgroundColor: theme.tokens['--bg-app'] }} />
+                            <div className="h-3 flex-1 rounded-[calc(var(--panel-radius)*0.25)] border border-(--border-subtle)" style={{ backgroundColor: theme.tokens['--bg-panel'] }} />
+                            <div className="h-3 flex-1 rounded-[calc(var(--panel-radius)*0.25)] border border-(--border-subtle)" style={{ backgroundColor: theme.tokens['--bg-surface'] }} />
+                            <div className="h-3 w-6 shrink-0 rounded-[calc(var(--panel-radius)*0.25)] border border-(--border-subtle)" style={{ backgroundColor: theme.tokens['--accent-ai'] }} />
                         </div>
                     </button>
                 );

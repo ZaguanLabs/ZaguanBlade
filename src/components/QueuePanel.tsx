@@ -36,7 +36,7 @@ const QueuePanelComponent: React.FC<QueuePanelProps> = ({ requests, onEditReques
                             <span className="font-mono text-[10px] text-(--fg-tertiary) w-4 text-right shrink-0">
                                 {index + 1}.
                             </span>
-                            <span className={`inline-flex shrink-0 items-center rounded-md border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] ${request.mode === 'planning'
+                            <span className={`inline-flex shrink-0 items-center rounded-[calc(var(--panel-radius)*0.35)] border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] ${request.mode === 'planning'
                                 ? 'border-(--accent-planning)/20 bg-[color-mix(in_srgb,var(--accent-planning)_10%,transparent)] text-(--accent-planning)'
                                 : 'border-(--accent-mention)/20 bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)] text-(--accent-mention)'
                                 }`}>
