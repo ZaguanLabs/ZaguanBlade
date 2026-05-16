@@ -18,29 +18,29 @@ const SymbolIcon: React.FC<{ kind: string }> = ({ kind }) => {
 
     // Functions/Methods
     if (k.includes('function') || k.includes('method') || k === 'constructor')
-        return <FunctionSquare className="w-3.5 h-3.5 text-purple-400" />;
+        return <FunctionSquare className="w-3.5 h-3.5 text-(--accent-planning)" />;
 
     // Classes/Structs/Interfaces
     if (k.includes('class') || k.includes('struct') || k.includes('interface') || k === 'impl' || k === 'trait')
-        return <Layout className="w-3.5 h-3.5 text-orange-400" />;
+        return <Layout className="w-3.5 h-3.5 text-(--accent-warning)" />;
 
     // Variables/Constants
     if (k.includes('const') || k.includes('let') || k.includes('var') || k === 'field')
-        return <Variable className="w-3.5 h-3.5 text-blue-400" />;
+        return <Variable className="w-3.5 h-3.5 text-(--accent-ai)" />;
 
     // Properties
     if (k.includes('property') || k === 'key')
-        return <Tag className="w-3.5 h-3.5 text-sky-400" />;
+        return <Tag className="w-3.5 h-3.5 text-(--accent-planning)" />;
 
     // Modules
     if (k.includes('module') || k === 'mod')
-        return <Box className="w-3.5 h-3.5 text-yellow-400" />;
+        return <Box className="w-3.5 h-3.5 text-(--accent-warning)" />;
 
     // Misc Blocks
     if (k === 'object' || k === 'call_expression')
-        return <Braces className="w-3.5 h-3.5 text-zinc-500" />;
+        return <Braces className="w-3.5 h-3.5 text-(--fg-tertiary)" />;
 
-    return <FileText className="w-3.5 h-3.5 text-zinc-600" />;
+    return <FileText className="w-3.5 h-3.5 text-(--fg-tertiary)" />;
 };
 
 const OutlineItem: React.FC<{
@@ -173,7 +173,7 @@ export const OutlinePanel: React.FC<OutlinePanelProps> = ({ filePath, onNavigate
     }
 
     return (
-        <ScrollArea className="flex flex-col h-full bg-(--bg-panel) pt-2 pb-4 scrollbar-thin scrollbar-thumb-zinc-800">
+        <ScrollArea className="flex flex-col h-full bg-(--bg-panel) pt-2 pb-4 scrollbar-thin scrollbar-thumb-(--bg-surface-hover)">
             {structure.map((node, idx) => (
                 <OutlineItem
                     key={`${node.name}-${idx}`}
