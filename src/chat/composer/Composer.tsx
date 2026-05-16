@@ -145,7 +145,7 @@ export const Composer: React.FC<ComposerProps> = ({
                     {activeMentionChips.length > 0 && (
                         <div className="flex flex-wrap gap-1.5 px-2 pb-1">
                             {activeMentionChips.map((mention) => (
-                                <span key={mention.path} className="inline-flex max-w-full rounded-md border border-[color-mix(in_srgb,var(--accent-mention)_24%,transparent)] bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)] px-2 py-1 text-[10px] text-(--accent-mention)">
+                                <span key={mention.path} className="inline-flex max-w-full rounded-[calc(var(--panel-radius)*0.45)] border border-[color-mix(in_srgb,var(--accent-mention)_24%,transparent)] bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)] px-2 py-1 text-[10px] text-(--accent-mention)">
                                     @{mention.path}
                                 </span>
                             ))}
@@ -157,7 +157,7 @@ export const Composer: React.FC<ComposerProps> = ({
                             selectedIndex={selectedSuggestionIndex}
                             onSelect={selectSuggestion}
                         />
-                        <div className="relative overflow-hidden rounded-lg border border-(--border-subtle) bg-(--bg-app)">
+                        <div className="relative overflow-hidden rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-app)">
                             <ComposerTextarea
                                 ref={textareaRef}
                                 text={text}
