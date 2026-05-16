@@ -90,33 +90,33 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
     };
 
     return (
-        <div className="h-full bg-[var(--bg-panel)] border-r border-[var(--border-subtle)] flex flex-col text-[var(--fg-secondary)]">
+        <div className="h-full bg-(--bg-panel) border-r border-(--border-subtle) flex flex-col text-(--fg-secondary)">
             {/* Explorer Section */}
             <div className="flex-1 flex flex-col min-h-0">
-                <div className="h-9 px-4 flex items-center bg-[var(--bg-panel)] border-b border-[var(--border-subtle)] text-[10px] uppercase tracking-wider font-semibold select-none justify-between text-[var(--fg-tertiary)] shrink-0">
+                <div className="h-9 px-4 flex items-center bg-(--bg-panel) border-b border-(--border-subtle) text-[10px] uppercase tracking-wider font-semibold select-none justify-between text-(--fg-tertiary) shrink-0">
                     <span>{t('fileTree.title')}</span>
-                    <button onClick={() => { loadRoot(); setRefreshKey(prev => prev + 1); }} className="hover:text-[var(--fg-primary)]" title={t('fileTree.refresh')}>
+                    <button onClick={() => { loadRoot(); setRefreshKey(prev => prev + 1); }} className="hover:text-(--fg-primary)" title={t('fileTree.refresh')}>
                         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
                     </button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto pt-2 scrollbar-thin scrollbar-thumb-zinc-800">
+                <div className="flex-1 overflow-y-auto pt-2 scrollbar-thin scrollbar-thumb-(--bg-surface-hover)">
                     {roots.length === 0 ? (
                         <div className="p-4 flex flex-col gap-2">
-                            <p className="text-xs text-[var(--fg-tertiary)] italic text-center">{t('fileTree.noWorkspace')}.</p>
+                            <p className="text-xs text-(--fg-tertiary) italic text-center">{t('fileTree.noWorkspace')}.</p>
                             <div className="flex gap-1">
                                 <input
-                                    className="bg-[var(--bg-surface)] border border-[var(--border-subtle)] text-xs p-1 w-full rounded-sm text-[var(--fg-primary)]"
+                                    className="bg-(--bg-surface) border border-(--border-subtle) text-xs p-1 w-full rounded-[calc(var(--panel-radius)*0.25)] text-(--fg-primary)"
                                     placeholder={t('common.pathPlaceholder')}
                                     value={pathInput}
                                     onChange={e => setPathInput(e.target.value)}
                                     onKeyDown={e => e.key === 'Enter' && openSpecificPath()}
                                 />
-                                <button onClick={openSpecificPath} className="p-1.5 bg-[var(--bg-surface)] hover:bg-[var(--bg-surface-hover)] rounded-sm text-[var(--fg-primary)]">
+                                <button onClick={openSpecificPath} className="p-1.5 bg-(--bg-surface) hover:bg-(--bg-surface-hover) rounded-[calc(var(--panel-radius)*0.25)] text-(--fg-primary)">
                                     <ChevronRight className="w-3 h-3" />
                                 </button>
                             </div>
-                            {error && <p className="text-[10px] text-[var(--accent-error)] break-all">{error}</p>}
+                            {error && <p className="text-[10px] text-(--state-danger) break-all">{error}</p>}
                         </div>
                     ) : (
                         <ErrorBoundary>
@@ -132,12 +132,12 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
             </div>
 
             {/* Resizer */}
-            <div className="h-[1px] bg-[var(--border-subtle)] flex-shrink-0" />
+            <div className="h-px bg-(--border-subtle) shrink-0" />
 
             {/* Outline Section */}
             {activeFile && (
-                <div style={{ height: `${outlineHeight}px` }} className="flex flex-col min-h-0 border-t border-[var(--border-subtle)]">
-                    <div className="h-7 px-4 flex items-center bg-[var(--bg-panel)] border-b border-[var(--border-subtle)] text-[10px] uppercase tracking-wider font-semibold select-none text-[var(--fg-tertiary)] shrink-0">
+                <div style={{ height: `${outlineHeight}px` }} className="flex flex-col min-h-0 border-t border-(--border-subtle)">
+                    <div className="h-7 px-4 flex items-center bg-(--bg-panel) border-b border-(--border-subtle) text-[10px] uppercase tracking-wider font-semibold select-none text-(--fg-tertiary) shrink-0">
                         <span>{t('common.outline')}</span>
                     </div>
                     <div className="flex-1 overflow-hidden">

@@ -54,7 +54,7 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
 
         return (
             <div className="mb-4">
-                <div className="flex items-center gap-2 text-sm font-semibold text-[var(--fg-secondary)] mb-2 px-1">
+                <div className="flex items-center gap-2 text-sm font-semibold text-(--fg-secondary) mb-2 px-1">
                     {icon}
                     {title}
                 </div>
@@ -62,18 +62,18 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
                     {nodes.map(node => (
                         <div
                             key={node.id}
-                            className="p-2 rounded bg-[var(--bg-surface-hover)] border border-[var(--border-subtle)] cursor-pointer hover:border-[var(--accent-primary)] transition-colors flex items-center justify-between group"
+                            className="p-2 rounded-[calc(var(--panel-radius)*0.4)] bg-(--bg-surface-hover) border border-(--border-subtle) cursor-pointer hover:border-(--accent-ai) transition-colors flex items-center justify-between group"
                             onClick={() => {
                                 if (node.file && node.line) {
                                     onNavigate(node.file, node.line, 0); // Assuming 0 for column if not provided
                                 }
                             }}
                         >
-                            <div className="truncate text-xs font-mono text-[var(--fg-primary)]">
+                            <div className="truncate text-xs font-mono text-(--fg-primary)">
                                 {node.name}
                             </div>
                             {node.file && (
-                                <div className="text-[10px] text-[var(--fg-tertiary)] opacity-0 group-hover:opacity-100 transition-opacity truncate max-w-[150px] ml-2">
+                                <div className="text-[10px] text-(--fg-tertiary) opacity-0 group-hover:opacity-100 transition-opacity truncate max-w-[150px] ml-2">
                                     {node.file.split('/').pop()}
                                 </div>
                             )}
@@ -104,16 +104,16 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
     };
 
     return (
-        <div className="fixed inset-y-0 right-0 w-80 bg-[var(--bg-panel)] border-l border-[var(--border-subtle)] shadow-xl z-50 flex flex-col animate-in slide-in-from-right duration-200">
+        <div className="fixed inset-y-0 right-0 w-80 bg-(--bg-panel) border-l border-(--border-subtle) shadow-(--shadow-xl) z-50 flex flex-col animate-in slide-in-from-right duration-(--transition-base)">
             {/* Header */}
-            <div className="h-12 border-b border-[var(--border-subtle)] flex items-center justify-between px-4 bg-[var(--bg-app)]">
-                <div className="flex items-center gap-2 text-[var(--fg-primary)] font-medium">
-                    <Network className="w-4 h-4 text-[var(--accent-primary)]" />
+            <div className="h-12 border-b border-(--border-subtle) flex items-center justify-between px-4 bg-(--bg-app)">
+                <div className="flex items-center gap-2 text-(--fg-primary) font-medium">
+                    <Network className="w-4 h-4 text-(--accent-ai)" />
                     <span className="truncate max-w-[180px]">{symbolName}</span>
                 </div>
                 <button
                     onClick={onClose}
-                    className="p-1 hover:bg-[var(--bg-surface-hover)] rounded text-[var(--fg-tertiary)] hover:text-[var(--fg-primary)] transition-colors"
+                    className="p-1 hover:bg-(--bg-surface-hover) rounded-[calc(var(--panel-radius)*0.35)] text-(--fg-tertiary) hover:text-(--fg-primary) transition-colors"
                 >
                     <X className="w-4 h-4" />
                 </button>
@@ -123,26 +123,26 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
             <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
                 {loading ? (
                     <div className="flex items-center justify-center py-10">
-                        <Loader2 className="w-6 h-6 animate-spin text-[var(--accent-primary)]" />
+                        <Loader2 className="w-6 h-6 animate-spin text-(--accent-ai)" />
                     </div>
                 ) : error ? (
-                    <div className="p-3 bg-red-500/10 border border-red-500/20 rounded text-xs text-red-400">
+                    <div className="p-3 bg-[color-mix(in_srgb,var(--state-danger)_10%,transparent)] border border-(--state-danger)/20 rounded-[calc(var(--panel-radius)*0.45)] text-xs text-(--state-danger)">
                         {error}
                     </div>
                 ) : graph ? (
                     <>
-                        {renderNodeList(getIncomingNodes(), t('graphInspector.incomingCalls'), <ArrowLeft className="w-3.5 h-3.5 text-orange-400" />)}
+                        {renderNodeList(getIncomingNodes(), t('graphInspector.incomingCalls'), <ArrowLeft className="w-3.5 h-3.5 text-(--accent-warning)" />)}
 
                         {/* Current Node Representation */}
-                        <div className="my-6 p-3 bg-[var(--accent-surface)] border border-[var(--accent-border)] rounded text-center">
-                            <div className="text-[10px] uppercase text-[var(--accent-text-secondary)] font-bold mb-1">{t('graphInspector.focus')}</div>
-                            <div className="font-mono text-sm font-bold text-[var(--accent-text-primary)]">{symbolName}</div>
+                        <div className="my-6 p-3 bg-[color-mix(in_srgb,var(--accent-ai)_12%,var(--bg-surface))] border border-(--accent-ai)/25 rounded-[calc(var(--panel-radius)*0.55)] text-center">
+                            <div className="text-[10px] uppercase text-(--fg-secondary) font-bold mb-1">{t('graphInspector.focus')}</div>
+                            <div className="font-mono text-sm font-bold text-(--fg-primary)">{symbolName}</div>
                         </div>
 
-                        {renderNodeList(getOutgoingNodes(), t('graphInspector.outgoingCalls'), <ArrowRight className="w-3.5 h-3.5 text-blue-400" />)}
+                        {renderNodeList(getOutgoingNodes(), t('graphInspector.outgoingCalls'), <ArrowRight className="w-3.5 h-3.5 text-(--accent-planning)" />)}
 
                         {getIncomingNodes().length === 0 && getOutgoingNodes().length === 0 && (
-                            <div className="text-center text-xs text-[var(--fg-tertiary)] italic py-4">
+                            <div className="text-center text-xs text-(--fg-tertiary) italic py-4">
                                 {t('graphInspector.noCallsFound')}
                             </div>
                         )}

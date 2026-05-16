@@ -38,22 +38,22 @@ export const ProgressIndicator: React.FC<ProgressIndicatorProps> = ({ progress }
         const stage = progress.stage.toLowerCase();
 
         if (stage.includes('search') || stage.includes('query')) {
-            return 'var(--accent-primary)';
+            return 'var(--accent-ai)';
         }
         if (stage.includes('extract') || stage.includes('fetch')) {
-            return 'var(--accent-purple)';
+            return 'var(--accent-planning)';
         }
         if (stage.includes('grad') || stage.includes('analyz')) {
             return 'var(--accent-warning)';
         }
         if (stage.includes('synth') || stage.includes('generat')) {
-            return 'var(--accent-green)';
+            return 'var(--accent-mention)';
         }
         if (stage.includes('done') || stage.includes('complete')) {
-            return 'var(--accent-green)';
+            return 'var(--accent-mention)';
         }
 
-        return 'var(--accent-primary)';
+        return 'var(--accent-ai)';
     };
 
     const getStageIcon = () => {
@@ -83,7 +83,7 @@ export const ProgressIndicator: React.FC<ProgressIndicatorProps> = ({ progress }
 
     return (
         <div
-            className="my-3 overflow-hidden rounded-2xl border px-4 py-3 transition-all duration-300"
+            className="my-3 overflow-hidden rounded-[calc(var(--panel-radius)*1.2)] border px-4 py-3 transition-all duration-(--transition-slow)"
             style={{
                 borderColor: `color-mix(in srgb, ${stageTone} 38%, var(--border-default))`,
                 backgroundColor: `color-mix(in srgb, ${stageTone} 10%, var(--bg-surface))`,
@@ -92,7 +92,7 @@ export const ProgressIndicator: React.FC<ProgressIndicatorProps> = ({ progress }
         >
             <div className="mb-2 flex items-center gap-3">
                 <div
-                    className="flex h-8 w-8 items-center justify-center rounded-2xl border animate-pulse"
+                    className="flex h-8 w-8 items-center justify-center rounded-[calc(var(--panel-radius)*0.8)] border animate-pulse"
                     style={{
                         borderColor: 'var(--border-subtle)',
                         backgroundColor: 'color-mix(in srgb, var(--bg-surface) 82%, transparent)',

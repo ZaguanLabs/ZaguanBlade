@@ -91,14 +91,14 @@ export const MarkdownEditor = forwardRef<CodeEditorHandle, MarkdownEditorProps>(
                     </span>
                 </div>
 
-                <div className="flex items-center gap-1 rounded-md p-0.5" style={{ backgroundColor: 'color-mix(in srgb, var(--markdown-inline-code-bg) 80%, transparent)' }}>
+                <div className="flex items-center gap-1 rounded-[calc(var(--panel-radius)*0.45)] p-0.5" style={{ backgroundColor: 'color-mix(in srgb, var(--markdown-inline-code-bg) 80%, transparent)' }}>
                     <button
                         onClick={switchMode}
-                        className={`flex items-center gap-2 px-3 py-1 rounded text-xs font-medium transition-all ${mode === 'edit'
+                        className={`flex items-center gap-2 px-3 py-1 rounded-[calc(var(--panel-radius)*0.35)] text-xs font-medium transition-all ${mode === 'edit'
                                 ? 'shadow-sm border text-(--markdown-heading) border-(--markdown-border) bg-(--markdown-inline-code-bg)'
-                                : 'shadow-sm border border-(--accent-primary) text-(--markdown-link)'
+                                : 'shadow-sm border border-(--accent-ai) text-(--markdown-link)'
                             }`}
-                        style={mode === 'view' ? { backgroundColor: 'color-mix(in srgb, var(--accent-primary) 18%, transparent)' } : undefined}
+                        style={mode === 'view' ? { backgroundColor: 'color-mix(in srgb, var(--accent-ai) 18%, transparent)' } : undefined}
                         title={t('editor.toggleEditView')}
                     >
                         {mode === 'edit' ? (
