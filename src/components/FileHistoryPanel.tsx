@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useFileHistory } from '../hooks/useFileHistory';
 import { RotateCcw, Clock } from 'lucide-react';
 import { ScrollArea } from './ui/ScrollArea';
+import { Surface } from './ui/Surface';
 
 interface FileHistoryPanelProps {
     activeFile: string | null;
@@ -53,7 +54,7 @@ export const FileHistoryPanel: React.FC<FileHistoryPanelProps> = ({ activeFile }
 
             <ScrollArea className="flex-1 p-2 space-y-2">
                 {history.map((entry) => (
-                    <div key={entry.id} className="group p-2 rounded-[calc(var(--panel-radius)*0.65)] bg-(--bg-surface) border border-(--border-subtle) hover:border-(--border-focus) transition-all">
+                    <Surface key={entry.id} variant="row" className="group p-2 hover:border-(--border-focus) transition-all">
                         <div className="flex justify-between items-center mb-1">
                             <span className="text-xs font-medium text-(--fg-primary) opacity-90">
                                 {formatTime(entry.timestamp)}
@@ -73,7 +74,7 @@ export const FileHistoryPanel: React.FC<FileHistoryPanelProps> = ({ activeFile }
                         <div className="text-[10px] font-mono text-(--fg-tertiary) truncate" title={entry.id}>
                             {t('fileHistory.snapshotId', { id: entry.id.substring(0, 8) })}
                         </div>
-                    </div>
+                    </Surface>
                 ))}
             </ScrollArea>
         </div>

@@ -5,6 +5,7 @@ import { ZLPService } from '../services/zlp';
 import { ZLPGraphResponse, CallGraphNode, CallGraphEdge } from '../types/zlp';
 import { formatUnknownBackendError } from '../utils/backendErrors';
 import { ScrollArea } from './ui/ScrollArea';
+import { Surface } from './ui/Surface';
 
 interface GraphInspectorProps {
     symbolId: string;
@@ -61,9 +62,10 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
                 </div>
                 <div className="space-y-1">
                     {nodes.map(node => (
-                        <div
+                        <Surface
                             key={node.id}
-                            className="p-2 rounded-[calc(var(--panel-radius)*0.4)] bg-(--bg-surface-hover) border border-(--border-subtle) cursor-pointer hover:border-(--accent-ai) transition-colors flex items-center justify-between group"
+                            variant="row"
+                            className="p-2 rounded-[calc(var(--panel-radius)*0.4)] bg-(--bg-surface-hover) cursor-pointer hover:border-(--accent-ai) transition-colors flex items-center justify-between group"
                             onClick={() => {
                                 if (node.file && node.line) {
                                     onNavigate(node.file, node.line, 0); // Assuming 0 for column if not provided
@@ -78,7 +80,7 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
                                     {node.file.split('/').pop()}
                                 </div>
                             )}
-                        </div>
+                        </Surface>
                     ))}
                 </div>
             </div>
@@ -135,10 +137,10 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
                         {renderNodeList(getIncomingNodes(), t('graphInspector.incomingCalls'), <ArrowLeft className="w-3.5 h-3.5 text-(--accent-warning)" />)}
 
                         {/* Current Node Representation */}
-                        <div className="my-6 p-3 bg-[color-mix(in_srgb,var(--accent-ai)_12%,var(--bg-surface))] border border-(--accent-ai)/25 rounded-[calc(var(--panel-radius)*0.55)] text-center">
+                        <Surface variant="row" className="my-6 p-3 bg-[color-mix(in_srgb,var(--accent-ai)_12%,var(--bg-surface))] border-(--accent-ai)/25 rounded-[calc(var(--panel-radius)*0.55)] text-center">
                             <div className="text-[10px] uppercase text-(--fg-secondary) font-bold mb-1">{t('graphInspector.focus')}</div>
                             <div className="font-mono text-sm font-bold text-(--fg-primary)">{symbolName}</div>
-                        </div>
+                        </Surface>
 
                         {renderNodeList(getOutgoingNodes(), t('graphInspector.outgoingCalls'), <ArrowRight className="w-3.5 h-3.5 text-(--accent-planning)" />)}
 
