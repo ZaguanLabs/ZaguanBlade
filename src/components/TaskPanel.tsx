@@ -12,11 +12,11 @@ interface TaskPanelProps {
 const StatusIcon: React.FC<{ status: TodoItem['status'] }> = ({ status }) => {
     switch (status) {
         case 'completed':
-            return <Check className="w-3 h-3 text-emerald-400" />;
+            return <Check className="w-3 h-3 text-(--accent-mention)" />;
         case 'in_progress':
-            return <Loader2 className="w-3 h-3 text-indigo-400 animate-spin" />;
+            return <Loader2 className="w-3 h-3 text-(--accent-ai) animate-spin" />;
         case 'pending':
-            return <Circle className="w-3 h-3 text-zinc-600" />;
+            return <Circle className="w-3 h-3 text-(--fg-tertiary)" />;
     }
 };
 
@@ -28,6 +28,7 @@ const TaskPanelComponent: React.FC<TaskPanelProps> = ({ todos, isCollapsed, onTo
 
     const completedCount = todos.filter(t => t.status === 'completed').length;
     const totalCount = todos.length;
+    const hasTodos = totalCount > 0;
     const allCompleted = totalCount > 0 && completedCount === totalCount;
     const summaryText = allDoneState
         ? t('taskPanel.allTasksCompleted')
@@ -35,10 +36,10 @@ const TaskPanelComponent: React.FC<TaskPanelProps> = ({ todos, isCollapsed, onTo
 
     // Slide-in animation on mount
     useEffect(() => {
-        if (todos.length > 0) {
+        if (hasTodos) {
             requestAnimationFrame(() => setIsVisible(true));
         }
-    }, [todos.length > 0]);
+    }, [hasTodos]);
 
     // "All done" brief display state
     useEffect(() => {
@@ -47,35 +48,35 @@ const TaskPanelComponent: React.FC<TaskPanelProps> = ({ todos, isCollapsed, onTo
         }
     }, [allCompleted, allDoneState]);
 
-    if (todos.length === 0) return null;
+    if (!hasTodos) return null;
 
     return (
         <div
             ref={panelRef}
-            className={`border-t border-[var(--border-subtle)] bg-[var(--bg-surface)] transition-all duration-300 ease-out ${
+            className={`border-t border-(--border-subtle) bg-(--bg-surface) transition-all duration-300 ease-out ${
                 isVisible ? 'opacity-100 max-h-[300px]' : 'opacity-0 max-h-0'
-            } ${allDoneState ? 'border-t-emerald-500/30' : ''}`}
+            } ${allDoneState ? 'border-t-(--accent-mention)/30' : ''}`}
             style={{ overflow: 'hidden' }}
         >
             <button
                 onClick={onToggleCollapse}
-                className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-[var(--bg-surface-hover)] transition-colors text-left"
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-(--bg-surface-hover) transition-colors text-left"
             >
-                <div className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border ${allDoneState ? 'border-emerald-500/20 bg-emerald-500/10' : 'border-indigo-500/20 bg-indigo-500/10'}`}>
-                    <Zap className={`h-3 w-3 ${allDoneState ? 'text-emerald-400' : 'text-indigo-400'}`} />
+                <div className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-[calc(var(--panel-radius)*0.35)] border ${allDoneState ? 'border-(--accent-mention)/20 bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)]' : 'border-(--accent-ai)/20 bg-[color-mix(in_srgb,var(--accent-ai)_10%,transparent)]'}`}>
+                    <Zap className={`h-3 w-3 ${allDoneState ? 'text-(--accent-mention)' : 'text-(--accent-ai)'}`} />
                 </div>
                 <span className={`flex-1 truncate text-[10px] font-medium uppercase tracking-[0.12em] ${
-                    allDoneState ? 'text-emerald-400' : 'text-[var(--fg-secondary)]'
+                    allDoneState ? 'text-(--accent-mention)' : 'text-(--fg-secondary)'
                 }`}>
                     {summaryText}
                 </span>
-                <span className="shrink-0 text-[10px] text-zinc-500">
+                <span className="shrink-0 text-[10px] text-(--fg-tertiary)">
                     {t('taskPanel.itemsCount', { count: totalCount })}
                 </span>
                 {isCollapsed ? (
-                    <ChevronRight className="w-3 h-3 text-zinc-500 shrink-0" />
+                    <ChevronRight className="w-3 h-3 text-(--fg-tertiary) shrink-0" />
                 ) : (
-                    <ChevronDown className="w-3 h-3 text-zinc-500 shrink-0" />
+                    <ChevronDown className="w-3 h-3 text-(--fg-tertiary) shrink-0" />
                 )}
             </button>
 
@@ -93,14 +94,14 @@ const TaskPanelComponent: React.FC<TaskPanelProps> = ({ todos, isCollapsed, onTo
                                 key={index}
                                 className={`flex items-center gap-1.5 border-l-2 px-1.5 py-1 text-[10px] leading-snug transition-colors ${
                                     todo.status === 'completed'
-                                        ? 'border-zinc-800 text-zinc-600 line-through'
+                                        ? 'border-(--border-subtle) text-(--fg-tertiary) line-through'
                                         : todo.status === 'in_progress'
-                                        ? 'border-indigo-400 text-[var(--fg-primary)] font-medium'
-                                        : 'border-zinc-800 text-zinc-500'
+                                        ? 'border-(--accent-ai) text-(--fg-primary) font-medium'
+                                        : 'border-(--border-subtle) text-(--fg-tertiary)'
                                 }`}
                             >
                                 <StatusIcon status={todo.status} />
-                                <span className="w-4 shrink-0 text-right font-mono text-[9px] text-zinc-600">
+                                <span className="w-4 shrink-0 text-right font-mono text-[9px] text-(--fg-tertiary)">
                                     {index + 1}.
                                 </span>
                                 <span className="min-w-0 flex-1 truncate">{text}</span>
