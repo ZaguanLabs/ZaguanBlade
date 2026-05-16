@@ -65,27 +65,27 @@ const OutlineItem: React.FC<{
     return (
         <div className="select-none">
             <div
-                className="flex items-center gap-1.5 py-0.5 px-2 hover:bg-[var(--bg-surface-hover)] cursor-pointer text-xs group"
+                className="flex items-center gap-1.5 py-0.5 px-2 hover:bg-(--bg-surface-hover) cursor-pointer text-xs group"
                 style={{ paddingLeft: `${depth * 16 + 8}px` }}
                 onClick={handleClick}
             >
                 {hasChildren ? (
                     <span
-                        className={`transition-transform cursor-pointer hover:text-[var(--fg-primary)] p-0.5 rounded-sm ${expanded ? 'rotate-90' : ''}`}
+                        className={`transition-transform cursor-pointer hover:text-(--fg-primary) p-0.5 rounded-sm ${expanded ? 'rotate-90' : ''}`}
                         onClick={toggleExpand}
                     >
-                        <ChevronRight className="w-3 h-3 text-[var(--fg-tertiary)]" />
+                        <ChevronRight className="w-3 h-3 text-(--fg-tertiary)" />
                     </span>
                 ) : (
                     <span className="w-4" />
                 )}
 
                 <SymbolIcon kind={node.kind} />
-                <span className="truncate text-[var(--fg-secondary)] group-hover:text-[var(--fg-primary)] transition-colors">
+                <span className="truncate text-(--fg-secondary) group-hover:text-(--fg-primary) transition-colors">
                     {node.name}
                 </span>
                 {node.detail && (
-                    <span className="ml-auto text-[10px] text-[var(--fg-tertiary)] opacity-0 group-hover:opacity-100 transition-opacity">
+                    <span className="ml-auto text-[10px] text-(--fg-tertiary) opacity-0 group-hover:opacity-100 transition-opacity">
                         {node.detail}
                     </span>
                 )}
@@ -158,7 +158,7 @@ export const OutlinePanel: React.FC<OutlinePanelProps> = ({ filePath, onNavigate
 
     if (loading) {
         return (
-            <div className="flex items-center justify-center p-8 text-[var(--fg-tertiary)]">
+            <div className="flex items-center justify-center p-8 text-(--fg-tertiary)">
                 <div className="animate-pulse text-xs italic">{t('outline.loadingStructure')}</div>
             </div>
         );
@@ -166,14 +166,14 @@ export const OutlinePanel: React.FC<OutlinePanelProps> = ({ filePath, onNavigate
 
     if (structure.length === 0) {
         return (
-            <div className="p-4 text-[10px] text-[var(--fg-tertiary)] italic text-center">
+            <div className="p-4 text-[10px] text-(--fg-tertiary) italic text-center">
                 {t('outline.noSymbols')}
             </div>
         );
     }
 
     return (
-        <ScrollArea className="flex flex-col h-full bg-[var(--bg-panel)] pt-2 pb-4 scrollbar-thin scrollbar-thumb-zinc-800">
+        <ScrollArea className="flex flex-col h-full bg-(--bg-panel) pt-2 pb-4 scrollbar-thin scrollbar-thumb-zinc-800">
             {structure.map((node, idx) => (
                 <OutlineItem
                     key={`${node.name}-${idx}`}
