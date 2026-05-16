@@ -96,8 +96,8 @@ export const MarkdownEditor = forwardRef<CodeEditorHandle, MarkdownEditorProps>(
                     <button
                         onClick={switchMode}
                         className={`flex items-center gap-2 px-3 py-1 rounded-[calc(var(--panel-radius)*0.35)] text-xs font-medium transition-all ${mode === 'edit'
-                                ? 'shadow-sm border text-(--markdown-heading) border-(--markdown-border) bg-(--markdown-inline-code-bg)'
-                                : 'shadow-sm border border-(--accent-ai) text-(--markdown-link)'
+                                ? 'shadow-(--shadow-sm) border text-(--markdown-heading) border-(--markdown-border) bg-(--markdown-inline-code-bg)'
+                                : 'shadow-(--shadow-sm) border border-(--accent-ai) text-(--markdown-link)'
                             }`}
                         style={mode === 'view' ? { backgroundColor: 'color-mix(in srgb, var(--accent-ai) 18%, transparent)' } : undefined}
                         title={t('editor.toggleEditView')}
