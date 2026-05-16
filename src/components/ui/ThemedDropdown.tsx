@@ -43,8 +43,8 @@ export function themedDropdownItemClassName(selected: boolean, className?: strin
     return cn(
         'group w-full rounded-[calc(var(--panel-radius)+2px)] border text-left transition-[border-color,background-color,box-shadow,transform] duration-200 focus:outline-none',
         selected
-            ? 'border-(--accent-primary) bg-[color-mix(in_srgb,var(--accent-primary)_14%,var(--bg-surface))] shadow-[0_0_0_1px_color-mix(in_srgb,var(--accent-primary)_28%,transparent)]'
-            : 'border-transparent bg-(--bg-surface) hover:border-(--border-default) hover:bg-(--bg-surface-hover) focus:border-(--accent-primary) focus:bg-(--bg-surface-hover)',
+            ? 'border-(--accent-ai) bg-[color-mix(in_srgb,var(--accent-ai)_14%,var(--bg-surface))] ring-1 ring-(--accent-ai)/30 shadow-(--shadow-sm)'
+            : 'border-transparent bg-(--bg-surface) hover:border-(--border-default) hover:bg-(--bg-surface-hover) focus:border-(--accent-ai) focus:bg-(--bg-surface-hover)',
         className,
     );
 }
