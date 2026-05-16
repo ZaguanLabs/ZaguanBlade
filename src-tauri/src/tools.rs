@@ -383,10 +383,10 @@ impl ToolResult {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_multi_patch_to_string, apply_patch_to_string, apply_semantic_patch_with_service,
-        apply_semantic_patch_writes_with_service, execute_tool, grep_search, parse_grep_timeout_ms,
-        stage_semantic_patch_writes, PatchHunk, SemanticPatchWrite, GREP_TIMEOUT_DEFAULT_MS,
-        GREP_TIMEOUT_MAX_MS, GREP_TIMEOUT_MIN_MS,
+        apply_multi_patch_to_string, apply_patch_to_string, apply_patch_to_string_with_line_hint,
+        apply_semantic_patch_with_service, apply_semantic_patch_writes_with_service, execute_tool,
+        grep_search, parse_grep_timeout_ms, stage_semantic_patch_writes, PatchHunk,
+        SemanticPatchWrite, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS, GREP_TIMEOUT_MIN_MS,
     };
     use crate::semantic_patch::{InsertPosition, PatchOperation, PatchTarget, SemanticPatch};
     use crate::symbol_index::SymbolStore;
@@ -400,6 +400,15 @@ mod tests {
         let content = "A\nTARGET\nB\nTARGET\nC\n";
         let err = apply_patch_to_string(content, "TARGET", "REPLACED").unwrap_err();
         assert!(err.contains("Ambiguous match"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn apply_patch_uses_line_hint_to_disambiguate_exact_matches() {
+        let content = "A\nTARGET\nB\nTARGET\nC\n";
+        let updated =
+            apply_patch_to_string_with_line_hint(content, "TARGET", "REPLACED", Some(4), Some(4))
+                .unwrap();
+        assert_eq!(updated, "A\nTARGET\nB\nREPLACED\nC\n");
     }
 
     #[test]
@@ -742,7 +751,9 @@ mod tests {
 
         let file_path = workspace.path().join("replace_target.ts");
         fs::write(&file_path, "function oldName() { return 1; }\n").expect("write target");
-        service.index_file("replace_target.ts").expect("index target");
+        service
+            .index_file("replace_target.ts")
+            .expect("index target");
 
         let patch = SemanticPatch {
             id: "pre-commit-before-mutation".to_string(),
@@ -2401,6 +2412,87 @@ pub fn apply_patch_to_string(
     ))
 }
 
+fn line_window_byte_range(
+    content: &str,
+    start_line: usize,
+    end_line: Option<usize>,
+) -> Result<(usize, usize), String> {
+    if start_line == 0 {
+        return Err("start_line must be 1-indexed".to_string());
+    }
+
+    let last_line = content.lines().count().max(1);
+    let start = start_line.min(last_line);
+    let end = end_line.unwrap_or(start).max(start).min(last_line);
+    let mut current_line = 1;
+    let mut start_byte = 0;
+    let mut end_byte = content.len();
+
+    for (idx, ch) in content.char_indices() {
+        if current_line == start {
+            start_byte = idx;
+            break;
+        }
+        if ch == '\n' {
+            current_line += 1;
+        }
+    }
+
+    current_line = 1;
+    for (idx, ch) in content.char_indices() {
+        if current_line > end {
+            end_byte = idx;
+            break;
+        }
+        if ch == '\n' {
+            current_line += 1;
+        }
+    }
+
+    Ok((start_byte, end_byte))
+}
+
+pub fn apply_patch_to_string_with_line_hint(
+    content: &str,
+    old_text: &str,
+    new_text: &str,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+) -> Result<String, String> {
+    let Some(start_line) = start_line else {
+        return apply_patch_to_string(content, old_text, new_text);
+    };
+    let (window_start, window_end) = line_window_byte_range(content, start_line, end_line)?;
+    let window = &content[window_start..window_end];
+
+    if !old_text.is_empty() {
+        let mut exact_matches = window.match_indices(old_text);
+        if let Some((relative_pos, _)) = exact_matches.next() {
+            if exact_matches.next().is_some() {
+                return Err(format!(
+                    "Ambiguous match: old_text appears multiple times within line hint {}-{}. Please provide more unique context.",
+                    start_line,
+                    end_line.unwrap_or(start_line)
+                ));
+            }
+
+            let pos = window_start + relative_pos;
+            let mut out = String::with_capacity(content.len() - old_text.len() + new_text.len());
+            out.push_str(&content[..pos]);
+            out.push_str(new_text);
+            out.push_str(&content[pos + old_text.len()..]);
+            return Ok(out);
+        }
+    }
+
+    Err(format!(
+        "old_text not found in hinted line range {}-{} (searched {} chars). Exact match required.",
+        start_line,
+        end_line.unwrap_or(start_line),
+        old_text.len()
+    ))
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 struct PatchHunk {
@@ -2415,34 +2507,19 @@ fn apply_multi_patch_to_string(content: &str, patches: &[PatchHunk]) -> Result<S
         return Err("No patches provided".to_string());
     }
 
-    let mut validation_errors = Vec::new();
-    for (idx, patch) in patches.iter().enumerate() {
-        let count = content.matches(&patch.old_text).count();
-        if count == 0 {
-            validation_errors.push(format!("Patch {}: old_text not found in file", idx + 1));
-        } else if count > 1 {
-            validation_errors.push(format!(
-                "Patch {}: old_text matches {} times. Add start_line hint or more context.",
-                idx + 1,
-                count
-            ));
-        }
-    }
-
-    if !validation_errors.is_empty() {
-        return Err(format!(
-            "Multi-patch validation failed (no changes made):\n{}",
-            validation_errors.join("\n")
-        ));
-    }
-
     let mut working = content.to_string();
     for (idx, patch) in patches.iter().enumerate() {
-        match apply_patch_to_string(&working, &patch.old_text, &patch.new_text) {
+        match apply_patch_to_string_with_line_hint(
+            &working,
+            &patch.old_text,
+            &patch.new_text,
+            patch.start_line,
+            patch.end_line,
+        ) {
             Ok(new_content) => working = new_content,
             Err(e) => {
                 return Err(format!(
-                    "Patch {} failed unexpectedly after validation: {}",
+                    "Patch {} failed (no changes made): {}",
                     idx + 1,
                     e
                 ));
@@ -2650,10 +2727,12 @@ fn apply_semantic_patch_with_service(
     service: &std::sync::Arc<crate::language_service::LanguageService>,
     patch: &crate::semantic_patch::SemanticPatch,
 ) -> Result<Vec<String>, String> {
-    Ok(apply_semantic_patch_writes_with_service(workspace_root, service, patch, |_| {})?
-        .into_iter()
-        .map(|write| write.file_path)
-        .collect())
+    Ok(
+        apply_semantic_patch_writes_with_service(workspace_root, service, patch, |_| {})?
+            .into_iter()
+            .map(|write| write.file_path)
+            .collect(),
+    )
 }
 
 fn emit_change_applied_for_paths<R: tauri::Runtime>(
@@ -2707,7 +2786,10 @@ fn prepare_tool_write_tracking<R: tauri::Runtime>(
     use tauri::Manager;
     let state = handle.state::<crate::app_state::AppState>();
 
-    if let Some(existing_change) = state.uncommitted_changes.get_by_path(&abs_path.to_path_buf()) {
+    if let Some(existing_change) = state
+        .uncommitted_changes
+        .get_by_path(&abs_path.to_path_buf())
+    {
         let base_content = state
             .history_service()
             .ok()
@@ -2780,7 +2862,8 @@ fn track_tool_write<R: tauri::Runtime>(
     use tauri::Manager;
     let state = handle.state::<crate::app_state::AppState>();
     let new_content = fs::read_to_string(abs_path).unwrap_or_default();
-    let diff = crate::uncommitted_changes::generate_unified_diff(&tracking.base_content, &new_content);
+    let diff =
+        crate::uncommitted_changes::generate_unified_diff(&tracking.base_content, &new_content);
     let (added, removed) = crate::uncommitted_changes::count_diff_stats(&diff);
 
     let uncommitted = crate::uncommitted_changes::UncommittedChange {
@@ -2919,12 +3002,8 @@ fn apply_edit_tool<R: tauri::Runtime>(
             // Apply multi-patch atomically
             match apply_multi_patch_to_string(&content, &patches) {
                 Ok(new_content) => {
-                    let tracking = prepare_tool_write_tracking(
-                        app_handle,
-                        &change_id,
-                        &abs,
-                        &content,
-                    );
+                    let tracking =
+                        prepare_tool_write_tracking(app_handle, &change_id, &abs, &content);
                     match fs::write(&abs, new_content.as_bytes()) {
                         Ok(()) => {
                             track_tool_write(app_handle, &abs, tracking);
@@ -2955,15 +3034,24 @@ fn apply_edit_tool<R: tauri::Runtime>(
         let Some(new_text) = get_str_arg(args, &["new_text", "new_content", "new", "to"]) else {
             return ToolResult::err("missing required arg: new_text (or new_content/new/to)");
         };
+        let start_line = args
+            .get("start_line")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
+        let end_line = args
+            .get("end_line")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
 
-        match apply_patch_to_string(&content, &old_text, &new_text) {
+        match apply_patch_to_string_with_line_hint(
+            &content,
+            &old_text,
+            &new_text,
+            start_line,
+            end_line,
+        ) {
             Ok(new_content) => {
-                let tracking = prepare_tool_write_tracking(
-                    app_handle,
-                    &change_id,
-                    &abs,
-                    &content,
-                );
+                let tracking = prepare_tool_write_tracking(app_handle, &change_id, &abs, &content);
                 match fs::write(&abs, new_content.as_bytes()) {
                     Ok(()) => {
                         track_tool_write(app_handle, &abs, tracking);

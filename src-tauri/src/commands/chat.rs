@@ -191,7 +191,10 @@ pub fn stop_generation(state: State<'_, AppState>, app_handle: tauri::AppHandle)
     if let Some((ws_client, session_id)) = stop_signal_target {
         tauri::async_runtime::spawn(async move {
             if let Err(error) = ws_client.send_stop_generation(session_id).await {
-                eprintln!("[STOP] Failed to send stop_generation to zcoderd: {}", error);
+                eprintln!(
+                    "[STOP] Failed to send stop_generation to zcoderd: {}",
+                    error
+                );
             }
         });
     }

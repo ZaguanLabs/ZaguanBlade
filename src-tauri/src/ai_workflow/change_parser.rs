@@ -135,10 +135,20 @@ pub fn parse_change_args(
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "missing required arg: new_content (or patches array)".to_string())?
                 .to_string();
+            let start_line = obj
+                .get("start_line")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize);
+            let end_line = obj
+                .get("end_line")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize);
 
             ChangeType::Patch {
                 old_content,
                 new_content,
+                start_line,
+                end_line,
             }
         }
         _ => {
@@ -214,9 +224,13 @@ mod tests {
             ChangeType::Patch {
                 old_content,
                 new_content,
+                start_line,
+                end_line,
             } => {
                 assert_eq!(old_content, "before");
                 assert_eq!(new_content, "after");
+                assert_eq!(start_line, None);
+                assert_eq!(end_line, None);
             }
             _ => panic!("expected Patch change type"),
         }
@@ -269,9 +283,13 @@ mod tests {
             ChangeType::Patch {
                 old_content,
                 new_content,
+                start_line,
+                end_line,
             } => {
                 assert_eq!(old_content, "before");
                 assert_eq!(new_content, "after");
+                assert_eq!(start_line, None);
+                assert_eq!(end_line, None);
             }
             _ => panic!("expected Patch change type"),
         }

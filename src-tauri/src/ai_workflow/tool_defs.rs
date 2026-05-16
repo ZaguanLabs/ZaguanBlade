@@ -170,6 +170,8 @@ pub fn get_tool_definitions() -> Vec<Value> {
                         "path": { "type": "string", "description": "File path" },
                         "old_text": { "type": "string", "description": "Legacy single-edit mode: text to find and replace" },
                         "new_text": { "type": "string", "description": "Legacy single-edit mode: replacement text" },
+                        "start_line": { "type": "integer", "description": "Optional line hint for legacy single-edit mode" },
+                        "end_line": { "type": "integer", "description": "Optional end line hint for legacy single-edit mode" },
                         "patches": {
                             "type": "array",
                             "description": "Preferred multi-edit mode: array of patches applied atomically",

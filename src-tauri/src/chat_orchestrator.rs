@@ -1162,6 +1162,7 @@ pub async fn handle_send_message<R: Runtime>(
                                     crate::ai_workflow::ChangeType::Patch {
                                         old_content,
                                         new_content,
+                                        ..
                                     } => ChangeProposal::Patch {
                                         id: change.call.id.clone(),
                                         path: change.path.clone(),

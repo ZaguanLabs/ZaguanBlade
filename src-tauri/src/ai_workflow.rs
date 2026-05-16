@@ -259,6 +259,10 @@ pub enum ChangeType {
     Patch {
         old_content: String,
         new_content: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        start_line: Option<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        end_line: Option<usize>,
     },
     /// Multi-hunk atomic patch (multiple changes applied together)
     MultiPatch {
@@ -592,13 +596,17 @@ impl AiWorkflow {
                                 ChangeType::Patch {
                                     old_content,
                                     new_content,
+                                    start_line,
+                                    end_line,
                                 } => {
                                     let current_content = fs::read_to_string(&full_path)
                                         .map_err(|e| format!("Failed to read file: {}", e))?;
-                                    let new_file_content = tools::apply_patch_to_string(
+                                    let new_file_content = tools::apply_patch_to_string_with_line_hint(
                                         &current_content,
                                         old_content,
                                         new_content,
+                                        *start_line,
+                                        *end_line,
                                     )?;
                                     fs::write(&full_path, new_file_content)
                                         .map_err(|e| format!("Failed to write file: {}", e))?;
@@ -608,10 +616,12 @@ impl AiWorkflow {
                                     let mut content = fs::read_to_string(&full_path)
                                         .map_err(|e| format!("Failed to read file: {}", e))?;
                                     for patch in patches {
-                                        content = tools::apply_patch_to_string(
+                                        content = tools::apply_patch_to_string_with_line_hint(
                                             &content,
                                             &patch.old_text,
                                             &patch.new_text,
+                                            patch.start_line,
+                                            patch.end_line,
                                         )?;
                                     }
                                     fs::write(&full_path, content)

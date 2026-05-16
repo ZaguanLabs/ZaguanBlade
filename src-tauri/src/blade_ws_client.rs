@@ -194,6 +194,12 @@ pub struct ToolResult {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalConversationState {
+    pub message_count: usize,
+    pub fingerprint: String,
+}
+
 /// WebSocket message types
 #[derive(Debug, Serialize)]
 struct WsBaseMessage {
@@ -231,6 +237,8 @@ struct ChatRequestPayload {
     mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     planning_mode: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    local_conversation_state: Option<LocalConversationState>,
 }
 
 #[derive(Debug, Serialize)]
@@ -568,7 +576,7 @@ impl BladeWsClient {
         workspace: Option<WorkspaceInfo>,
     ) -> Result<(), String> {
         self.send_message_with_storage_mode(
-            session_id, model_id, message, images, workspace, None, None,
+            session_id, model_id, message, images, workspace, None, None, None,
         )
         .await
     }
@@ -583,6 +591,7 @@ impl BladeWsClient {
         workspace: Option<WorkspaceInfo>,
         storage_mode: Option<String>,
         mode: Option<String>,
+        local_conversation_state: Option<LocalConversationState>,
     ) -> Result<(), String> {
         let conn = self.connection.lock().await;
         let conn = conn.as_ref().ok_or("Not connected")?;
@@ -601,6 +610,7 @@ impl BladeWsClient {
             storage_mode,
             mode,
             planning_mode,
+            local_conversation_state,
         };
 
         let msg = WsBaseMessage {

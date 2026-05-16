@@ -1580,6 +1580,7 @@ Do NOT include analysis, reasoning, explanations, or multiple options."#,
             Some(workspace_info),
             storage_mode,
             Some("code".to_string()),
+            None,
         )
         .await
         .map_err(|e| format!("Failed to send message: {}", e))?;

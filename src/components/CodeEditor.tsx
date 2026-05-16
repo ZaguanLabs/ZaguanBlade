@@ -427,16 +427,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
 
             replaceEditorDocument(view, content, unifiedDiff);
 
-        } else if (isMarkdown) {
-            // Only sync external content changes (e.g., file loaded, external modification)
-            // Skip if this was a user edit to prevent feedback loops
-            if (isUserEditRef.current) {
-                isUserEditRef.current = false;
-                return;
-            }
-
-            replaceEditorDocumentIfChanged(view, content, unifiedDiff);
-        } else if (!isMarkdown && isExternalContentUpdate) {
+        } else if (isExternalContentUpdate) {
             lastExternalContentVersionRef.current = externalContentVersion;
 
             replaceEditorDocumentIfChanged(view, content, unifiedDiff);

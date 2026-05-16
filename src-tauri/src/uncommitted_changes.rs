@@ -123,10 +123,7 @@ impl UncommittedChangeTracker {
     ) -> Result<UncommittedChange, String> {
         let change = {
             let changes = self.changes.lock().unwrap();
-            changes
-                .values()
-                .find(|c| &c.file_path == path)
-                .cloned()
+            changes.values().find(|c| &c.file_path == path).cloned()
         };
 
         match change {

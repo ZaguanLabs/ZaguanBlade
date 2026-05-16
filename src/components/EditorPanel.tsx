@@ -465,6 +465,13 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             if (bladeEvent.type === 'File') {
                 const fileEvent = bladeEvent.payload as FileEvent;
                 if (fileEvent.type === 'Content' && pathsMatch(fileEvent.payload.path, activeFile)) {
+                    if (lastPropagatedDirtyRef.current && fileEvent.payload.data !== getActiveEditorContent()) {
+                        console.debug('[EDITOR] Ignored stale content while local edits are dirty:', activeFile);
+                        awaitingInitialSyncRef.current = false;
+                        setLoading(false);
+                        return;
+                    }
+
                     console.debug('[EDITOR] Received content for:', activeFile);
                     awaitingInitialSyncRef.current = false;
                     setContent(fileEvent.payload.data);
@@ -498,7 +505,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         return () => {
             unsubscribe();
         };
-    }, [activeFile, emitContentStateChange, t]);
+    }, [activeFile, emitContentStateChange, getActiveEditorContent, t]);
 
     useEffect(() => {
         async function loadFile() {
@@ -662,6 +669,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                         <MarkdownEditor
                             ref={editorRef}
                             content={content}
+                            externalContentVersion={externalContentVersionRef.current}
                             onDocumentChange={handleEditorDocumentChange}
                             onSave={handleSave}
                             filename={activeFile}

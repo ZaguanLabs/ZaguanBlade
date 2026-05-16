@@ -12,13 +12,15 @@ interface MarkdownEditorProps {
     onDocumentChange?: () => void;
     onSave?: (val: string) => void;
     filename?: string;
+    externalContentVersion?: number;
 }
 
 export const MarkdownEditor = forwardRef<CodeEditorHandle, MarkdownEditorProps>(({
     content,
     onDocumentChange,
     onSave,
-    filename
+    filename,
+    externalContentVersion,
 }, ref) => {
     const { t } = useTranslation();
     const [mode, setMode] = useState<'edit' | 'view'>('edit');
@@ -131,6 +133,7 @@ export const MarkdownEditor = forwardRef<CodeEditorHandle, MarkdownEditorProps>(
                             onDocumentChange={onDocumentChange}
                             onSave={onSave}
                             filename={filename}
+                            externalContentVersion={externalContentVersion}
                             unifiedDiff={change?.unified_diff}
                         />
                         {change && (

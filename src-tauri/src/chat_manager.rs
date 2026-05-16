@@ -579,9 +579,89 @@ impl ChatManager {
         }
     }
 
-    fn sync_ws_conversation_messages_without_latest_user(&self, conversation: &ConversationHistory) {
+    fn sync_ws_conversation_messages_without_latest_user(
+        &self,
+        conversation: &ConversationHistory,
+    ) {
         if let Ok(mut guard) = self.ws_conversation_messages.lock() {
             *guard = Self::to_blade_conversation_messages(conversation, true);
+        }
+    }
+
+    fn local_conversation_state_from_messages(
+        messages: &[serde_json::Value],
+    ) -> crate::blade_ws_client::LocalConversationState {
+        let mut hash: u64 = 0xcbf29ce484222325;
+        fn write_part(hash: &mut u64, value: &str) {
+            for byte in value.as_bytes() {
+                *hash ^= u64::from(*byte);
+                *hash = hash.wrapping_mul(0x100000001b3);
+            }
+            *hash ^= 0xff;
+            *hash = hash.wrapping_mul(0x100000001b3);
+        }
+        for msg in messages {
+            write_part(
+                &mut hash,
+                msg.get("role")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(""),
+            );
+            write_part(
+                &mut hash,
+                msg.get("content")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(""),
+            );
+            write_part(
+                &mut hash,
+                msg.get("reasoning")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(""),
+            );
+            write_part(
+                &mut hash,
+                msg.get("tool_call_id")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(""),
+            );
+            if let Some(tool_calls) = msg.get("tool_calls").and_then(|value| value.as_array()) {
+                for tool_call in tool_calls {
+                    write_part(
+                        &mut hash,
+                        tool_call
+                            .get("id")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or(""),
+                    );
+                    write_part(
+                        &mut hash,
+                        tool_call
+                            .get("type")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or(""),
+                    );
+                    let function = tool_call.get("function");
+                    write_part(
+                        &mut hash,
+                        function
+                            .and_then(|value| value.get("name"))
+                            .and_then(|value| value.as_str())
+                            .unwrap_or(""),
+                    );
+                    write_part(
+                        &mut hash,
+                        function
+                            .and_then(|value| value.get("arguments"))
+                            .and_then(|value| value.as_str())
+                            .unwrap_or(""),
+                    );
+                }
+            }
+        }
+        crate::blade_ws_client::LocalConversationState {
+            message_count: messages.len(),
+            fingerprint: format!("{:016x}", hash),
         }
     }
 
@@ -787,6 +867,10 @@ impl ChatManager {
 
         self.sync_ws_conversation_messages_without_latest_user(conversation);
         let ws_conversation_messages = self.ws_conversation_messages.clone();
+        let local_conversation_state = ws_conversation_messages
+            .lock()
+            .map(|messages| Self::local_conversation_state_from_messages(&messages))
+            .ok();
 
         // Convert WebSocket events to ChatEvent channel
         let (tx, rx) = mpsc::channel();
@@ -832,6 +916,7 @@ impl ChatManager {
                                         Some(workspace_info.clone()),
                                         storage_mode.clone(),
                                         mode.clone(),
+                                        local_conversation_state.clone(),
                                     )
                                     .await
                                 {
@@ -3138,11 +3223,21 @@ mod tests {
     #[test]
     fn blade_conversation_context_can_exclude_latest_user_turn() {
         let mut conversation = ConversationHistory::new();
-        conversation.push(ChatMessage::new(ChatRole::User, "Earlier request".to_string()));
-        conversation.push(ChatMessage::new(ChatRole::Assistant, "Earlier answer".to_string()));
+        conversation.push(ChatMessage::new(
+            ChatRole::User,
+            "Earlier request".to_string(),
+        ));
+        conversation.push(ChatMessage::new(
+            ChatRole::Assistant,
+            "Earlier answer".to_string(),
+        ));
 
-        let mut latest = ChatMessage::new(ChatRole::User, "Long latest request about Nagomi".to_string());
-        latest.backend_content = Some("Long latest request about Nagomi with backend notes".to_string());
+        let mut latest = ChatMessage::new(
+            ChatRole::User,
+            "Long latest request about Nagomi".to_string(),
+        );
+        latest.backend_content =
+            Some("Long latest request about Nagomi with backend notes".to_string());
         conversation.push(latest);
 
         let messages = ChatManager::to_blade_conversation_messages(&conversation, true);

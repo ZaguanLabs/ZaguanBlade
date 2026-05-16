@@ -447,6 +447,7 @@ impl WsConnectionManager {
         workspace: Option<WorkspaceInfo>,
         storage_mode: Option<String>,
         mode: Option<String>,
+        local_conversation_state: Option<crate::blade_ws_client::LocalConversationState>,
     ) -> Result<(), String> {
         let client_lock = self.client.lock().await;
         let client = client_lock.as_ref().ok_or("Not connected")?;
@@ -459,6 +460,7 @@ impl WsConnectionManager {
                 workspace,
                 storage_mode,
                 mode,
+                local_conversation_state,
             )
             .await
     }
