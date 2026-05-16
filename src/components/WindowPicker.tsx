@@ -4,6 +4,7 @@ import { X, Monitor } from 'lucide-react';
 import type { WindowInfo } from '../types/screenshot';
 import { ScrollArea } from './ui/ScrollArea';
 import { Surface } from './ui/Surface';
+import { ListRow } from './ui/ListRow';
 
 interface WindowPickerProps {
     isOpen: boolean;
@@ -60,11 +61,10 @@ export const WindowPicker: React.FC<WindowPickerProps> = ({
                         </div>
                     )}
                     {!loading && windows.map((window) => (
-                        <button
+                        <ListRow
                             key={window.id}
-                            type="button"
                             onClick={() => onSelect(window.id)}
-                            className="w-full flex items-start gap-3 px-3 py-2 rounded-[calc(var(--panel-radius)*0.65)] text-left hover:bg-(--bg-surface-hover) transition"
+                            className="flex items-start gap-3 px-3 py-2"
                         >
                             <div className="mt-0.5">
                                 <Monitor className="w-4 h-4 text-(--accent-ai)" />
@@ -77,7 +77,7 @@ export const WindowPicker: React.FC<WindowPickerProps> = ({
                                     {window.app_name ? `${window.app_name} • ` : ''}{window.width}×{window.height}
                                 </div>
                             </div>
-                        </button>
+                        </ListRow>
                     ))}
                 </ScrollArea>
             </Surface>

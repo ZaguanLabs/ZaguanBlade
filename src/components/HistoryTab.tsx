@@ -5,6 +5,7 @@ import { useHistory } from '../hooks/useHistory';
 import type { ConversationSummary } from '../types/history';
 import { ScrollArea } from './ui/ScrollArea';
 import { Surface } from './ui/Surface';
+import { ListRow } from './ui/ListRow';
 
 interface HistoryTabProps {
     projectId: string;
@@ -165,10 +166,11 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
                                     {bucket}
                                 </div>
                                 {items.map((conversation) => (
-                                    <button
+                                    <ListRow
                                         key={conversation.id}
+                                        variant="card"
                                         onClick={() => onSelectConversation(conversation.id)}
-                                        className="group w-full rounded-[calc(var(--panel-radius)*0.9)] border border-(--border-subtle) bg-(--bg-surface)/80 px-4 py-3 text-left transition-colors hover:bg-(--bg-surface-hover) shadow-(--shadow-sm)"
+                                        className="px-4 py-3"
                                     >
                                         <div className="flex items-center gap-3">
                                             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-app)">
@@ -187,7 +189,7 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
                                                 <div className="mt-1">{t('historyTab.messageCount', { count: conversation.message_count })}</div>
                                             </div>
                                         </div>
-                                    </button>
+                                    </ListRow>
                                 ))}
                             </div>
                         );
