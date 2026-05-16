@@ -50,7 +50,7 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
         if (symbolId) fetchGraph();
 
         return () => { isMounted = false; };
-    }, [symbolId]);
+    }, [symbolId, t]);
 
     const renderNodeList = (nodes: CallGraphNode[], title: string, icon: React.ReactNode) => {
         if (nodes.length === 0) return null;
