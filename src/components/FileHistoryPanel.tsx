@@ -4,6 +4,7 @@ import { useFileHistory } from '../hooks/useFileHistory';
 import { RotateCcw, Clock } from 'lucide-react';
 import { ScrollArea } from './ui/ScrollArea';
 import { Surface } from './ui/Surface';
+import { IconButton } from './ui/IconButton';
 
 interface FileHistoryPanelProps {
     activeFile: string | null;
@@ -59,17 +60,18 @@ export const FileHistoryPanel: React.FC<FileHistoryPanelProps> = ({ activeFile }
                             <span className="text-xs font-medium text-(--fg-primary) opacity-90">
                                 {formatTime(entry.timestamp)}
                             </span>
-                            <button
+                            <IconButton
+                                tone="accent"
                                 onClick={() => {
                                     if (confirm(t('fileHistory.confirmRevert'))) {
                                         revertToSnapshot(entry.id);
                                     }
                                 }}
                                 title={t('fileHistory.revertToVersion')}
-                                className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-(--bg-app) rounded-[calc(var(--panel-radius)*0.45)] transition-opacity text-(--accent-ai) hover:text-(--accent-warning)"
+                                className="opacity-0 group-hover:opacity-100 p-1.5 rounded-[calc(var(--panel-radius)*0.45)] transition-opacity"
                             >
                                 <RotateCcw className="w-3.5 h-3.5" />
-                            </button>
+                            </IconButton>
                         </div>
                         <div className="text-[10px] font-mono text-(--fg-tertiary) truncate" title={entry.id}>
                             {t('fileHistory.snapshotId', { id: entry.id.substring(0, 8) })}

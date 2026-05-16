@@ -2,7 +2,7 @@ import React from 'react';
 import { cn } from '../../lib/utils';
 
 type IconButtonSize = 'xs' | 'sm';
-type IconButtonTone = 'neutral' | 'muted' | 'danger';
+type IconButtonTone = 'neutral' | 'muted' | 'accent' | 'danger';
 
 interface IconButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
     size?: IconButtonSize;
@@ -17,6 +17,7 @@ const iconButtonSizeClassName: Record<IconButtonSize, string> = {
 const iconButtonToneClassName: Record<IconButtonTone, string> = {
     neutral: 'text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover)',
     muted: 'text-zinc-500 hover:text-(--fg-primary) hover:bg-(--bg-surface-hover)',
+    accent: 'text-(--accent-ai) hover:text-(--accent-warning) hover:bg-(--bg-app)',
     danger: 'text-zinc-500 hover:text-red-400 hover:bg-red-500/10',
 };
 

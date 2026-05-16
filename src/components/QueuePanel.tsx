@@ -4,6 +4,7 @@ import { ListOrdered, Pencil, Trash2 } from 'lucide-react';
 import type { QueuedRequest } from '../types/chat';
 import { ScrollArea } from './ui/ScrollArea';
 import { IconButton } from './ui/IconButton';
+import { Surface } from './ui/Surface';
 
 interface QueuePanelProps {
     requests: QueuedRequest[];
@@ -27,9 +28,10 @@ const QueuePanelComponent: React.FC<QueuePanelProps> = ({ requests, onEditReques
                 {requests.map((request, index) => {
                     const preview = request.text.trim() || t('chat.queue.imageOnlyRequest');
                     return (
-                        <div
+                        <Surface
                             key={`queued-${index}`}
-                            className="flex items-center gap-2 rounded-xl border border-zinc-800/70 bg-zinc-950/30 px-2.5 py-2 text-[11px] text-zinc-400"
+                            variant="row"
+                            className="flex items-center gap-2 px-2.5 py-2 text-[11px] text-zinc-400"
                         >
                             <span className="font-mono text-[10px] text-zinc-600 w-4 text-right shrink-0">
                                 {index + 1}.
@@ -61,7 +63,7 @@ const QueuePanelComponent: React.FC<QueuePanelProps> = ({ requests, onEditReques
                                     <Trash2 className="w-3 h-3" />
                                 </IconButton>
                             </div>
-                        </div>
+                        </Surface>
                     );
                 })}
             </ScrollArea>
