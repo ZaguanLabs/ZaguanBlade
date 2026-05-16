@@ -4,6 +4,7 @@ import { Clock, MessageSquare, Loader2 } from 'lucide-react';
 import { useHistory } from '../hooks/useHistory';
 import type { ConversationSummary } from '../types/history';
 import { ScrollArea } from './ui/ScrollArea';
+import { Surface } from './ui/Surface';
 
 interface HistoryTabProps {
     projectId: string;
@@ -67,12 +68,12 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
     if (loading && conversations.length === 0) {
         return (
             <div className="flex flex-1 items-center justify-center bg-(--bg-app) px-4">
-                <div className="flex flex-col items-center gap-4 rounded-[calc(var(--panel-radius)*1.25)] border border-(--border-subtle) bg-(--bg-surface)/80 px-8 py-8 text-(--fg-tertiary) shadow-(--shadow-xl)">
+                <Surface variant="elevated" className="flex flex-col items-center gap-4 px-8 py-8 text-(--fg-tertiary)">
                     <div className="flex h-14 w-14 items-center justify-center rounded-[calc(var(--panel-radius)*1.1)] border border-(--border-subtle) bg-(--bg-app)">
                         <Loader2 className="h-7 w-7 animate-spin" />
                     </div>
                     <p className="text-xs font-semibold uppercase tracking-[0.18em]">{t('historyTab.loading')}</p>
-                </div>
+                </Surface>
             </div>
         );
     }
@@ -80,10 +81,10 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
     if (error) {
         return (
             <div className="flex flex-1 items-center justify-center bg-(--bg-app) px-4">
-                <div className="flex flex-col items-center gap-3 rounded-[calc(var(--panel-radius)*1.25)] border border-(--state-danger)/20 bg-[color-mix(in_srgb,var(--state-danger)_5%,transparent)] px-8 py-8 text-(--state-danger) shadow-(--shadow-xl)">
+                <Surface variant="danger" className="flex flex-col items-center gap-3 px-8 py-8 text-(--state-danger)">
                     <p className="text-xs font-semibold uppercase tracking-[0.18em]">{t('historyTab.loadFailed')}</p>
                     <p className="text-[10px] opacity-70">{error}</p>
-                </div>
+                </Surface>
             </div>
         );
     }
@@ -91,7 +92,7 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
     if (conversations.length === 0) {
         return (
             <div className="flex flex-1 items-center justify-center bg-(--bg-app) px-4">
-                <div className="select-none flex flex-col items-center gap-4 rounded-[calc(var(--panel-radius)*1.25)] border border-(--border-subtle) bg-(--bg-surface)/80 px-8 py-8 text-(--fg-tertiary) shadow-(--shadow-xl)">
+                <Surface variant="elevated" className="select-none flex flex-col items-center gap-4 px-8 py-8 text-(--fg-tertiary)">
                     <div className="flex h-16 w-16 items-center justify-center rounded-[calc(var(--panel-radius)*1.1)] border border-(--border-subtle) bg-(--bg-app)">
                         <Clock className="h-8 w-8 opacity-50" />
                     </div>
@@ -103,7 +104,7 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
                             {t('historyTab.emptyDescription')}
                         </p>
                     </div>
-                </div>
+                </Surface>
             </div>
         );
     }

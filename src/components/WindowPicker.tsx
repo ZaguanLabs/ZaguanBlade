@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { X, Monitor } from 'lucide-react';
 import type { WindowInfo } from '../types/screenshot';
 import { ScrollArea } from './ui/ScrollArea';
+import { Surface } from './ui/Surface';
 
 interface WindowPickerProps {
     isOpen: boolean;
@@ -34,7 +35,7 @@ export const WindowPicker: React.FC<WindowPickerProps> = ({
                 className="absolute inset-0 bg-(--bg-app)/75"
                 onClick={onCancel}
             />
-            <div className="relative w-full max-w-xl mx-4 bg-(--bg-surface) border border-(--border-focus) rounded-(--panel-radius) shadow-(--shadow-xl)">
+            <Surface variant="modal" className="relative w-full max-w-xl mx-4">
                 <div className="flex items-center justify-between px-4 py-3 border-b border-(--border-subtle)">
                     <div>
                         <div className="text-sm font-semibold text-(--fg-primary)">{resolvedTitle}</div>
@@ -79,7 +80,7 @@ export const WindowPicker: React.FC<WindowPickerProps> = ({
                         </button>
                     ))}
                 </ScrollArea>
-            </div>
+            </Surface>
         </div>
     );
 };
