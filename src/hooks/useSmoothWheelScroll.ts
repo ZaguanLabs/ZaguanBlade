@@ -5,6 +5,10 @@ const SETTLE_THRESHOLD_PX = 0.5;
 const WHEEL_EASING = 0.24;
 
 type WheelHandler<T extends HTMLElement> = (event: ReactWheelEvent<T>) => void;
+type SmoothWheelOptions = {
+    disabled?: boolean;
+    resetKey?: unknown;
+};
 type LegacyMediaQueryList = MediaQueryList & {
     addListener?: (listener: (event: MediaQueryListEvent) => void) => void;
     removeListener?: (listener: (event: MediaQueryListEvent) => void) => void;
@@ -60,7 +64,7 @@ function hasNestedScrollable(target: EventTarget | null, root: HTMLElement, delt
     return false;
 }
 
-export function useSmoothWheelScroll<T extends HTMLElement>(onWheel?: WheelHandler<T>): WheelHandler<T> {
+export function useSmoothWheelScroll<T extends HTMLElement>(onWheel?: WheelHandler<T>, options: SmoothWheelOptions = {}): WheelHandler<T> {
     const frameRef = useRef<number | null>(null);
     const targetScrollTopRef = useRef(0);
     const reduceMotionRef = useRef(false);
@@ -97,6 +101,10 @@ export function useSmoothWheelScroll<T extends HTMLElement>(onWheel?: WheelHandl
         };
     }, [stopAnimation]);
 
+    useEffect(() => {
+        stopAnimation();
+    }, [options.resetKey, stopAnimation]);
+
     const animate = useCallback((element: T) => {
         const step = () => {
             const current = element.scrollTop;
@@ -119,7 +127,7 @@ export function useSmoothWheelScroll<T extends HTMLElement>(onWheel?: WheelHandl
     return useCallback((event: ReactWheelEvent<T>) => {
         onWheel?.(event);
 
-        if (event.defaultPrevented || reduceMotionRef.current || event.ctrlKey || event.metaKey) {
+        if (event.defaultPrevented || options.disabled || reduceMotionRef.current || event.ctrlKey || event.metaKey) {
             return;
         }
 
@@ -143,5 +151,5 @@ export function useSmoothWheelScroll<T extends HTMLElement>(onWheel?: WheelHandl
         if (frameRef.current === null) {
             animate(element);
         }
-    }, [animate, onWheel]);
+    }, [animate, onWheel, options.disabled]);
 }

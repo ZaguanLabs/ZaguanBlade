@@ -63,6 +63,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
     const bottomRef = useRef<HTMLDivElement>(null);
     const [scrollMode, setScrollMode] = useState<'following' | 'detached'>('following');
     const scrollModeRef = useRef<'following' | 'detached'>('following');
+    const [smoothScrollResetKey, setSmoothScrollResetKey] = useState(0);
     const { rows } = useChatTimelineRows({
         messages,
         activities: chatActivities,
@@ -111,14 +112,14 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
             setStableScrollMode('detached');
         }
     }, [setStableScrollMode]);
-    const handleSmoothWheel = useSmoothWheelScroll<HTMLDivElement>(handleWheel);
+    const handleSmoothWheel = useSmoothWheelScroll<HTMLDivElement>(handleWheel, { resetKey: smoothScrollResetKey });
 
     const scrollToBottom = useCallback(() => {
         const element = scrollRef.current;
         if (!element) {
             return;
         }
-        bottomRef.current?.scrollIntoView({ block: 'end' });
+        setSmoothScrollResetKey((value) => value + 1);
         requestAnimationFrame(() => {
             element.scrollTop = element.scrollHeight;
         });
@@ -130,7 +131,10 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
             return;
         }
         const frame = requestAnimationFrame(() => {
-            bottomRef.current?.scrollIntoView({ block: 'end' });
+            const element = scrollRef.current;
+            if (element) {
+                element.scrollTop = element.scrollHeight;
+            }
         });
         return () => cancelAnimationFrame(frame);
     }, [activeMessage?.content, activeMessage?.reasoning, activeMessage?.streaming?.seq, rows.length, scrollMode]);
