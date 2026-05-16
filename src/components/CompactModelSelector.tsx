@@ -89,7 +89,7 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
                     setIsOpen(false);
                 }}
                 className={`
-                    group flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left transition-colors duration-150 focus:outline-none
+                    group flex w-full items-center gap-1.5 rounded-[calc(var(--panel-radius)*0.35)] px-2 py-1 text-left transition-colors duration-150 focus:outline-none
                     ${isSelected
                         ? 'bg-[color-mix(in_srgb,var(--accent-ai)_12%,var(--bg-surface))] text-(--fg-primary)'
                         : 'text-(--fg-secondary) hover:bg-(--bg-surface-hover) focus:bg-(--bg-surface-hover)'
@@ -118,13 +118,13 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
                 onClick={() => !disabled && setIsOpen(!isOpen)}
                 disabled={disabled}
                 className={`
-                    w-full flex items-center justify-between gap-1.5 rounded-md border border-(--border-subtle) bg-(--bg-app) px-2 py-1
+                    w-full flex items-center justify-between gap-1.5 rounded-[calc(var(--panel-radius)*0.35)] border border-(--border-subtle) bg-(--bg-app) px-2 py-1
                     transition-colors duration-150
                     ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
                 `}
             >
                 <div className="flex items-center gap-1 overflow-hidden">
-                    <div className="flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-sm border border-(--border-subtle) bg-(--bg-surface)">
+                    <div className="flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-[calc(var(--panel-radius)*0.25)] border border-(--border-subtle) bg-(--bg-surface)">
                         {selectedModel ? getModelIcon(selectedModel.id) : <Box className="w-3 h-3" />}
                     </div>
                     <span className="truncate text-[10px] font-medium text-(--fg-secondary)">

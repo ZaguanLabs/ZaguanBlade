@@ -269,7 +269,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                                         : 'text-(--fg-tertiary) hover:text-(--fg-secondary)'
                                     }
                                     ${isDragging ? 'opacity-50' : ''}
-                                    ${isDropTarget ? 'border-l-2 border-l-(--accent-primary)' : ''}
+                                    ${isDropTarget ? 'border-l-2 border-l-(--accent-ai)' : ''}
                                 `}
                                 style={{
                                     backgroundColor: isActive
@@ -289,7 +289,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                                 {tab.isAiEdited && !tab.hasVirtualChanges && (
                                     <span
                                         className={`w-1.5 h-1.5 rounded-full shrink-0 ${tab.hasUnreadAiEdit ? 'animate-pulse' : ''}`}
-                                        style={{ backgroundColor: 'var(--accent-primary)' }}
+                                        style={{ backgroundColor: 'var(--accent-ai)' }}
                                         title={tab.hasUnreadAiEdit ? t('tabs.aiEditedUnread') : t('tabs.aiEdited')}
                                     />
                                 )}
@@ -350,14 +350,14 @@ export const AppBar: React.FC<AppBarProps> = ({
                 <div className="flex items-center gap-1 pr-1 shrink-0">
                     <button
                         onClick={handleMinimize}
-                        className="h-7 w-7 rounded-md flex items-center justify-center text-(--fg-tertiary) hover:bg-(--bg-surface) hover:text-(--fg-secondary) active:scale-95 transition-all duration-150"
+                        className="h-7 w-7 rounded-[calc(var(--panel-radius)*0.35)] flex items-center justify-center text-(--fg-tertiary) hover:bg-(--bg-surface) hover:text-(--fg-secondary) active:scale-95 transition-all duration-150"
                         title={t('windowControls.minimize')}
                     >
                         <Minus className="w-3.5 h-3.5" strokeWidth={1.8} />
                     </button>
                     <button
                         onClick={handleMaximizeRestore}
-                        className="h-7 w-7 rounded-md flex items-center justify-center text-(--fg-tertiary) hover:bg-(--bg-surface) hover:text-(--fg-secondary) active:scale-95 transition-all duration-150"
+                        className="h-7 w-7 rounded-[calc(var(--panel-radius)*0.35)] flex items-center justify-center text-(--fg-tertiary) hover:bg-(--bg-surface) hover:text-(--fg-secondary) active:scale-95 transition-all duration-150"
                         title={isMaximized ? t('windowControls.restore') : t('windowControls.maximize')}
                     >
                         {isMaximized ? (
@@ -368,7 +368,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                     </button>
                     <button
                         onClick={handleClose}
-                        className="h-7 w-7 rounded-md flex items-center justify-center text-(--fg-tertiary) hover:bg-(--state-danger) hover:text-(--fg-bright) active:scale-95 transition-all duration-150"
+                        className="h-7 w-7 rounded-[calc(var(--panel-radius)*0.35)] flex items-center justify-center text-(--fg-tertiary) hover:bg-(--state-danger) hover:text-(--fg-bright) active:scale-95 transition-all duration-150"
                         title={t('windowControls.close')}
                     >
                         <X className="w-3.5 h-3.5" strokeWidth={1.8} />

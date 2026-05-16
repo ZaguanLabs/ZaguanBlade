@@ -406,7 +406,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                                 e.stopPropagation();
                                 onStopCommand();
                             }}
-                            className="inline-flex h-6 items-center gap-1 rounded-md border border-(--state-danger)/45 px-1.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-(--state-danger) transition-colors hover:bg-(--state-danger)/10"
+                            className="inline-flex h-6 items-center gap-1 rounded-[calc(var(--panel-radius)*0.35)] border border-(--state-danger)/45 px-1.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-(--state-danger) transition-colors hover:bg-(--state-danger)/10"
                             title={t('toolCall.stopCommand')}
                             aria-label={t('toolCall.stopCommand')}
                         >

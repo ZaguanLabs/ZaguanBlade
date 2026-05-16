@@ -85,7 +85,7 @@ const CodeBlock = React.memo<CodeBlockProps>(({ language, value }) => {
     const displayLanguage = language || 'text';
 
     return (
-        <div className="group relative my-3 rounded-lg overflow-hidden border border-(--markdown-border) bg-(--markdown-block-bg)">
+        <div className="group relative my-3 rounded-[calc(var(--panel-radius)*0.75)] overflow-hidden border border-(--markdown-border) bg-(--markdown-block-bg)">
             {/* Header with language label and copy button */}
             <div className="flex items-center justify-between px-3 py-1.5 border-b border-(--markdown-border)" style={{ backgroundColor: 'var(--markdown-block-header-bg)' }}>
                 <span className="text-[10px] font-mono text-(--markdown-marker) uppercase tracking-wider">
@@ -94,7 +94,7 @@ const CodeBlock = React.memo<CodeBlockProps>(({ language, value }) => {
                 <button
                     onClick={handleCopy}
                     className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-(--markdown-marker) hover:text-(--markdown-heading) transition-colors"
-                    style={{ backgroundColor: copied ? 'color-mix(in srgb, var(--accent-primary) 14%, transparent)' : undefined }}
+                    style={{ backgroundColor: copied ? 'color-mix(in srgb, var(--accent-ai) 14%, transparent)' : undefined }}
                     title={t('common.copy')}
                 >
                     {copied ? (
@@ -144,7 +144,7 @@ const PlainCodeBlock = React.memo<CodeBlockProps>(({ language, value }) => {
     const displayLanguage = language || 'text';
 
     return (
-        <div className="group relative my-3 overflow-hidden rounded-lg border border-(--markdown-border) bg-(--markdown-block-bg)">
+        <div className="group relative my-3 overflow-hidden rounded-[calc(var(--panel-radius)*0.75)] border border-(--markdown-border) bg-(--markdown-block-bg)">
             <div className="flex items-center justify-between border-b border-(--markdown-border) px-3 py-1.5" style={{ backgroundColor: 'var(--markdown-block-header-bg)' }}>
                 <span className="text-[10px] font-mono uppercase tracking-wider text-(--markdown-marker)">
                     {displayLanguage}
@@ -152,7 +152,7 @@ const PlainCodeBlock = React.memo<CodeBlockProps>(({ language, value }) => {
                 <button
                     onClick={handleCopy}
                     className="flex items-center gap-1 rounded px-2 py-0.5 text-[10px] text-(--markdown-marker) transition-colors hover:text-(--markdown-heading)"
-                    style={{ backgroundColor: copied ? 'color-mix(in srgb, var(--accent-primary) 14%, transparent)' : undefined }}
+                    style={{ backgroundColor: copied ? 'color-mix(in srgb, var(--accent-ai) 14%, transparent)' : undefined }}
                     title={t('common.copy')}
                 >
                     {copied ? (
@@ -433,7 +433,7 @@ const StreamingTableTail: React.FC<{ content: string }> = ({ content }) => {
     const incompleteRows = rows.filter((row) => row.length !== headers.length);
 
     return (
-        <div className="my-3 overflow-hidden rounded-lg border border-(--markdown-border)">
+        <div className="my-3 overflow-hidden rounded-[calc(var(--panel-radius)*0.75)] border border-(--markdown-border)">
             <div className="overflow-x-auto">
                 <table className="w-full text-[12px]">
                     <thead className="border-b border-(--markdown-border)" style={{ backgroundColor: 'var(--markdown-block-header-bg)' }}>
@@ -612,7 +612,7 @@ const markdownComponents = {
     // Tables
     table({ children }: { children?: React.ReactNode }) {
         return (
-            <div className="my-3 overflow-x-auto rounded-lg border border-(--markdown-border)">
+            <div className="my-3 overflow-x-auto rounded-[calc(var(--panel-radius)*0.75)] border border-(--markdown-border)">
                 <table className="w-full text-[12px]">
                     {children}
                 </table>
@@ -657,7 +657,7 @@ const markdownComponents = {
             <img
                 src={src}
                 alt={alt || ''}
-                className="my-3 max-w-full rounded-lg border border-(--markdown-border)"
+                className="my-3 max-w-full rounded-[calc(var(--panel-radius)*0.75)] border border-(--markdown-border)"
             />
         );
     },
