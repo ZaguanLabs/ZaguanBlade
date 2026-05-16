@@ -179,21 +179,21 @@ const PendingResponseIndicator: React.FC<{ toolActivity?: ToolActivityState | nu
             ? `${toolActivity.action} ${toolActivity.filePath}`
             : toolActivity.action)
         : 'Reviewing context and planning the next step';
-    const borderClass = isUsingTools ? 'border-indigo-500/15' : 'border-emerald-500/15';
+    const borderClass = isUsingTools ? 'border-(--accent-ai)/15' : 'border-(--accent-mention)/15';
     const panelClass = isUsingTools
-        ? 'bg-[linear-gradient(180deg,rgba(99,102,241,0.08),rgba(24,24,27,0.7))]'
-        : 'bg-[linear-gradient(180deg,rgba(16,185,129,0.08),rgba(24,24,27,0.7))]';
+        ? 'bg-[linear-gradient(180deg,color-mix(in_srgb,var(--accent-ai)_8%,transparent),color-mix(in_srgb,var(--bg-surface)_70%,transparent))]'
+        : 'bg-[linear-gradient(180deg,color-mix(in_srgb,var(--accent-mention)_8%,transparent),color-mix(in_srgb,var(--bg-surface)_70%,transparent))]';
     const iconWrapClass = isUsingTools
-        ? 'border-indigo-500/20 bg-indigo-500/10'
-        : 'border-emerald-500/20 bg-emerald-500/10';
-    const iconClass = isUsingTools ? 'text-indigo-300' : 'text-emerald-300';
-    const accentClass = isUsingTools ? 'text-indigo-300/80' : 'text-emerald-300/80';
-    const dotClass = isUsingTools ? 'bg-indigo-400/80' : 'bg-emerald-400/80';
+        ? 'border-(--accent-ai)/20 bg-[color-mix(in_srgb,var(--accent-ai)_10%,transparent)]'
+        : 'border-(--accent-mention)/20 bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)]';
+    const iconClass = isUsingTools ? 'text-(--accent-ai)' : 'text-(--accent-mention)';
+    const accentClass = isUsingTools ? 'text-(--accent-ai)/80' : 'text-(--accent-mention)/80';
+    const dotClass = isUsingTools ? 'bg-(--accent-ai)/80' : 'bg-(--accent-mention)/80';
 
     return (
         <div className="px-4 py-3">
-            <div className={`inline-flex max-w-full items-center gap-3 rounded-2xl border px-4 py-3 text-[11px] font-medium text-(--fg-secondary) shadow-[0_16px_40px_rgba(0,0,0,0.18)] ${borderClass} ${panelClass}`}>
-                <div className={`flex h-8 w-8 items-center justify-center rounded-2xl border ${iconWrapClass}`}>
+            <div className={`inline-flex max-w-full items-center gap-3 rounded-[calc(var(--panel-radius)*1.2)] border px-4 py-3 text-[11px] font-medium text-(--fg-secondary) shadow-(--shadow-lg) ${borderClass} ${panelClass}`}>
+                <div className={`flex h-8 w-8 items-center justify-center rounded-[calc(var(--panel-radius)*0.75)] border ${iconWrapClass}`}>
                     <Loader2 className={`h-4 w-4 animate-spin ${iconClass}`} />
                 </div>
                 <div className="min-w-0 flex flex-col items-start">
@@ -209,8 +209,8 @@ const PendingResponseIndicator: React.FC<{ toolActivity?: ToolActivityState | nu
                 </div>
                 <div className="ml-1 flex items-center gap-1">
                     <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
-                    <span className={`h-1.5 w-1.5 rounded-full ${isUsingTools ? 'bg-indigo-400/60' : 'bg-emerald-400/60'}`} />
-                    <span className={`h-1.5 w-1.5 rounded-full ${isUsingTools ? 'bg-indigo-400/40' : 'bg-emerald-400/40'}`} />
+                    <span className={`h-1.5 w-1.5 rounded-full ${isUsingTools ? 'bg-(--accent-ai)/60' : 'bg-(--accent-mention)/60'}`} />
+                    <span className={`h-1.5 w-1.5 rounded-full ${isUsingTools ? 'bg-(--accent-ai)/40' : 'bg-(--accent-mention)/40'}`} />
                 </div>
             </div>
         </div>
@@ -909,8 +909,8 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                 >
                     <div className="mx-auto flex w-full max-w-none flex-col gap-0.5 px-0.5 py-4 md:px-1">
                         {messages.length === 0 && (
-                            <div className="mx-4 mt-10 rounded-2xl border border-(--border-subtle) bg-(--bg-surface)/70 px-6 py-8 text-center shadow-[0_24px_80px_rgba(0,0,0,0.25)]">
-                                <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-emerald-500/20 bg-emerald-500/10 text-2xl shadow-[0_0_40px_rgba(16,185,129,0.15)]">
+                            <div className="mx-4 mt-10 rounded-[calc(var(--panel-radius)*1.2)] border border-(--border-subtle) bg-(--bg-surface)/70 px-6 py-8 text-center shadow-(--shadow-xl)">
+                                <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-[calc(var(--panel-radius)*1.2)] border border-(--accent-mention)/20 bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)] text-2xl shadow-(--shadow-lg)">
                                     🗡️
                                 </div>
                                 <h2 className="text-sm font-semibold uppercase tracking-[0.24em] text-(--fg-secondary)">{t('app.name')}</h2>
@@ -1002,7 +1002,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                         <div className="pointer-events-none sticky bottom-0 z-10 flex justify-center px-4 pb-4">
                             <button
                                 onClick={scrollToBottom}
-                                className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-(--border-subtle) bg-(--bg-surface)/95 px-4 py-2 text-xs font-medium text-(--fg-secondary) shadow-[0_18px_48px_rgba(0,0,0,0.25)] transition-colors hover:text-(--fg-primary)"
+                                className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-(--border-subtle) bg-(--bg-surface)/95 px-4 py-2 text-xs font-medium text-(--fg-secondary) shadow-(--shadow-lg) transition-colors hover:text-(--fg-primary)"
                             >
                                 <ArrowDown className="h-3.5 w-3.5" />
                                 {t('chat.jumpToLatest')}
@@ -1048,7 +1048,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                             type="button"
                             onClick={handleImplementPlan}
                             disabled={loading || !canUseAi}
-                            className="inline-flex items-center rounded-md border border-emerald-500/30 bg-emerald-500/12 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-200 transition-colors hover:border-emerald-400/50 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                            className="inline-flex items-center rounded-[calc(var(--panel-radius)*0.45)] border border-(--accent-mention)/30 bg-[color-mix(in_srgb,var(--accent-mention)_12%,transparent)] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-(--accent-mention) transition-colors hover:border-(--accent-mention)/50 hover:bg-[color-mix(in_srgb,var(--accent-mention)_20%,transparent)] disabled:cursor-not-allowed disabled:opacity-40"
                         >
                             {t('chat.implement')}
                         </button>
