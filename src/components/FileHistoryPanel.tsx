@@ -2,6 +2,7 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { useFileHistory } from '../hooks/useFileHistory';
 import { RotateCcw, Clock } from 'lucide-react';
+import { useSmoothWheelScroll } from '../hooks/useSmoothWheelScroll';
 
 interface FileHistoryPanelProps {
     activeFile: string | null;
@@ -10,6 +11,7 @@ interface FileHistoryPanelProps {
 export const FileHistoryPanel: React.FC<FileHistoryPanelProps> = ({ activeFile }) => {
     const { t } = useTranslation();
     const { history, loading, revertToSnapshot } = useFileHistory(activeFile);
+    const handleFileHistoryWheel = useSmoothWheelScroll<HTMLDivElement>();
 
     const formatTime = (ts: number) => {
         return new Date(ts).toLocaleString(undefined, {
@@ -50,7 +52,7 @@ export const FileHistoryPanel: React.FC<FileHistoryPanelProps> = ({ activeFile }
                 <span>{t('fileHistory.title')}</span>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-2 space-y-2">
+            <div className="flex-1 overflow-y-auto p-2 space-y-2" onWheel={handleFileHistoryWheel}>
                 {history.map((entry) => (
                     <div key={entry.id} className="group p-2 rounded-[calc(var(--panel-radius)*0.65)] bg-(--bg-surface) border border-(--border-subtle) hover:border-(--border-focus) transition-all">
                         <div className="flex justify-between items-center mb-1">

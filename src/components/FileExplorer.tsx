@@ -17,6 +17,7 @@ import { useContextMenu, ContextMenuItem } from './ui/ContextMenu';
 import { ConfirmModal } from './ui/Modal';
 import { listen, emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
+import { useSmoothWheelScroll } from '../hooks/useSmoothWheelScroll';
 
 // Define the Node type for our tree
 interface NodeData {
@@ -63,6 +64,7 @@ const getBaseName = (path: string) => {
 };
 
 export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, activeFile, roots, refreshKey }) => {
+    const handleTreeWheel = useSmoothWheelScroll<HTMLDivElement>();
     const { t } = useTranslation();
 
     // Use Ref for cache to persist data across renders.
@@ -695,6 +697,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                 {...tree.getContainerProps()}
                 className="flex-1 overflow-y-auto text-xs select-none outline-none"
                 onContextMenu={handleBackgroundContextMenu}
+                onWheel={handleTreeWheel}
             >
                 {newItem && newItem.parentPath === getWorkspaceRoot() && (
                     <div

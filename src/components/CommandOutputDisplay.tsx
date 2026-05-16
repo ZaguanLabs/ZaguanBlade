@@ -1,6 +1,7 @@
 'use client';
 import React, { useState } from 'react';
 import { Terminal, ChevronDown, ChevronRight, CheckCircle2, XCircle, Clock } from 'lucide-react';
+import { useSmoothWheelScroll } from '../hooks/useSmoothWheelScroll';
 
 const ORPHANED_ANSI_FINAL_BYTES = new Set(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'S', 'T', 'f', 'h', 'l', 'm', 'n', 'r', 's', 'u']);
 
@@ -65,6 +66,7 @@ export const CommandOutputDisplay: React.FC<CommandOutputDisplayProps> = ({
 }) => {
     const [isExpanded, setIsExpanded] = useState(true);
     const isSuccess = exitCode === 0;
+    const handleOutputWheel = useSmoothWheelScroll<HTMLPreElement>();
 
     return (
         <div
@@ -132,6 +134,7 @@ export const CommandOutputDisplay: React.FC<CommandOutputDisplayProps> = ({
                     <pre
                         className="p-4 text-xs font-mono text-(--fg-primary) overflow-x-auto max-h-[400px] overflow-y-auto select-text whitespace-pre-wrap wrap-break-word"
                         style={{ backgroundColor: 'color-mix(in srgb, var(--bg-surface) 94%, var(--bg-app))' }}
+                        onWheel={handleOutputWheel}
                     >
                         {stripAllAnsi(output)}
                     </pre>

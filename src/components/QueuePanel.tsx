@@ -2,6 +2,7 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { ListOrdered, Pencil, Trash2 } from 'lucide-react';
 import type { QueuedRequest } from '../types/chat';
+import { useSmoothWheelScroll } from '../hooks/useSmoothWheelScroll';
 
 interface QueuePanelProps {
     requests: QueuedRequest[];
@@ -11,6 +12,7 @@ interface QueuePanelProps {
 
 const QueuePanelComponent: React.FC<QueuePanelProps> = ({ requests, onEditRequest, onDeleteRequest }) => {
     const { t } = useTranslation();
+    const handleQueueWheel = useSmoothWheelScroll<HTMLDivElement>();
     if (requests.length === 0) return null;
 
     return (
@@ -21,7 +23,7 @@ const QueuePanelComponent: React.FC<QueuePanelProps> = ({ requests, onEditReques
                 </div>
                 <span className="font-semibold uppercase tracking-[0.16em]">{t('chat.queue.title', { count: requests.length })}</span>
             </div>
-            <div className="max-h-[200px] space-y-1 overflow-auto px-3 pb-3">
+            <div className="max-h-[200px] space-y-1 overflow-auto px-3 pb-3" onWheel={handleQueueWheel}>
                 {requests.map((request, index) => {
                     const preview = request.text.trim() || t('chat.queue.imageOnlyRequest');
                     return (

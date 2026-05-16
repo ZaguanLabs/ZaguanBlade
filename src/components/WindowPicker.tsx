@@ -2,6 +2,7 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { X, Monitor } from 'lucide-react';
 import type { WindowInfo } from '../types/screenshot';
+import { useSmoothWheelScroll } from '../hooks/useSmoothWheelScroll';
 
 interface WindowPickerProps {
     isOpen: boolean;
@@ -23,6 +24,7 @@ export const WindowPicker: React.FC<WindowPickerProps> = ({
     onCancel,
 }) => {
     const { t } = useTranslation();
+    const handleWindowListWheel = useSmoothWheelScroll<HTMLDivElement>();
     const resolvedTitle = title ?? t('screenshot.windowPickerTitle');
     const resolvedSubtitle = subtitle ?? t('screenshot.windowPickerSubtitle');
     if (!isOpen) return null;
@@ -46,7 +48,7 @@ export const WindowPicker: React.FC<WindowPickerProps> = ({
                         <X className="w-4 h-4" />
                     </button>
                 </div>
-                <div className="max-h-[360px] overflow-y-auto p-2">
+                <div className="max-h-[360px] overflow-y-auto p-2" onWheel={handleWindowListWheel}>
                     {loading && (
                         <div className="px-3 py-6 text-xs text-(--fg-tertiary) text-center">
                             {t('screenshot.loadingWindows')}

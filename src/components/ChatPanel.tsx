@@ -1,12 +1,15 @@
 import React, { useEffect, useRef, useCallback, useState, useMemo } from 'react';
-import { useTranslation } from 'react-i18next';
-import { ArrowDown, Check, X, Loader2 } from 'lucide-react';
+import { useLayoutEvents } from '../hooks/useLayoutEvents';
+import { useTabManager } from '../hooks/useTabManager';
 import { useCommandExecution } from '../hooks/useCommandExecution';
+import { useSmoothWheelScroll } from '../hooks/useSmoothWheelScroll';
 import { useHistory } from '../hooks/useHistory';
 import type { ChatMessage as ChatMessageType, ChatMode, ComposerMention, HookApprovalRequest, ImageAttachment, ModelInfo, QueuedRequest, ToolActivityState } from '../types/chat';
 
 import type { StructuredAction, TodoItem } from '../types/events';
 import { isNearChatBottom, shouldDetachChatAutoScrollOnWheel } from '../utils/chatScroll';
+import { useTranslation } from 'react-i18next';
+import { ArrowDown, Check, X, Loader2 } from 'lucide-react';
 import { ChatMessage } from './ChatMessage';
 import { ChatTabBar } from './ChatTabBar';
 import { CommandCenter } from './CommandCenter';
@@ -695,6 +698,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
             setShowScrollToBottom(true);
         }
     }, [messageCount]);
+    const handleSmoothWheel = useSmoothWheelScroll<HTMLDivElement>(handleWheel);
 
     const registerRowElement = useCallback((rowKey: string, element: HTMLDivElement | null) => {
         if (element) {
@@ -902,7 +906,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                     ref={scrollContainerRef}
                     className="relative flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent"
                     onScroll={handleScroll}
-                    onWheel={handleWheel}
+                    onWheel={handleSmoothWheel}
                 >
                     <div className="mx-auto flex w-full max-w-none flex-col gap-0.5 px-0.5 py-4 md:px-1">
                         {messages.length === 0 && (

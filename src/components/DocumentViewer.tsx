@@ -7,6 +7,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { useSmoothWheelScroll } from '../hooks/useSmoothWheelScroll';
 
 interface DocumentViewerProps {
   documentId: string;
@@ -33,6 +34,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
 }) => {
   const { t } = useTranslation();
   const [isSaving, setIsSaving] = useState(false);
+  const handleContentWheel = useSmoothWheelScroll<HTMLDivElement>();
   const trimmedContent = content.trim();
   const sourceName = `${suggestedName || ''} ${title}`.toLowerCase();
   const looksLikePlanDocument = sourceName.includes('plan') || /^\s*#{1,6}\s*plan\b/im.test(content);
@@ -120,7 +122,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto" onWheel={handleContentWheel}>
         <div className="max-w-4xl mx-auto px-6 py-8">
           <div className="prose prose-invert prose-lg max-w-none
             prose-headings:text-(--fg-bright) prose-headings:font-semibold prose-headings:tracking-tight

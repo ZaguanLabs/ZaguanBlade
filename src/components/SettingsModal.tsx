@@ -10,6 +10,7 @@ import i18n, { normalizeAppLanguage, supportedAppLanguages, languageI18nKey, typ
 import zbladeLogoUrl from '../assets/zblade-in-app-logo.png';
 import { availableThemes, normalizeThemeId } from '../themes';
 import { formatUnknownBackendError } from '../utils/backendErrors';
+import { useSmoothWheelScroll } from '../hooks/useSmoothWheelScroll';
 
 type StorageMode = 'local' | 'server';
 
@@ -225,6 +226,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
     const [isLoading, setIsLoading] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const handleSettingsContentWheel = useSmoothWheelScroll<HTMLDivElement>();
 
     useEffect(() => {
         if (!isOpen) return;
@@ -455,7 +457,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                     </div>
 
                     {/* Main Content */}
-                    <div className="flex-1 overflow-y-auto p-6 bg-(--bg-editor)">
+                    <div className="flex-1 overflow-y-auto p-6 bg-(--bg-editor)" onWheel={handleSettingsContentWheel}>
                         {isLoading ? (
                             <div className="flex items-center justify-center h-full">
                                 <Loader2 className="w-6 h-6 text-(--fg-tertiary) animate-spin" />
