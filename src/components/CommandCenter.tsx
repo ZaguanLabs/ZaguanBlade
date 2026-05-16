@@ -742,22 +742,22 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
 
     return (
         <>
-            <div className="shrink-0 border-t border-[var(--border-subtle)] bg-[var(--bg-app)]">
+            <div className="shrink-0 border-t border-(--border-subtle) bg-(--bg-app)">
                 <div className="px-2 pb-2 pt-2">
-                    <div className={`relative rounded-xl border shadow-[0_16px_44px_rgba(0,0,0,0.22)] transition-colors ${chatMode === 'planning'
-                        ? 'border-sky-500/35 bg-[var(--bg-surface)]/85'
-                        : 'border-[var(--border-subtle)] bg-[var(--bg-surface)]/85'
+                    <div className={`relative rounded-[calc(var(--panel-radius)*0.9)] border shadow-(--shadow-md) transition-colors ${chatMode === 'planning'
+                        ? 'border-(--accent-planning)/35 bg-(--bg-surface)/85'
+                        : 'border-(--border-subtle) bg-(--bg-surface)/85'
                         }`}>
-                    <div className={`relative z-[70] border-b px-2 py-1.5 transition-colors ${chatMode === 'planning'
-                        ? 'border-sky-500/25'
-                        : 'border-[var(--border-subtle)]/50'
+                    <div className={`relative z-70 border-b px-2 py-1.5 transition-colors ${chatMode === 'planning'
+                        ? 'border-(--accent-planning)/25'
+                        : 'border-(--border-subtle)/50'
                         }`}>
                         <div className="flex items-center justify-between gap-2">
                             <div className="flex items-center gap-1.5">
                                 <FeatureMenu onScreenshot={handleScreenshot} onUploadImage={handleUploadImage} disabled={disabled} />
-                                <div className={`inline-flex items-center gap-1 rounded-lg border p-1 ${chatMode === 'planning'
-                                    ? 'border-sky-500/25 bg-[var(--bg-app)]/70'
-                                    : 'border-[var(--border-subtle)] bg-[var(--bg-app)]/70'
+                                <div className={`inline-flex items-center gap-1 rounded-[calc(var(--panel-radius)*0.55)] border p-1 ${chatMode === 'planning'
+                                    ? 'border-(--accent-planning)/25 bg-(--bg-app)/70'
+                                    : 'border-(--border-subtle) bg-(--bg-app)/70'
                                     }`}>
                                     {chatModeOptions.map((option) => {
                                         const Icon = option.icon;
@@ -771,9 +771,9 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                                 title={option.description}
                                                 className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[10px] font-semibold transition-colors ${isActive
                                                     ? chatMode === 'planning'
-                                                        ? 'bg-sky-500/20 text-sky-100'
-                                                        : 'bg-[var(--accent-primary)]/16 text-[var(--fg-primary)]'
-                                                    : 'text-[var(--fg-tertiary)] hover:text-[var(--fg-primary)]'
+                                                        ? 'bg-[color-mix(in_srgb,var(--accent-planning)_20%,transparent)] text-(--fg-bright)'
+                                                        : 'bg-[color-mix(in_srgb,var(--accent-ai)_16%,transparent)] text-(--fg-primary)'
+                                                    : 'text-(--fg-tertiary) hover:text-(--fg-primary)'
                                                     }`}
                                             >
                                                 <Icon className="h-3 w-3" />
@@ -796,7 +796,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
 
                     <ImageAttachmentBar attachments={attachments} onRemove={handleRemoveAttachment} />
                     {attachmentError && (
-                        <div className="px-2 pb-1 pt-1 text-[10px] text-red-400">
+                        <div className="px-2 pb-1 pt-1 text-[10px] text-(--state-danger)">
                             {attachmentError}
                         </div>
                     )}
@@ -806,7 +806,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                 {activePathMentions.map((mention) => (
                                     <div
                                         key={mention.path}
-                                        className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-emerald-500/20 bg-emerald-500/8 px-2 py-1 text-[10px] text-emerald-300"
+                                        className="inline-flex max-w-full items-center gap-1.5 rounded-[calc(var(--panel-radius)*0.45)] border border-(--accent-mention)/20 bg-[color-mix(in_srgb,var(--accent-mention)_8%,transparent)] px-2 py-1 text-[10px] text-(--accent-mention)"
                                         title={mention.path}
                                     >
                                         {mention.is_dir ? (
@@ -814,10 +814,10 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                         ) : (
                                             <FileText className="h-3 w-3 shrink-0" />
                                         )}
-                                        <span className="font-medium uppercase tracking-[0.12em] text-emerald-400/80">
+                                        <span className="font-medium uppercase tracking-[0.12em] text-(--accent-mention)/80">
                                             {t('chat.pathRef')}
                                         </span>
-                                        <span className="truncate text-zinc-200">
+                                        <span className="truncate text-(--fg-primary)">
                                             {mention.path}
                                         </span>
                                     </div>
@@ -826,10 +826,10 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                         </div>
                     )}
 
-                    <div className={`relative px-1.5 pb-0 pt-1.5 transition-colors ${loading ? 'bg-[var(--bg-surface)]/40' : ''}`}>
+                    <div className={`relative px-1.5 pb-0 pt-1.5 transition-colors ${loading ? 'bg-(--bg-surface)/40' : ''}`}>
                         {showSuggestions && suggestions.length > 0 && (
                             <div
-                                className="absolute bottom-full left-0 right-0 z-[80] mx-0.5 mb-1.5 overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-[0_16px_44px_rgba(0,0,0,0.34)]"
+                                className="absolute bottom-full left-0 right-0 z-80 mx-0.5 mb-1.5 overflow-hidden rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-surface) shadow-(--shadow-lg)"
                             >
                                 {suggestions.map((suggestion, idx) => {
                                     const isActiveSuggestion = idx === selectedSuggestionIndex;
@@ -841,16 +841,16 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                                 onClick={() => insertSuggestion(suggestion)}
                                                 title={suggestion.tooltip}
                                                 className={`w-full flex items-center gap-2 px-2 py-1.5 text-left transition-colors ${isActiveSuggestion
-                                                    ? 'bg-[var(--accent-primary)]/15 text-[var(--fg-primary)]'
-                                                    : 'text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)]'
+                                                    ? 'bg-[color-mix(in_srgb,var(--accent-ai)_15%,transparent)] text-(--fg-primary)'
+                                                    : 'text-(--fg-secondary) hover:bg-(--bg-surface-hover)'
                                                     }`}
                                             >
-                                                <div className="flex h-6 w-6 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-app)]">
-                                                    <Icon className="h-3 w-3 text-[var(--accent-primary)]" />
+                                                <div className="flex h-6 w-6 items-center justify-center rounded-[calc(var(--panel-radius)*0.45)] border border-(--border-subtle) bg-(--bg-app)">
+                                                    <Icon className="h-3 w-3 text-(--accent-ai)" />
                                                 </div>
                                                 <div className="min-w-0 flex-1">
                                                     <span className="text-[10px] font-semibold">@{suggestion.name}</span>
-                                                    <span className="ml-1 text-[9px] text-[var(--fg-tertiary)]">{suggestion.description}</span>
+                                                    <span className="ml-1 text-[9px] text-(--fg-tertiary)">{suggestion.description}</span>
                                                 </div>
                                             </button>
                                         );
@@ -861,34 +861,34 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                             key={suggestion.key}
                                             onClick={() => insertSuggestion(suggestion)}
                                             className={`w-full flex items-center gap-2 px-2 py-1.5 text-left transition-colors ${isActiveSuggestion
-                                                ? 'bg-[var(--accent-primary)]/15 text-[var(--fg-primary)]'
-                                                : 'text-[var(--fg-secondary)] hover:bg-[var(--bg-surface-hover)]'
+                                                ? 'bg-[color-mix(in_srgb,var(--accent-ai)_15%,transparent)] text-(--fg-primary)'
+                                                : 'text-(--fg-secondary) hover:bg-(--bg-surface-hover)'
                                                 }`}
                                             title={suggestion.path}
                                         >
-                                            <div className="flex h-6 w-6 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-app)]">
+                                            <div className="flex h-6 w-6 items-center justify-center rounded-[calc(var(--panel-radius)*0.45)] border border-(--border-subtle) bg-(--bg-app)">
                                                 {suggestion.isDir ? (
-                                                    <Folder className="h-3 w-3 text-[var(--accent-primary)]" />
+                                                    <Folder className="h-3 w-3 text-(--accent-ai)" />
                                                 ) : (
-                                                    <FileText className="h-3 w-3 text-[var(--accent-primary)]" />
+                                                    <FileText className="h-3 w-3 text-(--accent-ai)" />
                                                 )}
                                             </div>
                                             <div className="min-w-0 flex-1">
                                                 <span className="block truncate text-[10px] font-semibold">@{suggestion.path}</span>
-                                                <span className="text-[9px] text-[var(--fg-tertiary)]">{suggestion.isDir ? t('chat.pathType.folder') : t('chat.pathType.file')}</span>
+                                                <span className="text-[9px] text-(--fg-tertiary)">{suggestion.isDir ? t('chat.pathType.folder') : t('chat.pathType.file')}</span>
                                             </div>
                                         </button>
                                     );
                                 })}
                             </div>
                         )}
-                        <div className={`relative overflow-hidden rounded-lg border bg-[var(--bg-app)] transition-colors shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] ${chatMode === 'planning'
+                        <div className={`relative overflow-hidden rounded-[calc(var(--panel-radius)*0.75)] border bg-(--bg-app) transition-colors shadow-(--shadow-sm) ${chatMode === 'planning'
                             ? loading
-                                ? 'border-sky-400/40'
-                                : 'border-sky-500/25 focus-within:border-sky-400/50'
+                                ? 'border-(--accent-planning)/40'
+                                : 'border-(--accent-planning)/25 focus-within:border-(--accent-planning)/50'
                             : loading
-                                ? 'border-[var(--border-focus)] bg-[var(--bg-surface)]/70'
-                                : 'border-[var(--border-subtle)] focus-within:border-[var(--accent-primary)]/60'
+                                ? 'border-(--border-focus) bg-(--bg-surface)/70'
+                                : 'border-(--border-subtle) focus-within:border-(--accent-ai)/60'
                             }`}>
                             <textarea
                                 ref={textareaRef}
@@ -897,7 +897,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                 onPaste={handlePaste}
                                 onKeyDown={handleKeyDown}
                                 placeholder={chatMode === 'planning' ? `${t('chat.planningPlaceholder')} (Ctrl-L to focus)` : `${t('chat.inputPlaceholder')} (Ctrl-L to focus)`}
-                                className="relative z-10 min-h-[88px] max-h-[360px] w-full resize-none overflow-y-auto bg-transparent px-3 pb-3 pt-2.5 pr-14 text-[13px] font-medium leading-[18px] text-[var(--fg-primary)] outline-none placeholder-[var(--fg-tertiary)]"
+                                className="relative z-10 min-h-[88px] max-h-[360px] w-full resize-none overflow-y-auto bg-transparent px-3 pb-3 pt-2.5 pr-14 text-[13px] font-medium leading-[18px] text-(--fg-primary) outline-none placeholder-(--fg-tertiary)"
                                 rows={1}
                                 disabled={disabled}
                             />
@@ -923,11 +923,11 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                     }
                                 }}
                                 disabled={(!text.trim() && attachments.length === 0 && !loading) || disabled}
-                                className={`absolute bottom-2 right-2 z-20 inline-flex h-9 w-9 items-center justify-center rounded-lg border transition-colors ${loading && !text.trim()
-                                    ? 'border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20'
+                                className={`absolute bottom-2 right-2 z-20 inline-flex h-9 w-9 items-center justify-center rounded-[calc(var(--panel-radius)*0.55)] border transition-colors ${loading && !text.trim()
+                                    ? 'border-(--state-danger)/30 bg-[color-mix(in_srgb,var(--state-danger)_10%,transparent)] text-(--state-danger) hover:bg-[color-mix(in_srgb,var(--state-danger)_18%,transparent)]'
                                     : chatMode === 'planning'
-                                        ? 'border-sky-500/25 bg-sky-500/10 text-sky-100 hover:border-sky-400/40 hover:bg-sky-500/15 disabled:cursor-not-allowed disabled:opacity-30'
-                                        : 'border-[var(--border-subtle)] bg-[var(--bg-surface)] text-[var(--fg-tertiary)] hover:border-[var(--accent-primary)]/40 hover:text-[var(--fg-primary)] disabled:cursor-not-allowed disabled:opacity-30'
+                                        ? 'border-(--accent-planning)/25 bg-[color-mix(in_srgb,var(--accent-planning)_10%,transparent)] text-(--fg-bright) hover:border-(--accent-planning)/40 hover:bg-[color-mix(in_srgb,var(--accent-planning)_15%,transparent)] disabled:cursor-not-allowed disabled:opacity-30'
+                                        : 'border-(--border-subtle) bg-(--bg-surface) text-(--fg-tertiary) hover:border-(--accent-ai)/40 hover:text-(--fg-primary) disabled:cursor-not-allowed disabled:opacity-30'
                                     }`}
                             >
                                 {loading && !text.trim() ? (
@@ -937,7 +937,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                 )}
                             </button>
                         </div>
-                        <div className="flex items-center justify-between border-t border-[var(--border-subtle)]/40 px-2 py-1 text-[10px] text-[var(--fg-tertiary)]">
+                        <div className="flex items-center justify-between border-t border-(--border-subtle)/40 px-2 py-1 text-[10px] text-(--fg-tertiary)">
                             <span>{chatMode === 'planning' ? t('chat.composer.planningReadonly') : t('chat.composer.enterToSend')}</span>
                             <span>{chatMode === 'planning' ? t('chat.composer.planningNoEdits') : t('chat.composer.shiftEnterNewline')}</span>
                         </div>

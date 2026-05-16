@@ -113,8 +113,8 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
     const containerStyle = isStreaming
         ? {
             backgroundColor: 'color-mix(in srgb, var(--bg-surface) 88%, var(--bg-app))',
-            borderColor: 'color-mix(in srgb, var(--accent-primary) 26%, var(--border-default))',
-            boxShadow: '0 10px 24px color-mix(in srgb, var(--accent-primary) 10%, transparent)'
+            borderColor: 'color-mix(in srgb, var(--accent-ai) 26%, var(--border-default))',
+            boxShadow: 'var(--shadow-md)'
         }
         : {
             backgroundColor: 'color-mix(in srgb, var(--bg-surface) 70%, var(--bg-app))',
@@ -124,7 +124,7 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
         };
     const headerStyle = {
         backgroundColor: isStreaming
-            ? 'color-mix(in srgb, var(--accent-primary) 8%, var(--bg-surface))'
+            ? 'color-mix(in srgb, var(--accent-ai) 8%, var(--bg-surface))'
             : 'color-mix(in srgb, var(--bg-surface) 54%, var(--bg-app))'
     };
     const contentStyle = {
@@ -132,18 +132,18 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
             ? 'color-mix(in srgb, var(--bg-app) 16%, var(--bg-surface))'
             : 'color-mix(in srgb, var(--bg-app) 10%, var(--bg-surface))',
         borderColor: isStreaming
-            ? 'color-mix(in srgb, var(--accent-primary) 16%, var(--border-subtle))'
+            ? 'color-mix(in srgb, var(--accent-ai) 16%, var(--border-subtle))'
             : 'color-mix(in srgb, var(--border-default) 72%, transparent)'
     };
     const contentTextStyle = {
         color: isStreaming
-            ? 'color-mix(in srgb, var(--fg-primary) 88%, var(--accent-primary))'
+            ? 'color-mix(in srgb, var(--fg-primary) 88%, var(--accent-ai))'
             : 'var(--fg-secondary)'
     };
 
     return (
         <div
-            className="my-2 overflow-hidden rounded-lg border transition-[border-color,background-color,box-shadow,opacity] duration-200"
+            className="my-2 overflow-hidden rounded-[calc(var(--panel-radius)*0.75)] border transition-[border-color,background-color,box-shadow,opacity] duration-200"
             style={containerStyle}
         >
             <button
@@ -152,14 +152,14 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
                 style={headerStyle}
             >
                 <div className="flex items-center gap-2 flex-1 min-w-0">
-                    <Brain className={`h-3 w-3 flex-shrink-0 ${isStreaming ? 'animate-pulse text-(--accent-primary)' : 'text-(--fg-tertiary)'}`} />
-                    <span className={`flex-shrink-0 font-mono text-[9px] uppercase tracking-[0.16em] ${isStreaming ? 'text-(--accent-primary)' : 'text-(--fg-tertiary)'
+                    <Brain className={`h-3 w-3 flex-shrink-0 ${isStreaming ? 'animate-pulse text-(--accent-ai)' : 'text-(--fg-tertiary)'}`} />
+                    <span className={`flex-shrink-0 font-mono text-[9px] uppercase tracking-[0.16em] ${isStreaming ? 'text-(--accent-ai)' : 'text-(--fg-tertiary)'
                         }`}>
                         {t('chatMessage.reasoning')}
                     </span>
                 </div>
                 {isStreaming && (
-                    <Loader2 className="mr-1 h-2.5 w-2.5 flex-shrink-0 animate-spin text-(--accent-primary)" />
+                    <Loader2 className="mr-1 h-2.5 w-2.5 flex-shrink-0 animate-spin text-(--accent-ai)" />
                 )}
                 {isExpanded ? (
                     <ChevronDown className="h-3 w-3 flex-shrink-0 text-(--fg-secondary)" />
@@ -212,24 +212,24 @@ const PlanSummaryDisplay: React.FC<{ todos: import('../types/events').TodoItem[]
         <div className="my-2">
             <button
                 onClick={() => setIsExpanded(!isExpanded)}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-emerald-500/5 border border-emerald-500/20 hover:bg-emerald-500/10 transition-colors text-left w-full"
+                className="flex items-center gap-2 px-3 py-1.5 rounded-[calc(var(--panel-radius)*0.45)] bg-[color-mix(in_srgb,var(--accent-mention)_5%,transparent)] border border-(--accent-mention)/20 hover:bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)] transition-colors text-left w-full"
             >
-                <Check className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
-                <span className="text-[11px] text-emerald-400 font-medium">
+                <Check className="w-3.5 h-3.5 text-(--accent-mention) flex-shrink-0" />
+                <span className="text-[11px] text-(--accent-mention) font-medium">
                     {t('chatMessage.planCompleted', { completed: completedCount, total: todos.length })}
                 </span>
                 {isExpanded ? (
-                    <ChevronDown className="w-3 h-3 text-zinc-500 ml-auto flex-shrink-0" />
+                    <ChevronDown className="w-3 h-3 text-(--fg-tertiary) ml-auto flex-shrink-0" />
                 ) : (
-                    <ChevronRight className="w-3 h-3 text-zinc-500 ml-auto flex-shrink-0" />
+                    <ChevronRight className="w-3 h-3 text-(--fg-tertiary) ml-auto flex-shrink-0" />
                 )}
             </button>
             {isExpanded && (
-                <div className="mt-1 px-3 py-2 rounded-md bg-emerald-500/5 border border-emerald-500/10 space-y-0.5">
+                <div className="mt-1 px-3 py-2 rounded-[calc(var(--panel-radius)*0.45)] bg-[color-mix(in_srgb,var(--accent-mention)_5%,transparent)] border border-(--accent-mention)/10 space-y-0.5">
                     {todos.map((todo, idx) => (
                         <div key={idx} className="flex items-center gap-2 text-[11px]">
-                            <Check className="w-3 h-3 text-emerald-400/60 flex-shrink-0" />
-                            <span className="text-zinc-500 line-through">{todo.content}</span>
+                            <Check className="w-3 h-3 text-(--accent-mention)/60 flex-shrink-0" />
+                            <span className="text-(--fg-tertiary) line-through">{todo.content}</span>
                         </div>
                     ))}
                 </div>
@@ -248,10 +248,10 @@ const ReferencedPathsDisplay: React.FC<{
     }
 
     return (
-        <div className="mb-2 overflow-hidden rounded-lg border border-emerald-500/15 bg-emerald-500/6">
-            <div className="flex items-center gap-2 border-b border-emerald-500/10 px-3 py-1.5 text-[10px] text-emerald-300/90">
+        <div className="mb-2 overflow-hidden rounded-[calc(var(--panel-radius)*0.75)] border border-(--accent-mention)/15 bg-[color-mix(in_srgb,var(--accent-mention)_6%,transparent)]">
+            <div className="flex items-center gap-2 border-b border-(--accent-mention)/10 px-3 py-1.5 text-[10px] text-(--accent-mention)/90">
                 <span className="font-semibold uppercase tracking-[0.16em]">{t('chat.referencedPaths')}</span>
-                <span className="text-emerald-400/60">{mentions.length}</span>
+                <span className="text-(--accent-mention)/60">{mentions.length}</span>
             </div>
             <div className="flex flex-wrap gap-1.5 px-3 py-2">
                 {mentions.map((mention) => {
@@ -259,9 +259,9 @@ const ReferencedPathsDisplay: React.FC<{
                     const content = (
                         <>
                             {mention.is_dir ? (
-                                <Folder className="h-3 w-3 shrink-0 text-emerald-300/80" />
+                                <Folder className="h-3 w-3 shrink-0 text-(--accent-mention)/80" />
                             ) : (
-                                <FileText className="h-3 w-3 shrink-0 text-emerald-300/80" />
+                                <FileText className="h-3 w-3 shrink-0 text-(--accent-mention)/80" />
                             )}
                             <span className="truncate">{mention.path}</span>
                         </>
@@ -271,7 +271,7 @@ const ReferencedPathsDisplay: React.FC<{
                         return (
                             <div
                                 key={`${mention.kind}:${mention.path}`}
-                                className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-emerald-500/15 bg-zinc-950/30 px-2 py-1 text-[10px] text-zinc-300"
+                                className="inline-flex max-w-full items-center gap-1.5 rounded-[calc(var(--panel-radius)*0.45)] border border-(--accent-mention)/15 bg-(--bg-app)/30 px-2 py-1 text-[10px] text-(--fg-secondary)"
                                 title={mention.path}
                             >
                                 {content}
@@ -284,7 +284,7 @@ const ReferencedPathsDisplay: React.FC<{
                             key={`${mention.kind}:${mention.path}`}
                             type="button"
                             onClick={() => onOpenFile?.(mention.path)}
-                            className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-emerald-500/15 bg-zinc-950/30 px-2 py-1 text-[10px] text-zinc-300 transition-colors hover:bg-emerald-500/10 hover:text-emerald-200"
+                            className="inline-flex max-w-full items-center gap-1.5 rounded-[calc(var(--panel-radius)*0.45)] border border-(--accent-mention)/15 bg-(--bg-app)/30 px-2 py-1 text-[10px] text-(--fg-secondary) transition-colors hover:bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)] hover:text-(--fg-bright)"
                             title={t('chatMessage.openPath', { path: mention.path })}
                         >
                             {content}
@@ -309,12 +309,12 @@ function getToolActivityTargetKey(id: string): string {
 
 function compactWorkEntryToneClass(entry: ChatWorkEntry): string {
     if (entry.status === 'executing' || entry.status === 'pending') {
-        return 'bg-(--accent-primary)';
+        return 'bg-(--accent-ai)';
     }
     if (entry.tone === 'error') {
-        return 'bg-(--accent-error)';
+        return 'bg-(--state-danger)';
     }
-    return 'bg-(--accent-green)';
+    return 'bg-(--accent-mention)';
 }
 
 const CompactWorkLog: React.FC<{
@@ -332,7 +332,7 @@ const CompactWorkLog: React.FC<{
     const hiddenCount = entries.length - visibleEntries.length;
 
     return (
-        <div className="mb-2 rounded-lg border border-(--border-subtle) bg-(--bg-surface)/45 px-2.5 py-2">
+        <div className="mb-2 rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-surface)/45 px-2.5 py-2">
             <button
                 type="button"
                 className="flex w-full items-center justify-between gap-3 text-left"
@@ -648,7 +648,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     const assistantLiveStyle = isAssistant
         ? {
             backgroundColor: 'color-mix(in srgb, var(--bg-surface) 45%, var(--bg-app))',
-            borderColor: 'color-mix(in srgb, var(--accent-primary) 38%, transparent)'
+            borderColor: 'color-mix(in srgb, var(--accent-ai) 38%, transparent)'
         }
         : undefined;
     const assistantChunkCounterStyle = isAssistant
@@ -658,10 +658,10 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                 : 'color-mix(in srgb, var(--bg-surface) 48%, var(--bg-app))',
             borderColor: stream?.endTime
                 ? 'color-mix(in srgb, var(--border-default) 94%, transparent)'
-                : 'color-mix(in srgb, var(--accent-primary) 32%, var(--border-default))',
+                : 'color-mix(in srgb, var(--accent-ai) 32%, var(--border-default))',
             color: stream?.endTime
                 ? 'var(--fg-tertiary)'
-                : 'color-mix(in srgb, var(--accent-primary) 70%, var(--fg-secondary))'
+                : 'color-mix(in srgb, var(--accent-ai) 70%, var(--fg-secondary))'
         }
         : undefined;
     const assistantChunkCounterDividerStyle = isAssistant
@@ -757,22 +757,22 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
             className={`group px-1.5 ${isContinued ? 'pt-0 pb-0.5' : 'pt-1.5 pb-1.5'} ${isTool ? 'opacity-70' : ''}`}
             onContextMenu={handleContextMenu}
         >
-            <div className={`relative w-full rounded-xl border px-3 py-2.5 transition-colors ${
+            <div className={`relative w-full rounded-[calc(var(--panel-radius)*0.9)] border px-3 py-2.5 transition-colors ${
                 isUser
                     ? ''
                     : isAssistant
                         ? ''
-                        : 'border-zinc-800/70 bg-zinc-950/40'
+                        : 'border-(--accent-warning)/20 bg-[color-mix(in_srgb,var(--accent-warning)_8%,var(--bg-app))]'
             }`} style={isUser ? userCardStyle : assistantCardStyle}>
                 <div className="min-w-0 overflow-hidden space-y-2">
                     {!isContinued && (
                         <div className="flex flex-col gap-2">
                             <div className="flex min-h-6 items-center gap-2">
                                 <div className="opacity-90 transition-opacity group-hover:opacity-100">
-                                    {isUser && <div className="flex h-6 w-6 items-center justify-center rounded-lg border" style={userIconStyle}><User className="h-3 w-3 text-(--fg-secondary)" /></div>}
-                                    {isAssistant && <div className="flex h-6 w-6 items-center justify-center rounded-lg border shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]" style={assistantIconStyle}><Bot className="h-3 w-3 text-(--accent-primary)" /></div>}
-                                    {isSystem && <div className="flex h-6 w-6 items-center justify-center rounded-lg border border-yellow-500/20 bg-yellow-500/10"><Terminal className="h-3 w-3 text-yellow-500" /></div>}
-                                    {isTool && <div className="flex h-6 w-6 items-center justify-center rounded-lg border border-purple-500/20 bg-purple-500/10"><Terminal className="h-3 w-3 text-purple-400" /></div>}
+                                    {isUser && <div className="flex h-6 w-6 items-center justify-center rounded-[calc(var(--panel-radius)*0.55)] border" style={userIconStyle}><User className="h-3 w-3 text-(--fg-secondary)" /></div>}
+                                    {isAssistant && <div className="flex h-6 w-6 items-center justify-center rounded-[calc(var(--panel-radius)*0.55)] border shadow-(--shadow-sm)" style={assistantIconStyle}><Bot className="h-3 w-3 text-(--accent-ai)" /></div>}
+                                    {isSystem && <div className="flex h-6 w-6 items-center justify-center rounded-[calc(var(--panel-radius)*0.55)] border border-(--accent-warning)/20 bg-[color-mix(in_srgb,var(--accent-warning)_10%,transparent)]"><Terminal className="h-3 w-3 text-(--accent-warning)" /></div>}
+                                    {isTool && <div className="flex h-6 w-6 items-center justify-center rounded-[calc(var(--panel-radius)*0.55)] border border-(--accent-planning)/20 bg-[color-mix(in_srgb,var(--accent-planning)_10%,transparent)]"><Terminal className="h-3 w-3 text-(--accent-planning)" /></div>}
                                 </div>
                                 <span className={`rounded-md border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] ${
                                     isUser
@@ -780,24 +780,24 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                         : isAssistant
                                             ? 'text-(--fg-tertiary)'
                                             : isSystem
-                                                ? 'border-yellow-500/20 bg-yellow-500/10 text-yellow-300'
-                                                : 'border-purple-500/20 bg-purple-500/10 text-purple-300'
+                                                ? 'border-(--accent-warning)/20 bg-[color-mix(in_srgb,var(--accent-warning)_10%,transparent)] text-(--accent-warning)'
+                                                : 'border-(--accent-planning)/20 bg-[color-mix(in_srgb,var(--accent-planning)_10%,transparent)] text-(--accent-planning)'
                                 }`} style={isUser ? userLabelStyle : assistantLabelStyle}>
                                     {isUser ? t('chatMessage.you') : (isAssistant ? t('chatMessage.assistant') : message.role)}
                                 </span>
                                 {isActive && isAssistant && (
-                                    <span className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[9px] font-medium text-(--accent-primary)" style={assistantLiveStyle}>
+                                    <span className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[9px] font-medium text-(--accent-ai)" style={assistantLiveStyle}>
                                         <Loader2 className="h-2.5 w-2.5 animate-spin" />
                                         {t('chatMessage.live')}
                                     </span>
                                 )}
                                 {isTool && message.tool_call_id && (
-                                    <span className="rounded-md border border-zinc-800 bg-zinc-950 px-1.5 py-0.5 text-[9px] font-mono text-zinc-500">
+                                    <span className="rounded-md border border-(--border-subtle) bg-(--bg-app) px-1.5 py-0.5 text-[9px] font-mono text-(--fg-tertiary)">
                                         {message.tool_call_id.slice(0, 8)}
                                     </span>
                                 )}
                             </div>
-                            <div className="h-px w-[95%] self-center bg-zinc-800/80" style={isUser ? userDividerStyle : assistantDividerStyle} />
+                            <div className="h-px w-[95%] self-center bg-(--border-default)" style={isUser ? userDividerStyle : assistantDividerStyle} />
                         </div>
                     )}
 
@@ -813,7 +813,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                     rel="noreferrer"
                                     className="block max-w-[160px]"
                                 >
-                                    <div className="overflow-hidden rounded-md border border-zinc-800/60 bg-zinc-900/40">
+                                    <div className="overflow-hidden rounded-[calc(var(--panel-radius)*0.45)] border border-(--border-subtle) bg-(--bg-surface)/40">
                                         <img
                                             src={image.previewUrl}
                                             alt={image.name}
@@ -822,7 +822,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                         />
                                     </div>
                                     {image.name && (
-                                        <div className="mt-1 text-[10px] text-zinc-500 truncate">
+                                        <div className="mt-1 text-[10px] text-(--fg-tertiary) truncate">
                                             {image.name}
                                         </div>
                                     )}
@@ -906,7 +906,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 return (
                                     <div key={block.id || `text-${idx}`} className="mb-2 select-text">
                                         {previousSegment?.kind === 'activity_group' && (
-                                            <div className="mb-3 h-px w-full bg-zinc-800/80" style={assistantDividerStyle} />
+                                            <div className="mb-3 h-px w-full bg-(--border-default)" style={assistantDividerStyle} />
                                         )}
                                         {renderTextContent(block.content)}
                                     </div>
@@ -1056,7 +1056,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 )}
                                 {finalText && (
                                     <div className="select-text">
-                                        {hasToolCalls && <div className="mb-3 h-px w-full bg-zinc-800/80" style={assistantDividerStyle} />}
+                                        {hasToolCalls && <div className="mb-3 h-px w-full bg-(--border-default)" style={assistantDividerStyle} />}
                                         {renderTextContent(finalText)}
                                     </div>
                                 )}

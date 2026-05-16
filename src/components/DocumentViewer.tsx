@@ -78,14 +78,14 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-full bg-zinc-950">
+    <div className="flex flex-col h-full bg-(--bg-editor)">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-zinc-800 bg-zinc-900/50">
+      <div className="flex items-center justify-between px-4 py-2 border-b border-(--border-subtle) bg-(--bg-panel)/60">
         <div className="flex items-center gap-2">
-          <FileText className="w-4 h-4 text-emerald-500" />
-          <span className="text-sm font-medium text-zinc-200">{title}</span>
+          <FileText className="w-4 h-4 text-(--accent-mention)" />
+          <span className="text-sm font-medium text-(--fg-primary)">{title}</span>
           {isEphemeral && (
-            <span className="text-xs px-2 py-0.5 rounded bg-yellow-500/10 text-yellow-500 border border-yellow-500/20">
+            <span className="text-xs px-2 py-0.5 rounded-[calc(var(--panel-radius)*0.35)] bg-[color-mix(in_srgb,var(--accent-warning)_10%,transparent)] text-(--accent-warning) border border-(--accent-warning)/20">
               Unsaved
             </span>
           )}
@@ -95,7 +95,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
           {canImplementPlan && (
             <button
               onClick={() => onImplementPlan?.(trimmedContent)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 border border-emerald-500/25 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-[calc(var(--panel-radius)*0.45)] bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)] text-(--accent-mention) hover:bg-[color-mix(in_srgb,var(--accent-mention)_18%,transparent)] border border-(--accent-mention)/25 transition-colors"
             >
               {t('chat.implement')}
             </button>
@@ -104,7 +104,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
             <button
               onClick={handleSave}
               disabled={isSaving}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/20 transition-colors disabled:opacity-50"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-[calc(var(--panel-radius)*0.45)] bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)] text-(--accent-mention) hover:bg-[color-mix(in_srgb,var(--accent-mention)_18%,transparent)] border border-(--accent-mention)/20 transition-colors disabled:opacity-50"
             >
               <Save className="w-3.5 h-3.5" />
               {isSaving ? t('statusBar.saving') : t('common.save')}
@@ -112,7 +112,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
           )}
           <button
             onClick={handleClose}
-            className="p-1.5 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+            className="p-1.5 rounded-[calc(var(--panel-radius)*0.4)] hover:bg-(--bg-surface-hover) text-(--fg-tertiary) hover:text-(--fg-primary) transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
@@ -123,25 +123,25 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
       <div className="flex-1 overflow-auto">
         <div className="max-w-4xl mx-auto px-6 py-8">
           <div className="prose prose-invert prose-lg max-w-none
-            prose-headings:text-zinc-100 prose-headings:font-semibold prose-headings:tracking-tight
+            prose-headings:text-(--fg-bright) prose-headings:font-semibold prose-headings:tracking-tight
             prose-h1:text-3xl prose-h1:mb-4 prose-h1:mt-0
             prose-h2:text-2xl prose-h2:mb-3 prose-h2:mt-8
             prose-h3:text-xl prose-h3:mb-2 prose-h3:mt-6
-            prose-p:text-zinc-300 prose-p:leading-relaxed prose-p:mb-4
-            prose-strong:text-zinc-100 prose-strong:font-semibold
-            prose-a:text-emerald-400 prose-a:no-underline hover:prose-a:underline
-            prose-code:text-emerald-400 prose-code:bg-zinc-900 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-sm prose-code:before:content-[''] prose-code:after:content-['']
-            prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-800 prose-pre:rounded-lg prose-pre:shadow-xl
-            prose-ul:text-zinc-300 prose-ul:my-4
-            prose-ol:text-zinc-300 prose-ol:my-4
-            prose-li:text-zinc-300 prose-li:leading-relaxed prose-li:my-1
-            prose-blockquote:border-l-emerald-500 prose-blockquote:text-zinc-400 prose-blockquote:italic
-            prose-hr:border-zinc-800 prose-hr:my-8
+            prose-p:text-(--fg-secondary) prose-p:leading-relaxed prose-p:mb-4
+            prose-strong:text-(--fg-bright) prose-strong:font-semibold
+            prose-a:text-(--accent-mention) prose-a:no-underline hover:prose-a:underline
+            prose-code:text-(--accent-mention) prose-code:bg-(--bg-surface) prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded-[calc(var(--panel-radius)*0.35)] prose-code:text-sm prose-code:before:content-[''] prose-code:after:content-['']
+            prose-pre:bg-(--bg-surface) prose-pre:border prose-pre:border-(--border-subtle) prose-pre:rounded-[calc(var(--panel-radius)*0.75)] prose-pre:shadow-(--shadow-lg)
+            prose-ul:text-(--fg-secondary) prose-ul:my-4
+            prose-ol:text-(--fg-secondary) prose-ol:my-4
+            prose-li:text-(--fg-secondary) prose-li:leading-relaxed prose-li:my-1
+            prose-blockquote:border-l-(--accent-mention) prose-blockquote:text-(--fg-tertiary) prose-blockquote:italic
+            prose-hr:border-(--border-subtle) prose-hr:my-8
             prose-table:border-collapse prose-table:my-6
-            prose-thead:border-b-2 prose-thead:border-zinc-700
-            prose-th:text-zinc-200 prose-th:font-semibold prose-th:text-left prose-th:px-4 prose-th:py-3 prose-th:bg-zinc-900/50
-            prose-td:text-zinc-300 prose-td:px-4 prose-td:py-3 prose-td:border-t prose-td:border-zinc-800
-            prose-tr:transition-colors hover:prose-tr:bg-zinc-900/30">
+            prose-thead:border-b-2 prose-thead:border-(--border-default)
+            prose-th:text-(--fg-primary) prose-th:font-semibold prose-th:text-left prose-th:px-4 prose-th:py-3 prose-th:bg-(--bg-panel)/50
+            prose-td:text-(--fg-secondary) prose-td:px-4 prose-td:py-3 prose-td:border-t prose-td:border-(--border-subtle)
+            prose-tr:transition-colors hover:prose-tr:bg-(--bg-surface)/30">
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               components={{
