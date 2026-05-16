@@ -833,7 +833,6 @@ const AppLayoutInner: React.FC = () => {
                         >
                             {!disableEditorSurface && activeTab?.type === 'file' && (
                                 <div
-                                    key={activeTab.id}
                                     className="absolute inset-x-0 top-0 z-10"
                                     style={{ bottom: editorViewportBottomInset }}
                                 >

@@ -198,6 +198,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     const loadingRef = useRef(loading);
     const onContentStateChangeRef = useRef(onContentStateChange);
     const lastPropagatedDirtyRef = useRef(isDirty);
+    const previousActiveFileRef = useRef(activeFile);
 
     const pathsMatch = (a: string, b: string): boolean => {
         if (a === b) return true;
@@ -303,6 +304,9 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     }, [flushPendingContentState]);
 
     useEffect(() => {
+        const isFileSwitch = activeFile !== previousActiveFileRef.current;
+        previousActiveFileRef.current = activeFile;
+
         if (!activeFile) {
             setContent('');
             baseContentRef.current = '';
@@ -343,6 +347,21 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             if (savedContent != null) {
                 baseContentRef.current = savedContent;
             }
+            awaitingInitialSyncRef.current = false;
+            return;
+        }
+
+        if (isDirty) {
+            if (savedContent != null) {
+                baseContentRef.current = savedContent;
+            }
+
+            if (isFileSwitch && savedContent != null) {
+                setContent(savedContent);
+                liveContentRef.current = savedContent;
+                externalContentVersionRef.current += 1;
+            }
+
             awaitingInitialSyncRef.current = false;
             return;
         }

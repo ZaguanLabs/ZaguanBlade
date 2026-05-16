@@ -34,6 +34,14 @@ function detectPathTrigger(text: string, cursor: number): { query: string; start
     };
 }
 
+function looksLikeImageFile(file: File): boolean {
+    return file.type.startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(file.name) || file.type === '';
+}
+
+function dedupeFileKey(file: File): string {
+    return `${file.name}:${file.size}:${file.lastModified}:${file.type}`;
+}
+
 export const ComposerTextarea = forwardRef<ComposerTextareaHandle, ComposerTextareaProps>(({
     text,
     setText,
@@ -67,6 +75,55 @@ export const ComposerTextarea = forwardRef<ComposerTextareaHandle, ComposerTexta
         resize();
     }, [resize, text]);
 
+    const handlePaste = useCallback(async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+        const filesFromItems = Array.from(event.clipboardData.items)
+            .filter((item) => item.kind === 'file')
+            .map((item) => item.getAsFile())
+            .filter((file): file is File => !!file);
+        const filesFromClipboard = Array.from(event.clipboardData.files);
+        const fileMap = new Map<string, File>();
+
+        for (const file of [...filesFromItems, ...filesFromClipboard]) {
+            if (looksLikeImageFile(file)) {
+                fileMap.set(dedupeFileKey(file), file);
+            }
+        }
+
+        if (fileMap.size > 0) {
+            event.preventDefault();
+            onPasteImages(Array.from(fileMap.values()));
+            return;
+        }
+
+        if (!navigator.clipboard?.read) {
+            return;
+        }
+
+        try {
+            const clipboardItems = await navigator.clipboard.read();
+            const clipboardFiles: File[] = [];
+
+            for (const item of clipboardItems) {
+                const imageTypes = item.types.filter((type) => type.startsWith('image/'));
+                for (const imageType of imageTypes) {
+                    const blob = await item.getType(imageType);
+                    const ext = imageType.split('/')[1] || 'png';
+                    clipboardFiles.push(new File([blob], `clipboard-image.${ext}`, {
+                        type: imageType,
+                        lastModified: Date.now(),
+                    }));
+                }
+            }
+
+            if (clipboardFiles.length > 0) {
+                event.preventDefault();
+                onPasteImages(clipboardFiles);
+            }
+        } catch {
+            return;
+        }
+    }, [onPasteImages]);
+
     return (
         <textarea
             ref={textareaRef}
@@ -77,13 +134,7 @@ export const ComposerTextarea = forwardRef<ComposerTextareaHandle, ComposerTexta
                 const trigger = detectPathTrigger(nextText, event.currentTarget.selectionStart);
                 onTriggerChange(trigger?.query ?? null);
             }}
-            onPaste={(event) => {
-                const files = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(file.name));
-                if (files.length > 0) {
-                    event.preventDefault();
-                    onPasteImages(files);
-                }
-            }}
+            onPaste={handlePaste}
             onKeyDown={(event) => {
                 if (showSuggestions && suggestions.length > 0) {
                     if (event.key === 'Enter' || event.key === 'Tab') {
