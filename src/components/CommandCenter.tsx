@@ -769,7 +769,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                                 onClick={() => setChatMode(option.value)}
                                                 disabled={disabled}
                                                 title={option.description}
-                                                className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[10px] font-semibold transition-colors ${isActive
+                                                className={`inline-flex items-center gap-1.5 rounded-[calc(var(--panel-radius)*0.35)] px-2 py-1 text-[10px] font-semibold transition-colors ${isActive
                                                     ? chatMode === 'planning'
                                                         ? 'bg-[color-mix(in_srgb,var(--accent-planning)_20%,transparent)] text-(--fg-bright)'
                                                         : 'bg-[color-mix(in_srgb,var(--accent-ai)_16%,transparent)] text-(--fg-primary)'

@@ -152,19 +152,19 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
                 style={headerStyle}
             >
                 <div className="flex items-center gap-2 flex-1 min-w-0">
-                    <Brain className={`h-3 w-3 flex-shrink-0 ${isStreaming ? 'animate-pulse text-(--accent-ai)' : 'text-(--fg-tertiary)'}`} />
-                    <span className={`flex-shrink-0 font-mono text-[9px] uppercase tracking-[0.16em] ${isStreaming ? 'text-(--accent-ai)' : 'text-(--fg-tertiary)'
+                    <Brain className={`h-3 w-3 shrink-0 ${isStreaming ? 'animate-pulse text-(--accent-ai)' : 'text-(--fg-tertiary)'}`} />
+                    <span className={`shrink-0 font-mono text-[9px] uppercase tracking-[0.16em] ${isStreaming ? 'text-(--accent-ai)' : 'text-(--fg-tertiary)'
                         }`}>
                         {t('chatMessage.reasoning')}
                     </span>
                 </div>
                 {isStreaming && (
-                    <Loader2 className="mr-1 h-2.5 w-2.5 flex-shrink-0 animate-spin text-(--accent-ai)" />
+                    <Loader2 className="mr-1 h-2.5 w-2.5 shrink-0 animate-spin text-(--accent-ai)" />
                 )}
                 {isExpanded ? (
-                    <ChevronDown className="h-3 w-3 flex-shrink-0 text-(--fg-secondary)" />
+                    <ChevronDown className="h-3 w-3 shrink-0 text-(--fg-secondary)" />
                 ) : (
-                    <ChevronRight className="h-3 w-3 flex-shrink-0 text-(--fg-secondary)" />
+                    <ChevronRight className="h-3 w-3 shrink-0 text-(--fg-secondary)" />
                 )}
             </button>
 
@@ -214,21 +214,21 @@ const PlanSummaryDisplay: React.FC<{ todos: import('../types/events').TodoItem[]
                 onClick={() => setIsExpanded(!isExpanded)}
                 className="flex items-center gap-2 px-3 py-1.5 rounded-[calc(var(--panel-radius)*0.45)] bg-[color-mix(in_srgb,var(--accent-mention)_5%,transparent)] border border-(--accent-mention)/20 hover:bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)] transition-colors text-left w-full"
             >
-                <Check className="w-3.5 h-3.5 text-(--accent-mention) flex-shrink-0" />
+                <Check className="w-3.5 h-3.5 text-(--accent-mention) shrink-0" />
                 <span className="text-[11px] text-(--accent-mention) font-medium">
                     {t('chatMessage.planCompleted', { completed: completedCount, total: todos.length })}
                 </span>
                 {isExpanded ? (
-                    <ChevronDown className="w-3 h-3 text-(--fg-tertiary) ml-auto flex-shrink-0" />
+                    <ChevronDown className="w-3 h-3 text-(--fg-tertiary) ml-auto shrink-0" />
                 ) : (
-                    <ChevronRight className="w-3 h-3 text-(--fg-tertiary) ml-auto flex-shrink-0" />
+                    <ChevronRight className="w-3 h-3 text-(--fg-tertiary) ml-auto shrink-0" />
                 )}
             </button>
             {isExpanded && (
                 <div className="mt-1 px-3 py-2 rounded-[calc(var(--panel-radius)*0.45)] bg-[color-mix(in_srgb,var(--accent-mention)_5%,transparent)] border border-(--accent-mention)/10 space-y-0.5">
                     {todos.map((todo, idx) => (
                         <div key={idx} className="flex items-center gap-2 text-[11px]">
-                            <Check className="w-3 h-3 text-(--accent-mention)/60 flex-shrink-0" />
+                            <Check className="w-3 h-3 text-(--accent-mention)/60 shrink-0" />
                             <span className="text-(--fg-tertiary) line-through">{todo.content}</span>
                         </div>
                     ))}
@@ -358,7 +358,7 @@ const CompactWorkLog: React.FC<{
             {(isExpanded || entries.length > 3) && (
                 <div className="mt-1.5 space-y-1">
                     {visibleEntries.map((entry) => (
-                        <div key={entry.id} className="flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5">
+                        <div key={entry.id} className="flex min-w-0 items-center gap-2 rounded-[calc(var(--panel-radius)*0.35)] px-1 py-0.5">
                             <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${compactWorkEntryToneClass(entry)}`} />
                             <span className="shrink-0 text-[10px] font-medium text-(--fg-secondary)">
                                 {entry.label}
@@ -380,7 +380,7 @@ const CompactWorkLog: React.FC<{
             <div className="mt-1.5 flex items-center justify-end">
                 <button
                     type="button"
-                    className="rounded-md px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-(--fg-tertiary) transition-colors hover:text-(--fg-secondary) disabled:cursor-default disabled:opacity-60"
+                    className="rounded-[calc(var(--panel-radius)*0.35)] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-(--fg-tertiary) transition-colors hover:text-(--fg-secondary) disabled:cursor-default disabled:opacity-60"
                     onClick={onToggleDetails}
                     disabled={detailsLockedOpen}
                 >
@@ -774,7 +774,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                     {isSystem && <div className="flex h-6 w-6 items-center justify-center rounded-[calc(var(--panel-radius)*0.55)] border border-(--accent-warning)/20 bg-[color-mix(in_srgb,var(--accent-warning)_10%,transparent)]"><Terminal className="h-3 w-3 text-(--accent-warning)" /></div>}
                                     {isTool && <div className="flex h-6 w-6 items-center justify-center rounded-[calc(var(--panel-radius)*0.55)] border border-(--accent-planning)/20 bg-[color-mix(in_srgb,var(--accent-planning)_10%,transparent)]"><Terminal className="h-3 w-3 text-(--accent-planning)" /></div>}
                                 </div>
-                                <span className={`rounded-md border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] ${
+                                <span className={`rounded-[calc(var(--panel-radius)*0.35)] border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] ${
                                     isUser
                                         ? 'text-(--fg-tertiary)'
                                         : isAssistant
@@ -786,13 +786,13 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                     {isUser ? t('chatMessage.you') : (isAssistant ? t('chatMessage.assistant') : message.role)}
                                 </span>
                                 {isActive && isAssistant && (
-                                    <span className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[9px] font-medium text-(--accent-ai)" style={assistantLiveStyle}>
+                                    <span className="inline-flex items-center gap-1 rounded-[calc(var(--panel-radius)*0.35)] border px-1.5 py-0.5 text-[9px] font-medium text-(--accent-ai)" style={assistantLiveStyle}>
                                         <Loader2 className="h-2.5 w-2.5 animate-spin" />
                                         {t('chatMessage.live')}
                                     </span>
                                 )}
                                 {isTool && message.tool_call_id && (
-                                    <span className="rounded-md border border-(--border-subtle) bg-(--bg-app) px-1.5 py-0.5 text-[9px] font-mono text-(--fg-tertiary)">
+                                    <span className="rounded-[calc(var(--panel-radius)*0.35)] border border-(--border-subtle) bg-(--bg-app) px-1.5 py-0.5 text-[9px] font-mono text-(--fg-tertiary)">
                                         {message.tool_call_id.slice(0, 8)}
                                     </span>
                                 )}
