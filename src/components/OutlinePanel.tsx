@@ -5,7 +5,7 @@ import { StructureNode } from '../types/zlp';
 import { ZLPService } from '../services/zlp';
 import { ChevronRight, Box, FunctionSquare, Variable, Tag, FileText, Layout, Braces } from 'lucide-react';
 import { useEditor } from '../contexts/EditorContext';
-import { useSmoothWheelScroll } from '../hooks/useSmoothWheelScroll';
+import { ScrollArea } from './ui/ScrollArea';
 
 interface OutlinePanelProps {
     filePath: string | null;
@@ -112,7 +112,6 @@ export const OutlinePanel: React.FC<OutlinePanelProps> = ({ filePath, onNavigate
     const { t } = useTranslation();
     const [structure, setStructure] = useState<StructureNode[]>([]);
     const [loading, setLoading] = useState(false);
-    const handleOutlineWheel = useSmoothWheelScroll<HTMLDivElement>();
 
     // We utilize the editorState simply to trigger updates if we want to hook into content changes later,
     // but primarily we refetch when filePath changes.
@@ -174,7 +173,7 @@ export const OutlinePanel: React.FC<OutlinePanelProps> = ({ filePath, onNavigate
     }
 
     return (
-        <div className="flex flex-col h-full bg-[var(--bg-panel)] overflow-y-auto pt-2 pb-4 scrollbar-thin scrollbar-thumb-zinc-800" onWheel={handleOutlineWheel}>
+        <ScrollArea className="flex flex-col h-full bg-[var(--bg-panel)] pt-2 pb-4 scrollbar-thin scrollbar-thumb-zinc-800">
             {structure.map((node, idx) => (
                 <OutlineItem
                     key={`${node.name}-${idx}`}
@@ -184,6 +183,6 @@ export const OutlinePanel: React.FC<OutlinePanelProps> = ({ filePath, onNavigate
                     filePath={filePath}
                 />
             ))}
-        </div>
+        </ScrollArea>
     );
 };

@@ -4,7 +4,7 @@ import { X, ArrowRight, ArrowLeft, Loader2, Network } from 'lucide-react';
 import { ZLPService } from '../services/zlp';
 import { ZLPGraphResponse, CallGraphNode, CallGraphEdge } from '../types/zlp';
 import { formatUnknownBackendError } from '../utils/backendErrors';
-import { useSmoothWheelScroll } from '../hooks/useSmoothWheelScroll';
+import { ScrollArea } from './ui/ScrollArea';
 
 interface GraphInspectorProps {
     symbolId: string;
@@ -25,7 +25,6 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
     const [graph, setGraph] = useState<ZLPGraphResponse | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const handleGraphContentWheel = useSmoothWheelScroll<HTMLDivElement>();
 
     useEffect(() => {
         let isMounted = true;
@@ -122,7 +121,7 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
             </div>
 
             {/* Content */}
-            <div className="flex-1 overflow-y-auto p-4 custom-scrollbar" onWheel={handleGraphContentWheel}>
+            <ScrollArea className="flex-1 p-4 custom-scrollbar">
                 {loading ? (
                     <div className="flex items-center justify-center py-10">
                         <Loader2 className="w-6 h-6 animate-spin text-(--accent-ai)" />
@@ -150,7 +149,7 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
                         )}
                     </>
                 ) : null}
-            </div>
+            </ScrollArea>
         </div>
     );
 };
