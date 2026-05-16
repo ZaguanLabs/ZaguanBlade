@@ -5,7 +5,7 @@ import { MarkdownRenderer } from './MarkdownRenderer';
 import { Eye, Edit3 } from 'lucide-react';
 import { useUncommittedChanges } from '../hooks/useUncommittedChanges';
 import { FileChangeBar } from './editor/FileChangeBar';
-import { useSmoothWheelScroll } from '../hooks/useSmoothWheelScroll';
+import { ScrollArea } from './ui/ScrollArea';
 
 interface MarkdownEditorProps {
     content: string;
@@ -25,7 +25,6 @@ export const MarkdownEditor = forwardRef<CodeEditorHandle, MarkdownEditorProps>(
     const [previewContent, setPreviewContent] = useState(content);
     const previewContentRef = React.useRef(content);
     const editorRef = React.useRef<CodeEditorHandle>(null);
-    const handlePreviewWheel = useSmoothWheelScroll<HTMLDivElement>();
 
     const { getChangeForFile, acceptFile, rejectFile, refresh } = useUncommittedChanges();
     const change = filename ? getChangeForFile(filename) : undefined;
@@ -143,12 +142,12 @@ export const MarkdownEditor = forwardRef<CodeEditorHandle, MarkdownEditorProps>(
                         )}
                     </>
                 ) : (
-                    <div className="h-full overflow-y-auto px-8 py-6 pb-[35vh] bg-(--editor-bg)" style={{ scrollPaddingBottom: '35vh' }} onWheel={handlePreviewWheel}>
+                    <ScrollArea className="h-full px-8 py-6 pb-[35vh] bg-(--editor-bg)" style={{ scrollPaddingBottom: '35vh' }}>
                         <div className="max-w-4xl mx-auto">
                             <MarkdownRenderer content={previewContent} />
                         </div>
                         <div aria-hidden="true" className="h-[35vh]" />
-                    </div>
+                    </ScrollArea>
                 )}
             </div>
         </div>

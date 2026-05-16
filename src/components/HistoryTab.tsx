@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Clock, MessageSquare, Loader2 } from 'lucide-react';
 import { useHistory } from '../hooks/useHistory';
 import type { ConversationSummary } from '../types/history';
-import { useSmoothWheelScroll } from '../hooks/useSmoothWheelScroll';
+import { ScrollArea } from './ui/ScrollArea';
 
 interface HistoryTabProps {
     projectId: string;
@@ -13,7 +13,6 @@ interface HistoryTabProps {
 export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConversation }) => {
     const { t } = useTranslation();
     const { conversations, loading, error, fetchConversations } = useHistory();
-    const handleHistoryWheel = useSmoothWheelScroll<HTMLDivElement>();
 
     const getConversationTitle = (conversation: ConversationSummary) => {
         const title = (conversation.title || '').trim();
@@ -142,7 +141,7 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
     ] as const;
 
     return (
-        <div className="flex-1 overflow-y-auto bg-(--bg-app)" onWheel={handleHistoryWheel}>
+        <ScrollArea className="flex-1 bg-(--bg-app)">
             <div className="mx-auto max-w-4xl px-4 py-4">
                 <div className="mb-4 rounded-[calc(var(--panel-radius)*1.1)] border border-(--border-subtle) bg-(--bg-surface)/70 px-5 py-4 shadow-(--shadow-md)">
                     <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-(--fg-tertiary)">
@@ -194,6 +193,6 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
                     })}
                 </div>
             </div>
-        </div>
+        </ScrollArea>
     );
 };
