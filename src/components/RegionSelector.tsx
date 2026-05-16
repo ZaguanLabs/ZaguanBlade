@@ -13,6 +13,8 @@ interface RegionSelectorProps {
 
 type Point = { x: number; y: number };
 
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
 export const RegionSelector: React.FC<RegionSelectorProps> = ({
     isOpen,
     dataUrl,
@@ -42,18 +44,14 @@ export const RegionSelector: React.FC<RegionSelectorProps> = ({
         setImgSize({ w: img.clientWidth, h: img.clientHeight });
     }, []);
 
-    if (!isOpen) return null;
-
-    const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
-
-    const getRelativePoint = (clientX: number, clientY: number): Point | null => {
+    const getRelativePoint = useCallback((clientX: number, clientY: number): Point | null => {
         const rect = wrapperRef.current?.getBoundingClientRect();
         if (!rect) return null;
         return {
             x: clamp(clientX - rect.left, 0, rect.width),
             y: clamp(clientY - rect.top, 0, rect.height),
         };
-    };
+    }, []);
 
     const handleMouseDown = (event: React.MouseEvent) => {
         event.preventDefault();
@@ -84,7 +82,9 @@ export const RegionSelector: React.FC<RegionSelectorProps> = ({
             window.removeEventListener('mousemove', handleGlobalMouseMove);
             window.removeEventListener('mouseup', handleGlobalMouseUp);
         };
-    }, [isDragging]);
+    }, [getRelativePoint, isDragging]);
+
+    if (!isOpen) return null;
 
     const selection = dragStart && dragEnd
         ? {
@@ -108,21 +108,21 @@ export const RegionSelector: React.FC<RegionSelectorProps> = ({
     };
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80">
-            <div className="relative w-full h-full max-w-6xl max-h-[90vh] mx-6 bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded-xl shadow-2xl overflow-hidden flex flex-col">
-                <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-subtle)] shrink-0">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-(--bg-app)/80">
+            <div className="relative w-full h-full max-w-6xl max-h-[90vh] mx-6 bg-(--bg-surface) border border-(--border-focus) rounded-(--panel-radius) shadow-(--shadow-xl) overflow-hidden flex flex-col">
+                <div className="flex items-center justify-between px-4 py-3 border-b border-(--border-subtle) shrink-0">
                     <div>
-                        <div className="text-sm font-semibold text-[var(--fg-primary)]">{t('screenshot.regionPickerTitle')}</div>
-                        <div className="text-xs text-[var(--fg-tertiary)]">{t('screenshot.dragToSelectArea')}</div>
+                        <div className="text-sm font-semibold text-(--fg-primary)">{t('screenshot.regionPickerTitle')}</div>
+                        <div className="text-xs text-(--fg-tertiary)">{t('screenshot.dragToSelectArea')}</div>
                     </div>
                     <button
                         onClick={onCancel}
-                        className="p-1 text-[var(--fg-tertiary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] rounded transition"
+                        className="p-1 text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover) rounded-[calc(var(--panel-radius)*0.35)] transition"
                     >
                         <X className="w-4 h-4" />
                     </button>
                 </div>
-                <div className="flex-1 flex items-center justify-center bg-black overflow-hidden min-h-0">
+                <div className="flex-1 flex items-center justify-center bg-(--bg-app) overflow-hidden min-h-0">
                     <div
                         ref={wrapperRef}
                         className="relative inline-block select-none"
@@ -138,29 +138,29 @@ export const RegionSelector: React.FC<RegionSelectorProps> = ({
                         />
                         {selection && selection.width > 1 && selection.height > 1 && (
                             <div
-                                className="absolute border-2 border-[var(--accent-primary)] rounded-sm pointer-events-none"
+                                className="absolute border-2 border-(--accent-ai) rounded-[calc(var(--panel-radius)*0.25)] pointer-events-none"
                                 style={{
                                     left: `${selection.left}px`,
                                     top: `${selection.top}px`,
                                     width: `${selection.width}px`,
                                     height: `${selection.height}px`,
-                                    backgroundColor: 'rgba(59, 130, 246, 0.15)',
+                                    backgroundColor: 'color-mix(in srgb, var(--accent-ai) 15%, transparent)',
                                 }}
                             />
                         )}
                     </div>
                 </div>
-                <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-[var(--border-subtle)] shrink-0">
+                <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-(--border-subtle) shrink-0">
                     <button
                         onClick={onCancel}
-                        className="px-3 py-1.5 text-xs font-medium text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] rounded transition"
+                        className="px-3 py-1.5 text-xs font-medium text-(--fg-secondary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover) rounded-[calc(var(--panel-radius)*0.35)] transition"
                     >
                         {t('common.cancel')}
                     </button>
                     <button
                         onClick={handleConfirm}
                         disabled={!selection || selection.width < 5 || selection.height < 5}
-                        className="px-3 py-1.5 text-xs font-medium bg-[var(--accent-primary)] text-white rounded transition disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
+                        className="px-3 py-1.5 text-xs font-medium bg-(--accent-ai) text-(--fg-bright) rounded-[calc(var(--panel-radius)*0.35)] transition disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
                     >
                         <Check className="w-3.5 h-3.5" />
                         {t('common.capture')}
