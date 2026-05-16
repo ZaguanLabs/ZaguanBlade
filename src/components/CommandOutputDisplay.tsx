@@ -70,7 +70,7 @@ export const CommandOutputDisplay: React.FC<CommandOutputDisplayProps> = ({
 
     return (
         <div
-            className="my-3 rounded-lg overflow-hidden border"
+            className="my-3 rounded-[calc(var(--panel-radius)*0.75)] overflow-hidden border"
             style={{
                 backgroundColor: 'color-mix(in srgb, var(--bg-surface) 90%, var(--bg-app))',
                 borderColor: 'color-mix(in srgb, var(--border-default) 88%, transparent)',
@@ -82,11 +82,11 @@ export const CommandOutputDisplay: React.FC<CommandOutputDisplayProps> = ({
                 className="w-full flex items-center gap-3 px-4 py-3 transition-colors text-left"
                 style={{ backgroundColor: 'color-mix(in srgb, var(--bg-panel) 84%, var(--bg-app))' }}
             >
-                <div className={`p-1.5 rounded ${isSuccess ? 'bg-emerald-500/10' : 'bg-red-500/10'}`}>
+                <div className={`p-1.5 rounded-[calc(var(--panel-radius)*0.35)] ${isSuccess ? 'bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)]' : 'bg-[color-mix(in_srgb,var(--state-danger)_10%,transparent)]'}`}>
                     {isSuccess ? (
-                        <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                        <CheckCircle2 className="w-4 h-4 text-(--accent-mention)" />
                     ) : (
-                        <XCircle className="w-4 h-4 text-red-500" />
+                        <XCircle className="w-4 h-4 text-(--state-danger)" />
                     )}
                 </div>
 
@@ -111,9 +111,9 @@ export const CommandOutputDisplay: React.FC<CommandOutputDisplayProps> = ({
                             <span>{duration}ms</span>
                         </div>
                     )}
-                    <div className={`px-2 py-0.5 rounded text-xs font-medium ${isSuccess
-                        ? 'bg-emerald-500/10 text-emerald-400'
-                        : 'bg-red-500/10 text-red-400'
+                    <div className={`px-2 py-0.5 rounded-[calc(var(--panel-radius)*0.35)] text-xs font-medium ${isSuccess
+                        ? 'bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)] text-(--accent-mention)'
+                        : 'bg-[color-mix(in_srgb,var(--state-danger)_10%,transparent)] text-(--state-danger)'
                         }`}>
                         Exit {exitCode}
                     </div>
