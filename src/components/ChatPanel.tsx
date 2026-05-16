@@ -903,7 +903,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
             {activeTab === 'chat' ? (
                 <div
                     ref={scrollContainerRef}
-                    className="relative flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent"
+                    className="relative flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-(--bg-surface-hover) scrollbar-track-transparent"
                     onScroll={handleScroll}
                     onWheel={handleSmoothWheel}
                 >

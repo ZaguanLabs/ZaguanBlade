@@ -137,7 +137,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
 
     return (
         <div className="relative min-h-0 flex-1">
-            <div ref={scrollRef} onScroll={handleScroll} onWheel={handleSmoothWheel} className="h-full overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent">
+            <div ref={scrollRef} onScroll={handleScroll} onWheel={handleSmoothWheel} className="h-full overflow-y-auto scrollbar-thin scrollbar-thumb-(--bg-surface-hover) scrollbar-track-transparent">
                 <div className="mx-auto flex w-full max-w-none flex-col gap-0.5 px-0.5 py-4 md:px-1">
                     {messages.length === 0 && (
                         <div className="mx-4 mt-10 rounded-(--panel-radius) border border-(--border-subtle) bg-(--bg-surface)/70 px-6 py-8 text-center shadow-(--panel-shadow)">

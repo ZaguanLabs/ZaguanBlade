@@ -96,7 +96,7 @@ export const ProtocolExplorer: React.FC = () => {
             </div>
 
             {/* Log Stream */}
-            <div className="flex-1 overflow-y-auto p-2 space-y-2 scrollbar-thin scrollbar-thumb-zinc-800">
+            <div className="flex-1 overflow-y-auto p-2 space-y-2 scrollbar-thin scrollbar-thumb-(--bg-surface-hover)">
                 {logs.length === 0 && (
                     <div className="text-center text-zinc-600 mt-20 italic">
                         Waiting for events...
