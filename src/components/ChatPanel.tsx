@@ -726,8 +726,8 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         }
 
         element.style.transition = 'box-shadow 180ms ease, background-color 180ms ease';
-        element.style.boxShadow = '0 0 0 1px color-mix(in srgb, var(--accent-primary) 42%, transparent)';
-        element.style.backgroundColor = 'color-mix(in srgb, var(--accent-primary) 8%, transparent)';
+        element.style.boxShadow = '0 0 0 1px color-mix(in srgb, var(--accent-ai) 42%, transparent)';
+        element.style.backgroundColor = 'color-mix(in srgb, var(--accent-ai) 8%, transparent)';
 
         const timerId = window.setTimeout(() => {
             element.style.boxShadow = '';

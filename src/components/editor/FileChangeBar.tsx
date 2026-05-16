@@ -35,13 +35,13 @@ export const FileChangeBar: React.FC<FileChangeBarProps> = ({
       {/* Diff stats */}
       <div className="flex items-center gap-1.5 text-[11px]">
         {change.added_lines > 0 && (
-          <span className="flex items-center gap-0.5" style={{ color: 'var(--accent-green)' }}>
+          <span className="flex items-center gap-0.5" style={{ color: 'var(--accent-mention)' }}>
             <Plus className="w-3 h-3" />
             {change.added_lines}
           </span>
         )}
         {change.removed_lines > 0 && (
-          <span className="flex items-center gap-0.5" style={{ color: 'var(--accent-error)' }}>
+          <span className="flex items-center gap-0.5" style={{ color: 'var(--state-danger)' }}>
             <Minus className="w-3 h-3" />
             {change.removed_lines}
           </span>
@@ -56,7 +56,7 @@ export const FileChangeBar: React.FC<FileChangeBarProps> = ({
         onClick={onAccept}
         disabled={disabled}
         className="flex items-center gap-1 text-[11px] font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-        style={{ color: 'var(--accent-green)' }}
+        style={{ color: 'var(--accent-mention)' }}
         title="Accept changes (keep on disk)"
       >
         <Check className="w-3.5 h-3.5" />
@@ -68,7 +68,7 @@ export const FileChangeBar: React.FC<FileChangeBarProps> = ({
         onClick={onReject}
         disabled={disabled}
         className="flex items-center gap-1 text-[11px] font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-        style={{ color: 'var(--accent-error)' }}
+        style={{ color: 'var(--state-danger)' }}
         title="Reject changes (revert to original)"
       >
         <X className="w-3.5 h-3.5" />

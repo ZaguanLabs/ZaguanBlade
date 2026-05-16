@@ -611,7 +611,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
         ? {
             backgroundColor: 'color-mix(in srgb, var(--bg-panel) 80%, var(--bg-app))',
             borderColor: 'color-mix(in srgb, var(--border-default) 88%, transparent)',
-            boxShadow: '0 14px 36px rgba(0, 0, 0, 0.18)'
+            boxShadow: 'var(--shadow-lg)'
         }
         : undefined;
     const userCardStyle = isUser
