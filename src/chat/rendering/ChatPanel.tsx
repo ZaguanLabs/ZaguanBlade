@@ -11,7 +11,6 @@ import { useCommandExecution } from '../../hooks/useCommandExecution';
 import { ChatHeader } from './ChatHeader';
 import { ChatViewport } from './ChatViewport';
 import { QueueStrip } from './QueueStrip';
-import { RunStatusDock } from './RunStatusDock';
 import { TaskStrip } from './TaskStrip';
 
 interface ResearchProgress {
@@ -149,12 +148,6 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
             />
             <TaskStrip todos={activeTodos} />
             <QueueStrip requests={queuedRequests} onEditRequest={handleEditQueuedRequest} onDeleteRequest={deleteQueuedRequest} />
-            <RunStatusDock
-                loading={loading}
-                waitingForApproval={waitingForApproval}
-                error={error}
-                toolActivity={toolActivity}
-            />
             <Composer
                 onSend={sendMessage}
                 onStop={stopGeneration}

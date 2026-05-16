@@ -18,7 +18,6 @@ import { ProgressIndicator } from './ProgressIndicator';
 import { GlobalChangeActions } from './editor/GlobalChangeActions';
 import { TaskPanel } from './TaskPanel';
 import { QueuePanel } from './QueuePanel';
-import { AgentRunStatusBar } from './AgentRunStatusBar';
 import type { UncommittedChange } from '../types/uncommitted';
 import { computeStableChatRows, deriveChatRows, estimateChatRowHeight, findFirstUnvirtualizedChatRowIndex, type StableChatRowsState } from '../utils/chatTimeline';
 import { recordDebugPerf } from '../utils/debugPerf';
@@ -1041,21 +1040,6 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                     onDeleteRequest={deleteQueuedRequest}
                 />
             </div>
-
-            <AgentRunStatusBar
-                loading={loading}
-                pendingActions={pendingActions}
-                pendingApprovalRequest={pendingApprovalRequest}
-                waitingForApproval={waitingForApproval}
-                toolActivity={toolActivity}
-                activeTodos={activeTodos}
-                queuedRequests={queuedRequests}
-                onStop={stopGeneration}
-                onJumpToApproval={() => jumpToRow(approvalRowKey, approvalTargetKey)}
-                onJumpToActiveStep={() => jumpToRow(activeStepRowKey, activeStepTargetKey)}
-                onJumpToTaskPanel={jumpToTaskPanel}
-                onJumpToQueue={jumpToQueue}
-            />
 
             {chatMode === 'planning' && latestPlanText && (
                 <div className="px-3 pb-1 pt-2">
