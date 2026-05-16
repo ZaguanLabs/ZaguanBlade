@@ -158,40 +158,40 @@ export const AgentRunStatusBar: React.FC<AgentRunStatusBarProps> = ({
 
     const toneClasses: Record<typeof statusModel.tone, { border: string; bg: string; icon: string; badge: string; text: string; subtext: string; button: string }> = {
         amber: {
-            border: 'border-amber-500/20',
-            bg: 'bg-amber-500/8',
-            icon: 'text-amber-300',
-            badge: 'border-amber-500/20 bg-amber-500/10 text-amber-200',
-            text: 'text-amber-100',
-            subtext: 'text-amber-200/80',
-            button: 'border-amber-400/25 bg-amber-500/10 text-amber-100 hover:bg-amber-500/16',
+            border: 'border-(--accent-warning)/20',
+            bg: 'bg-[color-mix(in_srgb,var(--accent-warning)_8%,transparent)]',
+            icon: 'text-(--accent-warning)',
+            badge: 'border-(--accent-warning)/20 bg-[color-mix(in_srgb,var(--accent-warning)_10%,transparent)] text-(--accent-warning)',
+            text: 'text-(--fg-bright)',
+            subtext: 'text-(--fg-secondary)',
+            button: 'border-(--accent-warning)/25 bg-[color-mix(in_srgb,var(--accent-warning)_10%,transparent)] text-(--fg-bright) hover:bg-[color-mix(in_srgb,var(--accent-warning)_16%,transparent)]',
         },
         indigo: {
-            border: 'border-indigo-500/20',
-            bg: 'bg-indigo-500/8',
-            icon: 'text-indigo-300',
-            badge: 'border-indigo-500/20 bg-indigo-500/10 text-indigo-200',
-            text: 'text-indigo-100',
-            subtext: 'text-indigo-200/80',
-            button: 'border-indigo-400/25 bg-indigo-500/10 text-indigo-100 hover:bg-indigo-500/16',
+            border: 'border-(--accent-ai)/20',
+            bg: 'bg-[color-mix(in_srgb,var(--accent-ai)_8%,transparent)]',
+            icon: 'text-(--accent-ai)',
+            badge: 'border-(--accent-ai)/20 bg-[color-mix(in_srgb,var(--accent-ai)_10%,transparent)] text-(--accent-ai)',
+            text: 'text-(--fg-bright)',
+            subtext: 'text-(--fg-secondary)',
+            button: 'border-(--accent-ai)/25 bg-[color-mix(in_srgb,var(--accent-ai)_10%,transparent)] text-(--fg-bright) hover:bg-[color-mix(in_srgb,var(--accent-ai)_16%,transparent)]',
         },
         emerald: {
-            border: 'border-emerald-500/20',
-            bg: 'bg-emerald-500/8',
-            icon: 'text-emerald-300',
-            badge: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200',
-            text: 'text-emerald-100',
-            subtext: 'text-emerald-200/80',
-            button: 'border-emerald-400/25 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/16',
+            border: 'border-(--accent-mention)/20',
+            bg: 'bg-[color-mix(in_srgb,var(--accent-mention)_8%,transparent)]',
+            icon: 'text-(--accent-mention)',
+            badge: 'border-(--accent-mention)/20 bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)] text-(--accent-mention)',
+            text: 'text-(--fg-bright)',
+            subtext: 'text-(--fg-secondary)',
+            button: 'border-(--accent-mention)/25 bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)] text-(--fg-bright) hover:bg-[color-mix(in_srgb,var(--accent-mention)_16%,transparent)]',
         },
         sky: {
-            border: 'border-sky-500/20',
-            bg: 'bg-sky-500/8',
-            icon: 'text-sky-300',
-            badge: 'border-sky-500/20 bg-sky-500/10 text-sky-200',
-            text: 'text-sky-100',
-            subtext: 'text-sky-200/80',
-            button: 'border-sky-400/25 bg-sky-500/10 text-sky-100 hover:bg-sky-500/16',
+            border: 'border-(--accent-planning)/20',
+            bg: 'bg-[color-mix(in_srgb,var(--accent-planning)_8%,transparent)]',
+            icon: 'text-(--accent-planning)',
+            badge: 'border-(--accent-planning)/20 bg-[color-mix(in_srgb,var(--accent-planning)_10%,transparent)] text-(--accent-planning)',
+            text: 'text-(--fg-bright)',
+            subtext: 'text-(--fg-secondary)',
+            button: 'border-(--accent-planning)/25 bg-[color-mix(in_srgb,var(--accent-planning)_10%,transparent)] text-(--fg-bright) hover:bg-[color-mix(in_srgb,var(--accent-planning)_16%,transparent)]',
         },
         zinc: {
             border: 'border-(--border-subtle)',
@@ -257,7 +257,7 @@ export const AgentRunStatusBar: React.FC<AgentRunStatusBarProps> = ({
     return (
         <div className={`border-t ${tone.border} ${tone.bg}`}>
             <div className="flex items-start gap-3 px-3 py-2.5">
-                <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border ${tone.border} ${tone.bg}`}>
+                <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-[calc(var(--panel-radius)*0.75)] border ${tone.border} ${tone.bg}`}>
                     {loading && !toolActivity && pendingApprovalCount === 0 && !waitingForApproval ? (
                         <Loader2 className={`h-4 w-4 animate-spin ${tone.icon}`} />
                     ) : (
@@ -333,7 +333,7 @@ export const AgentRunStatusBar: React.FC<AgentRunStatusBarProps> = ({
                     <button
                         type="button"
                         onClick={onStop}
-                        className={`inline-flex shrink-0 items-center gap-1 rounded-lg border px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] transition-colors ${tone.button}`}
+                        className={`inline-flex shrink-0 items-center gap-1 rounded-[calc(var(--panel-radius)*0.55)] border px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] transition-colors ${tone.button}`}
                     >
                         <Square className="h-3 w-3" />
                         Stop

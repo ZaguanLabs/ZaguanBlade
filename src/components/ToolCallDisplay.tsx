@@ -68,15 +68,15 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     const getStatusTone = () => {
         switch (status) {
             case 'executing':
-                return 'var(--accent-primary)';
+                return 'var(--accent-ai)';
             case 'complete':
-                return 'var(--accent-green)';
+                return 'var(--accent-mention)';
             case 'error':
-                return 'var(--accent-error)';
+                return 'var(--state-danger)';
             case 'skipped':
                 return 'var(--accent-warning)';
             default:
-                return 'var(--accent-purple)';
+                return 'var(--accent-planning)';
         }
     };
 
@@ -309,14 +309,14 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                             </div>
                             <div className="ml-auto flex shrink-0 items-center gap-1 pl-2">
                                 <span className={`text-[9px] font-semibold uppercase tracking-[0.14em] ${status === 'complete'
-                                    ? 'text-(--accent-green)'
+                                    ? 'text-(--accent-mention)'
                                     : status === 'executing'
-                                        ? 'text-(--accent-primary)'
+                                        ? 'text-(--accent-ai)'
                                         : status === 'error'
-                                            ? 'text-(--accent-error)'
+                                            ? 'text-(--state-danger)'
                                             : status === 'skipped'
                                                 ? 'text-(--accent-warning)'
-                                                : 'text-(--accent-purple)'
+                                                : 'text-(--accent-planning)'
                                     }`}>
                                     {getStatusText()}
                                 </span>
@@ -350,7 +350,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                                         e.stopPropagation();
                                         onUndo();
                                     }}
-                                    className="flex items-center gap-1 rounded px-1 py-0.5 text-[9px] text-(--fg-tertiary) transition-colors hover:text-(--accent-error)"
+                                    className="flex items-center gap-1 rounded px-1 py-0.5 text-[9px] text-(--fg-tertiary) transition-colors hover:text-(--state-danger)"
                                     title={t('toolCall.undoChanges')}
                                 >
                                     <RotateCcw className="w-2.5 h-2.5" />
@@ -406,7 +406,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                                 e.stopPropagation();
                                 onStopCommand();
                             }}
-                            className="inline-flex h-6 items-center gap-1 rounded-md border border-(--accent-error)/45 px-1.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-(--accent-error) transition-colors hover:bg-(--accent-error)/10"
+                            className="inline-flex h-6 items-center gap-1 rounded-md border border-(--state-danger)/45 px-1.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-(--state-danger) transition-colors hover:bg-(--state-danger)/10"
                             title={t('toolCall.stopCommand')}
                             aria-label={t('toolCall.stopCommand')}
                         >
@@ -414,10 +414,10 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                             {t('common.stop', { defaultValue: 'Stop' })}
                         </button>
                     )}
-                    <span className={`text-[9px] font-semibold uppercase tracking-[0.14em] ${status === 'complete' ? 'text-(--accent-green)' :
-                        status === 'executing' ? 'text-(--accent-primary)' :
-                            status === 'error' ? 'text-(--accent-error)' :
-                                status === 'skipped' ? 'text-(--accent-warning)' : 'text-(--accent-purple)'
+                    <span className={`text-[9px] font-semibold uppercase tracking-[0.14em] ${status === 'complete' ? 'text-(--accent-mention)' :
+                        status === 'executing' ? 'text-(--accent-ai)' :
+                            status === 'error' ? 'text-(--state-danger)' :
+                                status === 'skipped' ? 'text-(--accent-warning)' : 'text-(--accent-planning)'
                         }`}>
                         {getStatusText()}
                     </span>
@@ -440,7 +440,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                             title={t('toolCall.copyCommand')}
                         >
                             {copied ? (
-                                <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                <Check className="w-3.5 h-3.5 text-(--accent-mention)" />
                             ) : (
                                 <Copy className="w-3.5 h-3.5 text-(--fg-tertiary) group-hover/copy:text-(--fg-primary)" />
                             )}

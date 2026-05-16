@@ -135,10 +135,10 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
 
     if (loading) {
         return (
-            <div className="h-full flex items-center justify-center bg-[var(--bg-app)]">
+            <div className="h-full flex items-center justify-center bg-(--bg-app)">
                 <div className="flex flex-col items-center gap-3">
-                    <div className="animate-spin w-8 h-8 border-2 border-[var(--accent-primary)] border-t-transparent rounded-full" />
-                    <p className="text-sm text-[var(--fg-secondary)]">{t('pdf.loading')}</p>
+                    <div className="animate-spin w-8 h-8 border-2 border-(--accent-ai) border-t-transparent rounded-full" />
+                    <p className="text-sm text-(--fg-secondary)">{t('pdf.loading')}</p>
                 </div>
             </div>
         );
@@ -146,66 +146,66 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
 
     if (error) {
         return (
-            <div className="h-full flex items-center justify-center bg-[var(--bg-app)]">
+            <div className="h-full flex items-center justify-center bg-(--bg-app)">
                 <div className="flex flex-col items-center gap-3 max-w-md text-center">
-                    <FileText className="w-12 h-12 text-red-400 opacity-50" />
-                    <p className="text-sm text-red-400">{t('pdf.loadFailed')}</p>
-                    <p className="text-xs text-[var(--fg-tertiary)] font-mono">{error}</p>
+                    <FileText className="w-12 h-12 text-(--state-danger) opacity-50" />
+                    <p className="text-sm text-(--state-danger)">{t('pdf.loadFailed')}</p>
+                    <p className="text-xs text-(--fg-tertiary) font-mono">{error}</p>
                 </div>
             </div>
         );
     }
 
     return (
-        <div className="h-full flex flex-col bg-[var(--bg-app)]">
+        <div className="h-full flex flex-col bg-(--bg-app)">
             {/* Toolbar */}
-            <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--border-subtle)] bg-[var(--bg-surface)]">
+            <div className="flex items-center justify-between px-4 py-2 border-b border-(--border-subtle) bg-(--bg-surface)">
                 <div className="flex items-center gap-2">
                     <button
                         onClick={goToPrevPage}
                         disabled={currentPage <= 1}
-                        className="p-1.5 rounded hover:bg-[var(--bg-surface-hover)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        className="p-1.5 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface-hover) disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                         title={t('pdf.previousPage')}
                     >
-                        <ChevronLeft className="w-4 h-4 text-[var(--fg-secondary)]" />
+                        <ChevronLeft className="w-4 h-4 text-(--fg-secondary)" />
                     </button>
-                    <span className="text-xs text-[var(--fg-secondary)] font-mono min-w-[80px] text-center">
+                    <span className="text-xs text-(--fg-secondary) font-mono min-w-[80px] text-center">
                         {currentPage} / {numPages}
                     </span>
                     <button
                         onClick={goToNextPage}
                         disabled={currentPage >= numPages}
-                        className="p-1.5 rounded hover:bg-[var(--bg-surface-hover)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        className="p-1.5 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface-hover) disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                         title={t('pdf.nextPage')}
                     >
-                        <ChevronRight className="w-4 h-4 text-[var(--fg-secondary)]" />
+                        <ChevronRight className="w-4 h-4 text-(--fg-secondary)" />
                     </button>
                 </div>
 
                 <div className="flex items-center gap-2">
                     <button
                         onClick={zoomOut}
-                        className="p-1.5 rounded hover:bg-[var(--bg-surface-hover)] transition-colors"
+                        className="p-1.5 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface-hover) transition-colors"
                         title={t('pdf.zoomOut')}
                     >
-                        <ZoomOut className="w-4 h-4 text-[var(--fg-secondary)]" />
+                        <ZoomOut className="w-4 h-4 text-(--fg-secondary)" />
                     </button>
-                    <span className="text-xs text-[var(--fg-secondary)] font-mono min-w-[50px] text-center">
+                    <span className="text-xs text-(--fg-secondary) font-mono min-w-[50px] text-center">
                         {Math.round(scale * 100)}%
                     </span>
                     <button
                         onClick={zoomIn}
-                        className="p-1.5 rounded hover:bg-[var(--bg-surface-hover)] transition-colors"
+                        className="p-1.5 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface-hover) transition-colors"
                         title={t('pdf.zoomIn')}
                     >
-                        <ZoomIn className="w-4 h-4 text-[var(--fg-secondary)]" />
+                        <ZoomIn className="w-4 h-4 text-(--fg-secondary)" />
                     </button>
                     <button
                         onClick={fitToWidth}
-                        className="p-1.5 rounded hover:bg-[var(--bg-surface-hover)] transition-colors"
+                        className="p-1.5 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface-hover) transition-colors"
                         title={t('pdf.fitToWidth')}
                     >
-                        <Maximize2 className="w-4 h-4 text-[var(--fg-secondary)]" />
+                        <Maximize2 className="w-4 h-4 text-(--fg-secondary)" />
                     </button>
                 </div>
             </div>
@@ -213,11 +213,11 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
             {/* PDF Canvas */}
             <div 
                 ref={containerRef}
-                className="flex-1 overflow-auto flex items-start justify-center p-5 bg-[var(--bg-app)]"
+                className="flex-1 overflow-auto flex items-start justify-center p-5 bg-(--bg-app)"
             >
                 <canvas
                     ref={canvasRef}
-                    className="shadow-2xl"
+                    className="shadow-(--shadow-xl)"
                     style={{ maxWidth: '100%', height: 'auto' }}
                 />
             </div>

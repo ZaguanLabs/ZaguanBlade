@@ -663,7 +663,7 @@ const AppLayoutInner: React.FC = () => {
     const editorViewportBottomInset = !disableTerminalSurface && terminalHeight > 0 ? terminalHeight : 0;
 
     return (
-        <div className="h-screen w-screen bg-[var(--bg-app)] overflow-hidden flex flex-col font-sans text-[var(--fg-primary)]">
+        <div className="h-screen w-screen bg-(--bg-app) overflow-hidden flex flex-col font-sans text-(--fg-primary)">
             {/* Unified App Bar: title bar + tab strip merged */}
             <AppBar
                 tabs={appBarTabs}
@@ -695,13 +695,13 @@ const AppLayoutInner: React.FC = () => {
                         onClick={() => toggleSidebar('explorer')}
                         title={t('activityBar.explorer')}
                         aria-label={t('activityBar.explorer')}
-                        className={`relative p-2 rounded-md cursor-pointer transition-all duration-[var(--transition-fast)] ${isSidebarOpen && activeSidebar === 'explorer'
-                            ? 'text-[var(--fg-primary)] bg-[var(--bg-surface)]'
-                            : 'text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]'}
+                        className={`relative p-2 rounded-[calc(var(--panel-radius)*0.45)] cursor-pointer transition-all duration-(--transition-fast) ${isSidebarOpen && activeSidebar === 'explorer'
+                            ? 'text-(--fg-primary) bg-(--bg-surface)'
+                            : 'text-(--fg-nav) hover:text-(--fg-primary) hover:bg-(--bg-surface)'}
                         `}
                     >
                         {isSidebarOpen && activeSidebar === 'explorer' && (
-                            <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-[var(--accent-primary)] rounded-r" />
+                            <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-(--accent-ai) rounded-r" />
                         )}
                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
@@ -711,17 +711,17 @@ const AppLayoutInner: React.FC = () => {
                         onClick={() => toggleSidebar('git')}
                         title={t('activityBar.git')}
                         aria-label={t('activityBar.git')}
-                        className={`relative p-2 rounded-md cursor-pointer transition-all duration-[var(--transition-fast)] ${isSidebarOpen && activeSidebar === 'git'
-                            ? 'text-[var(--fg-primary)] bg-[var(--bg-surface)]'
-                            : 'text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]'}
+                        className={`relative p-2 rounded-[calc(var(--panel-radius)*0.45)] cursor-pointer transition-all duration-(--transition-fast) ${isSidebarOpen && activeSidebar === 'git'
+                            ? 'text-(--fg-primary) bg-(--bg-surface)'
+                            : 'text-(--fg-nav) hover:text-(--fg-primary) hover:bg-(--bg-surface)'}
                         `}
                     >
                         {isSidebarOpen && activeSidebar === 'git' && (
-                            <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-[var(--accent-primary)] rounded-r" />
+                            <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-(--accent-ai) rounded-r" />
                         )}
                         <GitBranch className="w-5 h-5" />
                         {gitStatus?.isRepo && gitChangedCount > 0 && (
-                            <span className="absolute -bottom-1 -right-1 min-w-[14px] h-3 px-1 rounded-full bg-[var(--accent-primary)] text-[9px] leading-3 text-white text-center shadow-sm">
+                            <span className="absolute -bottom-1 -right-1 min-w-[14px] h-3 px-1 rounded-full bg-(--accent-ai) text-[9px] leading-3 text-(--fg-bright) text-center shadow-sm">
                                 {Math.min(gitChangedCount, 99)}
                             </span>
                         )}
@@ -730,20 +730,20 @@ const AppLayoutInner: React.FC = () => {
                         onClick={() => toggleSidebar('history')}
                         title={t('activityBar.fileHistory')}
                         aria-label={t('activityBar.fileHistory')}
-                        className={`relative p-2 rounded-md cursor-pointer transition-all duration-[var(--transition-fast)] ${isSidebarOpen && activeSidebar === 'history'
-                            ? 'text-[var(--fg-primary)] bg-[var(--bg-surface)]'
-                            : 'text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)]'}
+                        className={`relative p-2 rounded-[calc(var(--panel-radius)*0.45)] cursor-pointer transition-all duration-(--transition-fast) ${isSidebarOpen && activeSidebar === 'history'
+                            ? 'text-(--fg-primary) bg-(--bg-surface)'
+                            : 'text-(--fg-nav) hover:text-(--fg-primary) hover:bg-(--bg-surface)'}
                         `}
                     >
                         {isSidebarOpen && activeSidebar === 'history' && (
-                            <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-[var(--accent-primary)] rounded-r" />
+                            <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-(--accent-ai) rounded-r" />
                         )}
                         <Clock className="w-5 h-5" />
                     </div>
                     <div
                         title={t('activityBar.searchComingSoon')}
                         aria-label={t('activityBar.search')}
-                        className="hidden relative p-2 rounded-md text-[var(--fg-nav)] opacity-40 cursor-not-allowed transition-all duration-[var(--transition-fast)]"
+                        className="hidden relative p-2 rounded-[calc(var(--panel-radius)*0.45)] text-(--fg-nav) opacity-40 cursor-not-allowed transition-all duration-(--transition-fast)"
                     >
                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -753,7 +753,7 @@ const AppLayoutInner: React.FC = () => {
                         onClick={() => setIsSettingsOpen(true)}
                         title={t('activityBar.settings')}
                         aria-label={t('activityBar.settings')}
-                        className="relative mt-auto p-2 rounded-md text-[var(--fg-nav)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-surface)] transition-all duration-[var(--transition-fast)] cursor-pointer"
+                        className="relative mt-auto p-2 rounded-[calc(var(--panel-radius)*0.45)] text-(--fg-nav) hover:text-(--fg-primary) hover:bg-(--bg-surface) transition-all duration-(--transition-fast) cursor-pointer"
                     >
                         <Settings className="w-5 h-5" />
                     </div>
@@ -764,8 +764,8 @@ const AppLayoutInner: React.FC = () => {
                 {!disableSidebarOverlay && (
                     <div
                         className={`
-                            absolute top-0 bottom-0 w-80 bg-[var(--bg-panel)] flex flex-col overflow-hidden
-                            transition-all duration-[var(--transition-fast)] ease-[cubic-bezier(0.22,1,0.36,1)]
+                            absolute top-0 bottom-0 w-80 bg-(--bg-panel) flex flex-col overflow-hidden
+                            transition-all duration-(--transition-fast) ease-[cubic-bezier(0.22,1,0.36,1)]
                             ${isSidebarOpen
                                 ? 'opacity-100 visible'
                                 : 'opacity-0 invisible pointer-events-none'}
@@ -780,12 +780,12 @@ const AppLayoutInner: React.FC = () => {
                         }}
                     >
                     {activeSidebar === 'explorer' && (
-                        <Suspense fallback={<div className="h-full flex items-center justify-center text-[var(--fg-subtle)]">{t('sidebar.loadingExplorer', 'Loading explorer...')}</div>}>
+                        <Suspense fallback={<div className="h-full flex items-center justify-center text-(--fg-tertiary)">{t('sidebar.loadingExplorer', 'Loading explorer...')}</div>}>
                             <ExplorerPanel onFileSelect={handleExplorerFileSelect} activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
                         </Suspense>
                     )}
                     {activeSidebar === 'git' && (
-                        <Suspense fallback={<div className="h-full flex items-center justify-center text-[var(--fg-subtle)]">{t('sidebar.loadingGit')}</div>}>
+                        <Suspense fallback={<div className="h-full flex items-center justify-center text-(--fg-tertiary)">{t('sidebar.loadingGit')}</div>}>
                             <GitPanel
                                 status={gitStatus}
                                 files={gitFiles}
@@ -806,7 +806,7 @@ const AppLayoutInner: React.FC = () => {
                         </Suspense>
                     )}
                     {activeSidebar === 'history' && (
-                        <Suspense fallback={<div className="h-full flex items-center justify-center text-[var(--fg-subtle)]">{t('sidebar.loadingHistory')}</div>}>
+                        <Suspense fallback={<div className="h-full flex items-center justify-center text-(--fg-tertiary)">{t('sidebar.loadingHistory')}</div>}>
                             <FileHistoryPanel activeFile={tabs.find(t => t.id === activeTabId)?.path || null} />
                         </Suspense>
                     )}
@@ -868,7 +868,7 @@ const AppLayoutInner: React.FC = () => {
                                     className="absolute inset-x-0 top-0 z-10"
                                     style={{ bottom: editorViewportBottomInset }}
                                 >
-                                    <Suspense fallback={<div className="h-full w-full bg-[var(--bg-editor)]" />}>
+                                    <Suspense fallback={<div className="h-full w-full bg-(--bg-editor)" />}>
                                         <DocumentViewer
                                             documentId={activeTab.id}
                                             title={activeTab.title}
@@ -885,7 +885,7 @@ const AppLayoutInner: React.FC = () => {
 
                             {disableEditorSurface && (
                                 <div
-                                    className="absolute inset-0 flex items-center justify-center text-sm text-[var(--fg-secondary)]"
+                                    className="absolute inset-0 flex items-center justify-center text-sm text-(--fg-secondary)"
                                     style={{ bottom: editorViewportBottomInset }}
                                 >
                                     Editor surface disabled via `?disableEditor=1`
@@ -912,9 +912,9 @@ const AppLayoutInner: React.FC = () => {
                                     onMouseDown={handleTerminalMouseDown}
                                 >
                                     <div
-                                        className={`w-full transition-all duration-[var(--transition-fast)] ${isTerminalDragging
-                                            ? 'h-[2px] bg-[var(--accent-primary)]'
-                                            : 'h-px bg-[var(--border-subtle)] group-hover:h-[2px] group-hover:bg-[var(--accent-primary)]'
+                                        className={`w-full transition-all duration-(--transition-fast) ${isTerminalDragging
+                                            ? 'h-[2px] bg-(--accent-ai)'
+                                            : 'h-px bg-(--border-subtle) group-hover:h-[2px] group-hover:bg-(--accent-ai)'
                                         }`}
                                     />
                                 </div>
@@ -935,14 +935,14 @@ const AppLayoutInner: React.FC = () => {
                             }}
                         >
                             <div
-                                className={`absolute inset-y-0 left-1/2 -translate-x-1/2 flex items-center justify-center pointer-events-auto resize-x-cursor transition-colors duration-[var(--transition-fast)] ${isChatDragging
-                                    ? 'bg-[var(--accent-primary)]/10'
-                                    : 'bg-transparent hover:bg-[var(--accent-primary)]/10'
+                                className={`absolute inset-y-0 left-1/2 -translate-x-1/2 flex items-center justify-center pointer-events-auto resize-x-cursor transition-colors duration-(--transition-fast) ${isChatDragging
+                                    ? 'bg-(--accent-ai)/10'
+                                    : 'bg-transparent hover:bg-(--accent-ai)/10'
                                     }`}
                                 style={{ width: 'var(--panel-gap)' }}
                                 onMouseDown={handleChatMouseDown}
                             >
-                                <div className={`h-full w-px ${isChatDragging ? 'bg-[var(--accent-primary)]' : 'bg-transparent hover:bg-[var(--accent-primary)]'}`} />
+                                <div className={`h-full w-px ${isChatDragging ? 'bg-(--accent-ai)' : 'bg-transparent hover:bg-(--accent-ai)'}`} />
                             </div>
                         </div>
                     )}
@@ -961,7 +961,7 @@ const AppLayoutInner: React.FC = () => {
                             }}
                             className="min-w-[280px] max-w-[800px] flex flex-col z-30 overflow-hidden"
                         >
-                            <Suspense fallback={<div className="flex-1 bg-[var(--bg-panel)] h-full w-full" />}>
+                            <Suspense fallback={<div className="flex-1 bg-(--bg-panel) h-full w-full" />}>
                                 {chatPanelV3 ? <ChatPanelV3
                                     messages={chat.messages}
                                     loading={chat.loading}
@@ -1036,7 +1036,7 @@ const AppLayoutInner: React.FC = () => {
 
             {/* Status Bar */}
             <div
-                className="text-[var(--fg-tertiary)] flex items-center px-3 text-[10px] font-mono justify-between select-none z-40"
+                className="text-(--fg-tertiary) flex items-center px-3 text-[10px] font-mono justify-between select-none z-40"
                 style={{
                     height: '24px',
                     backgroundColor: 'var(--bg-panel)',
@@ -1047,7 +1047,7 @@ const AppLayoutInner: React.FC = () => {
                 }}
             >
                 <div className="flex items-center gap-1.5">
-                    <span className="flex items-center gap-1.5 hover:text-[var(--fg-secondary)] cursor-pointer transition-colors duration-[var(--transition-fast)]">
+                    <span className="flex items-center gap-1.5 hover:text-(--fg-secondary) cursor-pointer transition-colors duration-(--transition-fast)">
                         <GitBranch className="w-3 h-3" />
                         {gitStatus?.branch ?? t('statusBar.noBranch')}{gitStatus?.dirty ? '*' : ''}
                     </span>
@@ -1120,13 +1120,13 @@ const AppLayoutInner: React.FC = () => {
 
 const MinimalShellLayout: React.FC = () => {
     return (
-        <div className="h-screen w-screen bg-[var(--bg-app)] overflow-hidden flex flex-col font-sans text-[var(--fg-primary)]">
+        <div className="h-screen w-screen bg-(--bg-app) overflow-hidden flex flex-col font-sans text-(--fg-primary)">
             <AppBar tabs={[]} activeTabId={null} projectName="Debug Shell" />
-            <div className="flex-1 flex items-center justify-center text-sm text-[var(--fg-secondary)]">
+            <div className="flex-1 flex items-center justify-center text-sm text-(--fg-secondary)">
                 Minimal layout mode enabled
             </div>
             <div
-                className="text-[var(--fg-tertiary)] flex items-center px-3 text-[10px] font-mono justify-between select-none z-40"
+                className="text-(--fg-tertiary) flex items-center px-3 text-[10px] font-mono justify-between select-none z-40"
                 style={{
                     height: '24px',
                     backgroundColor: 'var(--bg-panel)',

@@ -125,7 +125,7 @@ export const TitleBar: React.FC = () => {
 
     return (
         <div
-            className="h-9 bg-[var(--bg-app)] flex items-center justify-between px-1 select-none border-b border-black relative z-[51]"
+            className="h-9 bg-(--bg-app) flex items-center justify-between px-1 select-none border-b border-(--border-subtle) relative z-51"
             data-tauri-drag-region
         >
             {/* Left: File Menu */}
@@ -135,8 +135,8 @@ export const TitleBar: React.FC = () => {
                         <button
                             onClick={handleFileMenuClick}
                             className={`flex items-center gap-1 px-3 h-9 text-[11px] font-medium transition-colors ${fileMenuOpen
-                                    ? 'bg-[var(--bg-surface)] text-[var(--fg-primary)]'
-                                    : 'text-[var(--fg-tertiary)] hover:bg-[var(--bg-surface)] hover:text-[var(--fg-secondary)]'
+                                    ? 'bg-(--bg-surface) text-(--fg-primary)'
+                                    : 'text-(--fg-tertiary) hover:bg-(--bg-surface) hover:text-(--fg-secondary)'
                                 }`}
                         >
                             {t('app.menu.file')}
@@ -145,48 +145,47 @@ export const TitleBar: React.FC = () => {
 
                         {/* File Menu Dropdown */}
                         {fileMenuOpen && (
-                            <div className="absolute top-full left-0 mt-0.5 min-w-[180px] py-1.5 bg-[var(--bg-surface)] border border-[var(--border-focus)] rounded-lg shadow-xl z-[100]"
-                                style={{ boxShadow: '0 8px 30px rgba(0, 0, 0, 0.4)' }}
+                            <div className="absolute top-full left-0 mt-0.5 min-w-[180px] py-1.5 bg-(--bg-surface) border border-(--border-focus) rounded-[calc(var(--panel-radius)*0.75)] shadow-(--shadow-xl) z-100"
                             >
                                 <button
                                     onClick={() => {
                                         setFileMenuOpen(false);
                                         window.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, bubbles: true }));
                                     }}
-                                    className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] transition-colors"
+                                    className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-primary) hover:bg-(--bg-surface-hover) transition-colors"
                                 >
                                     <span>{t('fileTree.newFile')}</span>
-                                    <span className="text-[10px] text-[var(--fg-tertiary)] font-mono">Ctrl+N</span>
+                                    <span className="text-[10px] text-(--fg-tertiary) font-mono">Ctrl+N</span>
                                 </button>
                                 <button
                                     onClick={() => { setFileMenuOpen(false); }}
-                                    className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] transition-colors"
+                                    className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-primary) hover:bg-(--bg-surface-hover) transition-colors"
                                 >
                                     <span>{t('titleBar.openFolder')}</span>
-                                    <span className="text-[10px] text-[var(--fg-tertiary)] font-mono">Ctrl+O</span>
+                                    <span className="text-[10px] text-(--fg-tertiary) font-mono">Ctrl+O</span>
                                 </button>
-                                <div className="my-1.5 mx-2 h-px bg-[var(--border-subtle)]" />
+                                <div className="my-1.5 mx-2 h-px bg-(--border-subtle)" />
                                 <button
                                     onClick={() => { setFileMenuOpen(false); }}
-                                    className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] transition-colors"
+                                    className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-primary) hover:bg-(--bg-surface-hover) transition-colors"
                                 >
                                     <span>{t('common.save')}</span>
-                                    <span className="text-[10px] text-[var(--fg-tertiary)] font-mono">Ctrl+S</span>
+                                    <span className="text-[10px] text-(--fg-tertiary) font-mono">Ctrl+S</span>
                                 </button>
                                 <button
                                     onClick={() => { setFileMenuOpen(false); }}
-                                    className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] transition-colors"
+                                    className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-primary) hover:bg-(--bg-surface-hover) transition-colors"
                                 >
                                     <span>{t('common.saveAs')}</span>
-                                    <span className="text-[10px] text-[var(--fg-tertiary)] font-mono">Ctrl+Shift+S</span>
+                                    <span className="text-[10px] text-(--fg-tertiary) font-mono">Ctrl+Shift+S</span>
                                 </button>
-                                <div className="my-1.5 mx-2 h-px bg-[var(--border-subtle)]" />
+                                <div className="my-1.5 mx-2 h-px bg-(--border-subtle)" />
                                 <button
                                     onClick={() => { setFileMenuOpen(false); appWindow.close(); }}
-                                    className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-[var(--fg-primary)] hover:bg-[var(--bg-surface-hover)] transition-colors"
+                                    className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-primary) hover:bg-(--bg-surface-hover) transition-colors"
                                 >
                                     <span>{t('common.exit')}</span>
-                                    <span className="text-[10px] text-[var(--fg-tertiary)] font-mono">Alt+F4</span>
+                                    <span className="text-[10px] text-(--fg-tertiary) font-mono">Alt+F4</span>
                                 </button>
                             </div>
                         )}
@@ -204,7 +203,7 @@ export const TitleBar: React.FC = () => {
 
                 {/* App name */}
                 <span
-                    className="text-[11px] font-medium text-[var(--fg-tertiary)] tracking-wider uppercase"
+                    className="text-[11px] font-medium text-(--fg-tertiary) tracking-wider uppercase"
                     data-tauri-drag-region
                 >
                     Zaguán Blade
@@ -212,7 +211,7 @@ export const TitleBar: React.FC = () => {
 
                 {/* Fullscreen indicator */}
                 {isFullscreen && (
-                    <span className="text-[9px] text-[var(--fg-tertiary)] opacity-50 ml-2">
+                    <span className="text-[9px] text-(--fg-tertiary) opacity-50 ml-2">
                         (F11 to exit)
                     </span>
                 )}
@@ -224,7 +223,7 @@ export const TitleBar: React.FC = () => {
                     {/* Minimize */}
                     <button
                         onClick={handleMinimize}
-                        className="window-control-btn h-7 w-7 rounded-md flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[var(--bg-surface)] hover:text-[var(--fg-secondary)] active:scale-95 transition-all duration-150"
+                        className="window-control-btn h-7 w-7 rounded-[calc(var(--panel-radius)*0.45)] flex items-center justify-center text-(--fg-tertiary) hover:bg-(--bg-surface) hover:text-(--fg-secondary) active:scale-95 transition-all duration-(--transition-fast)"
                         title={t('windowControls.minimize')}
                     >
                         <Minus className="w-3.5 h-3.5" strokeWidth={1.8} />
@@ -233,7 +232,7 @@ export const TitleBar: React.FC = () => {
                     {/* Maximize/Restore */}
                     <button
                         onClick={handleMaximizeRestore}
-                        className="window-control-btn h-7 w-7 rounded-md flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[var(--bg-surface)] hover:text-[var(--fg-secondary)] active:scale-95 transition-all duration-150"
+                        className="window-control-btn h-7 w-7 rounded-[calc(var(--panel-radius)*0.45)] flex items-center justify-center text-(--fg-tertiary) hover:bg-(--bg-surface) hover:text-(--fg-secondary) active:scale-95 transition-all duration-(--transition-fast)"
                         title={isMaximized ? t('windowControls.restore') : t('windowControls.maximize')}
                     >
                         {isMaximized ? (
@@ -246,7 +245,7 @@ export const TitleBar: React.FC = () => {
                     {/* Close */}
                     <button
                         onClick={handleClose}
-                        className="window-control-btn h-7 w-7 rounded-md flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[#c42b1c] hover:text-white active:scale-95 transition-all duration-150"
+                        className="window-control-btn h-7 w-7 rounded-[calc(var(--panel-radius)*0.45)] flex items-center justify-center text-(--fg-tertiary) hover:bg-(--state-danger) hover:text-(--fg-bright) active:scale-95 transition-all duration-(--transition-fast)"
                         title={t('windowControls.close')}
                     >
                         <X className="w-3.5 h-3.5" strokeWidth={1.8} />
