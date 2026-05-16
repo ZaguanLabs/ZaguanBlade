@@ -19,8 +19,8 @@ const QueuePanelComponent: React.FC<QueuePanelProps> = ({ requests, onEditReques
     return (
         <div className="border-t border-(--border-subtle) bg-(--bg-surface)">
             <div className="flex items-center gap-3 px-3 py-2.5 text-[11px] text-(--fg-secondary)">
-                <div className="flex h-7 w-7 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950/40">
-                    <ListOrdered className="h-3.5 w-3.5 text-zinc-400" />
+                <div className="flex h-7 w-7 items-center justify-center rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-app)/40">
+                    <ListOrdered className="h-3.5 w-3.5 text-(--fg-tertiary)" />
                 </div>
                 <span className="font-semibold uppercase tracking-[0.16em]">{t('chat.queue.title', { count: requests.length })}</span>
             </div>
@@ -31,14 +31,14 @@ const QueuePanelComponent: React.FC<QueuePanelProps> = ({ requests, onEditReques
                         <Surface
                             key={`queued-${index}`}
                             variant="row"
-                            className="flex items-center gap-2 px-2.5 py-2 text-[11px] text-zinc-400"
+                            className="flex items-center gap-2 px-2.5 py-2 text-[11px] text-(--fg-tertiary)"
                         >
-                            <span className="font-mono text-[10px] text-zinc-600 w-4 text-right shrink-0">
+                            <span className="font-mono text-[10px] text-(--fg-tertiary) w-4 text-right shrink-0">
                                 {index + 1}.
                             </span>
                             <span className={`inline-flex shrink-0 items-center rounded-md border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] ${request.mode === 'planning'
-                                ? 'border-sky-500/20 bg-sky-500/10 text-sky-200'
-                                : 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200'
+                                ? 'border-(--accent-planning)/20 bg-[color-mix(in_srgb,var(--accent-planning)_10%,transparent)] text-(--accent-planning)'
+                                : 'border-(--accent-mention)/20 bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)] text-(--accent-mention)'
                                 }`}>
                                 {request.mode}
                             </span>

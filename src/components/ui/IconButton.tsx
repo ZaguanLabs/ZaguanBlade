@@ -16,9 +16,9 @@ const iconButtonSizeClassName: Record<IconButtonSize, string> = {
 
 const iconButtonToneClassName: Record<IconButtonTone, string> = {
     neutral: 'text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover)',
-    muted: 'text-zinc-500 hover:text-(--fg-primary) hover:bg-(--bg-surface-hover)',
+    muted: 'text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover)',
     accent: 'text-(--accent-ai) hover:text-(--accent-warning) hover:bg-(--bg-app)',
-    danger: 'text-zinc-500 hover:text-red-400 hover:bg-red-500/10',
+    danger: 'text-(--fg-tertiary) hover:text-(--state-danger) hover:bg-[color-mix(in_srgb,var(--state-danger)_10%,transparent)]',
 };
 
 export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(({ size = 'sm', tone = 'neutral', className, type = 'button', ...props }, ref) => (
