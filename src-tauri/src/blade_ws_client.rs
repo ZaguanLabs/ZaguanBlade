@@ -251,6 +251,8 @@ struct ToolResultPayload {
     error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     api_key: Option<String>, // API key for auth in multi-turn conversations
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -636,6 +638,7 @@ impl BladeWsClient {
         session_id: String,
         tool_call_id: String,
         result: ToolResult,
+        model_id: Option<String>,
     ) -> Result<(), String> {
         let conn = self.connection.lock().await;
         let conn = conn.as_ref().ok_or("Not connected")?;
@@ -647,6 +650,7 @@ impl BladeWsClient {
             content: result.content,
             error: result.error,
             api_key: Some(self.api_key.clone()), // Include API key for multi-turn auth
+            model_id,
         };
 
         let msg = WsBaseMessage {

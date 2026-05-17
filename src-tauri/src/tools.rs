@@ -2518,11 +2518,7 @@ fn apply_multi_patch_to_string(content: &str, patches: &[PatchHunk]) -> Result<S
         ) {
             Ok(new_content) => working = new_content,
             Err(e) => {
-                return Err(format!(
-                    "Patch {} failed (no changes made): {}",
-                    idx + 1,
-                    e
-                ));
+                return Err(format!("Patch {} failed (no changes made): {}", idx + 1, e));
             }
         }
     }
@@ -3044,11 +3040,7 @@ fn apply_edit_tool<R: tauri::Runtime>(
             .map(|n| n as usize);
 
         match apply_patch_to_string_with_line_hint(
-            &content,
-            &old_text,
-            &new_text,
-            start_line,
-            end_line,
+            &content, &old_text, &new_text, start_line, end_line,
         ) {
             Ok(new_content) => {
                 let tracking = prepare_tool_write_tracking(app_handle, &change_id, &abs, &content);

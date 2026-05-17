@@ -601,13 +601,14 @@ impl AiWorkflow {
                                 } => {
                                     let current_content = fs::read_to_string(&full_path)
                                         .map_err(|e| format!("Failed to read file: {}", e))?;
-                                    let new_file_content = tools::apply_patch_to_string_with_line_hint(
-                                        &current_content,
-                                        old_content,
-                                        new_content,
-                                        *start_line,
-                                        *end_line,
-                                    )?;
+                                    let new_file_content =
+                                        tools::apply_patch_to_string_with_line_hint(
+                                            &current_content,
+                                            old_content,
+                                            new_content,
+                                            *start_line,
+                                            *end_line,
+                                        )?;
                                     fs::write(&full_path, new_file_content)
                                         .map_err(|e| format!("Failed to write file: {}", e))?;
                                     Ok(())

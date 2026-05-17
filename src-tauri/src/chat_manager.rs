@@ -2362,6 +2362,7 @@ impl ChatManager {
         conversation: &mut ConversationHistory,
         workspace: Option<&PathBuf>,
         _is_local_mode: bool,
+        model_id: &str,
     ) -> Result<(), String> {
         // Send tool results to Blade Protocol via WebSocket
         // We need to send ALL tool results, not just the first one
@@ -2378,6 +2379,7 @@ impl ChatManager {
             .clone();
         let results = batch.file_results.clone(); // Clone for the task
         let provider_event_tx = self.provider_event_tx.clone();
+        let model_id = model_id.to_string();
         let _ = workspace;
 
         // Zaguan reuses the same websocket after tool results, so we need a fresh
@@ -2413,7 +2415,12 @@ impl ChatManager {
                 };
 
                 if let Err(e) = ws_client
-                    .send_tool_result(session_id.clone(), call.id.clone(), tool_result)
+                    .send_tool_result(
+                        session_id.clone(),
+                        call.id.clone(),
+                        tool_result,
+                        Some(model_id.clone()),
+                    )
                     .await
                 {
                     if let Some(tx) = &provider_event_tx {

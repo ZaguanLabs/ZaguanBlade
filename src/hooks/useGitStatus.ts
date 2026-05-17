@@ -56,6 +56,7 @@ export const useGitStatus = ({ includeFiles = false }: UseGitStatusOptions = {})
     const [lastRefreshedAt, setLastRefreshedAt] = useState<number | null>(null);
     const debounceRef = useRef<number | null>(null);
     const refreshInFlightRef = useRef(false);
+    const refreshFilesInFlightRef = useRef(false);
 
     const refreshSummary = useCallback(async () => {
         if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
@@ -76,6 +77,8 @@ export const useGitStatus = ({ includeFiles = false }: UseGitStatusOptions = {})
 
     const refreshFiles = useCallback(async () => {
         if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
+        if (refreshFilesInFlightRef.current) return;
+        refreshFilesInFlightRef.current = true;
 
         try {
             const nextFiles = await invoke<GitFileStatus[]>('git_status_files');
@@ -84,6 +87,7 @@ export const useGitStatus = ({ includeFiles = false }: UseGitStatusOptions = {})
         } catch (err) {
             setFilesError(formatUnknownBackendError(err));
         } finally {
+            refreshFilesInFlightRef.current = false;
             setLastRefreshedAt(Date.now());
         }
     }, []);

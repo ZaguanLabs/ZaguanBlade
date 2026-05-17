@@ -173,10 +173,15 @@ pre::selection,
 
 .markdown-content p,
 .markdown-content li,
-.markdown-content span,
-.markdown-content div {
+.markdown-content > span,
+.markdown-content > div {
     word-spacing: normal !important;
     white-space: normal !important;
+}
+
+.markdown-content pre,
+.markdown-content pre * {
+    white-space: pre !important;
 }
 
 /* Ensure text nodes render with proper spacing */

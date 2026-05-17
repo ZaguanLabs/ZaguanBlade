@@ -471,11 +471,12 @@ impl WsConnectionManager {
         session_id: String,
         tool_call_id: String,
         result: ToolResult,
+        model_id: Option<String>,
     ) -> Result<(), String> {
         let client_lock = self.client.lock().await;
         let client = client_lock.as_ref().ok_or("Not connected")?;
         client
-            .send_tool_result(session_id, tool_call_id, result)
+            .send_tool_result(session_id, tool_call_id, result, model_id)
             .await
     }
 

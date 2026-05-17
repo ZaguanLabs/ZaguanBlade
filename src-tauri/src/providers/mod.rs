@@ -393,12 +393,18 @@ impl AiProviderRuntime for ZaguanRuntime {
         batch: &PendingToolBatch,
         conversation: &mut ConversationHistory,
         _api_config: &ApiConfig,
-        _model_id: &str,
+        model_id: &str,
         _http: reqwest::Client,
         workspace: Option<&PathBuf>,
         is_local_mode: bool,
     ) -> Result<ProviderSessionHandle, String> {
-        manager.continue_zaguan_after_tools(batch, conversation, workspace, is_local_mode)?;
+        manager.continue_zaguan_after_tools(
+            batch,
+            conversation,
+            workspace,
+            is_local_mode,
+            model_id,
+        )?;
         Ok(ProviderSessionHandle { started: true })
     }
 }
