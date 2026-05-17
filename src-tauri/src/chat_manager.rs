@@ -2279,9 +2279,9 @@ impl ChatManager {
         // Store tool results in conversation history
         // RFC: Large Tool Result Handling - truncate in local mode
         for (_call, result) in batch.file_results.iter() {
-            let full_content = result.to_tool_content();
+            let full_content = result.to_tool_content_for_tool(&_call.function.name);
             let content = if is_local_mode {
-                result.to_tool_content_truncated()
+                result.to_tool_content_truncated_for_tool(&_call.function.name)
             } else {
                 full_content.clone()
             };
@@ -2397,7 +2397,7 @@ impl ChatManager {
             // Send ALL results sequentially
             // RFC: Large Tool Result Handling - truncate in local mode
             for (call, result) in &results {
-                let tool_content = result.to_tool_content();
+                let tool_content = result.to_tool_content_for_tool(&call.function.name);
 
                 let tool_result = crate::blade_ws_client::ToolResult {
                     success: result.success,

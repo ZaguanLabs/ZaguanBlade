@@ -25,13 +25,17 @@ pub struct GitStatusSummary {
     pub dirty: bool,
 }
 
-fn is_zblade_path(path: &str) -> bool {
+fn is_local_git_status_excluded_path(path: &str) -> bool {
     let normalized = path.replace('\\', "/");
     let trimmed = normalized.trim_start_matches("./");
     trimmed == ".zblade"
         || trimmed.starts_with(".zblade/")
         || trimmed.ends_with("/.zblade")
         || trimmed.contains("/.zblade/")
+        || trimmed == ".pnpm-store"
+        || trimmed.starts_with(".pnpm-store/")
+        || trimmed.ends_with("/.pnpm-store")
+        || trimmed.contains("/.pnpm-store/")
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -189,7 +193,7 @@ fn parse_git_status(output: &str) -> GitStatusSummary {
             }
             let xy = parts[0];
             let path = parts.last().unwrap_or(&"");
-            if is_zblade_path(path) {
+            if is_local_git_status_excluded_path(path) {
                 continue;
             }
             let mut chars = xy.chars();
@@ -211,7 +215,7 @@ fn parse_git_status(output: &str) -> GitStatusSummary {
             }
             let xy = parts[0];
             let new_path = parts.get(parts.len().saturating_sub(2)).unwrap_or(&"");
-            if is_zblade_path(new_path) {
+            if is_local_git_status_excluded_path(new_path) {
                 continue;
             }
             let mut chars = xy.chars();
@@ -233,7 +237,7 @@ fn parse_git_status(output: &str) -> GitStatusSummary {
             }
             let xy = parts[0];
             let path = parts.last().unwrap_or(&"");
-            if is_zblade_path(path) {
+            if is_local_git_status_excluded_path(path) {
                 continue;
             }
             let mut chars = xy.chars();
@@ -249,7 +253,7 @@ fn parse_git_status(output: &str) -> GitStatusSummary {
         }
 
         if let Some(rest) = line.strip_prefix("? ") {
-            if is_zblade_path(rest.trim()) {
+            if is_local_git_status_excluded_path(rest.trim()) {
                 continue;
             }
             summary.untracked_count += 1;
@@ -587,7 +591,7 @@ fn collect_git_paths(output: &str) -> Vec<String> {
     output
         .lines()
         .map(|line| line.trim().to_string())
-        .filter(|line| !line.is_empty() && !is_zblade_path(line))
+        .filter(|line| !line.is_empty() && !is_local_git_status_excluded_path(line))
         .collect()
 }
 
@@ -759,7 +763,7 @@ fn parse_git_status_files(output: &str) -> Vec<GitFileStatus> {
             }
             let xy = parts[0];
             let path = parts.last().unwrap_or(&"").to_string();
-            if is_zblade_path(&path) {
+            if is_local_git_status_excluded_path(&path) {
                 continue;
             }
             let mut chars = xy.chars();
@@ -785,7 +789,7 @@ fn parse_git_status_files(output: &str) -> Vec<GitFileStatus> {
             let xy = parts[0];
             let new_path = parts.get(parts.len().saturating_sub(2)).unwrap_or(&"");
             let old_path = parts.get(parts.len().saturating_sub(1)).unwrap_or(&"");
-            if is_zblade_path(new_path) {
+            if is_local_git_status_excluded_path(new_path) {
                 continue;
             }
             let mut chars = xy.chars();
@@ -810,7 +814,7 @@ fn parse_git_status_files(output: &str) -> Vec<GitFileStatus> {
             }
             let xy = parts[0];
             let path = parts.last().unwrap_or(&"").to_string();
-            if is_zblade_path(&path) {
+            if is_local_git_status_excluded_path(&path) {
                 continue;
             }
             let mut chars = xy.chars();
@@ -830,7 +834,7 @@ fn parse_git_status_files(output: &str) -> Vec<GitFileStatus> {
 
         if let Some(rest) = line.strip_prefix("? ") {
             let path = rest.trim().to_string();
-            if is_zblade_path(&path) {
+            if is_local_git_status_excluded_path(&path) {
                 continue;
             }
             files.push(GitFileStatus {
@@ -921,7 +925,7 @@ pub async fn git_stage_file(state: State<'_, AppState>, path: String) -> Result<
         return Err("No workspace open".to_string());
     };
 
-    if is_zblade_path(&path) {
+    if is_local_git_status_excluded_path(&path) {
         return Ok(());
     }
 

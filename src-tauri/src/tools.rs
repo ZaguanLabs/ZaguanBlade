@@ -374,10 +374,123 @@ impl ToolResult {
         }
     }
 
+    pub fn to_tool_content_for_tool(&self, tool_name: &str) -> String {
+        if self.success {
+            return self.content.clone();
+        }
+        if self.skipped {
+            return self.to_tool_content();
+        }
+
+        let raw = self.to_tool_content();
+        let Some(error) = self.error.as_deref() else {
+            return raw;
+        };
+        let feedback = build_tool_failure_feedback(tool_name, error);
+        if feedback.is_empty() {
+            raw
+        } else {
+            format!("{raw}\n\n{feedback}")
+        }
+    }
+
     pub fn to_tool_content_truncated(&self) -> String {
         let content = self.to_tool_content();
         truncate_large_content(&content)
     }
+
+    pub fn to_tool_content_truncated_for_tool(&self, tool_name: &str) -> String {
+        let content = self.to_tool_content_for_tool(tool_name);
+        truncate_large_content(&content)
+    }
+}
+
+fn build_tool_failure_feedback(tool_name: &str, error: &str) -> String {
+    let lower = error.to_lowercase();
+    let mut lines = vec!["ZaguanBlade feedback:".to_string()];
+
+    match tool_name {
+        "run_command" => {
+            if lower.contains("exit code") {
+                lines.push(
+                    "- What happened: the command executed, but the process returned a non-zero exit code.".to_string(),
+                );
+                lines.push(
+                    "- Suggested next step: read stdout/stderr above as the authoritative diagnostic, fix the underlying issue, and avoid retrying the exact same command unless something changed.".to_string(),
+                );
+            } else if lower.contains("cwd") || lower.contains("directory") {
+                lines.push(
+                    "- What happened: the command could not be started in the requested working directory.".to_string(),
+                );
+                lines.push(
+                    "- Suggested next step: verify the workspace-relative cwd and use an existing directory inside the workspace.".to_string(),
+                );
+            } else {
+                lines.push(
+                    "- What happened: the command failed before or during execution.".to_string(),
+                );
+                lines.push(
+                    "- Suggested next step: inspect the error above, check the command/cwd/environment, and explain the likely cause before choosing a safer next action.".to_string(),
+                );
+            }
+        }
+        "apply_patch" | "apply_patch_validated" | "apply_edit" | "replace_file_content"
+        | "multi_replace_file_content" | "edit_file" => {
+            if lower.contains("old_text not found") {
+                lines.push(
+                    "- What happened: the requested old_text did not exactly match the current file contents.".to_string(),
+                );
+                lines.push(
+                    "- Suggested next step: read the current file or relevant line range again, then retry with an exact snippet including whitespace and surrounding context.".to_string(),
+                );
+            } else if lower.contains("ambiguous match") {
+                lines.push(
+                    "- What happened: the patch matched more than one location, so applying it would be unsafe.".to_string(),
+                );
+                lines.push(
+                    "- Suggested next step: retry with a more unique old_text block or include accurate start_line/end_line hints.".to_string(),
+                );
+            } else if lower.contains("missing required arg") || lower.contains("must be") {
+                lines.push(
+                    "- What happened: the edit request did not match the expected tool schema.".to_string(),
+                );
+                lines.push(
+                    "- Suggested next step: correct the tool arguments before retrying; do not change strategy until the payload shape is valid.".to_string(),
+                );
+            } else {
+                lines.push(
+                    "- What happened: the edit tool could not safely apply the requested file change.".to_string(),
+                );
+                lines.push(
+                    "- Suggested next step: use the raw error above as the source of truth, re-read the target content if needed, and retry with a smaller, more precise change.".to_string(),
+                );
+            }
+        }
+        "read_file" | "read_file_range" | "read_many_files" => {
+            lines.push(
+                "- What happened: the file-read request could not return the requested content.".to_string(),
+            );
+            lines.push(
+                "- Suggested next step: verify the path, line range, and workspace scope before relying on assumptions about the file.".to_string(),
+            );
+        }
+        "grep_search" | "codebase_search" | "symbol_search" | "codebase_investigator" => {
+            lines.push(
+                "- What happened: the search/investigation tool did not complete successfully.".to_string(),
+            );
+            lines.push(
+                "- Suggested next step: narrow the query, reduce scope, or switch to a more targeted file/path search.".to_string(),
+            );
+        }
+        _ => {
+            lines.push("- What happened: the tool reported a failure.".to_string());
+            lines.push(
+                "- Suggested next step: treat the raw error above as authoritative, explain it briefly to the user, and choose the smallest safe corrective action.".to_string(),
+            );
+        }
+    }
+
+    lines.join("\n")
 }
 
 #[cfg(test)]
@@ -386,7 +499,8 @@ mod tests {
         apply_multi_patch_to_string, apply_patch_to_string, apply_patch_to_string_with_line_hint,
         apply_semantic_patch_with_service, apply_semantic_patch_writes_with_service, execute_tool,
         grep_search, parse_grep_timeout_ms, stage_semantic_patch_writes, PatchHunk,
-        SemanticPatchWrite, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS, GREP_TIMEOUT_MIN_MS,
+        SemanticPatchWrite, ToolResult, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS,
+        GREP_TIMEOUT_MIN_MS,
     };
     use crate::semantic_patch::{InsertPosition, PatchOperation, PatchTarget, SemanticPatch};
     use crate::symbol_index::SymbolStore;
@@ -433,6 +547,29 @@ mod tests {
         assert!(result.success, "apply_patch_validated should succeed");
         let updated = fs::read_to_string(&file_path).expect("read updated file");
         assert_eq!(updated, "hello\nblade\n");
+    }
+
+    #[test]
+    fn failed_tool_content_includes_recovery_feedback_for_patch_failures() {
+        let result = ToolResult::err(
+            "old_text not found in file (searched 12 chars). Exact match required.",
+        );
+
+        let content = result.to_tool_content_for_tool("apply_patch");
+
+        assert!(content.contains("tool_error: old_text not found"));
+        assert!(content.contains("ZaguanBlade feedback:"));
+        assert!(content.contains("read the current file or relevant line range again"));
+    }
+
+    #[test]
+    fn skipped_tool_content_does_not_add_recovery_feedback() {
+        let result = ToolResult::skipped("User skipped this action.");
+
+        let content = result.to_tool_content_for_tool("apply_patch");
+
+        assert!(content.contains("tool_error: User skipped this action."));
+        assert!(!content.contains("ZaguanBlade feedback:"));
     }
 
     #[test]
@@ -1386,11 +1523,18 @@ fn batch(
                 "elapsed_ms": elapsed_ms,
             })
         } else {
+            let raw_error = result.error.clone().unwrap_or_else(|| "unknown error".to_string());
+            let feedback = if result.skipped {
+                String::new()
+            } else {
+                build_tool_failure_feedback(&tool_name, &raw_error)
+            };
             serde_json::json!({
                 "index": index,
                 "tool": tool_name,
                 "ok": false,
-                "error": result.error.unwrap_or_else(|| "unknown error".to_string()),
+                "error": raw_error,
+                "feedback": feedback,
                 "skipped": result.skipped,
                 "elapsed_ms": elapsed_ms,
             })

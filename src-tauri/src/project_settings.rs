@@ -159,11 +159,12 @@ pub fn get_settings_path(project_path: &Path) -> PathBuf {
         .join("settings.json")
 }
 
-fn line_ignores_zblade(line: &str) -> bool {
+fn line_ignores_local_dir(line: &str, dir_name: &str) -> bool {
     let trimmed = line.trim();
-    matches!(trimmed, ".zblade" | ".zblade/" | "/.zblade" | "/.zblade/")
-        || trimmed.starts_with(".zblade/")
-        || trimmed.starts_with("/.zblade/")
+    let unanchored = trimmed.strip_prefix('/').unwrap_or(trimmed);
+    unanchored == dir_name
+        || unanchored == format!("{}/", dir_name)
+        || unanchored.starts_with(&format!("{}/", dir_name))
 }
 
 fn ensure_project_gitignore_has_zblade(project_path: &Path) {
@@ -181,7 +182,16 @@ fn ensure_project_gitignore_has_zblade(project_path: &Path) {
     };
 
     let existing_content = String::from_utf8_lossy(&existing_bytes);
-    if existing_content.lines().any(line_ignores_zblade) {
+    let missing_ignores: Vec<&str> = [".zblade", ".pnpm-store"]
+        .into_iter()
+        .filter(|dir_name| {
+            !existing_content
+                .lines()
+                .any(|line| line_ignores_local_dir(line, dir_name))
+        })
+        .collect();
+
+    if missing_ignores.is_empty() {
         return;
     }
 
@@ -204,7 +214,11 @@ fn ensure_project_gitignore_has_zblade(project_path: &Path) {
     if !existing_bytes.is_empty() && existing_bytes.last().copied() != Some(b'\n') {
         suffix.push('\n');
     }
-    suffix.push_str("\n# ZaguanBlade local data\n.zblade/\n");
+    suffix.push_str("\n# ZaguanBlade local data\n");
+    for dir_name in missing_ignores {
+        suffix.push_str(dir_name);
+        suffix.push_str("/\n");
+    }
 
     if let Err(err) = file.write_all(suffix.as_bytes()) {
         eprintln!("[zblade] Warning: Failed to append to .gitignore: {}", err);
@@ -361,7 +375,12 @@ mod tests {
         init_zblade_dir(project_path).unwrap();
 
         let content = fs::read_to_string(project_path.join(".gitignore")).unwrap();
-        assert!(content.lines().any(line_ignores_zblade));
+        assert!(content
+            .lines()
+            .any(|line| line_ignores_local_dir(line, ".zblade")));
+        assert!(content
+            .lines()
+            .any(|line| line_ignores_local_dir(line, ".pnpm-store")));
     }
 
     #[test]
@@ -377,7 +396,12 @@ mod tests {
         let content = fs::read_to_string(&gitignore_path).unwrap();
         assert!(content.contains("node_modules/\n"));
         assert!(content.contains("dist/\n"));
-        assert!(content.lines().any(line_ignores_zblade));
+        assert!(content
+            .lines()
+            .any(|line| line_ignores_local_dir(line, ".zblade")));
+        assert!(content
+            .lines()
+            .any(|line| line_ignores_local_dir(line, ".pnpm-store")));
     }
 
     #[test]
@@ -391,8 +415,13 @@ mod tests {
         let content = fs::read_to_string(project_path.join(".gitignore")).unwrap();
         let zblade_lines = content
             .lines()
-            .filter(|line| line_ignores_zblade(line))
+            .filter(|line| line_ignores_local_dir(line, ".zblade"))
+            .count();
+        let pnpm_store_lines = content
+            .lines()
+            .filter(|line| line_ignores_local_dir(line, ".pnpm-store"))
             .count();
         assert_eq!(zblade_lines, 1);
+        assert_eq!(pnpm_store_lines, 1);
     }
 }

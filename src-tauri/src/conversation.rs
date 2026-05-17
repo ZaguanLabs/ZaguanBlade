@@ -97,9 +97,9 @@ impl ConversationHistory {
                                 });
                                 // RFC: Large Tool Result Handling - truncate in local mode
                                 tc.result = Some(if truncate {
-                                    result.to_tool_content_truncated()
+                                    result.to_tool_content_truncated_for_tool(&call.function.name)
                                 } else {
-                                    result.to_tool_content()
+                                    result.to_tool_content_for_tool(&call.function.name)
                                 });
                                 break;
                             }
@@ -243,7 +243,10 @@ impl ConversationHistory {
         results: &[(ToolCall, crate::tools::ToolResult)],
     ) {
         for (call, result) in calls.iter().zip(results.iter()) {
-            let mut tool_msg = ChatMessage::new(ChatRole::Tool, result.1.to_tool_content());
+            let mut tool_msg = ChatMessage::new(
+                ChatRole::Tool,
+                result.1.to_tool_content_for_tool(&call.function.name),
+            );
             tool_msg.tool_call_id = Some(call.id.clone());
             self.messages.push(tool_msg);
         }
