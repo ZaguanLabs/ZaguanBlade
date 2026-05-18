@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { message } from '@tauri-apps/plugin-dialog';
 import { EditorPanel } from './EditorPanel';
 import { TerminalPane, TerminalPaneHandle } from './TerminalPane';
 import { AppBar } from './AppBar';
@@ -340,6 +341,11 @@ const AppLayoutInner: React.FC = () => {
         };
     } | null>(null);
     const pendingTabContentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const activeContentSnapshotRef = useRef<(() => {
+        savedContent?: string;
+        draftContent?: string;
+        isDirty: boolean;
+    }) | null>(null);
 
     useEffect(() => {
         setActiveFile(activeFilePath);
@@ -446,6 +452,14 @@ const AppLayoutInner: React.FC = () => {
             flushPendingTabContentState(activeTabId);
         }, 120);
     }, [activeTabId, flushPendingTabContentState]);
+
+    const handleRegisterContentSnapshot = useCallback((getSnapshot: (() => {
+        savedContent?: string;
+        draftContent?: string;
+        isDirty: boolean;
+    }) | null) => {
+        activeContentSnapshotRef.current = getSnapshot;
+    }, []);
 
     // Tauri event listeners (file open, research progress, change-applied, etc.)
     const { researchProgress, finalizeResearchActivities } = disableLayoutEvents
@@ -599,6 +613,118 @@ const AppLayoutInner: React.FC = () => {
 
     const terminalState = getTerminalState();
 
+    const handleBeforeShutdown = useCallback(async () => {
+        const activeSnapshot = activeContentSnapshotRef.current?.();
+        let tabsForShutdown = tabs;
+
+        if (activeSnapshot && activeTabId) {
+            tabsForShutdown = tabsForShutdown.map(tab => {
+                if (tab.id !== activeTabId) {
+                    return tab;
+                }
+
+                return {
+                    ...tab,
+                    savedContent: activeSnapshot.savedContent ?? tab.savedContent,
+                    draftContent: activeSnapshot.draftContent,
+                    isDirty: activeSnapshot.isDirty,
+                };
+            });
+        }
+
+        const pending = pendingTabContentStateRef.current;
+        if (pending) {
+            tabsForShutdown = tabsForShutdown.map(tab => {
+                if (tab.id !== pending.tabId) {
+                    return tab;
+                }
+
+                return {
+                    ...tab,
+                    savedContent: pending.state.savedContent ?? tab.savedContent,
+                    draftContent: pending.state.draftContent,
+                    isDirty: pending.state.isDirty,
+                };
+            });
+        }
+
+        const dirtyFileTabs = tabsForShutdown.filter(tab => (
+            tab.type === 'file'
+            && tab.path
+            && tab.isDirty
+            && tab.draftContent !== undefined
+        ));
+
+        if (dirtyFileTabs.length === 0) {
+            return true;
+        }
+
+        const fileList = dirtyFileTabs
+            .slice(0, 5)
+            .map(tab => `- ${tab.title || tab.path}`)
+            .join('\n');
+        const overflow = dirtyFileTabs.length > 5
+            ? `\n${t('editor.shutdownUnsaved.overflow', { count: dirtyFileTabs.length - 5 })}`
+            : '';
+        const fileWord = t(dirtyFileTabs.length === 1
+            ? 'editor.shutdownUnsaved.fileSingular'
+            : 'editor.shutdownUnsaved.filePlural');
+        const saveLabel = t('common.save');
+        const dontSaveLabel = t('editor.shutdownUnsaved.dontSave');
+        const cancelLabel = t('common.cancel');
+
+        const result = await message(
+            t('editor.shutdownUnsaved.message', {
+                count: dirtyFileTabs.length,
+                fileWord,
+                fileList,
+                overflow,
+            }),
+            {
+                title: t('editor.unsavedChanges'),
+                kind: 'warning',
+                buttons: {
+                    yes: saveLabel,
+                    no: dontSaveLabel,
+                    cancel: cancelLabel,
+                },
+            },
+        );
+
+        if (result === cancelLabel || result === 'Cancel') {
+            return false;
+        }
+
+        if (result === dontSaveLabel || result === 'No') {
+            return true;
+        }
+
+        try {
+            await Promise.all(dirtyFileTabs.map(tab => invoke('write_file_content', {
+                path: tab.path,
+                content: tab.draftContent ?? '',
+            })));
+            pendingTabContentStateRef.current = null;
+            if (pendingTabContentTimerRef.current) {
+                clearTimeout(pendingTabContentTimerRef.current);
+                pendingTabContentTimerRef.current = null;
+            }
+            return true;
+        } catch (error) {
+            console.error('[Layout] Failed to save dirty files before shutdown:', error);
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            await message(
+                t('editor.shutdownUnsaved.saveFailedMessage', { error: errorMessage }),
+                {
+                    title: t('editor.saveFailed'),
+                    kind: 'error',
+                    buttons: { ok: t('common.ok') },
+                },
+            );
+            return false;
+        }
+    }, [activeTabId, t, tabs]);
+
     // Project state persistence
     const { loaded: stateLoaded, isClosing } = disableProjectState
         ? { loaded: true, isClosing: false }
@@ -612,6 +738,7 @@ const AppLayoutInner: React.FC = () => {
             terminalHeight,
             chatPanelWidth,
             onStateLoaded: handleStateLoaded,
+            beforeShutdown: handleBeforeShutdown,
         });
 
     // Cache warmup (Blade Protocol v2.1)
@@ -845,6 +972,7 @@ const AppLayoutInner: React.FC = () => {
                                         draftContent={activeTab.draftContent ?? null}
                                         isDirty={Boolean(activeTab.isDirty)}
                                         onContentStateChange={handleActiveTabContentStateChange}
+                                        onRegisterContentSnapshot={handleRegisterContentSnapshot}
                                         onOpenSettings={() => setIsSettingsOpen(true)}
                                     />
                                 </div>

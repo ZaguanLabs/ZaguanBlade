@@ -84,6 +84,14 @@
       "manageSubscription": "Gestionar suscripción",
       "noApiKey": "¿No tienes clave API? Usa IA local.",
       "localPrivacy": "Tu código se queda en tu equipo."
+    },
+    "shutdownUnsaved": {
+      "fileSingular": "archivo",
+      "filePlural": "archivos",
+      "overflow": "- ...y {{count}} más",
+      "message": "Tienes cambios sin guardar en {{count}} {{fileWord}}:\n\n{{fileList}}{{overflow}}\n\n¿Quieres guardar los cambios antes de salir?",
+      "dontSave": "No guardar",
+      "saveFailedMessage": "No se pudieron guardar los cambios antes de salir:\n\n{{error}}"
     }
   },
   "chat": {
@@ -157,8 +165,11 @@
     "composer": {
       "planningReadonly": "El modo planificación es de solo lectura",
       "planningNoEdits": "No deben ejecutarse ediciones ni comandos",
-      "enterToSend": "Intro para enviar",
-      "shiftEnterNewline": "Mayús+Intro para salto de línea"
+      "enterToSend": "Enter para enviar",
+      "shiftEnterNewline": "Mayús+Intro para salto de línea",
+      "planPlaceholder": "Planifica un cambio...",
+      "requestPlaceholder": "Pregunta o solicita un cambio...",
+      "shiftEnterForNewline": "Mayús+Enter para nueva línea"
     },
     "tabs": {
       "chat": "Chat",
@@ -261,7 +272,9 @@
     "changeAccepted": "Cambio aceptado",
     "changeRejected": "Cambio rechazado",
     "allChangesAccepted": "Todos los cambios aceptados",
-    "allChangesRejected": "Todos los cambios rechazados"
+    "allChangesRejected": "Todos los cambios rechazados",
+    "acceptChangesTitle": "Aceptar cambios (mantener en disco)",
+    "rejectChangesTitle": "Rechazar cambios (volver al original)"
   },
   "approval": {
     "title": "Aprobar cambios",
@@ -886,5 +899,15 @@
   "outline": {
     "loadingStructure": "Analizando estructura...",
     "noSymbols": "No se han encontrado símbolos."
+  },
+  "protocolExplorer": {
+    "title": "Explorador de protocolo",
+    "open": "Abrir explorador de protocolo",
+    "pause": "Pausar",
+    "resume": "Reanudar",
+    "clearLogs": "Borrar registros",
+    "waitingForEvents": "Esperando eventos...",
+    "eventId": "ID del evento: {{id}}",
+    "causedByIntent": "Causado por intención: {{id}}"
   }
 }

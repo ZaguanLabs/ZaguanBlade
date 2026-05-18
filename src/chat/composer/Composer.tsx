@@ -1,4 +1,5 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { CaptureResult } from '../../types/screenshot';
 import type { ChatMode, ComposerMention, ModelInfo, QueuedRequest } from '../../types/chat';
 import { ComposerTextarea, type ComposerTextareaHandle, replaceActiveTrigger } from './ComposerTextarea';
@@ -40,6 +41,7 @@ export const Composer: React.FC<ComposerProps> = ({
     prefillRequest,
     onPrefillConsumed,
 }) => {
+    const { t } = useTranslation();
     const [text, setText] = useState('');
     const [mentionQuery, setMentionQuery] = useState<string | null>(null);
     const [selectedSuggestionIndex] = useState(0);
@@ -48,7 +50,7 @@ export const Composer: React.FC<ComposerProps> = ({
     const textareaDomCursorRef = useRef(0);
     const isLocalOnly = models.length > 0 && models.every((model) => model.provider === 'ollama' || model.provider === 'openai-compat');
     const isGlmModel = selectedModelId.toLowerCase().includes('glm-4') || selectedModelId.toLowerCase().includes('glm-5');
-    const imageDisabledReason = isLocalOnly ? 'Images require a subscription model.' : isGlmModel ? 'Images are not supported by this model.' : undefined;
+    const imageDisabledReason = isLocalOnly ? t('chat.imageNoSubscription') : isGlmModel ? t('chat.imageNotSupported') : undefined;
     const attachments = useComposerAttachments({
         disabledImages: isLocalOnly || isGlmModel,
         disabledReason: imageDisabledReason,
@@ -166,7 +168,7 @@ export const Composer: React.FC<ComposerProps> = ({
                                     textareaDomCursorRef.current = value.length;
                                 }}
                                 disabled={disabled}
-                                placeholder={chatMode === 'planning' ? 'Plan a change...' : 'Ask or request a change...'}
+                                placeholder={chatMode === 'planning' ? t('chat.composer.planPlaceholder') : t('chat.composer.requestPlaceholder')}
                                 showSuggestions={mentionQuery !== null}
                                 suggestions={suggestions}
                                 selectedSuggestionIndex={selectedSuggestionIndex}
@@ -177,8 +179,8 @@ export const Composer: React.FC<ComposerProps> = ({
                             />
                         </div>
                         <div className="flex items-center justify-between border-t border-(--border-subtle)/40 px-2 py-1 text-[10px] text-(--fg-tertiary)">
-                            <span>Enter to send</span>
-                            <span>Shift-Enter for newline</span>
+                            <span>{t('chat.composer.enterToSend')}</span>
+                            <span>{t('chat.composer.shiftEnterForNewline')}</span>
                         </div>
                     </div>
                 </div>

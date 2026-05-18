@@ -87,7 +87,7 @@ const WelcomePage: React.FC<{
                 <div className="mb-8 flex justify-center">
                     <img
                         src={zbladeLogoUrl}
-                        alt="Zaguán Blade"
+                        alt={t('app.name')}
                         className="w-32 h-32 object-contain drop-shadow-lg"
                         draggable={false}
                     />
@@ -158,6 +158,11 @@ interface EditorPanelProps {
         draftContent?: string;
         isDirty: boolean;
     }) => void;
+    onRegisterContentSnapshot?: (getSnapshot: (() => {
+        savedContent?: string;
+        draftContent?: string;
+        isDirty: boolean;
+    }) | null) => void;
     onOpenSettings?: () => void;
 }
 
@@ -170,6 +175,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     draftContent,
     isDirty = false,
     onContentStateChange,
+    onRegisterContentSnapshot,
     onOpenSettings,
 }) => {
     recordDebugPerf('EditorPanel.render');
@@ -227,12 +233,32 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         onContentStateChangeRef.current = onContentStateChange;
     }, [onContentStateChange]);
 
-    const isMarkdownFile = activeFile?.endsWith('.md') || activeFile?.endsWith('.markdown') || false;
-    const isPdfFile = activeFile?.endsWith('.pdf') || false;
-
     const getActiveEditorContent = useCallback(() => {
         return editorRef.current?.getContent() ?? liveContentRef.current;
     }, []);
+
+    useEffect(() => {
+        if (!onRegisterContentSnapshot) {
+            return;
+        }
+
+        onRegisterContentSnapshot(() => {
+            const currentContent = getActiveEditorContent();
+            const nextIsDirty = currentContent !== baseContentRef.current;
+            return {
+                savedContent: nextIsDirty ? baseContentRef.current : currentContent,
+                draftContent: nextIsDirty ? currentContent : undefined,
+                isDirty: nextIsDirty,
+            };
+        });
+
+        return () => {
+            onRegisterContentSnapshot(null);
+        };
+    }, [getActiveEditorContent, onRegisterContentSnapshot]);
+
+    const isMarkdownFile = activeFile?.endsWith('.md') || activeFile?.endsWith('.markdown') || false;
+    const isPdfFile = activeFile?.endsWith('.pdf') || false;
 
     const scheduleDocumentSync = useCallback(() => {
         if (!activeFile || isPdfFile) {
@@ -344,10 +370,12 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         }
 
         if (isDirty && draftContent != null) {
-            setContent(draftContent);
-            setContentOwnerPath(activeFile);
-            liveContentRef.current = draftContent;
-            externalContentVersionRef.current += 1;
+            if (isFileSwitch || contentOwnerPath !== activeFile) {
+                setContent(draftContent);
+                setContentOwnerPath(activeFile);
+                liveContentRef.current = draftContent;
+                externalContentVersionRef.current += 1;
+            }
             if (savedContent != null) {
                 baseContentRef.current = savedContent;
             }
@@ -382,7 +410,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         }
 
         awaitingInitialSyncRef.current = true;
-    }, [activeFile, draftContent, isDirty, savedContent, isMarkdownFile]);
+    }, [activeFile, contentOwnerPath, draftContent, isDirty, savedContent, isMarkdownFile]);
 
     useEffect(() => {
         documentVersionRef.current = 0;
@@ -614,13 +642,16 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 
     const handleEditorDocumentChange = () => {
         scheduleDocumentSync();
+        const nextText = getActiveEditorContent();
+        liveContentRef.current = nextText;
+        const nextIsDirty = nextText !== baseContentRef.current;
+        pendingContentStateRef.current = {
+            savedContent: nextIsDirty ? baseContentRef.current : nextText,
+            draftContent: nextIsDirty ? nextText : undefined,
+            isDirty: nextIsDirty,
+        };
 
         if (!lastPropagatedDirtyRef.current) {
-            pendingContentStateRef.current = {
-                savedContent: baseContentRef.current,
-                draftContent: undefined,
-                isDirty: true,
-            };
             flushPendingContentState();
         }
 
@@ -630,7 +661,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 
         contentStateTimerRef.current = setTimeout(() => {
             contentStateTimerRef.current = null;
-            const nextText = getActiveEditorContent();
+            const nextText = liveContentRef.current;
             liveContentRef.current = nextText;
             const nextIsDirty = nextText !== baseContentRef.current;
             pendingContentStateRef.current = {

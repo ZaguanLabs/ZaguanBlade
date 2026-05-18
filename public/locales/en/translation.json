@@ -84,6 +84,14 @@
       "manageSubscription": "Manage Subscription",
       "noApiKey": "No API key? Use Local AI.",
       "localPrivacy": "Your code stays on your machine."
+    },
+    "shutdownUnsaved": {
+      "fileSingular": "file",
+      "filePlural": "files",
+      "overflow": "- ...and {{count}} more",
+      "message": "You have unsaved changes in {{count}} {{fileWord}}:\n\n{{fileList}}{{overflow}}\n\nSave changes before quitting?",
+      "dontSave": "Don't Save",
+      "saveFailedMessage": "Failed to save changes before quitting:\n\n{{error}}"
     }
   },
   "chat": {
@@ -158,7 +166,10 @@
       "planningReadonly": "Planning mode is read-only",
       "planningNoEdits": "No edits or commands should run",
       "enterToSend": "Enter to send",
-      "shiftEnterNewline": "Shift+Enter for newline"
+      "shiftEnterNewline": "Shift+Enter for newline",
+      "planPlaceholder": "Plan a change...",
+      "requestPlaceholder": "Ask or request a change...",
+      "shiftEnterForNewline": "Shift-Enter for newline"
     },
     "tabs": {
       "chat": "Chat",
@@ -261,7 +272,9 @@
     "changeAccepted": "Change accepted",
     "changeRejected": "Change rejected",
     "allChangesAccepted": "All changes accepted",
-    "allChangesRejected": "All changes rejected"
+    "allChangesRejected": "All changes rejected",
+    "acceptChangesTitle": "Accept changes (keep on disk)",
+    "rejectChangesTitle": "Reject changes (revert to original)"
   },
   "approval": {
     "title": "Approve Changes",
@@ -890,5 +903,15 @@
   "outline": {
     "loadingStructure": "Parsing structure...",
     "noSymbols": "No symbols found."
+  },
+  "protocolExplorer": {
+    "title": "Protocol Explorer",
+    "open": "Open Protocol Explorer",
+    "pause": "Pause",
+    "resume": "Resume",
+    "clearLogs": "Clear Logs",
+    "waitingForEvents": "Waiting for events...",
+    "eventId": "Event ID: {{id}}",
+    "causedByIntent": "Caused by Intent: {{id}}"
   }
 }

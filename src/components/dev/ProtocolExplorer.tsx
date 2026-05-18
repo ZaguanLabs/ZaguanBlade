@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { subscribeBladeEvents } from '../../services/bladeEvents';
 import { X, Play, Pause, Trash2, Activity, ArrowRight, Clock, Box } from 'lucide-react';
 import { BladeEvent, BladeEventEnvelope } from '../../types/blade';
@@ -16,6 +17,7 @@ interface LogEntry {
 }
 
 export const ProtocolExplorer: React.FC = () => {
+    const { t } = useTranslation();
     const [logs, setLogs] = useState<LogEntry[]>([]);
     const [isOpen, setIsOpen] = useState(false);
     const [isPaused, setIsPaused] = useState(false);
@@ -55,7 +57,7 @@ export const ProtocolExplorer: React.FC = () => {
             <button
                 onClick={() => setIsOpen(true)}
                 className="fixed bottom-4 right-4 z-50 p-2 bg-(--bg-surface) border border-(--border-subtle) rounded-full shadow-(--shadow-lg) hover:bg-(--bg-surface-hover) transition-all text-xs text-(--fg-tertiary) flex items-center gap-2 group"
-                title="Open Protocol Explorer"
+                title={t('protocolExplorer.open')}
             >
                 <Activity className="w-4 h-4 text-(--accent-mention) group-hover:text-(--accent-ai)" />
             </button>
@@ -68,20 +70,20 @@ export const ProtocolExplorer: React.FC = () => {
             <div className="flex items-center justify-between px-3 py-2 border-b border-(--border-subtle) bg-(--bg-surface)/50">
                 <div className="flex items-center gap-2 text-(--fg-secondary) font-semibold uppercase tracking-wider">
                     <Activity className="w-3 h-3 text-(--accent-mention)" />
-                    Protocol Explorer
+                    {t('protocolExplorer.title')}
                 </div>
                 <div className="flex items-center gap-1">
                     <button
                         onClick={() => setIsPaused(!isPaused)}
                         className={`p-1 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface-hover) ${isPaused ? 'text-(--accent-warning)' : 'text-(--fg-tertiary)'}`}
-                        title={isPaused ? "Resume" : "Pause"}
+                        title={isPaused ? t('protocolExplorer.resume') : t('protocolExplorer.pause')}
                     >
                         {isPaused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}
                     </button>
                     <button
                         onClick={() => setLogs([])}
                         className="p-1 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface-hover) text-(--fg-tertiary) hover:text-(--state-danger)"
-                        title="Clear Logs"
+                        title={t('protocolExplorer.clearLogs')}
                     >
                         <Trash2 className="w-3 h-3" />
                     </button>
@@ -99,7 +101,7 @@ export const ProtocolExplorer: React.FC = () => {
             <div className="flex-1 overflow-y-auto p-2 space-y-2 scrollbar-thin scrollbar-thumb-(--bg-surface-hover)">
                 {logs.length === 0 && (
                     <div className="text-center text-(--fg-tertiary) mt-20 italic">
-                        Waiting for events...
+                        {t('protocolExplorer.waitingForEvents')}
                     </div>
                 )}
                 {logs.map((log) => (
@@ -109,11 +111,11 @@ export const ProtocolExplorer: React.FC = () => {
                             <Clock className="w-3 h-3" />
                             <span>{new Date(log.receivedAt).toLocaleTimeString().split(' ')[0]}.{String(new Date(log.receivedAt).getMilliseconds()).padStart(3, '0')}</span>
                             <span className="text-(--fg-tertiary)">|</span>
-                            <span className="font-mono text-(--fg-tertiary)" title={`Event ID: ${log.id}`}>{log.id.slice(0, 8)}...</span>
+                            <span className="font-mono text-(--fg-tertiary)" title={t('protocolExplorer.eventId', { id: log.id })}>{log.id.slice(0, 8)}...</span>
                             {log.causality_id && (
                                 <>
                                     <ArrowRight className="w-3 h-3 text-(--fg-tertiary)" />
-                                    <span className="bg-(--bg-surface-hover)/50 px-1 rounded-[calc(var(--panel-radius)*0.25)] text-(--fg-tertiary)" title={`Caused by Intent: ${log.causality_id}`}>{log.causality_id.slice(0, 8)}...</span>
+                                    <span className="bg-(--bg-surface-hover)/50 px-1 rounded-[calc(var(--panel-radius)*0.25)] text-(--fg-tertiary)" title={t('protocolExplorer.causedByIntent', { id: log.causality_id })}>{log.causality_id.slice(0, 8)}...</span>
                                 </>
                             )}
                         </div>
@@ -128,7 +130,7 @@ export const ProtocolExplorer: React.FC = () => {
                                 <span className="text-(--fg-tertiary) mx-1">::</span>
                                 <span className="text-(--fg-secondary)">
                                     {/* Try to extract inner variant name */}
-                                    {Object.keys(log.event.payload || {})[0] || 'Unknown'}
+                                    {Object.keys(log.event.payload || {})[0] || t('common.unknown')}
                                 </span>
                             </div>
                         </div>

@@ -37,6 +37,7 @@ interface UseProjectStateOptions {
     terminalHeight: number;
     chatPanelWidth: number;
     onStateLoaded?: (state: ProjectState) => void;
+    beforeShutdown?: () => Promise<boolean>;
 }
 
 interface UseProjectStateReturn {
@@ -60,6 +61,7 @@ export function useProjectState({
     terminalHeight,
     chatPanelWidth,
     onStateLoaded,
+    beforeShutdown,
 }: UseProjectStateOptions): UseProjectStateReturn {
     const [loaded, setLoaded] = useState(false);
     const [isClosing, setIsClosing] = useState(false);
@@ -71,6 +73,11 @@ export function useProjectState({
     const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const lastSavedSignatureRef = useRef<string | null>(null);
     const lastObservedSignatureRef = useRef<string | null>(null);
+    const beforeShutdownRef = useRef(beforeShutdown);
+
+    useEffect(() => {
+        beforeShutdownRef.current = beforeShutdown;
+    }, [beforeShutdown]);
 
     // Helper to construct state object
     const constructState = useCallback((): ProjectState | null => {
@@ -206,7 +213,7 @@ export function useProjectState({
                 clearTimeout(saveTimeoutRef.current);
             }
         };
-    }, [projectPath, tabs, activeTabId, selectedModelId, terminals, activeTerminalId, terminalHeight, chatPanelWidth, loaded, saveState]);
+    }, [projectPath, tabs, activeTabId, selectedModelId, terminals, activeTerminalId, terminalHeight, chatPanelWidth, loaded, saveState, constructState]);
 
     // Exit Handler - The "Deep Fix"
     // We delegate the exit-save-sequence entirely to the backend
@@ -228,6 +235,20 @@ export function useProjectState({
 
                     isClosingRef.current = true;
                     setIsClosing(true); // Trigger UI overlay
+
+                    try {
+                        const shouldContinue = await beforeShutdownRef.current?.();
+                        if (shouldContinue === false) {
+                            isClosingRef.current = false;
+                            setIsClosing(false);
+                            return;
+                        }
+                    } catch (e) {
+                        console.error('Before shutdown hook failed:', e);
+                        isClosingRef.current = false;
+                        setIsClosing(false);
+                        return;
+                    }
 
                     // Construct final state
                     const finalState = constructState();

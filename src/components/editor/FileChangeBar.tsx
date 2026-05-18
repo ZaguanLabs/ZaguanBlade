@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { Check, X, Plus, Minus } from 'lucide-react';
 import type { UncommittedChange } from '../../types/uncommitted';
 
@@ -15,6 +16,7 @@ export const FileChangeBar: React.FC<FileChangeBarProps> = ({
   onReject,
   disabled = false,
 }) => {
+  const { t } = useTranslation();
   const fileName = change.file_path.split('/').pop() || change.file_path;
 
   return (
@@ -57,10 +59,10 @@ export const FileChangeBar: React.FC<FileChangeBarProps> = ({
         disabled={disabled}
         className="flex items-center gap-1 text-[11px] font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         style={{ color: 'var(--accent-mention)' }}
-        title="Accept changes (keep on disk)"
+        title={t('diff.acceptChangesTitle')}
       >
         <Check className="w-3.5 h-3.5" />
-        Accept
+        {t('diff.accept')}
       </button>
 
       {/* Reject */}
@@ -69,10 +71,10 @@ export const FileChangeBar: React.FC<FileChangeBarProps> = ({
         disabled={disabled}
         className="flex items-center gap-1 text-[11px] font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         style={{ color: 'var(--state-danger)' }}
-        title="Reject changes (revert to original)"
+        title={t('diff.rejectChangesTitle')}
       >
         <X className="w-3.5 h-3.5" />
-        Reject
+        {t('diff.reject')}
       </button>
     </div>
   );
