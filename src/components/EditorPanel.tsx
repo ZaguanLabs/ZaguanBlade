@@ -175,6 +175,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     recordDebugPerf('EditorPanel.render');
     const { t } = useTranslation();
     const [content, setContent] = useState(() => draftContent ?? savedContent ?? '');
+    const [contentOwnerPath, setContentOwnerPath] = useState<string | null>(() => activeFile);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [reloadTrigger, setReloadTrigger] = useState(0);
@@ -309,6 +310,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 
         if (!activeFile) {
             setContent('');
+            setContentOwnerPath(null);
             baseContentRef.current = '';
             liveContentRef.current = '';
             externalContentVersionRef.current += 1;
@@ -330,6 +332,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 
             if (savedContent != null) {
                 setContent(savedContent);
+                setContentOwnerPath(activeFile);
                 liveContentRef.current = savedContent;
                 externalContentVersionRef.current += 1;
                 awaitingInitialSyncRef.current = false;
@@ -342,6 +345,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 
         if (isDirty && draftContent != null) {
             setContent(draftContent);
+            setContentOwnerPath(activeFile);
             liveContentRef.current = draftContent;
             externalContentVersionRef.current += 1;
             if (savedContent != null) {
@@ -358,6 +362,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 
             if (isFileSwitch && savedContent != null) {
                 setContent(savedContent);
+                setContentOwnerPath(activeFile);
                 liveContentRef.current = savedContent;
                 externalContentVersionRef.current += 1;
             }
@@ -368,6 +373,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 
         if (savedContent != null) {
             setContent(savedContent);
+            setContentOwnerPath(activeFile);
             liveContentRef.current = savedContent;
             baseContentRef.current = savedContent;
             externalContentVersionRef.current += 1;
@@ -475,6 +481,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     console.debug('[EDITOR] Received content for:', activeFile);
                     awaitingInitialSyncRef.current = false;
                     setContent(fileEvent.payload.data);
+                    setContentOwnerPath(activeFile);
                     liveContentRef.current = fileEvent.payload.data;
                     baseContentRef.current = fileEvent.payload.data;
                     externalContentVersionRef.current += 1;
@@ -511,6 +518,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         async function loadFile() {
             if (!activeFile) {
                 setContent('');
+                setContentOwnerPath(null);
                 liveContentRef.current = '';
                 return;
             }
@@ -640,6 +648,10 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         pendingNavigation.current = { path, line, col: character };
     };
 
+    const activeEditorContent = contentOwnerPath === activeFile
+        ? content
+        : (isDirty && draftContent != null ? draftContent : savedContent ?? '');
+
     if (!activeFile) {
         return <WelcomePage hasRemoteApiKey={hasRemoteApiKey} onOpenSettings={onOpenSettings} />;
     }
@@ -668,7 +680,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     <Suspense fallback={<div className="h-full w-full bg-(--bg-editor)" />}>
                         <MarkdownEditor
                             ref={editorRef}
-                            content={content}
+                            content={activeEditorContent}
                             externalContentVersion={externalContentVersionRef.current}
                             onDocumentChange={handleEditorDocumentChange}
                             onSave={handleSave}
@@ -678,7 +690,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 ) : (
                     <EditorWithChangeBar
                         editorRef={editorRef}
-                        content={content}
+                        content={activeEditorContent}
                         externalContentVersion={externalContentVersionRef.current}
                         onDocumentChange={handleEditorDocumentChange}
                         handleSave={handleSave}
