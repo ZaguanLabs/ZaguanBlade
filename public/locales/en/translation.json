@@ -91,7 +91,11 @@
       "overflow": "- ...and {{count}} more",
       "message": "You have unsaved changes in {{count}} {{fileWord}}:\n\n{{fileList}}{{overflow}}\n\nSave changes before quitting?",
       "dontSave": "Don't Save",
-      "saveFailedMessage": "Failed to save changes before quitting:\n\n{{error}}"
+      "saveFailedMessage": "Failed to save changes before quitting:\n\n{{error}}",
+      "summary": "You have unsaved changes in {{count}} {{fileWord}}.",
+      "question": "Save changes before quitting?",
+      "overflowPlain": "...and {{count}} more",
+      "saveFailedSummary": "Your changes could not be saved before quitting."
     }
   },
   "chat": {

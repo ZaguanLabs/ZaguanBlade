@@ -91,7 +91,11 @@
       "overflow": "- ...y {{count}} más",
       "message": "Tienes cambios sin guardar en {{count}} {{fileWord}}:\n\n{{fileList}}{{overflow}}\n\n¿Quieres guardar los cambios antes de salir?",
       "dontSave": "No guardar",
-      "saveFailedMessage": "No se pudieron guardar los cambios antes de salir:\n\n{{error}}"
+      "saveFailedMessage": "No se pudieron guardar los cambios antes de salir:\n\n{{error}}",
+      "summary": "Tienes cambios sin guardar en {{count}} {{fileWord}}.",
+      "question": "¿Quieres guardar los cambios antes de salir?",
+      "overflowPlain": "...y {{count}} más",
+      "saveFailedSummary": "No se pudieron guardar tus cambios antes de salir."
     }
   },
   "chat": {

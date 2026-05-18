@@ -3,11 +3,10 @@ import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { message } from '@tauri-apps/plugin-dialog';
 import { EditorPanel } from './EditorPanel';
 import { TerminalPane, TerminalPaneHandle } from './TerminalPane';
 import { AppBar } from './AppBar';
-import { GitBranch, Settings, Clock } from 'lucide-react';
+import { AlertTriangle, GitBranch, Settings, Clock } from 'lucide-react';
 import { useStartupBootstrap } from '../contexts/StartupBootstrapContext';
 import { EditorProvider, useEditorActions } from '../contexts/EditorContext';
 import { useChatPanelV3Flag } from '../contexts/ChatPanelFlagContext';
@@ -31,6 +30,19 @@ const DocumentViewer = React.lazy(() => import('./DocumentViewer').then(module =
 const SettingsModal = React.lazy(() => import('./SettingsModal').then(module => ({ default: module.SettingsModal })));
 const StorageSetupModal = React.lazy(() => import('./StorageSetupModal').then(module => ({ default: module.StorageSetupModal })));
 const ProtocolExplorer = React.lazy(() => import('./dev/ProtocolExplorer').then(module => ({ default: module.ProtocolExplorer })));
+
+type ShutdownDecision = 'save' | 'discard' | 'cancel';
+
+interface ShutdownPromptState {
+    files: string[];
+    overflowCount: number;
+    resolve: (decision: ShutdownDecision) => void;
+}
+
+interface ShutdownSaveErrorState {
+    message: string;
+    resolve: () => void;
+}
 
 function normalizePath(value: string): string {
     return value.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
@@ -241,6 +253,8 @@ const AppLayoutInner: React.FC = () => {
     // Sidebar State
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [activeSidebar, setActiveSidebar] = useState<'explorer' | 'git' | 'history'>('explorer');
+    const [shutdownPrompt, setShutdownPrompt] = useState<ShutdownPromptState | null>(null);
+    const [shutdownSaveError, setShutdownSaveError] = useState<ShutdownSaveErrorState | null>(null);
     const isGitSidebarVisible = isSidebarOpen && activeSidebar === 'git';
 
     const chat = disableChatHook ? useNoopChat() : useChat();
@@ -346,6 +360,51 @@ const AppLayoutInner: React.FC = () => {
         draftContent?: string;
         isDirty: boolean;
     }) | null>(null);
+
+    const requestShutdownDecision = useCallback((files: string[], overflowCount: number) => (
+        new Promise<ShutdownDecision>((resolve) => {
+            setShutdownPrompt({ files, overflowCount, resolve });
+        })
+    ), []);
+
+    const requestShutdownSaveErrorAck = useCallback((message: string) => (
+        new Promise<void>((resolve) => {
+            setShutdownSaveError({ message, resolve });
+        })
+    ), []);
+
+    const handleShutdownPromptDecision = useCallback((decision: ShutdownDecision) => {
+        setShutdownPrompt((current) => {
+            current?.resolve(decision);
+            return null;
+        });
+    }, []);
+
+    const handleShutdownSaveErrorAck = useCallback(() => {
+        setShutdownSaveError((current) => {
+            current?.resolve();
+            return null;
+        });
+    }, []);
+
+    useEffect(() => {
+        if (!shutdownPrompt && !shutdownSaveError) {
+            return;
+        }
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                if (shutdownSaveError) {
+                    handleShutdownSaveErrorAck();
+                    return;
+                }
+                handleShutdownPromptDecision('cancel');
+            }
+        };
+
+        document.addEventListener('keydown', handleKeyDown);
+        return () => document.removeEventListener('keydown', handleKeyDown);
+    }, [handleShutdownPromptDecision, handleShutdownSaveErrorAck, shutdownPrompt, shutdownSaveError]);
 
     useEffect(() => {
         setActiveFile(activeFilePath);
@@ -659,43 +718,16 @@ const AppLayoutInner: React.FC = () => {
             return true;
         }
 
-        const fileList = dirtyFileTabs
+        const filesForPrompt = dirtyFileTabs
             .slice(0, 5)
-            .map(tab => `- ${tab.title || tab.path}`)
-            .join('\n');
-        const overflow = dirtyFileTabs.length > 5
-            ? `\n${t('editor.shutdownUnsaved.overflow', { count: dirtyFileTabs.length - 5 })}`
-            : '';
-        const fileWord = t(dirtyFileTabs.length === 1
-            ? 'editor.shutdownUnsaved.fileSingular'
-            : 'editor.shutdownUnsaved.filePlural');
-        const saveLabel = t('common.save');
-        const dontSaveLabel = t('editor.shutdownUnsaved.dontSave');
-        const cancelLabel = t('common.cancel');
+            .map(tab => tab.title || tab.path || t('editor.untitled'));
+        const decision = await requestShutdownDecision(filesForPrompt, Math.max(0, dirtyFileTabs.length - filesForPrompt.length));
 
-        const result = await message(
-            t('editor.shutdownUnsaved.message', {
-                count: dirtyFileTabs.length,
-                fileWord,
-                fileList,
-                overflow,
-            }),
-            {
-                title: t('editor.unsavedChanges'),
-                kind: 'warning',
-                buttons: {
-                    yes: saveLabel,
-                    no: dontSaveLabel,
-                    cancel: cancelLabel,
-                },
-            },
-        );
-
-        if (result === cancelLabel || result === 'Cancel') {
+        if (decision === 'cancel') {
             return false;
         }
 
-        if (result === dontSaveLabel || result === 'No') {
+        if (decision === 'discard') {
             return true;
         }
 
@@ -713,17 +745,10 @@ const AppLayoutInner: React.FC = () => {
         } catch (error) {
             console.error('[Layout] Failed to save dirty files before shutdown:', error);
             const errorMessage = error instanceof Error ? error.message : String(error);
-            await message(
-                t('editor.shutdownUnsaved.saveFailedMessage', { error: errorMessage }),
-                {
-                    title: t('editor.saveFailed'),
-                    kind: 'error',
-                    buttons: { ok: t('common.ok') },
-                },
-            );
+            await requestShutdownSaveErrorAck(errorMessage);
             return false;
         }
-    }, [activeTabId, t, tabs]);
+    }, [activeTabId, requestShutdownDecision, requestShutdownSaveErrorAck, t, tabs]);
 
     // Project state persistence
     const { loaded: stateLoaded, isClosing } = disableProjectState
@@ -1217,6 +1242,130 @@ const AppLayoutInner: React.FC = () => {
             <Suspense fallback={null}>
                 <ProtocolExplorer />
             </Suspense>
+
+            {shutdownPrompt && (
+                <div className="fixed inset-0 z-9999 flex items-center justify-center p-4 animate-in fade-in duration-(--transition-fast)">
+                    <button
+                        type="button"
+                        aria-label={t('common.cancel')}
+                        className="absolute inset-0 bg-(--glass-bg) backdrop-blur-sm"
+                        onClick={() => handleShutdownPromptDecision('cancel')}
+                    />
+                    <div
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="shutdown-unsaved-title"
+                        className="relative w-full max-w-lg overflow-hidden rounded-(--panel-radius) border border-(--border-focus) bg-(--bg-panel) shadow-(--shadow-xl) animate-in fade-in zoom-in-95 duration-(--transition-base)"
+                    >
+                        <div className="flex items-start gap-3 border-b border-(--border-subtle) bg-(--bg-surface)/70 px-5 py-4">
+                            <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-[calc(var(--panel-radius)*0.7)] border border-[color-mix(in_srgb,var(--accent-warning)_38%,transparent)] bg-[color-mix(in_srgb,var(--accent-warning)_14%,transparent)] text-(--accent-warning)">
+                                <AlertTriangle className="h-5 w-5" />
+                            </div>
+                            <div className="min-w-0">
+                                <h2 id="shutdown-unsaved-title" className="text-base font-semibold text-(--fg-primary)">
+                                    {t('editor.unsavedChanges')}
+                                </h2>
+                                <p className="mt-1 text-sm leading-5 text-(--fg-secondary)">
+                                    {t('editor.shutdownUnsaved.summary', {
+                                        count: shutdownPrompt.files.length + shutdownPrompt.overflowCount,
+                                        fileWord: t((shutdownPrompt.files.length + shutdownPrompt.overflowCount) === 1
+                                            ? 'editor.shutdownUnsaved.fileSingular'
+                                            : 'editor.shutdownUnsaved.filePlural'),
+                                    })}
+                                </p>
+                            </div>
+                        </div>
+                        <div className="px-5 py-4">
+                            <div className="rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-app)/60 p-3">
+                                <ul className="space-y-1.5">
+                                    {shutdownPrompt.files.map((file) => (
+                                        <li key={file} className="flex items-center gap-2 text-sm text-(--fg-primary)">
+                                            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-(--accent-warning)" />
+                                            <span className="min-w-0 truncate font-mono text-xs">{file}</span>
+                                        </li>
+                                    ))}
+                                    {shutdownPrompt.overflowCount > 0 && (
+                                        <li className="pl-3.5 text-xs text-(--fg-tertiary)">
+                                            {t('editor.shutdownUnsaved.overflowPlain', { count: shutdownPrompt.overflowCount })}
+                                        </li>
+                                    )}
+                                </ul>
+                            </div>
+                            <p className="mt-4 text-sm text-(--fg-secondary)">
+                                {t('editor.shutdownUnsaved.question')}
+                            </p>
+                        </div>
+                        <div className="flex flex-col-reverse gap-2 border-t border-(--border-subtle) bg-(--bg-surface)/40 px-5 py-4 sm:flex-row sm:justify-end">
+                            <button
+                                type="button"
+                                onClick={() => handleShutdownPromptDecision('cancel')}
+                                className="rounded-[calc(var(--panel-radius)*0.55)] px-3 py-2 text-xs font-medium text-(--fg-secondary) transition-all duration-(--transition-fast) hover:bg-(--bg-surface-hover) hover:text-(--fg-primary)"
+                            >
+                                {t('common.cancel')}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => handleShutdownPromptDecision('discard')}
+                                className="rounded-[calc(var(--panel-radius)*0.55)] px-3 py-2 text-xs font-medium text-(--fg-secondary) transition-all duration-(--transition-fast) hover:bg-[color-mix(in_srgb,var(--state-danger)_14%,transparent)] hover:text-(--state-danger)"
+                            >
+                                {t('editor.shutdownUnsaved.dontSave')}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => handleShutdownPromptDecision('save')}
+                                className="rounded-[calc(var(--panel-radius)*0.55)] bg-(--accent-ai) px-3 py-2 text-xs font-semibold text-(--fg-bright) shadow-(--shadow-sm) transition-all duration-(--transition-fast) hover:brightness-110"
+                            >
+                                {t('common.save')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {shutdownSaveError && (
+                <div className="fixed inset-0 z-9999 flex items-center justify-center p-4 animate-in fade-in duration-(--transition-fast)">
+                    <button
+                        type="button"
+                        aria-label={t('common.ok')}
+                        className="absolute inset-0 bg-(--glass-bg) backdrop-blur-sm"
+                        onClick={handleShutdownSaveErrorAck}
+                    />
+                    <div
+                        role="alertdialog"
+                        aria-modal="true"
+                        aria-labelledby="shutdown-save-error-title"
+                        className="relative w-full max-w-md overflow-hidden rounded-(--panel-radius) border border-[color-mix(in_srgb,var(--state-danger)_42%,var(--border-focus))] bg-(--bg-panel) shadow-(--shadow-xl) animate-in fade-in zoom-in-95 duration-(--transition-base)"
+                    >
+                        <div className="flex items-start gap-3 border-b border-(--border-subtle) bg-(--bg-surface)/70 px-5 py-4">
+                            <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-[calc(var(--panel-radius)*0.7)] border border-[color-mix(in_srgb,var(--state-danger)_38%,transparent)] bg-[color-mix(in_srgb,var(--state-danger)_14%,transparent)] text-(--state-danger)">
+                                <AlertTriangle className="h-5 w-5" />
+                            </div>
+                            <div className="min-w-0">
+                                <h2 id="shutdown-save-error-title" className="text-base font-semibold text-(--fg-primary)">
+                                    {t('editor.saveFailed')}
+                                </h2>
+                                <p className="mt-1 text-sm leading-5 text-(--fg-secondary)">
+                                    {t('editor.shutdownUnsaved.saveFailedSummary')}
+                                </p>
+                            </div>
+                        </div>
+                        <div className="px-5 py-4">
+                            <div className="max-h-40 overflow-auto rounded-[calc(var(--panel-radius)*0.65)] border border-(--border-subtle) bg-(--bg-app)/60 p-3 font-mono text-xs text-(--fg-secondary)">
+                                {shutdownSaveError.message}
+                            </div>
+                        </div>
+                        <div className="flex justify-end border-t border-(--border-subtle) bg-(--bg-surface)/40 px-5 py-4">
+                            <button
+                                type="button"
+                                onClick={handleShutdownSaveErrorAck}
+                                className="rounded-[calc(var(--panel-radius)*0.55)] bg-(--accent-ai) px-3 py-2 text-xs font-semibold text-(--fg-bright) shadow-(--shadow-sm) transition-all duration-(--transition-fast) hover:brightness-110"
+                            >
+                                {t('common.ok')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Settings Modal */}
             <Suspense fallback={null}>
