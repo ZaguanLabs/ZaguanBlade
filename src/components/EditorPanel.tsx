@@ -648,9 +648,11 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         pendingNavigation.current = { path, line, col: character };
     };
 
+    const immediateTabContent = isDirty && draftContent != null ? draftContent : savedContent;
+    const hasActiveEditorContent = contentOwnerPath === activeFile || immediateTabContent != null;
     const activeEditorContent = contentOwnerPath === activeFile
         ? content
-        : (isDirty && draftContent != null ? draftContent : savedContent ?? '');
+        : immediateTabContent ?? '';
 
     if (!activeFile) {
         return <WelcomePage hasRemoteApiKey={hasRemoteApiKey} onOpenSettings={onOpenSettings} />;
@@ -676,6 +678,8 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     <Suspense fallback={<div className="h-full w-full bg-(--bg-editor)" />}>
                         <PdfViewer filePath={activeFile} />
                     </Suspense>
+                ) : !hasActiveEditorContent ? (
+                    <div className="h-full w-full bg-(--bg-editor)" />
                 ) : isMarkdownFile ? (
                     <Suspense fallback={<div className="h-full w-full bg-(--bg-editor)" />}>
                         <MarkdownEditor
