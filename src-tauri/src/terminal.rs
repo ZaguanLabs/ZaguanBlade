@@ -887,8 +887,22 @@ pub fn execute_command_in_terminal<R: Runtime>(
         })
         .map_err(|e| e.to_string())?;
 
-    // Execute the command directly (not a shell)
-    let mut cmd = CommandBuilder::new("sh");
+    // Determine shell from environment or default to bash
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string());
+    let shell_name = std::path::Path::new(&shell)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("sh");
+
+    // Execute using the user's actual shell to ensure paths/environments are loaded.
+    let mut cmd = CommandBuilder::new(&shell);
+    
+    // For bash/zsh, we want to source the profile before running the command to ensure
+    // things like nvm, pyenv, cargo paths are available, just like a real interactive shell.
+    if shell_name == "bash" || shell_name == "zsh" {
+        cmd.arg("-l"); // Make it a login shell to source profiles
+    }
+    
     cmd.arg("-c");
     cmd.arg(&command);
 

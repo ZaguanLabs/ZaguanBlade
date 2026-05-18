@@ -7,7 +7,11 @@ use crate::project_settings;
 use crate::utils::{extract_root_command, is_cwd_outside_workspace, parse_command};
 use crate::{blade_protocol, local_artifacts};
 use std::collections::HashSet;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
+
+const CHAT_EVENT_NOTIFY_FALLBACK_MS: u64 = 16;
+const CHAT_IDLE_NOTIFY_FALLBACK_MS: u64 = 50;
 
 fn extract_explicit_output_path(message: &str) -> Option<String> {
     message
@@ -770,7 +774,18 @@ pub async fn handle_send_message<R: Runtime>(
                 }
 
                 if !has_pending && !has_pending_done_without_tools {
-                    next_event.await;
+                    if has_rx {
+                        let fallback_ms = if is_streaming {
+                            CHAT_EVENT_NOTIFY_FALLBACK_MS
+                        } else {
+                            CHAT_IDLE_NOTIFY_FALLBACK_MS
+                        };
+                        let _ =
+                            tokio::time::timeout(Duration::from_millis(fallback_ms), next_event)
+                                .await;
+                    } else {
+                        next_event.await;
+                    }
                 }
                 continue;
             } else if let DrainResult::Research {

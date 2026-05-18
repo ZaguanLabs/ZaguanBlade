@@ -434,8 +434,12 @@ fn build_tool_failure_feedback(tool_name: &str, error: &str) -> String {
                 );
             }
         }
-        "apply_patch" | "apply_patch_validated" | "apply_edit" | "replace_file_content"
-        | "multi_replace_file_content" | "edit_file" => {
+        "apply_patch"
+        | "apply_patch_validated"
+        | "apply_edit"
+        | "replace_file_content"
+        | "multi_replace_file_content"
+        | "edit_file" => {
             if lower.contains("old_text not found") {
                 lines.push(
                     "- What happened: the requested old_text did not exactly match the current file contents.".to_string(),
@@ -452,7 +456,8 @@ fn build_tool_failure_feedback(tool_name: &str, error: &str) -> String {
                 );
             } else if lower.contains("missing required arg") || lower.contains("must be") {
                 lines.push(
-                    "- What happened: the edit request did not match the expected tool schema.".to_string(),
+                    "- What happened: the edit request did not match the expected tool schema."
+                        .to_string(),
                 );
                 lines.push(
                     "- Suggested next step: correct the tool arguments before retrying; do not change strategy until the payload shape is valid.".to_string(),
@@ -468,7 +473,8 @@ fn build_tool_failure_feedback(tool_name: &str, error: &str) -> String {
         }
         "read_file" | "read_file_range" | "read_many_files" => {
             lines.push(
-                "- What happened: the file-read request could not return the requested content.".to_string(),
+                "- What happened: the file-read request could not return the requested content."
+                    .to_string(),
             );
             lines.push(
                 "- Suggested next step: verify the path, line range, and workspace scope before relying on assumptions about the file.".to_string(),
@@ -476,7 +482,8 @@ fn build_tool_failure_feedback(tool_name: &str, error: &str) -> String {
         }
         "grep_search" | "codebase_search" | "symbol_search" | "codebase_investigator" => {
             lines.push(
-                "- What happened: the search/investigation tool did not complete successfully.".to_string(),
+                "- What happened: the search/investigation tool did not complete successfully."
+                    .to_string(),
             );
             lines.push(
                 "- Suggested next step: narrow the query, reduce scope, or switch to a more targeted file/path search.".to_string(),
@@ -1523,7 +1530,10 @@ fn batch(
                 "elapsed_ms": elapsed_ms,
             })
         } else {
-            let raw_error = result.error.clone().unwrap_or_else(|| "unknown error".to_string());
+            let raw_error = result
+                .error
+                .clone()
+                .unwrap_or_else(|| "unknown error".to_string());
             let feedback = if result.skipped {
                 String::new()
             } else {

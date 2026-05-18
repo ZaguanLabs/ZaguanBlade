@@ -616,14 +616,21 @@ impl AiWorkflow {
                                 ChangeType::MultiPatch { patches } => {
                                     let mut content = fs::read_to_string(&full_path)
                                         .map_err(|e| format!("Failed to read file: {}", e))?;
-                                    for patch in patches {
+                                    for (idx, patch) in patches.iter().enumerate() {
                                         content = tools::apply_patch_to_string_with_line_hint(
                                             &content,
                                             &patch.old_text,
                                             &patch.new_text,
                                             patch.start_line,
                                             patch.end_line,
-                                        )?;
+                                        )
+                                        .map_err(|e| {
+                                            format!(
+                                                "Patch {} failed (no changes made): {}",
+                                                idx + 1,
+                                                e
+                                            )
+                                        })?;
                                     }
                                     fs::write(&full_path, content)
                                         .map_err(|e| format!("Failed to write file: {}", e))?;

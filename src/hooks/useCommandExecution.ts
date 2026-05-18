@@ -263,10 +263,26 @@ export function useCommandExecution() {
     }, []);
 
     const reserveTerminalForCommand = useCallback((callId: string, cwd?: string) => {
-        const terminal = createCommandTerminal(callId, cwd);
+        // Try to reuse the primary terminal first
+        let terminal = terminalsRef.current.get(BLADE_TERMINAL_ID);
+        
+        // If the primary doesn't exist, is busy, or is locked in background
+        if (!terminal || terminal.activeCallId || terminal.backgroundLocked) {
+            // Find another idle terminal
+            const idleTerminal = Array.from(terminalsRef.current.values()).find(t => 
+                !t.primary && !t.activeCallId && !t.backgroundLocked && t.id.startsWith('ai-cmd-')
+            );
+            
+            if (idleTerminal) {
+                terminal = idleTerminal;
+            } else {
+                // If all are busy, create a new one
+                terminal = createCommandTerminal(callId, cwd);
+            }
+        }
 
         updateTerminal(terminal.id, current => {
-            const base = current ?? terminal;
+            const base = current ?? terminal!;
             return {
                 ...base,
                 cwd: cwd ?? base.cwd,
@@ -274,7 +290,7 @@ export function useCommandExecution() {
             };
         });
 
-        return terminalsRef.current.get(terminal.id) ?? terminal;
+        return terminalsRef.current.get(terminal!.id) ?? terminal!;
     }, [createCommandTerminal, updateTerminal]);
 
     const clearTerminalExitFallback = useCallback((callId: string) => {

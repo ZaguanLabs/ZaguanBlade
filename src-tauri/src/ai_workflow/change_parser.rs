@@ -73,45 +73,62 @@ pub fn parse_change_args(
         | "multi_replace_file_content" => {
             // Check for new multi-patch format FIRST
             if let Some(patches_value) = obj.get("patches") {
-                if let Some(patches_arr) = patches_value.as_array() {
-                    let patches: Vec<PatchHunk> = patches_arr
-                        .iter()
-                        .filter_map(|p| {
-                            let patch_obj = p.as_object()?;
-                            Some(PatchHunk {
-                                old_text: patch_obj.get("old_text")?.as_str()?.to_string(),
-                                new_text: patch_obj.get("new_text")?.as_str()?.to_string(),
-                                start_line: patch_obj
-                                    .get("start_line")
-                                    .and_then(|v| v.as_u64())
-                                    .map(|n| n as usize),
-                                end_line: patch_obj
-                                    .get("end_line")
-                                    .and_then(|v| v.as_u64())
-                                    .map(|n| n as usize),
-                            })
-                        })
-                        .collect();
-
-                    if !patches.is_empty() {
-                        return Ok(PendingChange {
-                            call: crate::protocol::ToolCall {
-                                id: String::new(), // Will be filled by caller
-                                typ: "function".to_string(),
-                                function: crate::protocol::ToolFunction {
-                                    name: String::new(),
-                                    arguments: String::new(),
-                                },
-                                status: Some("executing".to_string()),
-                                result: None,
-                            },
-                            path,
-                            change_type: ChangeType::MultiPatch { patches },
-                            applied: false,
-                            error: None,
-                        });
-                    }
+                let patches_arr = patches_value
+                    .as_array()
+                    .ok_or_else(|| "patches must be an array".to_string())?;
+                if patches_arr.is_empty() {
+                    return Err("patches array is empty".to_string());
                 }
+
+                let mut patches: Vec<PatchHunk> = Vec::with_capacity(patches_arr.len());
+                for (idx, patch_value) in patches_arr.iter().enumerate() {
+                    let patch_obj = patch_value
+                        .as_object()
+                        .ok_or_else(|| format!("Patch {} is not an object", idx + 1))?;
+                    let old_text = patch_obj
+                        .get("old_text")
+                        .or_else(|| patch_obj.get("old_content"))
+                        .or_else(|| patch_obj.get("old"))
+                        .or_else(|| patch_obj.get("from"))
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| format!("Patch {} missing old_text", idx + 1))?;
+                    let new_text = patch_obj
+                        .get("new_text")
+                        .or_else(|| patch_obj.get("new_content"))
+                        .or_else(|| patch_obj.get("new"))
+                        .or_else(|| patch_obj.get("to"))
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| format!("Patch {} missing new_text", idx + 1))?;
+                    patches.push(PatchHunk {
+                        old_text: old_text.to_string(),
+                        new_text: new_text.to_string(),
+                        start_line: patch_obj
+                            .get("start_line")
+                            .and_then(|v| v.as_u64())
+                            .map(|n| n as usize),
+                        end_line: patch_obj
+                            .get("end_line")
+                            .and_then(|v| v.as_u64())
+                            .map(|n| n as usize),
+                    });
+                }
+
+                return Ok(PendingChange {
+                    call: crate::protocol::ToolCall {
+                        id: String::new(), // Will be filled by caller
+                        typ: "function".to_string(),
+                        function: crate::protocol::ToolFunction {
+                            name: String::new(),
+                            arguments: String::new(),
+                        },
+                        status: Some("executing".to_string()),
+                        result: None,
+                    },
+                    path,
+                    change_type: ChangeType::MultiPatch { patches },
+                    applied: false,
+                    error: None,
+                });
             }
 
             // Fall back to legacy single-patch format
@@ -293,5 +310,30 @@ mod tests {
             }
             _ => panic!("expected Patch change type"),
         }
+    }
+
+    #[test]
+    fn parse_change_args_rejects_invalid_multi_patch_hunk() {
+        let workspace = tempdir().expect("tempdir");
+        let raw_args = json!({
+            "path": "example.txt",
+            "patches": [
+                {
+                    "old_text": "alpha",
+                    "new_text": "beta"
+                },
+                {
+                    "old_text": "gamma"
+                }
+            ]
+        })
+        .to_string();
+
+        let err = match parse_change_args(&raw_args, workspace.path(), "apply_patch") {
+            Ok(_) => panic!("invalid hunk should not be silently dropped"),
+            Err(err) => err,
+        };
+
+        assert!(err.contains("Patch 2 missing new_text"));
     }
 }
