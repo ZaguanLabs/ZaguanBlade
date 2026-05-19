@@ -6,6 +6,7 @@ use tokio::process::Command as TokioCommand;
 
 use crate::{
     app_state::AppState,
+    blade_ws_client::LocalConversationState,
     config::normalize_openai_compat_url,
     models::{catalog, registry},
     providers,
@@ -1296,21 +1297,24 @@ Do NOT include analysis, reasoning, explanations, or multiple options."#,
         .await
         .map_err(|e| format!("WebSocket connection failed: {}", e))?;
 
-    // Wait for authentication
-    let mut authenticated = false;
-    while let Some(event) = ws_rx.recv().await {
-        if let crate::blade_ws_client::BladeWsEvent::Connected { .. } = event {
-            authenticated = true;
-            break;
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while let Some(event) = ws_rx.recv().await {
+            match event {
+                crate::blade_ws_client::BladeWsEvent::Connected { .. } => return Ok(()),
+                crate::blade_ws_client::BladeWsEvent::Error { message, .. } => {
+                    return Err(format!("Authentication failed: {}", message));
+                }
+                crate::blade_ws_client::BladeWsEvent::Disconnected => {
+                    return Err("WebSocket disconnected before authentication".to_string());
+                }
+                _ => {}
+            }
         }
-        if let crate::blade_ws_client::BladeWsEvent::Error { message, .. } = event {
-            return Err(format!("Authentication failed: {}", message));
-        }
-    }
 
-    if !authenticated {
-        return Err("WebSocket authentication timeout".to_string());
-    }
+        Err("WebSocket closed before authentication".to_string())
+    })
+    .await
+    .map_err(|_| "WebSocket authentication timed out".to_string())??;
 
     // Send the commit message generation request
     ws_manager
@@ -1322,7 +1326,10 @@ Do NOT include analysis, reasoning, explanations, or multiple options."#,
             Some(workspace_info),
             storage_mode,
             Some("code".to_string()),
-            None,
+            Some(LocalConversationState {
+                message_count: 0,
+                fingerprint: "git-commit-message".to_string(),
+            }),
         )
         .await
         .map_err(|e| format!("Failed to send message: {}", e))?;
@@ -1330,22 +1337,66 @@ Do NOT include analysis, reasoning, explanations, or multiple options."#,
     // Collect response (some models stream answer via reasoning_chunk).
     let mut content = String::new();
     let mut reasoning = String::new();
-    while let Some(event) = ws_rx.recv().await {
-        match event {
-            crate::blade_ws_client::BladeWsEvent::TextChunk { content: chunk, .. } => {
-                content.push_str(&chunk);
+    let mut finish_reason: Option<String> = None;
+    tokio::time::timeout(std::time::Duration::from_secs(90), async {
+        while let Some(event) = ws_rx.recv().await {
+            match event {
+                crate::blade_ws_client::BladeWsEvent::TextChunk {
+                    content: chunk,
+                    phase,
+                    ..
+                } => {
+                    if phase.as_deref() == Some("commentary") && content.trim().is_empty() {
+                        reasoning.push_str(&chunk);
+                    } else {
+                        content.push_str(&chunk);
+                    }
+                }
+                crate::blade_ws_client::BladeWsEvent::ReasoningChunk { content: chunk, .. } => {
+                    reasoning.push_str(&chunk);
+                }
+                crate::blade_ws_client::BladeWsEvent::GetConversationContext {
+                    request_id,
+                    session_id,
+                } => {
+                    ws_manager
+                        .send_conversation_context(request_id, session_id, Vec::new())
+                        .await
+                        .map_err(|e| format!("Failed to send empty commit-message context: {}", e))?;
+                }
+                crate::blade_ws_client::BladeWsEvent::ToolCall { name, .. } => {
+                    return Err(format!(
+                        "Commit message generation unexpectedly requested tool `{}`",
+                        name
+                    ));
+                }
+                crate::blade_ws_client::BladeWsEvent::ApprovalRequest { tool_name, .. } => {
+                    return Err(format!(
+                        "Commit message generation unexpectedly requested approval for `{}`",
+                        tool_name
+                    ));
+                }
+                crate::blade_ws_client::BladeWsEvent::ChatDone {
+                    finish_reason: reason,
+                    ..
+                } => {
+                    finish_reason = Some(reason);
+                    return Ok(());
+                }
+                crate::blade_ws_client::BladeWsEvent::Error { message, .. } => {
+                    return Err(format!("AI generation failed: {}", message));
+                }
+                crate::blade_ws_client::BladeWsEvent::Disconnected => {
+                    return Err("WebSocket disconnected during AI commit message generation".to_string());
+                }
+                _ => {}
             }
-            crate::blade_ws_client::BladeWsEvent::ReasoningChunk { content: chunk, .. } => {
-                reasoning.push_str(&chunk);
-            }
-            crate::blade_ws_client::BladeWsEvent::ChatDone { .. } => break,
-            crate::blade_ws_client::BladeWsEvent::Error { message, .. } => {
-                return Err(format!("AI generation failed: {}", message));
-            }
-            crate::blade_ws_client::BladeWsEvent::Disconnected => break,
-            _ => {}
         }
-    }
+
+        Err("WebSocket closed during AI commit message generation".to_string())
+    })
+    .await
+    .map_err(|_| "Timed out waiting for AI commit message".to_string())??;
 
     // Prefer final assistant text, but fall back to reasoning stream when providers
     // emit the completion there. Then extract the last non-empty line because some
@@ -1359,7 +1410,19 @@ Do NOT include analysis, reasoning, explanations, or multiple options."#,
     let message = extract_commit_message(raw);
 
     if message.is_empty() {
-        Err("AI returned empty response".to_string())
+        eprintln!(
+            "[GIT] AI commit message generation returned empty output (finish_reason={:?}, content_len={}, reasoning_len={})",
+            finish_reason,
+            content.len(),
+            reasoning.len()
+        );
+        Err(format!(
+            "AI returned empty commit message{}",
+            finish_reason
+                .as_deref()
+                .map(|reason| format!(" (finish reason: {})", reason))
+                .unwrap_or_default()
+        ))
     } else {
         Ok(message)
     }
