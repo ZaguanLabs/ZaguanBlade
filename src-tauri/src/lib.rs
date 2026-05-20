@@ -170,6 +170,7 @@ pub fn run() {
             commands::chat::send_message,
             commands::chat::list_models,
             commands::chat::get_conversation,
+            commands::chat::truncate_conversation,
             commands::chat::list_conversations,
             commands::chat::load_conversation,
             commands::chat::new_conversation,

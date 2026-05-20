@@ -500,6 +500,7 @@ interface ChatMessageProps {
     onUndoTool?: (toolCallId: string) => void;
     onStopCommand?: (callId: string) => void;
     onOpenFile?: (path: string) => void;
+    onEditMessage?: () => void;
     registerActivityTarget?: (targetKey: string, element: HTMLDivElement | null) => void;
     showInlineWorkLog?: boolean;
     workDetailsVisible?: boolean;
@@ -521,6 +522,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     onUndoTool,
     onStopCommand,
     onOpenFile,
+    onEditMessage,
     registerActivityTarget,
     showInlineWorkLog = true,
     workDetailsVisible,
@@ -714,16 +716,14 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
             },
         ];
 
-        if (isUser) {
+        if (isUser && onEditMessage) {
             items.push(
                 { id: 'div-1', label: '', divider: true },
                 {
                     id: 'edit-message',
                     label: t('chat.contextMenu.editMessage'),
                     icon: <Pencil className="w-4 h-4" />,
-                    onClick: () => {
-                        // TODO: Implement edit message functionality
-                    }
+                    onClick: onEditMessage
                 }
             );
         }
@@ -743,7 +743,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
         }
 
         showMenu({ x: e.clientX, y: e.clientY }, items);
-    }, [copyableMessageContent, isUser, isAssistant, showMenu, t]);
+    }, [copyableMessageContent, isUser, isAssistant, onEditMessage, showMenu, t]);
 
     // Don't render Tool messages separately - they're shown in the tool call display
     // UNLESS this is a standalone tool message not handled by the previous assistant message.

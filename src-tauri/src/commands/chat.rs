@@ -54,6 +54,23 @@ pub fn get_conversation(state: State<'_, AppState>) -> Vec<crate::protocol::Chat
 }
 
 #[tauri::command]
+pub fn truncate_conversation(len: usize, state: State<'_, AppState>) -> Result<(), String> {
+    let mut conversation = state
+        .conversation
+        .lock()
+        .map_err(|e| format!("Failed to lock conversation: {}", e))?;
+    if len > conversation.len() {
+        return Err(format!(
+            "Cannot truncate conversation to {} messages; current length is {}",
+            len,
+            conversation.len()
+        ));
+    }
+    conversation.truncate(len);
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn list_conversations(
     _state: State<'_, AppState>,
     app: AppHandle,

@@ -116,6 +116,7 @@ interface ChatPanelProps {
     activeTodos: TodoItem[];
     queuedRequests: QueuedRequest[];
     deleteQueuedRequest: (index: number) => void;
+    editLastUserMessage: () => Promise<QueuedRequest | null>;
     onImplementPlan: (planText: string) => void;
 }
 
@@ -248,6 +249,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     activeTodos,
     queuedRequests,
     deleteQueuedRequest,
+    editLastUserMessage,
     onImplementPlan,
 }) => {
     recordDebugPerf('ChatPanel.render');
@@ -414,6 +416,10 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     const lastMessageContent = lastMessage?.content ?? '';
     const lastMessageReasoning = lastMessage?.reasoning ?? '';
     const lastMessageBlockCount = lastMessage?.blocks?.length ?? 0;
+    const lastUserMessageId = useMemo(
+        () => [...messages].reverse().find((message) => message.role === 'User')?.id,
+        [messages],
+    );
     const shouldShowPendingResponseIndicator = (loading || !!toolActivity) && !waitingForApproval && lastMessage?.role !== 'Assistant';
     const chatRows = useMemo(
         () => {
@@ -863,6 +869,14 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         deleteQueuedRequest(index);
     }, [queuedRequests, deleteQueuedRequest]);
 
+    const handleEditLastUserMessage = useCallback(async () => {
+        const request = await editLastUserMessage();
+        if (request) {
+            setComposerPrefill(request);
+        }
+        return request;
+    }, [editLastUserMessage]);
+
     const handleComposerPrefillConsumed = useCallback(() => {
         setComposerPrefill(null);
     }, []);
@@ -953,6 +967,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                                     onUndoTool={onUndoTool}
                                     onStopCommand={handleStopCommand}
                                     onOpenFile={onOpenFile}
+                                    onEditMessage={row.message.id === lastUserMessageId ? handleEditLastUserMessage : undefined}
                                     registerActivityTarget={registerActivityTarget}
                                 />
                             </div>
@@ -979,6 +994,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                                     onUndoTool={onUndoTool}
                                     onStopCommand={handleStopCommand}
                                     onOpenFile={onOpenFile}
+                                    onEditMessage={row.message.id === lastUserMessageId ? handleEditLastUserMessage : undefined}
                                     registerActivityTarget={registerActivityTarget}
                                 />
                             </div>

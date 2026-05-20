@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { ChatMessage as ChatMessageType, HookApprovalRequest, ToolActivityState } from '../../types/chat';
+import type { ChatMessage as ChatMessageType, HookApprovalRequest, QueuedRequest, ToolActivityState } from '../../types/chat';
 import type { StructuredAction } from '../../types/events';
 import { ChatMessage } from '../../components/ChatMessage';
 import { ProgressIndicator } from '../../components/ProgressIndicator';
@@ -38,6 +38,7 @@ interface ChatViewportProps {
     onUndoTool?: (toolCallId: string) => void;
     onStopCommand?: (toolCallId: string) => void;
     onOpenFile?: (path: string) => void;
+    onEditLastUserMessage?: () => Promise<QueuedRequest | null>;
 }
 
 export const ChatViewport: React.FC<ChatViewportProps> = ({
@@ -57,6 +58,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
     onUndoTool,
     onStopCommand,
     onOpenFile,
+    onEditLastUserMessage,
 }) => {
     const { t } = useTranslation();
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -72,6 +74,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
         pendingApprovalRequest,
     });
     const activeMessage = rows.find((row) => row.kind === 'message' && row.isActive)?.message;
+    const lastUserMessageId = [...messages].reverse().find((message) => message.role === 'User')?.id;
     const showProgressIndicator = Boolean(researchProgress?.isActive);
     const showPendingResponse = loading && messages[messages.length - 1]?.role !== 'Assistant' && !showProgressIndicator;
 
@@ -180,6 +183,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                                 onUndoTool={onUndoTool}
                                 onStopCommand={onStopCommand}
                                 onOpenFile={onOpenFile}
+                                onEditMessage={row.message.id === lastUserMessageId ? onEditLastUserMessage : undefined}
                                 showInlineWorkLog={false}
                                 workDetailsVisible={true}
                             />

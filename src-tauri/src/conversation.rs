@@ -123,6 +123,12 @@ impl ConversationHistory {
         self.metadata.updated_at = Utc::now();
     }
 
+    pub fn truncate(&mut self, len: usize) {
+        self.messages.truncate(len);
+        self.metadata.message_count = self.messages.len();
+        self.metadata.updated_at = Utc::now();
+    }
+
     pub fn get(&self, index: usize) -> Option<&ChatMessage> {
         self.messages.get(index)
     }

@@ -103,6 +103,7 @@ function useNoopChat() {
     const newConversation = useCallback(() => Promise.resolve(), []);
     const undoTool = useCallback(() => Promise.resolve(), []);
     const loadConversation = useCallback(() => Promise.resolve(), []);
+    const editLastUserMessage = useCallback(() => Promise.resolve(null), []);
     const deleteQueuedRequest = useCallback((index: number) => {
         setMessageQueue(prev => prev.filter((_, currentIndex) => currentIndex !== index));
     }, []);
@@ -137,6 +138,7 @@ function useNoopChat() {
         setActiveTodos,
         messageQueue,
         deleteQueuedRequest,
+        editLastUserMessage,
     };
 }
 
@@ -1146,6 +1148,7 @@ const AppLayoutInner: React.FC = () => {
                                     activeTodos={chat.activeTodos}
                                     queuedRequests={chat.messageQueue}
                                     deleteQueuedRequest={chat.deleteQueuedRequest}
+                                    editLastUserMessage={chat.editLastUserMessage}
                                 /> : <LegacyChatPanel
                                     messages={chat.messages}
                                     loading={chat.loading}
@@ -1177,6 +1180,7 @@ const AppLayoutInner: React.FC = () => {
                                     activeTodos={chat.activeTodos}
                                     queuedRequests={chat.messageQueue}
                                     deleteQueuedRequest={chat.deleteQueuedRequest}
+                                    editLastUserMessage={chat.editLastUserMessage}
                                     onImplementPlan={handleImplementPlan}
                                 />}
                             </Suspense>

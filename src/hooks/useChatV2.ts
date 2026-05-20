@@ -68,6 +68,13 @@ function writeCachedModels(models: ModelInfo[]): void {
     }
 }
 
+function isImageAttachment(image: ChatImage): image is ImageAttachment {
+    const candidate = image as Partial<ImageAttachment>;
+    return typeof candidate.id === 'string'
+        && typeof candidate.dataUrl === 'string'
+        && typeof candidate.thumbnailUrl === 'string';
+}
+
 function areToolActivitiesEqual(a: ToolActivityState | null, b: ToolActivityState | null): boolean {
     if (a === b) {
         return true;
@@ -1777,6 +1784,45 @@ export function useChatV2() {
         dispatch({ type: 'queue/delete', index });
     }, []);
 
+    const editLastUserMessage = useCallback(async (): Promise<QueuedRequest | null> => {
+        if (state.loading || dispatchInFlightRef.current) {
+            return null;
+        }
+
+        const messages = messagesRef.current;
+        const userIndex = [...messages].reverse().findIndex((message) => message.role === 'User');
+        if (userIndex === -1) {
+            return null;
+        }
+
+        const messageIndex = messages.length - 1 - userIndex;
+        const message = messages[messageIndex];
+        const request: QueuedRequest = {
+            text: message.content,
+            attachments: message.images?.filter(isImageAttachment),
+            mentions: message.mentions,
+            mode: chatModeRef.current,
+        };
+
+        try {
+            await invoke('truncate_conversation', { len: messageIndex });
+        } catch (error) {
+            console.error('[useChatV2] Failed to truncate conversation for message edit:', error);
+            dispatch({ type: 'error/set', error: error instanceof Error ? error.message : String(error) });
+            return null;
+        }
+
+        resetStreamingState();
+        dispatch({ type: 'messages/replace', messages: messages.slice(0, messageIndex) });
+        dispatch({ type: 'chat-activity/clear' });
+        dispatch({ type: 'todos/set', todos: [] });
+        dispatch({ type: 'queue/clear' });
+        dispatch({ type: 'pending-actions/set', actions: null });
+        dispatch({ type: 'pending-approval-request/set', request: null });
+        dispatch({ type: 'waiting-for-approval/set', waiting: false });
+        return request;
+    }, [resetStreamingState, state.loading]);
+
     const stopGeneration = useCallback(async () => {
         const inFlightToolCallIds = Array.from(new Set([
             ...messagesRef.current.flatMap((message) => (message.tool_calls || [])
@@ -1972,5 +2018,6 @@ export function useChatV2() {
         setActiveTodos,
         messageQueue: state.messageQueue,
         deleteQueuedRequest,
+        editLastUserMessage,
     };
 }

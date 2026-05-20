@@ -52,6 +52,7 @@ interface ChatPanelProps {
     activeTodos: TodoItem[];
     queuedRequests: QueuedRequest[];
     deleteQueuedRequest: (index: number) => void;
+    editLastUserMessage: () => Promise<QueuedRequest | null>;
 }
 
 const ChatPanelComponent: React.FC<ChatPanelProps> = ({
@@ -86,6 +87,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     activeTodos,
     queuedRequests,
     deleteQueuedRequest,
+    editLastUserMessage,
 }) => {
     const [activeTab, setActiveTab] = useState<'chat' | 'history'>('chat');
     const [composerPrefill, setComposerPrefill] = useState<QueuedRequest | null>(null);
@@ -106,6 +108,14 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         setComposerPrefill(request);
         deleteQueuedRequest(index);
     }, [deleteQueuedRequest, queuedRequests]);
+
+    const handleEditLastUserMessage = useCallback(async () => {
+        const request = await editLastUserMessage();
+        if (request) {
+            setComposerPrefill(request);
+        }
+        return request;
+    }, [editLastUserMessage]);
 
     return (
         <div className="flex h-full flex-col bg-(--bg-app) font-sans text-(--fg-primary)">
@@ -129,6 +139,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                     onUndoTool={onUndoTool}
                     onStopCommand={stopCommandExecution}
                     onOpenFile={onOpenFile}
+                    onEditLastUserMessage={handleEditLastUserMessage}
                 />
             ) : (
                 <HistoryTab
