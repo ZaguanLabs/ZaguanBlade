@@ -50,7 +50,7 @@
     "i18next-http-backend": "^4.0.0",
     "lucide-react": "^1.16.0",
     "pdfjs-dist": "^5.7.284",
-    "postcss": "^8.5.14",
+    "postcss": "^8.5.15",
     "react": "19.2.6",
     "react-dom": "19.2.6",
     "react-i18next": "^17.0.8",
@@ -67,7 +67,7 @@
     "@tauri-apps/cli": "^2.11.2",
     "@types/diff": "^8.0.0",
     "@types/node": "^20.19.41",
-    "@types/react": "^19.2.14",
+    "@types/react": "^19.2.15",
     "@types/react-dom": "^19.2.3",
     "@types/react-syntax-highlighter": "^15.5.13",
     "@vitejs/plugin-react": "^6.0.2",
@@ -76,10 +76,10 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.6.0",
     "tailwindcss": "^4.3.0",
-    "terser": "^5.47.1",
+    "terser": "^5.48.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.59.4",
-    "vite": "^8.0.13"
+    "vite": "^8.0.14"
   },
   "overrides": {
     "@codemirror/state": "6.6.0",

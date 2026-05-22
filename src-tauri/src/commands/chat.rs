@@ -54,7 +54,11 @@ pub fn get_conversation(state: State<'_, AppState>) -> Vec<crate::protocol::Chat
 }
 
 #[tauri::command]
-pub fn truncate_conversation(len: usize, state: State<'_, AppState>) -> Result<(), String> {
+pub fn truncate_conversation(
+    len: usize,
+    reset_session: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let mut conversation = state
         .conversation
         .lock()
@@ -67,6 +71,18 @@ pub fn truncate_conversation(len: usize, state: State<'_, AppState>) -> Result<(
         ));
     }
     conversation.truncate(len);
+    if reset_session.unwrap_or(false) {
+        conversation.metadata.session_id = None;
+        drop(conversation);
+        let mut mgr = state
+            .chat_manager
+            .lock()
+            .map_err(|e| format!("Failed to lock chat manager: {}", e))?;
+        mgr.session_id = None;
+        mgr.planning_mode = None;
+        mgr.runtime_mode = None;
+        mgr.mode_source = None;
+    }
     Ok(())
 }
 

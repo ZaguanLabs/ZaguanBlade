@@ -506,6 +506,7 @@ export function useChatV2() {
     const toolChunkCountsRef = useRef<Map<string, { chunkCount: number; startedAt: number; lastChunkAt: number }>>(new Map());
     const messageCompletionCleanupTimersRef = useRef<Map<string, number>>(new Map());
     const pendingRunCommandCompletionStatusRef = useRef<Map<string, 'complete' | 'error' | 'skipped'>>(new Map());
+    const ignoredChatEventIdsRef = useRef<Set<string>>(new Set());
 
     const toChatMentions = useCallback((mentions?: ComposerMention[]): ChatMention[] | undefined => {
         if (!mentions || mentions.length === 0) {
@@ -1461,6 +1462,9 @@ export function useChatV2() {
             unlistenBladeEvent = subscribeBladeEventType('Chat', (event) => {
                 const chatEvent = event.event.payload as { type: string; payload: any };
                 if (chatEvent.type === 'MessageDelta') {
+                    if (ignoredChatEventIdsRef.current.has(chatEvent.payload.id)) {
+                        return;
+                    }
                     if (STREAM_DEBUG_ENABLED) {
                         streamDebugLog('[stream-debug][ui-recv][text]', {
                             id: chatEvent.payload.id,
@@ -1480,6 +1484,9 @@ export function useChatV2() {
                 }
 
                 if (chatEvent.type === 'ReasoningDelta') {
+                    if (ignoredChatEventIdsRef.current.has(chatEvent.payload.id)) {
+                        return;
+                    }
                     if (STREAM_DEBUG_ENABLED) {
                         streamDebugLog('[stream-debug][ui-recv][reasoning]', {
                             id: chatEvent.payload.id,
@@ -1500,6 +1507,9 @@ export function useChatV2() {
 
                 if (chatEvent.type === 'MessageCompleted') {
                     const { id } = chatEvent.payload;
+                    if (ignoredChatEventIdsRef.current.has(id)) {
+                        return;
+                    }
                     flushPendingUpdatesImmediately();
                     scheduleMessageCompletionCleanup(id);
                     toolChunkCountsRef.current.clear();
@@ -1508,6 +1518,9 @@ export function useChatV2() {
 
                 if (chatEvent.type === 'ToolUpdate') {
                     const { message_id: messageId, tool_call_id: toolCallId, status, result, tool_call: incomingToolCall } = chatEvent.payload;
+                    if (ignoredChatEventIdsRef.current.has(messageId) || ignoredChatEventIdsRef.current.has(toolCallId)) {
+                        return;
+                    }
                     toolChunkCountsRef.current.delete(toolCallId);
                     setToolActivity(null);
 
@@ -1786,7 +1799,13 @@ export function useChatV2() {
 
     const editLastUserMessage = useCallback(async (): Promise<QueuedRequest | null> => {
         if (state.loading || dispatchInFlightRef.current) {
-            return null;
+            try {
+                await BladeDispatcher.chat({ type: 'StopGeneration', payload: {} });
+            } catch (error) {
+                console.error('[useChatV2] Failed to stop generation before message edit:', error);
+            }
+            dispatchInFlightRef.current = false;
+            dispatch({ type: 'loading/set', loading: false });
         }
 
         const messages = messagesRef.current;
@@ -1805,13 +1824,21 @@ export function useChatV2() {
         };
 
         try {
-            await invoke('truncate_conversation', { len: messageIndex });
+            await invoke('truncate_conversation', { len: messageIndex, resetSession: true });
         } catch (error) {
             console.error('[useChatV2] Failed to truncate conversation for message edit:', error);
             dispatch({ type: 'error/set', error: error instanceof Error ? error.message : String(error) });
             return null;
         }
 
+        messages.slice(messageIndex).forEach((removedMessage) => {
+            if (removedMessage.id) {
+                ignoredChatEventIdsRef.current.add(removedMessage.id);
+            }
+            removedMessage.tool_calls?.forEach((toolCall) => {
+                ignoredChatEventIdsRef.current.add(toolCall.id);
+            });
+        });
         resetStreamingState();
         dispatch({ type: 'messages/replace', messages: messages.slice(0, messageIndex) });
         dispatch({ type: 'chat-activity/clear' });
