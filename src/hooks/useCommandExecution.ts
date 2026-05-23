@@ -3,7 +3,7 @@ import { listen, emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { BladeDispatcher } from '../services/blade';
 import { subscribeBladeNestedEventType } from '../services/bladeEvents';
-import { BLADE_TERMINAL_ID } from '../constants/terminal';
+import { BLADE_TERMINAL_ID, BLADE_TERMINAL_TITLE } from '../constants/terminal';
 
 export interface CommandExecution {
     commandId: string;
@@ -75,7 +75,7 @@ export function buildRunCommandTerminalSpawnCommand(
             `( ${commandToRun} )`,
             '__blade_ec=$?',
             exitSentinel,
-            'exit "$__blade_ec"',
+            'unset __blade_ec',
         ].join('; ');
     }
 
@@ -88,11 +88,11 @@ export function buildRunCommandTerminalSpawnCommand(
         startSentinel,
         `( ${commandToRun} ) & __blade_pid=$!`,
         waitMs > 0 ? `sleep ${waitSeconds}` : null,
-        `if kill -0 "$__blade_pid" 2>/dev/null; then disown "$__blade_pid" 2>/dev/null || true; echo '${DETACHED_MARKER}'"$__blade_pid"; __blade_ec=0; ${exitSentinel}; exit 0; fi`,
+        `if kill -0 "$__blade_pid" 2>/dev/null; then disown "$__blade_pid" 2>/dev/null || true; echo '${DETACHED_MARKER}'"$__blade_pid"; __blade_ec=0; ${exitSentinel}; unset __blade_ec __blade_pid; return 0 2>/dev/null || true; fi`,
         'wait "$__blade_pid"',
         '__blade_ec=$?',
         exitSentinel,
-        'exit "$__blade_ec"',
+        'unset __blade_ec __blade_pid',
     ].filter(Boolean).join('; ');
 }
 
@@ -209,11 +209,17 @@ export function useCommandExecution() {
                 id: terminalId,
                 cwd: cwd ?? existing.cwd,
                 title: existing.title ?? title,
-                interactive,
+                interactive: true,
                 focus: true,
                 transient: terminalId !== BLADE_TERMINAL_ID,
                 displayCommand,
             });
+            if (command) {
+                await BladeDispatcher.terminal({
+                    type: 'Input',
+                    payload: { id: terminalId, data: `${command}\n` },
+                });
+            }
             return;
         }
 
@@ -233,16 +239,21 @@ export function useCommandExecution() {
                 id: terminalId,
                 cwd,
                 title,
-                command,
-                interactive,
+                interactive: true,
                 focus: true,
                 transient: terminalId !== BLADE_TERMINAL_ID,
-                displayCommand,
             });
         }
 
         if (waitForReady) {
             await waitForTerminalReady(terminalId);
+        }
+
+        if (command) {
+            await BladeDispatcher.terminal({
+                type: 'Input',
+                payload: { id: terminalId, data: `${command}\n` },
+            });
         }
     }, [updateTerminal, waitForTerminalReady]);
 
@@ -390,7 +401,7 @@ export function useCommandExecution() {
                 pending.cwd,
                 command,
                 true,
-                false,
+                true,
                 pending.command,
             );
         } catch (err) {
@@ -507,7 +518,21 @@ export function useCommandExecution() {
 
             unlistenTerminalReady = await listen<{ id: string }>('terminal-ready', (event) => {
                 const terminalId = event.payload.id;
-                updateTerminal(terminalId, terminal => terminal ? { ...terminal, ready: true, opening: false } : terminal);
+                updateTerminal(terminalId, terminal => {
+                    if (terminal) {
+                        return { ...terminal, ready: true, opening: false };
+                    }
+
+                    return {
+                        id: terminalId,
+                        title: terminalId === BLADE_TERMINAL_ID ? BLADE_TERMINAL_TITLE : terminalId,
+                        ready: true,
+                        opening: false,
+                        activeCallId: null,
+                        backgroundLocked: false,
+                        primary: terminalId === BLADE_TERMINAL_ID,
+                    };
+                });
                 resolveTerminalReady(terminalId);
             });
 
@@ -584,19 +609,22 @@ export function useCommandExecution() {
         };
 
         setupListeners();
+        const terminalExitFallbackTimers = terminalExitFallbackTimersRef.current;
+        const activeTerminalCommand = activeTerminalCommandRef.current;
+        const commandOutputBuffers = commandOutputBuffersRef.current;
 
         return () => {
-            for (const timeoutId of terminalExitFallbackTimersRef.current.values()) {
+            for (const timeoutId of terminalExitFallbackTimers.values()) {
                 window.clearTimeout(timeoutId);
             }
-            terminalExitFallbackTimersRef.current.clear();
+            terminalExitFallbackTimers.clear();
             if (unlistenStart) unlistenStart();
             if (unlistenTerminalReady) unlistenTerminalReady();
             if (unlistenBladeCmdExited) unlistenBladeCmdExited();
             if (unlistenExit) unlistenExit();
             if (unsubscribeTerminalOutput) unsubscribeTerminalOutput();
-            activeTerminalCommandRef.current.clear();
-            commandOutputBuffersRef.current.clear();
+            activeTerminalCommand.clear();
+            commandOutputBuffers.clear();
         };
     }, [clearTerminalExitFallback, executeNativeCommand, handleCommandComplete, invalidateTerminal, releaseTerminalReservation, reserveTerminalForCommand, resolveTerminalReady, sendCommandToBlade, takeCommandOutputBuffer, updateTerminal]);
 
