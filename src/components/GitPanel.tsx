@@ -355,7 +355,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                                 <div
                                                     className="absolute inset-y-0 left-0"
                                                     style={{
-                                                        background: 'linear-gradient(90deg, color-mix(in srgb, var(--accent-ai) 82%, transparent), color-mix(in srgb, var(--accent-mention) 78%, transparent), color-mix(in srgb, var(--accent-purple) 76%, transparent))',
+                                                        background: 'linear-gradient(90deg, color-mix(in srgb, var(--accent-ai) 28%, transparent), color-mix(in srgb, var(--accent-ai) 82%, transparent), color-mix(in srgb, var(--accent-ai) 38%, transparent))',
                                                         width: '100%',
                                                         transformOrigin: 'left center',
                                                         animation: 'push-fill-sweep 1.2s ease-out infinite',
