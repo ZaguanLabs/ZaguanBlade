@@ -34,6 +34,7 @@ function tabInfoToTab(info: TabInfo): Tab {
 export interface AppBarTab {
     id: string;
     title: string;
+    path?: string;
     isEphemeral: boolean;
     isDirty: boolean;
     hasVirtualChanges: boolean;
@@ -155,6 +156,7 @@ export function useTabManager(uncommittedChanges: UncommittedChange[]) {
         return {
             id: t.id,
             title: t.title,
+            path: t.path,
             isEphemeral: t.type === 'ephemeral',
             isDirty: Boolean(t.isDirty),
             hasVirtualChanges: isFileTab ? uncommittedChangesMetadata.paths.has(path!) : false,
@@ -219,10 +221,71 @@ export function useTabManager(uncommittedChanges: UncommittedChange[]) {
         setTabs(prev => {
             const newTabs = [...prev];
             const [movedTab] = newTabs.splice(fromIndex, 1);
+            if (!movedTab) {
+                return prev;
+            }
             newTabs.splice(toIndex, 0, movedTab);
+            if (isTabsBackendAuthoritative()) {
+                EditorFacade.reorderTabs(newTabs.map(tab => tab.id)).catch(console.error);
+            }
             return newTabs;
         });
     }, []);
+
+    const handleTabMoveToBeginning = useCallback((tabId: string) => {
+        setTabs(prev => {
+            const index = prev.findIndex(tab => tab.id === tabId);
+            if (index <= 0) {
+                return prev;
+            }
+            const next = [...prev];
+            const [moved] = next.splice(index, 1);
+            next.unshift(moved);
+            if (isTabsBackendAuthoritative()) {
+                EditorFacade.reorderTabs(next.map(tab => tab.id)).catch(console.error);
+            }
+            return next;
+        });
+    }, []);
+
+    const handleTabMoveToEnd = useCallback((tabId: string) => {
+        setTabs(prev => {
+            const index = prev.findIndex(tab => tab.id === tabId);
+            if (index === -1 || index === prev.length - 1) {
+                return prev;
+            }
+            const next = [...prev];
+            const [moved] = next.splice(index, 1);
+            next.push(moved);
+            if (isTabsBackendAuthoritative()) {
+                EditorFacade.reorderTabs(next.map(tab => tab.id)).catch(console.error);
+            }
+            return next;
+        });
+    }, []);
+
+    const handleTabCloseAll = useCallback(() => {
+        if (isTabsBackendAuthoritative()) {
+            tabs.forEach(tab => {
+                EditorFacade.closeTab(tab.id).catch(console.error);
+            });
+            return;
+        }
+        setTabs([]);
+        setActiveTabId(null);
+    }, [tabs]);
+
+    const handleTabCloseOthers = useCallback((tabId: string) => {
+        if (isTabsBackendAuthoritative()) {
+            tabs.filter(tab => tab.id !== tabId).forEach(tab => {
+                EditorFacade.closeTab(tab.id).catch(console.error);
+            });
+            EditorFacade.setActiveTab(tabId).catch(console.error);
+            return;
+        }
+        setTabs(prev => prev.filter(tab => tab.id === tabId));
+        setActiveTabId(tabId);
+    }, [tabs]);
 
     const handleEphemeralSave = useCallback(async (ephemeralTabId: string, savedPath: string) => {
         console.debug('[TabManager] handleEphemeralSave called:', { ephemeralTabId, savedPath });
@@ -325,6 +388,10 @@ export function useTabManager(uncommittedChanges: UncommittedChange[]) {
         handleFileSelect,
         handleTabClose,
         handleTabReorder,
+        handleTabMoveToBeginning,
+        handleTabMoveToEnd,
+        handleTabCloseAll,
+        handleTabCloseOthers,
         handleEphemeralSave,
         popTabHistory,
     };

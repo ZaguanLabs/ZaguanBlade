@@ -157,6 +157,7 @@ function useNoopTabManager(uncommittedChanges: { file_path: string }[]) {
     const appBarTabs = useMemo(() => tabs.map((tab) => ({
         id: tab.id,
         title: tab.title,
+        path: tab.path,
         isEphemeral: tab.type === 'ephemeral',
         isDirty: Boolean(tab.isDirty),
         hasVirtualChanges: Boolean(tab.path && uncommittedChanges.some(change => change.file_path === tab.path)),
@@ -209,6 +210,42 @@ function useNoopTabManager(uncommittedChanges: { file_path: string }[]) {
         });
     }, []);
 
+    const handleTabMoveToBeginning = useCallback((tabId: string) => {
+        setTabs(prev => {
+            const index = prev.findIndex(tab => tab.id === tabId);
+            if (index <= 0) {
+                return prev;
+            }
+            const next = [...prev];
+            const [moved] = next.splice(index, 1);
+            next.unshift(moved);
+            return next;
+        });
+    }, []);
+
+    const handleTabMoveToEnd = useCallback((tabId: string) => {
+        setTabs(prev => {
+            const index = prev.findIndex(tab => tab.id === tabId);
+            if (index === -1 || index === prev.length - 1) {
+                return prev;
+            }
+            const next = [...prev];
+            const [moved] = next.splice(index, 1);
+            next.push(moved);
+            return next;
+        });
+    }, []);
+
+    const handleTabCloseAll = useCallback(() => {
+        setTabs([]);
+        setActiveTabId(null);
+    }, []);
+
+    const handleTabCloseOthers = useCallback((tabId: string) => {
+        setTabs(prev => prev.filter(tab => tab.id === tabId));
+        setActiveTabId(tabId);
+    }, []);
+
     const handleEphemeralSave = useCallback(async () => undefined, []);
 
     return {
@@ -226,6 +263,10 @@ function useNoopTabManager(uncommittedChanges: { file_path: string }[]) {
         handleFileSelect,
         handleTabClose,
         handleTabReorder,
+        handleTabMoveToBeginning,
+        handleTabMoveToEnd,
+        handleTabCloseAll,
+        handleTabCloseOthers,
         handleEphemeralSave,
     };
 }
@@ -334,7 +375,8 @@ const AppLayoutInner: React.FC = () => {
         tabs, setTabs, activeTabId, setActiveTabId, activeTab, activeFilename,
         appBarTabs, setAiEditedFilePaths, setUnseenAiEditedFilePaths,
         processingFilesRef, handleTabClick, handleFileSelect, handleTabClose,
-        handleTabReorder, handleEphemeralSave,
+        handleTabReorder, handleTabMoveToBeginning, handleTabMoveToEnd,
+        handleTabCloseAll, handleTabCloseOthers, handleEphemeralSave,
     } = tabManager;
 
     // Sync active tab and open file paths to EditorContext
@@ -826,6 +868,10 @@ const AppLayoutInner: React.FC = () => {
                 onTabClick={handleTabClick}
                 onTabClose={handleTabClose}
                 onReorder={handleTabReorder}
+                onTabMoveToBeginning={handleTabMoveToBeginning}
+                onTabMoveToEnd={handleTabMoveToEnd}
+                onTabCloseAll={handleTabCloseAll}
+                onTabCloseOthers={handleTabCloseOthers}
                 tabStripMaxWidth={editorColumnWidth}
             />
 

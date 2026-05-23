@@ -4,10 +4,12 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Minus, Square, X, Maximize2, ChevronDown, FileText } from 'lucide-react';
 import zbladeAppIcon from '../assets/zblade-app-icon.png';
 import { getFileIcon } from '../lib/fileIcons';
+import { useContextMenu } from './ui/ContextMenu';
 
 export interface AppBarTab {
     id: string;
     title: string;
+    path?: string;
     isEphemeral?: boolean;
     isDirty?: boolean;
     hasVirtualChanges?: boolean;
@@ -22,6 +24,10 @@ interface AppBarProps {
     onTabClick?: (id: string) => void;
     onTabClose?: (id: string) => void;
     onReorder?: (fromIndex: number, toIndex: number) => void;
+    onTabMoveToBeginning?: (id: string) => void;
+    onTabMoveToEnd?: (id: string) => void;
+    onTabCloseAll?: () => void;
+    onTabCloseOthers?: (id: string) => void;
     tabStripMaxWidth?: number;
 }
 
@@ -32,6 +38,10 @@ export const AppBar: React.FC<AppBarProps> = ({
     onTabClick,
     onTabClose,
     onReorder,
+    onTabMoveToBeginning,
+    onTabMoveToEnd,
+    onTabCloseAll,
+    onTabCloseOthers,
     tabStripMaxWidth,
 }) => {
     const [isMaximized, setIsMaximized] = useState(false);
@@ -43,6 +53,7 @@ export const AppBar: React.FC<AppBarProps> = ({
     const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
     const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
     const { t } = useTranslation();
+    const { showMenu } = useContextMenu();
     const appWindow = getCurrentWindow();
 
     useEffect(() => {
@@ -151,6 +162,60 @@ export const AppBar: React.FC<AppBarProps> = ({
             onReorder(fromIndex, toIndex);
         }
     }, [draggedIndex, onReorder]);
+
+    const handleTabContextMenu = useCallback((e: React.MouseEvent, tab: AppBarTab, index: number) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setFileMenuOpen(false);
+
+        const copyText = (value?: string) => {
+            if (!value) {
+                return;
+            }
+            void navigator.clipboard.writeText(value);
+        };
+
+        showMenu({ x: e.clientX, y: e.clientY }, [
+            {
+                id: 'copy-filename',
+                label: 'Copy filename',
+                onClick: () => copyText(tab.title),
+            },
+            {
+                id: 'copy-full-path',
+                label: 'Copy full path',
+                disabled: !tab.path,
+                onClick: () => copyText(tab.path),
+            },
+            { id: 'divider-copy-move', label: '', divider: true },
+            {
+                id: 'move-to-beginning',
+                label: 'Move to beginning',
+                disabled: !onTabMoveToBeginning || index === 0,
+                onClick: () => onTabMoveToBeginning?.(tab.id),
+            },
+            {
+                id: 'move-to-end',
+                label: 'Move to end',
+                disabled: !onTabMoveToEnd || index === tabs.length - 1,
+                onClick: () => onTabMoveToEnd?.(tab.id),
+            },
+            { id: 'divider-move-close', label: '', divider: true },
+            {
+                id: 'close-others',
+                label: 'Close Others',
+                disabled: !onTabCloseOthers || tabs.length <= 1,
+                onClick: () => onTabCloseOthers?.(tab.id),
+            },
+            {
+                id: 'close-all',
+                label: 'Close All',
+                danger: true,
+                disabled: !onTabCloseAll || tabs.length === 0,
+                onClick: () => onTabCloseAll?.(),
+            },
+        ]);
+    }, [onTabCloseAll, onTabCloseOthers, onTabMoveToBeginning, onTabMoveToEnd, showMenu, tabs.length]);
 
     useEffect(() => {
         if (activeTabId && activeTabRef.current) {
@@ -261,6 +326,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                                 onDragLeave={handleDragLeave}
                                 onDrop={(e) => handleDrop(e, index)}
                                 onClick={() => onTabClick?.(tab.id)}
+                                onContextMenu={(e) => handleTabContextMenu(e, tab, index)}
                                 className={`
                                     group flex items-center gap-1.5 px-3 h-[33px] cursor-pointer
                                     transition-colors relative whitespace-nowrap shrink-0 text-xs
