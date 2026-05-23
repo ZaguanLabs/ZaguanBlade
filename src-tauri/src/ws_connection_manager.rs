@@ -448,6 +448,9 @@ impl WsConnectionManager {
         storage_mode: Option<String>,
         mode: Option<String>,
         local_conversation_state: Option<crate::blade_ws_client::LocalConversationState>,
+        tools: Option<Vec<Value>>,
+        tool_choice: Option<Value>,
+        parallel_tool_calls: Option<bool>,
     ) -> Result<(), String> {
         let client_lock = self.client.lock().await;
         let client = client_lock.as_ref().ok_or("Not connected")?;
@@ -461,6 +464,9 @@ impl WsConnectionManager {
                 storage_mode,
                 mode,
                 local_conversation_state,
+                tools,
+                tool_choice,
+                parallel_tool_calls,
             )
             .await
     }

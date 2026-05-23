@@ -917,6 +917,9 @@ impl ChatManager {
                                         storage_mode.clone(),
                                         mode.clone(),
                                         local_conversation_state.clone(),
+                                        None,
+                                        None,
+                                        None,
                                     )
                                     .await
                                 {

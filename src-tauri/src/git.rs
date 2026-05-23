@@ -1218,6 +1218,10 @@ pub async fn git_generate_commit_message_ai(
 
     let prompt = format!(
         r#"Generate a Git commit message for these changes.
+This is a text-only commit-message task. Do not request, propose, or emit tool calls.
+Do not use commands, shells, filesystem tools, repository tools, or external actions.
+Use only the provided diff and metadata below.
+
 Use Conventional Commits format: type(scope): description
 
 Allowed types: feat, fix, refactor, docs, style, test, chore, perf
@@ -1325,11 +1329,14 @@ Do NOT include analysis, reasoning, explanations, or multiple options."#,
             None,
             Some(workspace_info),
             storage_mode,
-            Some("code".to_string()),
+            Some("ask".to_string()),
             Some(LocalConversationState {
                 message_count: 0,
                 fingerprint: "git-commit-message".to_string(),
             }),
+            Some(Vec::new()),
+            Some(serde_json::json!("none")),
+            Some(false),
         )
         .await
         .map_err(|e| format!("Failed to send message: {}", e))?;

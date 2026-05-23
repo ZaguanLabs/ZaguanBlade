@@ -239,6 +239,12 @@ struct ChatRequestPayload {
     planning_mode: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     local_conversation_state: Option<LocalConversationState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parallel_tool_calls: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -578,7 +584,7 @@ impl BladeWsClient {
         workspace: Option<WorkspaceInfo>,
     ) -> Result<(), String> {
         self.send_message_with_storage_mode(
-            session_id, model_id, message, images, workspace, None, None, None,
+            session_id, model_id, message, images, workspace, None, None, None, None, None, None,
         )
         .await
     }
@@ -594,6 +600,9 @@ impl BladeWsClient {
         storage_mode: Option<String>,
         mode: Option<String>,
         local_conversation_state: Option<LocalConversationState>,
+        tools: Option<Vec<Value>>,
+        tool_choice: Option<Value>,
+        parallel_tool_calls: Option<bool>,
     ) -> Result<(), String> {
         let conn = self.connection.lock().await;
         let conn = conn.as_ref().ok_or("Not connected")?;
@@ -613,6 +622,9 @@ impl BladeWsClient {
             mode,
             planning_mode,
             local_conversation_state,
+            tools,
+            tool_choice,
+            parallel_tool_calls,
         };
 
         let msg = WsBaseMessage {
