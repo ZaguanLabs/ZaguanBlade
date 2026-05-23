@@ -306,7 +306,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                         }`}
                                         style={{
                                             backgroundColor: pushSuccess
-                                                ? 'var(--accent-mention)'
+                                                ? 'var(--accent-ai)'
                                                 : isPushing
                                                     ? 'color-mix(in srgb, var(--accent-ai) 18%, var(--bg-surface))'
                                                     : 'var(--accent-ai)',
@@ -319,7 +319,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                                 ? '1px solid color-mix(in srgb, var(--accent-ai) 40%, var(--border-default))'
                                                 : '1px solid transparent',
                                             boxShadow: pushSuccess
-                                                ? '0 0 0 1px color-mix(in srgb, var(--accent-mention) 24%, transparent), var(--shadow-md)'
+                                                ? '0 0 0 1px color-mix(in srgb, var(--accent-ai) 24%, transparent), var(--shadow-md)'
                                                 : isPushing
                                                     ? 'inset 0 1px 0 color-mix(in srgb, var(--fg-bright) 12%, transparent)'
                                                     : 'var(--shadow-sm)',
