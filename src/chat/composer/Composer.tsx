@@ -8,6 +8,8 @@ import { MentionSuggestions, type ComposerSuggestion } from './MentionSuggestion
 import { useComposerAttachments } from './useComposerAttachments';
 import { usePathSuggestions, type WorkspacePathMatch } from './usePathSuggestions';
 
+const MAX_COMPOSER_HISTORY = 20;
+
 interface ComposerProps {
     onSend: (text: string, attachments?: ReturnType<typeof useComposerAttachments>['attachments'], mentions?: ComposerMention[], mode?: ChatMode) => void;
     onStop?: () => void;
@@ -48,6 +50,9 @@ export const Composer: React.FC<ComposerProps> = ({
     const [selectedMentions, setSelectedMentions] = useState<Record<string, WorkspacePathMatch>>({});
     const textareaRef = useRef<ComposerTextareaHandle>(null);
     const textareaDomCursorRef = useRef(0);
+    const historyRef = useRef<string[]>([]);
+    const historyIndexRef = useRef<number | null>(null);
+    const historyDraftRef = useRef('');
     const isLocalOnly = models.length > 0 && models.every((model) => model.provider === 'ollama' || model.provider === 'openai-compat');
     const isGlmModel = selectedModelId.toLowerCase().includes('glm-4') || selectedModelId.toLowerCase().includes('glm-5');
     const imageDisabledReason = isLocalOnly ? t('chat.imageNoSubscription') : isGlmModel ? t('chat.imageNotSupported') : undefined;
@@ -76,13 +81,68 @@ export const Composer: React.FC<ComposerProps> = ({
         if (!text.trim() && attachments.attachments.length === 0) {
             return;
         }
-        onSend(text, attachments.attachments, collectMentions(text, selectedMentions), chatMode);
+        const submittedText = text;
+        const trimmedText = submittedText.trim();
+        if (trimmedText) {
+            const previousHistory = historyRef.current;
+            historyRef.current = previousHistory[previousHistory.length - 1] === submittedText
+                ? previousHistory
+                : [...previousHistory, submittedText].slice(-MAX_COMPOSER_HISTORY);
+        }
+        historyIndexRef.current = null;
+        historyDraftRef.current = '';
+        onSend(submittedText, attachments.attachments, collectMentions(submittedText, selectedMentions), chatMode);
         setText('');
         setMentionQuery(null);
         setSelectedMentions({});
         attachments.clearAttachments();
         requestAnimationFrame(() => textareaRef.current?.resize());
     }, [attachments, chatMode, disabled, onSend, selectedMentions, text]);
+
+    const updateTextFromHistory = useCallback((nextText: string) => {
+        setText(nextText);
+        setMentionQuery(null);
+        requestAnimationFrame(() => {
+            textareaRef.current?.focus();
+            textareaRef.current?.resize();
+        });
+    }, []);
+
+    const navigateHistory = useCallback((direction: 'previous' | 'next') => {
+        const history = historyRef.current;
+        if (history.length === 0) {
+            return false;
+        }
+
+        if (direction === 'previous') {
+            const currentIndex = historyIndexRef.current;
+            if (currentIndex === 0) {
+                return false;
+            }
+            if (currentIndex === null) {
+                historyDraftRef.current = text;
+                historyIndexRef.current = history.length - 1;
+            } else {
+                historyIndexRef.current = currentIndex - 1;
+            }
+            updateTextFromHistory(history[historyIndexRef.current]);
+            return true;
+        }
+
+        const currentIndex = historyIndexRef.current;
+        if (currentIndex === null) {
+            return false;
+        }
+        if (currentIndex === history.length - 1) {
+            historyIndexRef.current = null;
+            updateTextFromHistory(historyDraftRef.current);
+            historyDraftRef.current = '';
+            return true;
+        }
+        historyIndexRef.current = currentIndex + 1;
+        updateTextFromHistory(history[historyIndexRef.current]);
+        return true;
+    }, [text, updateTextFromHistory]);
 
     const selectSuggestion = useCallback((suggestion: ComposerSuggestion) => {
         const textarea = document.activeElement instanceof HTMLTextAreaElement ? document.activeElement : null;
@@ -175,6 +235,7 @@ export const Composer: React.FC<ComposerProps> = ({
                                 onTriggerChange={setMentionQuery}
                                 onSelectSuggestion={selectSuggestion}
                                 onSubmit={submit}
+                                onNavigateHistory={navigateHistory}
                                 onPasteImages={(files) => void attachments.appendFiles(files)}
                             />
                         </div>

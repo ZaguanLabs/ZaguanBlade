@@ -18,6 +18,7 @@ interface ComposerTextareaProps {
     onTriggerChange: (query: string | null) => void;
     onSelectSuggestion: (suggestion: ComposerSuggestion) => void;
     onSubmit: () => void;
+    onNavigateHistory: (direction: 'previous' | 'next') => boolean;
     onPasteImages: (files: File[]) => void;
 }
 
@@ -53,6 +54,7 @@ export const ComposerTextarea = forwardRef<ComposerTextareaHandle, ComposerTexta
     onTriggerChange,
     onSelectSuggestion,
     onSubmit,
+    onNavigateHistory,
     onPasteImages,
 }, ref) => {
     const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -151,6 +153,24 @@ export const ComposerTextarea = forwardRef<ComposerTextareaHandle, ComposerTexta
                 if (event.key === 'Enter' && !event.shiftKey) {
                     event.preventDefault();
                     onSubmit();
+                    return;
+                }
+                if (!showSuggestions && event.key === 'ArrowUp') {
+                    const textarea = event.currentTarget;
+                    if (textarea.selectionStart === textarea.selectionEnd && textarea.selectionStart === 0) {
+                        if (onNavigateHistory('previous')) {
+                            event.preventDefault();
+                        }
+                    }
+                    return;
+                }
+                if (!showSuggestions && event.key === 'ArrowDown') {
+                    const textarea = event.currentTarget;
+                    if (textarea.selectionStart === textarea.selectionEnd && textarea.selectionStart === textarea.value.length) {
+                        if (onNavigateHistory('next')) {
+                            event.preventDefault();
+                        }
+                    }
                 }
             }}
             placeholder={placeholder}
