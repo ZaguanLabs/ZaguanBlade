@@ -644,6 +644,7 @@
     "commitMessageRequired": "El mensaje de commit es obligatorio.",
     "generateCommitMessage": "Generar mensaje de commit con IA",
     "generate": "Generar",
+    "generating": "Generando",
     "pushed": "Push hecho",
     "pushing": "Haciendo push",
     "unstagedCommitHint": "Los cambios sin preparar se añadirán al hacer commit",

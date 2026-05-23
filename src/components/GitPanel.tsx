@@ -275,11 +275,13 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                 {/* Generate button - always visible */}
                                 <button
                                     className={`flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-[calc(var(--panel-radius)*0.55)] transition-all font-medium border ${
-                                        busyAction === 'generate-message' || changedCount === 0
-                                            ? 'border-(--border-subtle) text-(--fg-tertiary) cursor-not-allowed opacity-50'
-                                            : 'border-(--border-default) text-(--fg-secondary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover)'
+                                        busyAction === 'generate-message'
+                                            ? 'border-(--accent-ai)/40 text-(--accent-ai) animate-generate-pulse'
+                                            : changedCount === 0
+                                                ? 'border-(--border-subtle) text-(--fg-tertiary) cursor-not-allowed opacity-50'
+                                                : 'border-(--border-default) text-(--fg-secondary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover)'
                                     }`}
-                                    disabled={busyAction === 'generate-message' || changedCount === 0}
+                                    disabled={changedCount === 0}
                                     onClick={() =>
                                         runAction('generate-message', async () => {
                                             const message = await onGenerateCommitMessage();
@@ -288,8 +290,8 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                     }
                                     title={t('git.generateCommitMessage')}
                                 >
-                                    <Sparkles className={`w-3 h-3 ${busyAction === 'generate-message' ? 'animate-pulse' : ''}`} />
-                                    {t('git.generate')}
+                                    <Sparkles className={`w-3 h-3 ${busyAction === 'generate-message' ? 'animate-spin' : ''}`} />
+                                    {busyAction === 'generate-message' ? t('git.generating') : t('git.generate')}
                                 </button>
 
                                 <div className="flex-1" />

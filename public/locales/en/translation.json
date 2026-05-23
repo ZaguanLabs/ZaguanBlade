@@ -648,6 +648,7 @@
     "commitMessageRequired": "Commit message is required.",
     "generateCommitMessage": "Generate commit message with AI",
     "generate": "Generate",
+    "generating": "Generating",
     "pushed": "Pushed!",
     "pushing": "Pushing",
     "unstagedCommitHint": "Unstaged changes will be staged on commit",

@@ -196,6 +196,16 @@ pre::selection,
     border: 1px solid var(--glass-border);
 }
 
+/* Generate button gentle pulse while working */
+@keyframes generate-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+.animate-generate-pulse {
+    animation: generate-pulse 2s ease-in-out infinite;
+}
+
 /* Push button shimmer animation */
 @keyframes push-shimmer {
     0% { background-position: 200% 0; }
