@@ -651,6 +651,8 @@
     "generating": "Generando",
     "pushed": "Push hecho",
     "pushing": "Haciendo push",
+    "publishBranch": "Publicar rama",
+    "pushWithCount": "Push {{count}}",
     "unstagedCommitHint": "Los cambios sin preparar se añadirán al hacer commit",
     "workingTreeClean": "✓ El árbol de trabajo está limpio",
     "stagedSection": "Preparados",

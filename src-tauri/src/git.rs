@@ -23,6 +23,9 @@ pub struct GitStatusSummary {
     pub branch: Option<String>,
     pub ahead: u32,
     pub behind: u32,
+    pub has_upstream: bool,
+    pub has_remote: bool,
+    pub can_push: bool,
     pub dirty: bool,
 }
 
@@ -82,6 +85,9 @@ fn empty_summary() -> GitStatusSummary {
         branch: None,
         ahead: 0,
         behind: 0,
+        has_upstream: false,
+        has_remote: false,
+        can_push: false,
         dirty: false,
     }
 }
@@ -161,6 +167,9 @@ fn parse_git_status(output: &str) -> GitStatusSummary {
         branch: None,
         ahead: 0,
         behind: 0,
+        has_upstream: false,
+        has_remote: false,
+        can_push: false,
         dirty: false,
     };
 
@@ -171,6 +180,10 @@ fn parse_git_status(output: &str) -> GitStatusSummary {
                 if head != "(detached)" && head != "(unknown)" {
                     summary.branch = Some(head.to_string());
                 }
+                continue;
+            }
+            if rest.strip_prefix("branch.upstream ").is_some() {
+                summary.has_upstream = true;
                 continue;
             }
             if let Some(ab) = rest.strip_prefix("branch.ab ") {
@@ -298,8 +311,18 @@ fn collect_git_status_snapshot_cli(root: &str) -> Result<GitStatusSnapshot, Stri
         None => return Ok(empty_snapshot()),
     };
 
+    let mut summary = parse_git_status(&stdout);
+    summary.has_remote = git_has_remote(root);
+    summary.can_push = summary.branch.is_some()
+        && summary.has_remote
+        && if summary.has_upstream {
+            summary.ahead > 0
+        } else {
+            git_has_commits(root)
+        };
+
     Ok(GitStatusSnapshot {
-        summary: parse_git_status(&stdout),
+        summary,
         files: parse_git_status_files(&stdout),
     })
 }
@@ -376,6 +399,37 @@ fn run_git(root: &str, args: &[&str]) -> Result<String, String> {
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn git_has_remote(root: &str) -> bool {
+    run_git(root, &["remote"][..])
+        .map(|output| output.lines().any(|line| !line.trim().is_empty()))
+        .unwrap_or(false)
+}
+
+fn git_has_commits(root: &str) -> bool {
+    run_git(root, &["rev-parse", "--verify", "HEAD"][..]).is_ok()
+}
+
+fn default_push_remote(root: &str, branch: &str) -> Option<String> {
+    let branch_remote_key = format!("branch.{}.remote", branch);
+    if let Ok(remote) = run_git(root, &["config", "--get", branch_remote_key.as_str()][..]) {
+        let remote = remote.trim();
+        if !remote.is_empty() {
+            return Some(remote.to_string());
+        }
+    }
+
+    let remotes = run_git(root, &["remote"][..]).ok()?;
+    if remotes.lines().any(|line| line.trim() == "origin") {
+        return Some("origin".to_string());
+    }
+
+    remotes
+        .lines()
+        .map(str::trim)
+        .find(|remote| !remote.is_empty())
+        .map(ToString::to_string)
 }
 
 fn find_subject_start_in_line(line: &str) -> Option<usize> {
@@ -875,9 +929,27 @@ mod tests {
         assert_eq!(summary.changed_count, 3);
         assert_eq!(summary.unstaged_count, 2);
         assert_eq!(summary.untracked_count, 1);
+        assert!(summary.has_upstream);
+        assert_eq!(summary.ahead, 0);
+        assert_eq!(summary.behind, 0);
         assert_eq!(files.len(), 3);
         assert_eq!(files[0].path, "src-tauri/src/ai_workflow.rs");
         assert_eq!(files[2].status_code, "??");
+    }
+
+    #[test]
+    fn porcelain_status_parser_handles_branch_without_upstream() {
+        let output = "\
+# branch.oid 64b114a287e09f5ad611a0b4b8558cdd546a19f3
+# branch.head main
+";
+
+        let summary = parse_git_status(output);
+
+        assert_eq!(summary.branch.as_deref(), Some("main"));
+        assert!(!summary.has_upstream);
+        assert_eq!(summary.ahead, 0);
+        assert_eq!(summary.behind, 0);
     }
 }
 
@@ -1085,7 +1157,19 @@ pub async fn git_push(state: State<'_, AppState>) -> Result<String, String> {
         return Err("No workspace open".to_string());
     };
 
-    run_git_async(&root, &["push"][..], "push").await
+    let snapshot = collect_git_status_snapshot_cli(&root)?;
+    if snapshot.summary.has_upstream {
+        return run_git_async(&root, &["push"][..], "push").await;
+    }
+
+    let branch = snapshot
+        .summary
+        .branch
+        .ok_or_else(|| "Cannot push without an active branch".to_string())?;
+    let remote = default_push_remote(&root, &branch)
+        .ok_or_else(|| "Cannot push because no Git remote is configured".to_string())?;
+
+    run_git_async(&root, &["push", "-u", &remote, &branch][..], "push -u").await
 }
 
 #[tauri::command]

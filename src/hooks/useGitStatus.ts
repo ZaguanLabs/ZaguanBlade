@@ -12,6 +12,9 @@ export interface GitStatusSummary {
     branch: string | null;
     ahead: number;
     behind: number;
+    hasUpstream: boolean;
+    hasRemote: boolean;
+    canPush: boolean;
     dirty: boolean;
 }
 

@@ -732,10 +732,6 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                         activeFile={activeFile}
                         highlightLines={highlightLines}
                         handleNavigate={handleNavigate}
-                        onFileContentChanged={() => {
-                            awaitingInitialSyncRef.current = false;
-                            setReloadTrigger(prev => prev + 1);
-                        }}
                     />
                 )}
             </div>
@@ -752,7 +748,6 @@ interface EditorWithChangeBarProps {
     activeFile: string;
     highlightLines?: { startLine: number; endLine: number } | null;
     handleNavigate: (path: string, line: number, character: number) => void;
-    onFileContentChanged: (filePath: string) => void;
 }
 
 function EditorWithChangeBar({
@@ -764,11 +759,8 @@ function EditorWithChangeBar({
     activeFile,
     highlightLines,
     handleNavigate,
-    onFileContentChanged,
 }: EditorWithChangeBarProps) {
-    const { getChangeForFile, acceptFile, rejectFile, refresh } = useUncommittedChanges({
-        onFileChanged: onFileContentChanged,
-    });
+    const { getChangeForFile, acceptFile, rejectFile, refresh } = useUncommittedChanges();
     const change = getChangeForFile(activeFile);
 
     const handleAccept = async () => {

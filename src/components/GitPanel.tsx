@@ -67,7 +67,10 @@ export const GitPanel: React.FC<GitPanelProps> = ({
     const stagedCount = status?.stagedCount ?? 0;
     const canCommit = commitMessage.trim().length > 0 && changedCount > 0;
     const isPushing = busyAction === 'push';
-    const showPushButton = (status?.ahead ?? 0) > 0 || pushSuccess || isPushing;
+    const showPushButton = Boolean(status?.canPush) || pushSuccess || isPushing;
+    const pushLabel = status?.hasUpstream === false && status?.hasRemote
+        ? t('git.publishBranch')
+        : t('git.pushWithCount', { count: status?.ahead ?? 0 });
 
     const stagedFiles = useMemo(
         () => files.filter(file => file.staged),
@@ -378,7 +381,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                             ) : (
                                                 <>
                                                     <Upload className="w-3 h-3" />
-                                                    Push {status?.ahead}
+                                                    {pushLabel}
                                                 </>
                                             )}
                                         </span>
