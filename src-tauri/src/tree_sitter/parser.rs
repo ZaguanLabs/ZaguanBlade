@@ -16,6 +16,7 @@ pub enum Language {
     Python,
     Rust,
     Go,
+    Markdown,
 }
 
 impl Language {
@@ -31,6 +32,7 @@ impl Language {
             "py" => Some(Language::Python),
             "rs" => Some(Language::Rust),
             "go" => Some(Language::Go),
+            "md" | "markdown" => Some(Language::Markdown),
             _ => None,
         }
     }
@@ -45,6 +47,7 @@ impl Language {
             Language::Python => "Python",
             Language::Rust => "Rust",
             Language::Go => "Go",
+            Language::Markdown => "Markdown",
         }
     }
 }
@@ -198,6 +201,11 @@ mod tests {
         assert_eq!(Language::from_path("main.py"), Some(Language::Python));
         assert_eq!(Language::from_path("lib.rs"), Some(Language::Rust));
         assert_eq!(Language::from_path("main.go"), Some(Language::Go));
+        assert_eq!(Language::from_path("README.md"), Some(Language::Markdown));
+        assert_eq!(
+            Language::from_path("docs/plan.markdown"),
+            Some(Language::Markdown)
+        );
         assert_eq!(Language::from_path("data.json"), None);
     }
 

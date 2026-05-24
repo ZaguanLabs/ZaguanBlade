@@ -31,6 +31,7 @@ pub enum SymbolType {
     Export,
     Trait,
     Impl,
+    Heading,
 }
 
 impl std::fmt::Display for SymbolType {
@@ -53,6 +54,7 @@ impl std::fmt::Display for SymbolType {
             SymbolType::Export => "export",
             SymbolType::Trait => "trait",
             SymbolType::Impl => "impl",
+            SymbolType::Heading => "heading",
         };
         write!(f, "{}", s)
     }
@@ -111,6 +113,7 @@ impl std::str::FromStr for SymbolType {
             "export" => Ok(SymbolType::Export),
             "trait" => Ok(SymbolType::Trait),
             "impl" => Ok(SymbolType::Impl),
+            "heading" => Ok(SymbolType::Heading),
             _ => Err(format!("Unknown symbol type: {}", s)),
         }
     }
@@ -368,6 +371,7 @@ impl SymbolExtractor {
             Language::Python => self.python_node_to_symbol(node, source),
             Language::Rust => self.rust_node_to_symbol(node, source),
             Language::Go => self.go_node_to_symbol(node, source),
+            Language::Markdown => None,
         }
     }
 
@@ -937,6 +941,7 @@ impl SymbolExtractor {
                     return Some(format!("{}{}", params_text, return_type));
                 }
             }
+            Language::Markdown => {}
         }
         None
     }
@@ -1020,7 +1025,7 @@ fn extract_structural_relationships_from_node(
             relationships,
             seen,
         ),
-        Language::Go => {}
+        Language::Go | Language::Markdown => {}
     }
 
     for i in 0..node.child_count() {
@@ -1425,6 +1430,7 @@ fn extract_relationship_target_name(
             let callee = node.child_by_field_name("function")?;
             extract_callable_name(&callee, source)
         }
+        Language::Markdown => None,
     }
 }
 

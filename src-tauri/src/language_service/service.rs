@@ -12,8 +12,8 @@ use crate::gitignore_filter::GitignoreFilter;
 use crate::project_settings;
 use crate::symbol_index::{SearchQuery, SearchResult, SymbolReference, SymbolStore};
 use crate::tree_sitter::{
-    extract_symbol_relationships, extract_symbols, Language, Symbol, SymbolRelationship,
-    SymbolRelationshipType, SymbolType, TreeSitterParser,
+    extract_symbol_relationships, extract_symbols, Language, Position, Range, Symbol,
+    SymbolRelationship, SymbolRelationshipType, SymbolType, TreeSitterParser,
 };
 use crate::worktree::WorktreeStore;
 
@@ -711,17 +711,26 @@ impl LanguageService {
                 LanguageError::NotSupported(format!("Unknown language for: {}", file_path))
             })?;
 
-        let tree = {
-            let mut parser = self.parser.lock().unwrap();
-            parser
-                .parse(&content, language)
-                .map_err(|e| LanguageError::Parse(e.to_string()))?
-        };
-
         // Extract symbols
-        let extracted_symbols = extract_symbols(&tree, &content, language, file_path);
-        let mut relationships =
-            extract_symbol_relationships(&tree, &content, language, file_path, &extracted_symbols);
+        let (extracted_symbols, mut relationships) = if matches!(language, Language::Markdown) {
+            (extract_markdown_header_symbols(file_path, &content), Vec::new())
+        } else {
+            let tree = {
+                let mut parser = self.parser.lock().unwrap();
+                parser
+                    .parse(&content, language)
+                    .map_err(|e| LanguageError::Parse(e.to_string()))?
+            };
+            let extracted_symbols = extract_symbols(&tree, &content, language, file_path);
+            let relationships = extract_symbol_relationships(
+                &tree,
+                &content,
+                language,
+                file_path,
+                &extracted_symbols,
+            );
+            (extracted_symbols, relationships)
+        };
         let symbols = self.with_file_root_symbol(file_path, &content, extracted_symbols);
         self.canonicalize_import_relationships(file_path, &mut relationships);
         self.append_module_export_relationships(
@@ -1533,22 +1542,29 @@ impl LanguageService {
                 LanguageError::NotSupported(format!("Unknown language for: {}", file_path))
             })?;
 
-        let tree = {
-            let mut parser = self.parser.lock().unwrap();
-            parser
-                .parse(snapshot.content(), language)
-                .map_err(|e| LanguageError::Parse(e.to_string()))?
-        };
-
         // Extract symbols
-        let extracted_symbols = extract_symbols(&tree, snapshot.content(), language, file_path);
-        let mut relationships = extract_symbol_relationships(
-            &tree,
-            snapshot.content(),
-            language,
-            file_path,
-            &extracted_symbols,
-        );
+        let (extracted_symbols, mut relationships) = if matches!(language, Language::Markdown) {
+            (
+                extract_markdown_header_symbols(file_path, snapshot.content()),
+                Vec::new(),
+            )
+        } else {
+            let tree = {
+                let mut parser = self.parser.lock().unwrap();
+                parser
+                    .parse(snapshot.content(), language)
+                    .map_err(|e| LanguageError::Parse(e.to_string()))?
+            };
+            let extracted_symbols = extract_symbols(&tree, snapshot.content(), language, file_path);
+            let relationships = extract_symbol_relationships(
+                &tree,
+                snapshot.content(),
+                language,
+                file_path,
+                &extracted_symbols,
+            );
+            (extracted_symbols, relationships)
+        };
         let symbols = self.with_file_root_symbol(file_path, snapshot.content(), extracted_symbols);
         self.canonicalize_import_relationships(file_path, &mut relationships);
         self.append_module_export_relationships(
@@ -2529,6 +2545,7 @@ impl LanguageService {
                 python_is_exported_name(content, &symbol.name).then(|| symbol.name.clone())
             }
             Language::Go => go_is_exported_name(&symbol.name).then(|| symbol.name.clone()),
+            Language::Markdown => None,
         }
     }
 }
@@ -2557,6 +2574,76 @@ fn compute_hash(content: &str) -> String {
     let mut hasher = DefaultHasher::new();
     content.hash(&mut hasher);
     format!("{:x}", hasher.finish())
+}
+
+fn extract_markdown_header_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
+    let mut symbols = Vec::new();
+    let mut byte_offset = 0usize;
+
+    for (line_index, segment) in content.split_inclusive('\n').enumerate() {
+        let line_start = byte_offset;
+        byte_offset += segment.len();
+
+        let line_without_lf = segment.strip_suffix('\n').unwrap_or(segment);
+        let line = line_without_lf
+            .strip_suffix('\r')
+            .unwrap_or(line_without_lf);
+
+        let Some((level, name)) = parse_markdown_header(line) else {
+            continue;
+        };
+
+        let line_number = line_index as u32;
+        let character_count = line.chars().count() as u32;
+        let qualified_name = format!("h{}:{}:{}", level, line_number + 1, name);
+
+        symbols.push(Symbol {
+            id: format!("{}::{}#{}", file_path, qualified_name, SymbolType::Heading),
+            name,
+            qualified_name,
+            symbol_type: SymbolType::Heading,
+            file_path: file_path.to_string(),
+            range: Range {
+                start: Position::new(line_number, 0),
+                end: Position::new(line_number, character_count),
+            },
+            byte_offset: line_start,
+            byte_length: line.len(),
+            parent_id: None,
+            docstring: None,
+            signature: Some(format!("h{}", level)),
+            content_hash: compute_hash(line),
+        });
+    }
+
+    symbols
+}
+
+fn parse_markdown_header(line: &str) -> Option<(usize, String)> {
+    let level = line.chars().take_while(|character| *character == '#').count();
+    if !(1..=6).contains(&level) {
+        return None;
+    }
+
+    let after_hashes = &line[level..];
+    if after_hashes
+        .chars()
+        .next()
+        .is_some_and(|character| !character.is_whitespace())
+    {
+        return None;
+    }
+
+    let name = after_hashes
+        .trim()
+        .trim_end_matches('#')
+        .trim()
+        .to_string();
+    if name.is_empty() {
+        return None;
+    }
+
+    Some((level, name))
 }
 
 fn push_unique_limited(items: &mut Vec<String>, value: String, limit: usize) {
@@ -2759,6 +2846,25 @@ mod tests {
         // Should find function and class
         assert!(symbols.iter().any(|s| s.name == "authenticate"));
         assert!(symbols.iter().any(|s| s.name == "UserService"));
+    }
+
+    #[test]
+    fn test_index_markdown_headers() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("planning.md"),
+            "# Stage 2 Planning\n\nBody text\n\n## Goals\n\n### Details ###\n\nNot a symbol\n",
+        )
+        .unwrap();
+
+        let symbols = service.index_file("planning.md").unwrap();
+
+        assert!(symbols.iter().any(|s| s.name == "Stage 2 Planning"));
+        assert!(symbols.iter().any(|s| s.name == "Goals"));
+        assert!(symbols.iter().any(|s| s.name == "Details"));
+        assert!(!symbols.iter().any(|s| s.name == "Body text"));
+        assert!(!symbols.iter().any(|s| s.name == "Not a symbol"));
     }
 
     #[test]
