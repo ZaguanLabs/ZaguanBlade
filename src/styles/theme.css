@@ -178,3 +178,35 @@
   --bg-app: #10131a;
   --bg-panel: #141925;
 }
+
+/* YOLO Pill — Theme-specific overrides for status bar warning indicator */
+
+/* Blade Coder (warm cinematic dark) — slightly stronger opacity */
+[data-theme="blade-coder"] .yolo-pill {
+  border-color: color-mix(in srgb, var(--accent-warning) 52%, transparent);
+  background-color: color-mix(in srgb, var(--accent-warning) 18%, transparent);
+}
+
+[data-theme="blade-coder"] .yolo-pill:hover {
+  background-color: color-mix(in srgb, var(--accent-warning) 26%, transparent);
+}
+
+/* Blade Cream (light theme) — much stronger opacity for light backgrounds */
+[data-theme="blade-cream"] .yolo-pill {
+  border-color: color-mix(in srgb, var(--accent-warning) 68%, transparent);
+  background-color: color-mix(in srgb, var(--accent-warning) 28%, transparent);
+}
+
+[data-theme="blade-cream"] .yolo-pill:hover {
+  background-color: color-mix(in srgb, var(--accent-warning) 38%, transparent);
+}
+
+/* Blade Robot (industrial light) — much stronger opacity for light backgrounds */
+[data-theme="blade-robot"] .yolo-pill {
+  border-color: color-mix(in srgb, var(--accent-warning) 68%, transparent);
+  background-color: color-mix(in srgb, var(--accent-warning) 28%, transparent);
+}
+
+[data-theme="blade-robot"] .yolo-pill:hover {
+  background-color: color-mix(in srgb, var(--accent-warning) 38%, transparent);
+}

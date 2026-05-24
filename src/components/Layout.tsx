@@ -1308,7 +1308,7 @@ const AppLayoutInner: React.FC = () => {
                         <button
                             type="button"
                             onClick={openConfigurationSettings}
-                            className="inline-flex items-center gap-1 rounded-[calc(var(--panel-radius)*0.35)] border border-[color-mix(in_srgb,var(--accent-warning)_42%,transparent)] bg-[color-mix(in_srgb,var(--accent-warning)_12%,transparent)] px-1.5 py-0.5 font-semibold text-(--accent-warning) opacity-100 transition-colors hover:bg-[color-mix(in_srgb,var(--accent-warning)_18%,transparent)]"
+                            className="yolo-pill inline-flex items-center gap-1 rounded-[calc(var(--panel-radius)*0.35)] border border-[color-mix(in_srgb,var(--accent-warning)_42%,transparent)] bg-[color-mix(in_srgb,var(--accent-warning)_12%,transparent)] px-1.5 py-0.5 font-semibold text-(--accent-warning) opacity-100 transition-colors hover:bg-[color-mix(in_srgb,var(--accent-warning)_18%,transparent)]"
                         >
                             <AlertTriangle className="h-3 w-3" />
                             {t('statusBar.yoloMode')}
