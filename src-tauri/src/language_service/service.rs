@@ -2779,6 +2779,15 @@ fn should_allow_non_indexed_live_sync(file_path: &str) -> bool {
         || lower.ends_with(".json")
         || lower.ends_with(".jsonc")
         || lower.ends_with(".json5")
+        || is_dot_file_path(&lower)
+}
+
+fn is_dot_file_path(file_path: &str) -> bool {
+    file_path
+        .rsplit(['/', '\\'])
+        .next()
+        .map(|name| name.starts_with('.') && name.len() > 1)
+        .unwrap_or(false)
 }
 
 fn go_is_exported_name(name: &str) -> bool {
@@ -2819,6 +2828,14 @@ mod tests {
         let store = Arc::new(SymbolStore::new(&db_path).unwrap());
         let service = LanguageService::new(temp_dir.path().to_path_buf(), store).unwrap();
         (service, temp_dir)
+    }
+
+    #[test]
+    fn test_dot_files_allow_non_indexed_live_sync() {
+        assert!(should_allow_non_indexed_live_sync(".gitignore"));
+        assert!(should_allow_non_indexed_live_sync("config/.env.local"));
+        assert!(should_allow_non_indexed_live_sync("nested/.dockerignore"));
+        assert!(!should_allow_non_indexed_live_sync("src/main.rs"));
     }
 
     #[test]

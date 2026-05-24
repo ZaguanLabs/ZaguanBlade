@@ -1448,6 +1448,12 @@ export function useChatV2(options: UseChatV2Options = {}) {
 
                     nextMessages[messageIndex] = {
                         ...message,
+                        tool_calls: (message.tool_calls || []).map((toolCall) => toolCall.id === callId
+                            ? {
+                                ...toolCall,
+                                status: exitCode === 0 ? 'complete' : 'error',
+                            }
+                            : toolCall),
                         blocks: normalizedBlocks.blocks,
                         content_before_tools: normalizedBlocks.contentBeforeTools,
                         content_after_tools: normalizedBlocks.contentAfterTools,
@@ -1459,7 +1465,7 @@ export function useChatV2(options: UseChatV2Options = {}) {
             });
 
             unlistenToolCompleted = await listen<ToolExecutionCompletedPayload>('tool-execution-completed', (event) => {
-                const { tool_call_id: toolCallId, success, skipped } = event.payload;
+                const { tool_name: toolName, tool_call_id: toolCallId, success, skipped } = event.payload;
                 const nextStatus: 'complete' | 'error' | 'skipped' = skipped
                     ? 'skipped'
                     : success
@@ -1470,12 +1476,18 @@ export function useChatV2(options: UseChatV2Options = {}) {
                     if (!message.tool_calls?.some((toolCall) => toolCall.id === toolCallId)) {
                         return message;
                     }
+                    const commandExecution = toolName === 'run_command'
+                        ? message.commandExecutions?.find((execution) => execution.id === toolCallId)
+                        : undefined;
+                    const effectiveStatus = !skipped && commandExecution?.exitCode === 0
+                        ? 'complete'
+                        : nextStatus;
                     return {
                         ...message,
                         tool_calls: (message.tool_calls || []).map((toolCall) => toolCall.id === toolCallId
                             ? {
                                 ...toolCall,
-                                status: nextStatus,
+                                status: effectiveStatus,
                                 ...(skipped && !toolCall.result ? { result: 'Skipped by user' } : {}),
                             }
                             : toolCall),

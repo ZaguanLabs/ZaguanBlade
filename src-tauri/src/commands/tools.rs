@@ -980,7 +980,7 @@ pub async fn approve_single_command<R: Runtime>(
                     // Check if result already exists
                     if !batch.file_results.iter().any(|(c, _)| c.id == call_id) {
                         if approved {
-                            if let Some(workspace_root) = ws_root.as_deref() {
+                            let completed_immediately = if let Some(workspace_root) = ws_root.as_deref() {
                                 if let Some((result, output, exit_code, refresh_explorer)) =
                                     try_execute_builtin_command(&cmd, Path::new(workspace_root))
                                 {
@@ -993,31 +993,40 @@ pub async fn approve_single_command<R: Runtime>(
                                         exit_code,
                                         refresh_explorer,
                                     );
-                                    return;
+                                    true
+                                } else {
+                                    false
                                 }
-                            }
+                            } else {
+                                false
+                            };
 
-                            eprintln!("[SINGLE APPROVAL] User APPROVED command: {}", cmd.command);
-                            // Emit event for this specific command to be executed
-                            let command_id = format!("cmd-{}", cmd.call.id);
-                            let _ = app_handle.emit(
-                                crate::events::event_names::COMMAND_EXECUTION_STARTED,
-                                crate::events::CommandExecutionStartedPayload {
-                                    command_id,
-                                    call_id: cmd.call.id.clone(),
-                                    command: cmd.command.clone(),
-                                    program: cmd.command_spec.program.clone(),
-                                    args: if cmd.command_spec.args.is_empty() {
-                                        None
-                                    } else {
-                                        Some(cmd.command_spec.args.clone())
+                            if !completed_immediately {
+                                eprintln!(
+                                    "[SINGLE APPROVAL] User APPROVED command: {}",
+                                    cmd.command
+                                );
+                                // Emit event for this specific command to be executed
+                                let command_id = format!("cmd-{}", cmd.call.id);
+                                let _ = app_handle.emit(
+                                    crate::events::event_names::COMMAND_EXECUTION_STARTED,
+                                    crate::events::CommandExecutionStartedPayload {
+                                        command_id,
+                                        call_id: cmd.call.id.clone(),
+                                        command: cmd.command.clone(),
+                                        program: cmd.command_spec.program.clone(),
+                                        args: if cmd.command_spec.args.is_empty() {
+                                            None
+                                        } else {
+                                            Some(cmd.command_spec.args.clone())
+                                        },
+                                        shell: Some(cmd.command_spec.shell),
+                                        cwd: cmd.cwd.clone(),
+                                        blocking: cmd.blocking,
+                                        wait_ms_before_async: cmd.wait_ms_before_async,
                                     },
-                                    shell: Some(cmd.command_spec.shell),
-                                    cwd: cmd.cwd.clone(),
-                                    blocking: cmd.blocking,
-                                    wait_ms_before_async: cmd.wait_ms_before_async,
-                                },
-                            );
+                                );
+                            }
                         } else {
                             eprintln!("[SINGLE APPROVAL] User SKIPPED command: {}", cmd.command);
                             // Add skip result immediately

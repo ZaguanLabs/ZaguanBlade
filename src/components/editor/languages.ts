@@ -1,9 +1,68 @@
 import type { Extension } from "@codemirror/state";
+import { StreamLanguage, type StringStream } from "@codemirror/language";
+
+const shellLikeDotFileNames = new Set([
+    ".env",
+    ".gitignore",
+    ".dockerignore",
+    ".npmignore",
+    ".eslintignore",
+    ".prettierignore",
+    ".ignore",
+]);
+
+function basename(filename: string): string {
+    return filename.split(/[\\/]/).pop()?.toLowerCase() ?? filename.toLowerCase();
+}
+
+function extension(filename: string): string | undefined {
+    return basename(filename).split(".").pop()?.toLowerCase();
+}
+
+function isShellLikeDotFile(filename: string): boolean {
+    const name = basename(filename);
+    return shellLikeDotFileNames.has(name) || name.startsWith(".env.");
+}
+
+const shellLikeDotFileLanguage = StreamLanguage.define({
+    name: "shell-like-dotfile",
+    token(stream: StringStream) {
+        if (stream.eatSpace()) {
+            return null;
+        }
+
+        if (stream.sol() && stream.match(/#.*/)) {
+            return "lineComment";
+        }
+
+        if (stream.sol() && stream.match("!")) {
+            return "keyword";
+        }
+
+        if (stream.match(/[*?\[\]{}]+/)) {
+            return "operator";
+        }
+
+        if (stream.match(/\/+/)) {
+            return "separator";
+        }
+
+        stream.eatWhile(/[^#*!?\[\]{}\/\s]/);
+        if (stream.current().length === 0) {
+            stream.next();
+        }
+        return "string";
+    },
+});
 
 export async function loadLanguageExtension(filename?: string): Promise<Extension[]> {
     if (!filename) return [];
 
-    const ext = filename.split(".").pop()?.toLowerCase();
+    if (isShellLikeDotFile(filename)) {
+        return [shellLikeDotFileLanguage];
+    }
+
+    const ext = extension(filename);
 
     switch (ext) {
         case "rs": {
@@ -115,7 +174,11 @@ export async function loadLanguageExtension(filename?: string): Promise<Extensio
 export function getLanguageName(filename?: string): string {
     if (!filename) return "Plain Text";
 
-    const ext = filename.split(".").pop()?.toLowerCase();
+    if (isShellLikeDotFile(filename)) {
+        return "Shell";
+    }
+
+    const ext = extension(filename);
 
     switch (ext) {
         case "rs":
