@@ -713,7 +713,10 @@ impl LanguageService {
 
         // Extract symbols
         let (extracted_symbols, mut relationships) = if matches!(language, Language::Markdown) {
-            (extract_markdown_header_symbols(file_path, &content), Vec::new())
+            (
+                extract_markdown_header_symbols(file_path, &content),
+                Vec::new(),
+            )
         } else {
             let tree = {
                 let mut parser = self.parser.lock().unwrap();
@@ -2620,7 +2623,10 @@ fn extract_markdown_header_symbols(file_path: &str, content: &str) -> Vec<Symbol
 }
 
 fn parse_markdown_header(line: &str) -> Option<(usize, String)> {
-    let level = line.chars().take_while(|character| *character == '#').count();
+    let level = line
+        .chars()
+        .take_while(|character| *character == '#')
+        .count();
     if !(1..=6).contains(&level) {
         return None;
     }
@@ -2634,11 +2640,7 @@ fn parse_markdown_header(line: &str) -> Option<(usize, String)> {
         return None;
     }
 
-    let name = after_hashes
-        .trim()
-        .trim_end_matches('#')
-        .trim()
-        .to_string();
+    let name = after_hashes.trim().trim_end_matches('#').trim().to_string();
     if name.is_empty() {
         return None;
     }

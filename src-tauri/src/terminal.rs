@@ -896,13 +896,13 @@ pub fn execute_command_in_terminal<R: Runtime>(
 
     // Execute using the user's actual shell to ensure paths/environments are loaded.
     let mut cmd = CommandBuilder::new(&shell);
-    
+
     // For bash/zsh, we want to source the profile before running the command to ensure
     // things like nvm, pyenv, cargo paths are available, just like a real interactive shell.
     if shell_name == "bash" || shell_name == "zsh" {
         cmd.arg("-l"); // Make it a login shell to source profiles
     }
-    
+
     cmd.arg("-c");
     cmd.arg(&command);
 

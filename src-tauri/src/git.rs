@@ -1369,7 +1369,9 @@ Do NOT include analysis, reasoning, explanations, or multiple options."#,
                     ws_manager
                         .send_conversation_context(request_id, session_id, Vec::new())
                         .await
-                        .map_err(|e| format!("Failed to send empty commit-message context: {}", e))?;
+                        .map_err(|e| {
+                            format!("Failed to send empty commit-message context: {}", e)
+                        })?;
                 }
                 crate::blade_ws_client::BladeWsEvent::ToolCall { name, .. } => {
                     return Err(format!(
@@ -1394,7 +1396,9 @@ Do NOT include analysis, reasoning, explanations, or multiple options."#,
                     return Err(format!("AI generation failed: {}", message));
                 }
                 crate::blade_ws_client::BladeWsEvent::Disconnected => {
-                    return Err("WebSocket disconnected during AI commit message generation".to_string());
+                    return Err(
+                        "WebSocket disconnected during AI commit message generation".to_string()
+                    );
                 }
                 _ => {}
             }
