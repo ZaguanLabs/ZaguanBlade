@@ -1824,6 +1824,16 @@ export function useChatV2(options: UseChatV2Options = {}) {
         }
         dispatchInFlightRef.current = true;
         void (async () => {
+            // Add user message to UI before dispatching from queue
+            const userMessage: ChatMessage = {
+                id: crypto.randomUUID(),
+                role: 'User',
+                content: nextMessage.text,
+                images: nextMessage.attachments,
+                mentions: nextMessage.mentions,
+            };
+            updateMessages((messages) => [...messages, userMessage]);
+
             const accepted = await dispatchToBackend(nextMessage.text, nextMessage.attachments, nextMessage.mentions, nextMessage.mode);
             if (accepted) {
                 blockedQueuedRequestRef.current = null;
@@ -1832,21 +1842,16 @@ export function useChatV2(options: UseChatV2Options = {}) {
                 blockedQueuedRequestRef.current = nextMessage;
             }
         })();
-    }, [dispatchToBackend, state.loading, state.messageQueue]);
+    }, [dispatchToBackend, state.loading, state.messageQueue, updateMessages]);
 
     const sendMessage = useCallback((text: string, attachments?: ImageAttachment[], mentions?: ComposerMention[], mode?: ChatMode) => {
         const requestMode = mode ?? chatModeRef.current;
-        const userMessage: ChatMessage = {
-            id: crypto.randomUUID(),
-            role: 'User',
-            content: text,
-            images: attachments,
-            mentions,
-        };
-        updateMessages((messages) => [...messages, userMessage]);
+
+        // Always enqueue the request. The queue drain effect will add the user
+        // message to the UI and dispatch to the backend when ready.
         blockedQueuedRequestRef.current = null;
         dispatch({ type: 'queue/enqueue', request: { text, attachments, mentions, mode: requestMode } });
-    }, [updateMessages]);
+    }, []);
 
     const setChatMode = useCallback((mode: ChatMode) => {
         dispatch({ type: 'mode/set', mode });

@@ -59,6 +59,7 @@
   --fg-tertiary: #687186;      /* Tertiary / disabled */
   --fg-nav: #8f98ad;           /* Navigation icons */
   --fg-bright: #f0f0ff;        /* Bright text (cursor, highlights) */
+  --fg-on-accent: #ffffff;      /* Text on solid accent backgrounds */
 
   /* Borders */
   --border-subtle: rgba(255, 255, 255, 0.05);    /* Subtle separator */

@@ -58,6 +58,7 @@ export const ComposerTextarea = forwardRef<ComposerTextareaHandle, ComposerTexta
     onPasteImages,
 }, ref) => {
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const lastScrollHeightRef = useRef<number>(0);
 
     const resize = useCallback(() => {
         const textarea = textareaRef.current;
@@ -66,6 +67,7 @@ export const ComposerTextarea = forwardRef<ComposerTextareaHandle, ComposerTexta
         }
         textarea.style.height = 'auto';
         textarea.style.height = `${Math.min(textarea.scrollHeight, 360)}px`;
+        lastScrollHeightRef.current = textarea.scrollHeight;
     }, []);
 
     useImperativeHandle(ref, () => ({
@@ -74,7 +76,14 @@ export const ComposerTextarea = forwardRef<ComposerTextareaHandle, ComposerTexta
     }), [resize]);
 
     useEffect(() => {
-        resize();
+        const textarea = textareaRef.current;
+        if (!textarea) {
+            return;
+        }
+        // Only resize if scrollHeight changed (content grew/shrunk)
+        if (textarea.scrollHeight !== lastScrollHeightRef.current) {
+            resize();
+        }
     }, [resize, text]);
 
     const handlePaste = useCallback(async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {

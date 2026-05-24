@@ -314,10 +314,10 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                                     ? 'color-mix(in srgb, var(--accent-ai) 18%, var(--bg-surface))'
                                                     : 'var(--accent-ai)',
                                             color: pushSuccess
-                                                ? 'var(--fg-bright)'
+                                                ? 'var(--fg-on-accent)'
                                                 : isPushing
-                                                    ? 'var(--fg-primary)'
-                                                    : 'var(--fg-bright)',
+                                                    ? 'var(--fg-on-accent)'
+                                                    : 'var(--fg-on-accent)',
                                             border: isPushing
                                                 ? '1px solid color-mix(in srgb, var(--accent-ai) 40%, var(--border-default))'
                                                 : '1px solid transparent',
@@ -391,7 +391,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                         className={`flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-[calc(var(--panel-radius)*0.55)] transition-all font-medium ${
                                             busyAction === 'commit' || !canCommit
                                                 ? 'bg-(--bg-surface) text-(--fg-tertiary) cursor-not-allowed'
-                                                : 'bg-(--accent-ai) text-(--fg-bright) hover:brightness-110'
+                                                : 'bg-(--accent-ai) text-(--fg-on-accent) hover:brightness-110'
                                         }`}
                                         disabled={busyAction === 'commit' || !canCommit}
                                         onClick={() =>
