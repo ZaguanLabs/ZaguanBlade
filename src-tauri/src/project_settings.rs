@@ -129,6 +129,8 @@ pub struct ProjectSettings {
     /// Default: false (respect .gitignore for security)
     #[serde(default = "default_false")]
     pub allow_gitignored_files: bool,
+    #[serde(default = "default_false")]
+    pub auto_approve_run_commands: bool,
 }
 
 fn default_true() -> bool {
@@ -322,6 +324,7 @@ mod tests {
         assert!(settings.context.compression.enabled);
         assert_eq!(settings.context.compression.model, CompressionModel::Remote);
         assert!(!settings.privacy.telemetry);
+        assert!(!settings.auto_approve_run_commands);
     }
 
     #[test]
@@ -332,6 +335,10 @@ mod tests {
 
         assert_eq!(restored.storage.mode, settings.storage.mode);
         assert_eq!(restored.context.max_tokens, settings.context.max_tokens);
+        assert_eq!(
+            restored.auto_approve_run_commands,
+            settings.auto_approve_run_commands
+        );
     }
 
     #[test]
@@ -359,12 +366,14 @@ mod tests {
         let mut settings = ProjectSettings::default();
         settings.storage.mode = StorageMode::Server;
         settings.context.max_tokens = 16000;
+        settings.auto_approve_run_commands = true;
 
         save_project_settings(project_path, &settings).unwrap();
 
         let loaded = load_project_settings(project_path).unwrap();
         assert_eq!(loaded.storage.mode, StorageMode::Server);
         assert_eq!(loaded.context.max_tokens, 16000);
+        assert!(loaded.auto_approve_run_commands);
     }
 
     #[test]

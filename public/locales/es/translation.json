@@ -362,6 +362,9 @@
       "availableThemesLabel": "Temas disponibles",
       "live": "Activo",
       "themeScopeHelp": "Este tema actualiza a la vez el shell de la app, el editor, el Markdown y la terminal.",
+      "yoloModeTitle": "Modo YOLO",
+      "yoloModeDescription": "Aprueba automáticamente las solicitudes run_command en este proyecto sin interrumpir la conversación.",
+      "yoloModeScopeHelp": "Solo se omiten las aprobaciones de run_command. El modelo no recibe esta información.",
       "themes": {
         "zaguan-dark": {
           "label": "Zaguán Dark",
@@ -516,7 +519,8 @@
     "notifications": "Notificaciones",
     "sync": "Sincronizar",
     "extension": "Extensión",
-    "feedback": "Opiniones"
+    "feedback": "Opiniones",
+    "yoloMode": "YOLO: comandos autoaprobados"
   },
   "windowControls": {
     "minimize": "Minimizar",

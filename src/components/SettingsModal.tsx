@@ -58,6 +58,7 @@ interface SettingsState {
         openaiCompatUrl: string;
     };
     allowGitIgnoredFiles?: boolean;  // Per-project setting
+    autoApproveRunCommands?: boolean;
 }
 
 const defaultSettings: SettingsState = {
@@ -99,6 +100,7 @@ const defaultSettings: SettingsState = {
         openaiCompatUrl: 'http://localhost:8080',
     },
     allowGitIgnoredFiles: false,  // Default: respect .gitignore
+    autoApproveRunCommands: false,
 };
 
 
@@ -179,6 +181,7 @@ function backendToFrontend(backend: BackendSettings): Omit<SettingsState, 'accou
         },
         editor: {},
         allowGitIgnoredFiles: backend.allow_gitignored_files,
+        autoApproveRunCommands: backend.auto_approve_run_commands,
     };
 }
 
@@ -204,6 +207,7 @@ function frontendToBackend(frontend: SettingsState): BackendSettings {
         },
         editor: {},
         allow_gitignored_files: frontend.allowGitIgnoredFiles || false,
+        auto_approve_run_commands: frontend.autoApproveRunCommands || false,
     };
 }
 
@@ -471,7 +475,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                                 {activeSection === 'configuration' && (
                                     <ConfigurationSettings
                                         settings={settings.configuration}
+                                        autoApproveRunCommands={settings.autoApproveRunCommands || false}
                                         onChange={(updates) => updateSettings('configuration', updates)}
+                                        onAutoApproveRunCommandsChange={(value) => {
+                                            setSettings(prev => ({ ...prev, autoApproveRunCommands: value }));
+                                            setHasChanges(true);
+                                        }}
                                     />
                                 )}
                                 {activeSection === 'storage' && (
@@ -551,7 +560,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
 
 interface ConfigurationSettingsProps {
     settings: SettingsState['configuration'];
+    autoApproveRunCommands: boolean;
     onChange: (settings: Partial<SettingsState['configuration']>) => void;
+    onAutoApproveRunCommandsChange: (value: boolean) => void;
 }
 
 function getThemeI18nLabel(t: ReturnType<typeof useTranslation>['t'], theme: { id: string; label: string }) {
@@ -597,7 +608,12 @@ const ThemeGrid: React.FC<{
     );
 };
 
-const ConfigurationSettings: React.FC<ConfigurationSettingsProps> = ({ settings, onChange }) => {
+const ConfigurationSettings: React.FC<ConfigurationSettingsProps> = ({
+    settings,
+    autoApproveRunCommands,
+    onChange,
+    onAutoApproveRunCommandsChange,
+}) => {
     const { t } = useTranslation();
 
     return (
@@ -660,6 +676,26 @@ const ConfigurationSettings: React.FC<ConfigurationSettingsProps> = ({ settings,
                 <div className="flex items-center gap-2 text-[11px] text-(--fg-tertiary)">
                     <span className="h-2 w-2 rounded-full bg-(--accent-ai)" />
                     <span>{t('settings.configurationSection.languageSaveHint')}</span>
+                </div>
+            </div>
+
+            <div className="border border-[color-mix(in_srgb,var(--accent-warning)_28%,var(--border-default))] rounded-[calc(var(--panel-radius)+4px)] p-5 space-y-4 bg-[color-mix(in_srgb,var(--accent-warning)_7%,var(--bg-panel))] shadow-(--panel-shadow)">
+                <div className="flex items-start justify-between gap-4">
+                    <div>
+                        <div className="text-sm font-medium text-(--fg-primary)">{t('settings.configurationSection.yoloModeTitle')}</div>
+                        <div className="text-xs text-(--fg-tertiary) mt-1">
+                            {t('settings.configurationSection.yoloModeDescription')}
+                        </div>
+                    </div>
+                    <Toggle
+                        checked={autoApproveRunCommands}
+                        onChange={onAutoApproveRunCommandsChange}
+                    />
+                </div>
+
+                <div className="flex items-center gap-2 text-[11px] text-(--accent-warning)">
+                    <span className="h-2 w-2 rounded-full bg-(--accent-warning)" />
+                    <span>{t('settings.configurationSection.yoloModeScopeHelp')}</span>
                 </div>
             </div>
         </div>

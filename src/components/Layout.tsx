@@ -20,6 +20,7 @@ import { useResizeHandlers } from '../hooks/useResizeHandlers';
 import { useLayoutEvents } from '../hooks/useLayoutEvents';
 import { readDebugFlag, readDebugSurfaceFlag } from '../utils/debugFlags';
 import type { ChatMode } from '../types/chat';
+import type { BackendSettings } from '../types/settings';
 import { recordDebugPerf } from '../utils/debugPerf';
 const ExplorerPanel = React.lazy(() => import('./ExplorerPanel').then(module => ({ default: module.ExplorerPanel })));
 const LegacyChatPanel = React.lazy(() => import('./ChatPanel').then(module => ({ default: module.ChatPanel })));
@@ -298,9 +299,10 @@ const AppLayoutInner: React.FC = () => {
     const [activeSidebar, setActiveSidebar] = useState<'explorer' | 'git' | 'history'>('explorer');
     const [shutdownPrompt, setShutdownPrompt] = useState<ShutdownPromptState | null>(null);
     const [shutdownSaveError, setShutdownSaveError] = useState<ShutdownSaveErrorState | null>(null);
+    const [autoApproveRunCommands, setAutoApproveRunCommands] = useState(false);
     const isGitSidebarVisible = isSidebarOpen && activeSidebar === 'git';
 
-    const chat = disableChatHook ? useNoopChat() : useChat();
+    const chat = disableChatHook ? useNoopChat() : useChat({ autoApproveRunCommands });
     const [wasStoppedByUser, setWasStoppedByUser] = useState(false);
     const {
         changes: uncommittedChanges,
@@ -596,6 +598,11 @@ const AppLayoutInner: React.FC = () => {
         return () => document.removeEventListener('open-settings', handleOpenSettings);
     }, []);
 
+    const openConfigurationSettings = useCallback(() => {
+        setInitialSettingsSection('configuration');
+        setIsSettingsOpen(true);
+    }, []);
+
     // First-time setup modal state (RFC-002)
     const [showStorageSetup, setShowStorageSetup] = useState(false);
     const [workspacePath, setWorkspacePath] = useState<string | null>(null);
@@ -643,6 +650,48 @@ const AppLayoutInner: React.FC = () => {
             setShowStorageSetup(false);
         }
     }, [bootstrap]);
+
+    useEffect(() => {
+        if (!workspacePath) {
+            setAutoApproveRunCommands(false);
+            return;
+        }
+
+        let disposed = false;
+        let unlistenProjectSettings: (() => void) | undefined;
+
+        const loadAutoApproveRunCommands = async () => {
+            try {
+                const settings = await invoke<BackendSettings>('load_project_settings', {
+                    projectPath: workspacePath,
+                });
+                if (!disposed) {
+                    setAutoApproveRunCommands(settings.auto_approve_run_commands === true);
+                }
+            } catch (error) {
+                if (!disposed) {
+                    setAutoApproveRunCommands(false);
+                }
+                console.debug('[Layout] Failed to load auto-approve run command setting:', error);
+            }
+        };
+
+        void loadAutoApproveRunCommands();
+        void listen('project-settings-changed', () => {
+            void loadAutoApproveRunCommands();
+        }).then((unlisten) => {
+            if (disposed) {
+                unlisten();
+                return;
+            }
+            unlistenProjectSettings = unlisten;
+        });
+
+        return () => {
+            disposed = true;
+            unlistenProjectSettings?.();
+        };
+    }, [workspacePath]);
 
     // Resize handlers (terminal + chat panel drag) — must be before handleStateLoaded
     const editorColumnRef = useRef<HTMLDivElement>(null);
@@ -1255,6 +1304,16 @@ const AppLayoutInner: React.FC = () => {
                     </span>
                 </div>
                 <div className="flex items-center gap-4 opacity-70">
+                    {autoApproveRunCommands && (
+                        <button
+                            type="button"
+                            onClick={openConfigurationSettings}
+                            className="inline-flex items-center gap-1 rounded-[calc(var(--panel-radius)*0.35)] border border-[color-mix(in_srgb,var(--accent-warning)_42%,transparent)] bg-[color-mix(in_srgb,var(--accent-warning)_12%,transparent)] px-1.5 py-0.5 font-semibold text-(--accent-warning) opacity-100 transition-colors hover:bg-[color-mix(in_srgb,var(--accent-warning)_18%,transparent)]"
+                        >
+                            <AlertTriangle className="h-3 w-3" />
+                            {t('statusBar.yoloMode')}
+                        </button>
+                    )}
                     {(disableEditorSurface || disableTerminalSurface || disableChatSurface) && (
                         <span className="text-(--accent-warning)">
                             debug:

@@ -37,4 +37,5 @@ export interface BackendSettings {
     };
     editor: {};
     allow_gitignored_files: boolean;
+    auto_approve_run_commands: boolean;
 }

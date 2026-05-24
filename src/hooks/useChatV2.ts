@@ -20,6 +20,10 @@ const MAX_CHAT_ACTIVITY_HISTORY = 200;
 const STREAM_DEBUG_ENABLED = false;
 const MODEL_CACHE_STORAGE_KEY = 'zblade.chat.models.v1';
 
+interface UseChatV2Options {
+    autoApproveRunCommands?: boolean;
+}
+
 function pickDefaultModel(models: ModelInfo[]): ModelInfo | null {
     if (models.length === 0) {
         return null;
@@ -93,6 +97,10 @@ function areToolActivitiesEqual(a: ToolActivityState | null, b: ToolActivityStat
 
 function isWhitespaceOnly(value: string): boolean {
     return value.trim().length === 0;
+}
+
+function isRunCommandAction(action: StructuredAction): boolean {
+    return action.actionKind === 'command' || action.is_generic_tool === false;
 }
 
 function streamDebugPreview(value: string): string {
@@ -470,7 +478,7 @@ function reconcileMessageImagePreviews(previousMessages: ChatMessage[], nextMess
     return changed ? reconciled : nextMessages;
 }
 
-export function useChatV2() {
+export function useChatV2(options: UseChatV2Options = {}) {
     const { getEditorSnapshot } = useEditorActions();
     const [state, dispatch] = useReducer(chatReducer, initialState);
 
@@ -482,6 +490,8 @@ export function useChatV2() {
     const toolCallOwnerMessageIdRef = useRef<Map<string, string>>(new Map());
     const pendingActionsRef = useRef<StructuredAction[] | null>(null);
     const pendingApprovalRequestRef = useRef<HookApprovalRequest | null>(null);
+    const autoApproveRunCommandsRef = useRef(options.autoApproveRunCommands === true);
+    const markToolCallsExecutingLocallyRef = useRef<(toolCallIds: string[]) => void>(() => undefined);
     const selectedModelIdRef = useRef(state.selectedModelId);
     const chatModeRef = useRef(state.chatMode);
     const activeTodosRef = useRef<TodoItem[]>(state.activeTodos);
@@ -638,6 +648,10 @@ export function useChatV2() {
     useEffect(() => {
         pendingApprovalRequestRef.current = state.pendingApprovalRequest;
     }, [state.pendingApprovalRequest]);
+
+    useEffect(() => {
+        autoApproveRunCommandsRef.current = options.autoApproveRunCommands === true;
+    }, [options.autoApproveRunCommands]);
 
     useEffect(() => {
         selectedModelIdRef.current = state.selectedModelId;
@@ -983,6 +997,10 @@ export function useChatV2() {
         updateToolCallsStatusLocally(toolCallIds, 'executing');
     }, [updateToolCallsStatusLocally]);
 
+    useEffect(() => {
+        markToolCallsExecutingLocallyRef.current = markToolCallsExecutingLocally;
+    }, [markToolCallsExecutingLocally]);
+
     const markToolCallsSkippedLocally = useCallback((toolCallIds: string[], skippedResultText = 'Skipped by user') => {
         updateToolCallsStatusLocally(toolCallIds, 'skipped', skippedResultText);
     }, [updateToolCallsStatusLocally]);
@@ -1305,6 +1323,21 @@ export function useChatV2() {
             });
 
             unlistenPermission = await listen<RequestConfirmationPayload>('request-confirmation', (event) => {
+                if (
+                    autoApproveRunCommandsRef.current
+                    && event.payload.actions.length > 0
+                    && event.payload.actions.every(isRunCommandAction)
+                ) {
+                    dispatch({ type: 'pending-actions/set', actions: null });
+                    dispatch({ type: 'waiting-for-approval/set', waiting: false });
+                    void BladeDispatcher.workflow({
+                        type: 'ApproveToolDecision',
+                        payload: { decision: 'approve_once' },
+                    }).catch((error) => {
+                        console.error('[useChatV2] Failed to auto-approve command decision:', error);
+                    });
+                    return;
+                }
                 dispatch({ type: 'pending-actions/set', actions: event.payload.actions });
             });
 
@@ -1322,6 +1355,20 @@ export function useChatV2() {
 
             unlistenApprovalRequest = await listen<ApprovalRequestPayload>(EventNames.APPROVAL_REQUEST, (event) => {
                 const request = normalizeApprovalRequest(event.payload);
+                if (autoApproveRunCommandsRef.current && request.toolName === 'run_command') {
+                    markToolCallsExecutingLocallyRef.current([request.toolCallId]);
+                    dispatch({ type: 'pending-approval-request/set', request: null });
+                    dispatch({ type: 'waiting-for-approval/set', waiting: false });
+                    void invoke('send_approval_response', {
+                        sessionId: request.sessionId,
+                        approvalId: request.approvalId,
+                        toolCallId: request.toolCallId,
+                        approved: true,
+                    }).catch((error) => {
+                        console.error('[useChatV2] Failed to auto-approve command request:', error);
+                    });
+                    return;
+                }
                 dispatch({ type: 'pending-approval-request/set', request });
                 dispatch({ type: 'waiting-for-approval/set', waiting: true });
                 updateMessages((messages) => messages.map((message) => {
