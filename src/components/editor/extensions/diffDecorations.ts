@@ -633,8 +633,15 @@ const diffDecorationsField = StateField.define<DecorationSet>({
             }
         }
 
-        if (diffChanged || tr.docChanged) {
+        if (diffChanged) {
+            // Diff state changed explicitly — rebuild from scratch
             return buildDiffDecorations(tr.state);
+        }
+
+        if (tr.docChanged) {
+            // Document changed but diff state didn't — map existing decorations
+            // through the changes to keep them at the correct positions
+            return decorations.map(tr.changes);
         }
 
         return decorations;

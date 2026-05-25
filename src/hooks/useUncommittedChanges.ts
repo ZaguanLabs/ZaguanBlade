@@ -50,6 +50,15 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
       }
 
       const nextPath = normalizePath(nextChange.file_path);
+      const existing = prev.find(change => normalizePath(change.file_path) === nextPath);
+
+      // Preserve existing non-empty diff when new diff is empty.
+      // This prevents the diff view from disappearing when the user edits the file
+      // and the backend re-diffs with an empty result.
+      if (existing && existing.unified_diff.trim().length > 0 && nextChange.unified_diff.trim().length === 0) {
+        return prev;
+      }
+
       const filtered = prev.filter(change => normalizePath(change.file_path) !== nextPath);
       return [...filtered, nextChange].sort((a, b) => a.timestamp - b.timestamp);
     });
