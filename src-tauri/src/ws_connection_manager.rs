@@ -520,6 +520,16 @@ impl WsConnectionManager {
             .await
     }
 
+    pub async fn send_context_pack_response(
+        &self,
+        request_id: String,
+        payload: crate::blade_protocol::ContextPackPayload,
+    ) -> Result<(), String> {
+        let client_lock = self.client.lock().await;
+        let client = client_lock.as_ref().ok_or("Not connected")?;
+        client.send_context_pack_response(request_id, payload).await
+    }
+
     /// Disconnect the WebSocket
     pub async fn disconnect(&self) {
         {

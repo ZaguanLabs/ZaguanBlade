@@ -1,3 +1,4 @@
+use crate::blade_protocol::ContextPackPayload;
 use crate::environment::EnvironmentInfo;
 use futures_util::{SinkExt, StreamExt};
 use lazy_static::lazy_static;
@@ -155,6 +156,21 @@ pub enum BladeWsEvent {
         tool_name: String,
         file_path: Option<String>,
     },
+    /// Context pack request from zcoderd — query local semantic/symbol/docs index
+    ContextPackRequest {
+        id: String,
+        query: String,
+        intent: Option<String>,
+        max_results: Option<usize>,
+        include_tests: Option<bool>,
+        include_docs: Option<bool>,
+        include_memory: Option<bool>,
+    },
+    /// Context pack response destined for zcoderd
+    ContextPackResponse {
+        id: String,
+        payload: ContextPackPayload,
+    },
 }
 
 /// Workspace information sent to zcoderd
@@ -214,8 +230,13 @@ struct WsBaseMessage {
 #[derive(Debug, Serialize)]
 struct AuthenticatePayload {
     api_key: String,
+    client: String,
+    version: String,
     client_name: String,
     client_version: String,
+    protocol_version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    capabilities: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     environment: Option<EnvironmentInfo>,
 }
@@ -470,6 +491,12 @@ impl BladeWsClient {
             //     environment.os, environment.arch, environment.shell);
 
             // Send authentication message
+            let mut capabilities = serde_json::Map::new();
+            capabilities.insert(
+                "context_pack_request".to_string(),
+                serde_json::Value::Bool(true),
+            );
+
             let auth_msg = WsBaseMessage {
                 id: "auth-1".to_string(),
                 msg_type: "authenticate".to_string(),
@@ -477,8 +504,12 @@ impl BladeWsClient {
                 payload: Some(
                     serde_json::to_value(AuthenticatePayload {
                         api_key,
+                        client: "zblade".to_string(),
+                        version: env!("CARGO_PKG_VERSION").to_string(),
                         client_name: "zblade".to_string(),
                         client_version: env!("CARGO_PKG_VERSION").to_string(),
+                        protocol_version: 2,
+                        capabilities: Some(serde_json::Value::Object(capabilities)),
                         environment: Some(environment),
                     })
                     .unwrap(),
@@ -793,6 +824,32 @@ impl BladeWsClient {
             .map_err(|e| format!("Failed to send conversation context: {}", e))?;
 
         eprintln!("[WS CTX] T+{:?} Channel send complete!", t0.elapsed());
+        Ok(())
+    }
+
+    /// Send context pack response to zcoderd (v0.8.0 capability: context_pack_request)
+    pub async fn send_context_pack_response(
+        &self,
+        request_id: String,
+        payload: crate::blade_protocol::ContextPackPayload,
+    ) -> Result<(), String> {
+        let conn = self.connection.lock().await;
+        let conn = conn.as_ref().ok_or("Not connected")?;
+
+        let msg = WsBaseMessage {
+            id: request_id,
+            msg_type: "context_pack_response".to_string(),
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            payload: Some(serde_json::to_value(payload).unwrap()),
+        };
+
+        let json =
+            serde_json::to_string(&msg).map_err(|e| format!("JSON serialization error: {}", e))?;
+
+        conn.tx
+            .send(WsMessage::Send(json))
+            .map_err(|e| format!("Failed to send context pack response: {}", e))?;
+
         Ok(())
     }
 
@@ -1347,6 +1404,45 @@ impl BladeWsClient {
                 let _ = tx.send(BladeWsEvent::GetConversationContext {
                     request_id: correlation_id,
                     session_id,
+                });
+            }
+            "context_pack_request" => {
+                let id = msg.payload
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&correlation_id)
+                    .to_string();
+                let query = msg.payload
+                    .get("query")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let intent = msg.payload
+                    .get("intent")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let max_results = msg.payload
+                    .get("max_results")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as usize);
+                let include_tests = msg.payload
+                    .get("include_tests")
+                    .and_then(|v| v.as_bool());
+                let include_docs = msg.payload
+                    .get("include_docs")
+                    .and_then(|v| v.as_bool());
+                let include_memory = msg.payload
+                    .get("include_memory")
+                    .and_then(|v| v.as_bool());
+
+                let _ = tx.send(BladeWsEvent::ContextPackRequest {
+                    id,
+                    query,
+                    intent,
+                    max_results,
+                    include_tests,
+                    include_docs,
+                    include_memory,
                 });
             }
             _ => {

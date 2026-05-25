@@ -1,6 +1,6 @@
 [package]
 name = "zblade"
-version = "0.7.2"
+version = "0.8.0"
 description = "Zaguán Blade - A versatile AI code editor"
 authors = ["Zaguán Labs"]
 edition = "2021"

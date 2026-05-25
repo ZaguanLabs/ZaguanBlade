@@ -13,6 +13,7 @@ pub mod chat_orchestrator;
 pub mod commands;
 pub mod config;
 pub mod context_assembly;
+pub mod context_pack;
 pub mod conversation;
 pub mod conversation_store;
 pub mod core_state;

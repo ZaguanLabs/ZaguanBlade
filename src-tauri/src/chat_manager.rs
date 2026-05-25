@@ -1212,6 +1212,65 @@ impl ChatManager {
                                     });
                                 }
                             }
+                            crate::blade_ws_client::BladeWsEvent::ContextPackRequest {
+                                id,
+                                query,
+                                intent,
+                                max_results,
+                                include_tests,
+                                include_docs,
+                                include_memory,
+                            } => {
+                                let workspace_root = PathBuf::from(workspace_info.root.clone());
+                                let active_file = workspace_info.active_file.clone();
+                                let open_files = workspace_info
+                                    .open_files
+                                    .iter()
+                                    .map(|file| file.path.clone())
+                                    .collect::<Vec<_>>();
+                                let request = crate::context_pack::ContextPackRequest {
+                                    id: id.clone(),
+                                    query,
+                                    intent,
+                                    max_results,
+                                    include_tests,
+                                    include_docs,
+                                    include_memory,
+                                };
+
+                                let payload = match tokio::time::timeout(
+                                    std::time::Duration::from_secs(5),
+                                    tokio::task::spawn_blocking(move || {
+                                        crate::context_pack::build_context_pack(
+                                            &workspace_root,
+                                            active_file.as_deref(),
+                                            &open_files,
+                                            &request,
+                                        )
+                                    }),
+                                )
+                                .await
+                                {
+                                    Ok(Ok(payload)) => payload,
+                                    Ok(Err(error)) => crate::context_pack::error_payload(
+                                        "internal_error",
+                                        &format!("Context pack worker failed: {}", error),
+                                    ),
+                                    Err(_) => crate::context_pack::error_payload(
+                                        "timeout",
+                                        "Context pack generation timed out",
+                                    ),
+                                };
+
+                                if let Err(error) =
+                                    ws_client.send_context_pack_response(id, payload).await
+                                {
+                                    let _ = tx.send(ChatEvent::Error(format!(
+                                        "Failed to send context pack response: {}",
+                                        error
+                                    )));
+                                }
+                            }
                             crate::blade_ws_client::BladeWsEvent::GetConversationContext {
                                 request_id,
                                 session_id: req_session_id,
@@ -1246,7 +1305,8 @@ impl ChatManager {
                             | crate::blade_ws_client::BladeWsEvent::HistoryDetailResponse {
                                 ..
                             }
-                            | crate::blade_ws_client::BladeWsEvent::ZlpResponse { .. } => {}
+                            | crate::blade_ws_client::BladeWsEvent::ZlpResponse { .. }
+                            | crate::blade_ws_client::BladeWsEvent::ContextPackResponse { .. } => {}
                         }
                     }
                 }

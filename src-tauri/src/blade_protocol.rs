@@ -642,6 +642,83 @@ pub struct LanguageLocation {
 }
 
 // ==============================================================================
+// 3.5 Context Pack Protocol (v1.6+)
+// ==============================================================================
+
+/// Response payload for a context pack request
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ContextPackPayload {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
+    #[serde(default)]
+    pub confidence: ContextPackConfidence,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub primary_files: Vec<ContextFileResult>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related_tests: Vec<ContextFileResult>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related_docs: Vec<ContextFileResult>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub memories: Vec<ContextMemoryItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hypothesized_flow: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub recommended_next_step: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<ContextPackError>,
+}
+
+/// Confidence level for context pack results
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextPackConfidence {
+    High,
+    Medium,
+    Low,
+}
+
+impl Default for ContextPackConfidence {
+    fn default() -> Self {
+        Self::Low
+    }
+}
+
+/// A file result in a context pack response
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ContextFileResult {
+    pub path: String,
+    #[serde(default)]
+    pub score: u32,
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub suggested_ranges: Vec<ContextRange>,
+}
+
+/// A line range suggestion for reading a file
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+pub struct ContextRange {
+    pub start_line: u32,
+    pub end_line: u32,
+}
+
+/// A memory/saved-knowledge item in a context pack response
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ContextMemoryItem {
+    pub summary: String,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub score: u32,
+}
+
+/// Error payload inside a context pack response
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ContextPackError {
+    pub code: String,
+    pub message: String,
+}
+
+// ==============================================================================
 // 4. Error Model
 // ==============================================================================
 
