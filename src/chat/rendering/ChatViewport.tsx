@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChatMessage as ChatMessageType, HookApprovalRequest, QueuedRequest, ToolActivityState } from '../../types/chat';
 import type { StructuredAction } from '../../types/events';
@@ -115,7 +115,10 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
             setStableScrollMode('detached');
         }
     }, [setStableScrollMode]);
-    const handleSmoothWheel = useSmoothWheelScroll<HTMLDivElement>(handleWheel, { resetKey: smoothScrollResetKey });
+    const handleSmoothWheel = useSmoothWheelScroll<HTMLDivElement>(handleWheel, {
+        disabled: scrollMode === 'following',
+        resetKey: smoothScrollResetKey,
+    });
 
     const scrollToBottom = useCallback(() => {
         const element = scrollRef.current;
@@ -123,28 +126,24 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
             return;
         }
         setSmoothScrollResetKey((value) => value + 1);
-        requestAnimationFrame(() => {
-            element.scrollTop = element.scrollHeight;
-        });
+        element.scrollTop = element.scrollHeight;
         setStableScrollMode('following');
     }, [setStableScrollMode]);
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         if (scrollMode !== 'following') {
             return;
         }
-        const frame = requestAnimationFrame(() => {
-            const element = scrollRef.current;
-            if (element) {
-                element.scrollTop = element.scrollHeight;
-            }
-        });
-        return () => cancelAnimationFrame(frame);
+        const element = scrollRef.current;
+        if (!element) {
+            return;
+        }
+        element.scrollTop = element.scrollHeight;
     }, [activeMessage?.content, activeMessage?.reasoning, activeMessage?.streaming?.seq, rows.length, scrollMode]);
 
     return (
         <div className="relative min-h-0 flex-1">
-            <div ref={scrollRef} onScroll={handleScroll} onWheel={handleSmoothWheel} className="h-full overflow-y-auto scrollbar-thin scrollbar-thumb-(--bg-surface-hover) scrollbar-track-transparent">
+            <div ref={scrollRef} onScroll={handleScroll} onWheel={handleSmoothWheel} className="h-full overflow-y-auto overscroll-contain [overflow-anchor:none] scrollbar-thin scrollbar-thumb-(--bg-surface-hover) scrollbar-track-transparent">
                 <div className="mx-auto flex w-full max-w-none flex-col gap-0.5 px-0.5 py-4 md:px-1">
                     {messages.length === 0 && (
                         <div className="mx-4 mt-10 rounded-(--panel-radius) border border-(--border-subtle) bg-(--bg-surface)/70 px-6 py-8 text-center shadow-(--panel-shadow)">

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback, useState, useMemo } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { useLayoutEvents } from '../hooks/useLayoutEvents';
 import { useTabManager } from '../hooks/useTabManager';
 import { useCommandExecution } from '../hooks/useCommandExecution';
@@ -598,7 +598,6 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     // overflow-anchor keeps the scroll position anchored. We only call
     // scrollToBottom when the sentinel is visible (meaning user is at bottom)
     // and new content has been appended that might push the sentinel out of view.
-    const streamingScrollFrameRef = useRef<number | null>(null);
     const isSentinelVisibleRef = useRef(true);
 
     useEffect(() => {
@@ -623,33 +622,19 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     // During streaming, gently nudge scroll to bottom only if the sentinel
     // is visible (user is at/near bottom). This replaces the old
     // streamingSignature-driven scrollToBottom which fought the user's wheel.
-    useEffect(() => {
+    useLayoutEffect(() => {
         if (!loading) return;
         if (!isSentinelVisibleRef.current) return;
         if (!isUserAtBottomRef.current) return;
 
-        if (streamingScrollFrameRef.current !== null) {
-            return;
+        recordDebugPerf('ChatPanel.streamingScrollFrame');
+        const container = scrollContainerRef.current;
+        if (!container) return;
+        const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+        if (distanceFromBottom > 2) {
+            container.scrollTop = container.scrollHeight;
+            scrollTopRef.current = container.scrollTop;
         }
-
-        streamingScrollFrameRef.current = requestAnimationFrame(() => {
-            streamingScrollFrameRef.current = null;
-            recordDebugPerf('ChatPanel.streamingScrollFrame');
-            const container = scrollContainerRef.current;
-            if (!container) return;
-            // Only nudge if not already at bottom — avoids fighting user scroll
-            const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-            if (distanceFromBottom > 2) {
-                container.scrollTop = container.scrollHeight;
-                scrollTopRef.current = container.scrollTop;
-            }
-        });
-        return () => {
-            if (streamingScrollFrameRef.current !== null) {
-                cancelAnimationFrame(streamingScrollFrameRef.current);
-                streamingScrollFrameRef.current = null;
-            }
-        };
     }, [loading, streamingSignature]);
 
     // Prevent default context menu on empty areas
@@ -703,7 +688,9 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
             setShowScrollToBottom(true);
         }
     }, [messageCount]);
-    const handleSmoothWheel = useSmoothWheelScroll<HTMLDivElement>(handleWheel);
+    const handleSmoothWheel = useSmoothWheelScroll<HTMLDivElement>(handleWheel, {
+        disabled: isUserAtBottomRef.current,
+    });
 
     const registerRowElement = useCallback((rowKey: string, element: HTMLDivElement | null) => {
         if (element) {
@@ -917,7 +904,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
             {activeTab === 'chat' ? (
                 <div
                     ref={scrollContainerRef}
-                    className="relative flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-(--bg-surface-hover) scrollbar-track-transparent"
+                    className="relative flex-1 overflow-y-auto overscroll-contain [overflow-anchor:none] scrollbar-thin scrollbar-thumb-(--bg-surface-hover) scrollbar-track-transparent"
                     onScroll={handleScroll}
                     onWheel={handleSmoothWheel}
                 >
