@@ -37,28 +37,34 @@ import { GraphInspector } from "./GraphInspector";
 
 const EDITING_AID_MAX_DOC_LENGTH = 500_000;
 
-const replaceEditorDocument = (view: EditorView, content: string, unifiedDiff?: string) => {
+const replaceEditorDocument = (view: EditorView, content: string, unifiedDiff?: string, preserveScroll = false) => {
     const diffState = createDiffStateFromUnifiedDiff(unifiedDiff);
     const { main } = view.state.selection;
     const safeAnchor = Math.min(main.anchor, content.length);
     const safeHead = Math.min(main.head, content.length);
 
-    view.dispatch({
+    const spec = {
         changes: { from: 0, to: view.state.doc.length, insert: content },
         selection: { anchor: safeAnchor, head: safeHead },
         effects: [
             setBaseContent.of(content),
             setDiffState.of(diffState),
         ]
-    });
+    };
+
+    if (preserveScroll) {
+        dispatchPreservingScroll(view, spec);
+    } else {
+        view.dispatch(spec);
+    }
 };
 
-const replaceEditorDocumentIfChanged = (view: EditorView, content: string, unifiedDiff?: string) => {
+const replaceEditorDocumentIfChanged = (view: EditorView, content: string, unifiedDiff?: string, preserveScroll = false) => {
     if (view.state.doc.toString() === content) {
         return;
     }
 
-    replaceEditorDocument(view, content, unifiedDiff);
+    replaceEditorDocument(view, content, unifiedDiff, preserveScroll);
 };
 
 const getEditingAidExtensions = (isMarkdown: boolean, docLength: number): Extension[] => {
@@ -81,13 +87,19 @@ const dispatchPreservingScroll = (view: EditorView, spec: TransactionSpec) => {
 
     view.dispatch(spec);
 
-    requestAnimationFrame(() => {
+    const restoreScroll = () => {
         if (!scroller.isConnected) {
             return;
         }
 
         scroller.scrollTop = scrollTop;
         scroller.scrollLeft = scrollLeft;
+    };
+
+    restoreScroll();
+    requestAnimationFrame(() => {
+        restoreScroll();
+        requestAnimationFrame(restoreScroll);
     });
 };
 
@@ -430,7 +442,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
         } else if (isExternalContentUpdate) {
             lastExternalContentVersionRef.current = externalContentVersion;
 
-            replaceEditorDocumentIfChanged(view, content, unifiedDiff);
+            replaceEditorDocumentIfChanged(view, content, unifiedDiff, true);
         }
         // Reset the user edit flag after processing
         isUserEditRef.current = false;
