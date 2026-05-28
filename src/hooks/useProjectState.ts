@@ -47,6 +47,17 @@ interface UseProjectStateReturn {
     isClosing: boolean;
 }
 
+interface ProjectStateInputs {
+    projectPath: string | null;
+    tabs: TabState[];
+    activeTabId: string | null;
+    selectedModelId: string;
+    terminals: TerminalState[];
+    activeTerminalId: string;
+    terminalHeight: number;
+    chatPanelWidth: number;
+}
+
 function serializeProjectState(state: ProjectState): string {
     return JSON.stringify(state);
 }
@@ -74,43 +85,60 @@ export function useProjectState({
     const lastSavedSignatureRef = useRef<string | null>(null);
     const lastObservedSignatureRef = useRef<string | null>(null);
     const beforeShutdownRef = useRef(beforeShutdown);
+    const projectStateInputsRef = useRef<ProjectStateInputs>({
+        projectPath,
+        tabs,
+        activeTabId,
+        selectedModelId,
+        terminals,
+        activeTerminalId,
+        terminalHeight,
+        chatPanelWidth,
+    });
 
-    useEffect(() => {
-        beforeShutdownRef.current = beforeShutdown;
-    }, [beforeShutdown]);
+    beforeShutdownRef.current = beforeShutdown;
+    projectStateInputsRef.current = {
+        projectPath,
+        tabs,
+        activeTabId,
+        selectedModelId,
+        terminals,
+        activeTerminalId,
+        terminalHeight,
+        chatPanelWidth,
+    };
 
     // Helper to construct state object
     const constructState = useCallback((): ProjectState | null => {
-        if (!projectPath) return null;
+        const current = projectStateInputsRef.current;
+        if (!current.projectPath) return null;
 
-        const activeTab = tabs.find(t => t.id === activeTabId);
+        const activeTab = current.tabs.find(t => t.id === current.activeTabId);
         const activeFile = activeTab?.type === 'file' ? activeTab.path || null : null;
 
         return {
-            project_path: projectPath,
+            project_path: current.projectPath,
             active_file: activeFile,
-            open_tabs: tabs.filter(t => t.type === 'file').map(t => ({
+            open_tabs: current.tabs.filter(t => t.type === 'file').map(t => ({
                 id: t.id,
                 title: t.title,
                 type: t.type,
                 path: t.path,
             })),
-            selected_model_id: selectedModelId,
-            terminals: terminals.map(t => ({
+            selected_model_id: current.selectedModelId,
+            terminals: current.terminals.map(t => ({
                 id: t.id,
                 title: t.title,
                 cwd: t.cwd,
             })),
-            active_terminal_id: activeTerminalId,
-            terminal_height: terminalHeight,
-            chat_panel_width: chatPanelWidth,
+            active_terminal_id: current.activeTerminalId,
+            terminal_height: current.terminalHeight,
+            chat_panel_width: current.chatPanelWidth,
             explorer_width: null,
         };
-    }, [projectPath, tabs, activeTabId, selectedModelId, terminals, activeTerminalId, terminalHeight, chatPanelWidth]);
+    }, []);
 
     const saveState = useCallback(async () => {
-        if (!projectPath) return;
-
         if (!isDirtyRef.current) {
             return;
         }
@@ -132,7 +160,7 @@ export function useProjectState({
         } catch (e) {
             console.error('[ProjectState] Failed to save state:', e);
         }
-    }, [projectPath, constructState]);
+    }, [constructState]);
 
     const loadState = useCallback(async (): Promise<ProjectState | null> => {
         if (!projectPath) return null;

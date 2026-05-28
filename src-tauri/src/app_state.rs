@@ -83,6 +83,7 @@ pub struct AppState {
     pub pending_error_feedback: Mutex<Option<String>>, // Recovery hint to prepend to next user message
     pub git_dir: RwLock<Option<PathBuf>>,              // Path to .git directory for gix::open()
     pub frontend_watchdog: FrontendWatchdogState,
+    pub remote_control: crate::remote_control::RemoteControlService,
 }
 
 impl AppState {
@@ -184,10 +185,11 @@ impl AppState {
             pending_error_feedback: Mutex::new(None),
             git_dir: RwLock::new(None),
             frontend_watchdog: FrontendWatchdogState::new(),
+            remote_control: crate::remote_control::RemoteControlService::new(),
         }
     }
 
-    fn workspace_root(&self) -> Option<PathBuf> {
+    pub fn workspace_root(&self) -> Option<PathBuf> {
         self.workspace
             .lock()
             .ok()
@@ -344,4 +346,23 @@ impl AppState {
             .map_err(|e| format!("Failed to lock indexer manager: {}", e))? = None;
         Ok(())
     }
+
+    pub async fn is_local_model_active(&self) -> bool {
+        let config = { self.config.lock().unwrap().clone() };
+        let models = crate::models::catalog::list_all_models(&config).await;
+        let selected_model = *self.selected_model_index.lock().unwrap();
+        if !models.is_empty() && selected_model < models.len() {
+            if let Some(m) = models.get(selected_model) {
+                if let Some(ref provider) = m.provider {
+                    let provider_id = crate::providers::ProviderId::from_provider_str(provider);
+                    return matches!(
+                        provider_id,
+                        crate::providers::ProviderId::Ollama | crate::providers::ProviderId::OpenAiCompat
+                    );
+                }
+            }
+        }
+        false
+    }
 }
+

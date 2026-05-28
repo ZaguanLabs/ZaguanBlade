@@ -34,6 +34,9 @@ pub async fn augment_batch_with_validation_feedback<R: Runtime>(
     batch: &mut PendingToolBatch,
 ) {
     let state = app_handle.state::<AppState>();
+    if state.is_local_model_active().await {
+        return;
+    }
     let workspace_root = {
         let workspace = state.workspace.lock().unwrap();
         workspace.workspace.clone()

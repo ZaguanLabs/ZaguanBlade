@@ -6,6 +6,7 @@ pub mod history;
 pub mod local_context;
 pub mod misc;
 pub mod project;
+pub mod remote_control;
 pub mod screenshot;
 pub mod settings_local_ai;
 pub mod settings_remote;

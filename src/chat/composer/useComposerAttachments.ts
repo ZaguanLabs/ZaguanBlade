@@ -95,6 +95,22 @@ export function useComposerAttachments(options: {
         }
     }, [options.disabledImages, options.disabledReason]);
 
+    const appendDataUrl = useCallback(async (dataUrl: string, name: string) => {
+        if (options.disabledImages) {
+            setAttachmentError(options.disabledReason || 'Images are not available for this model.');
+            return false;
+        }
+        try {
+            const attachment = await attachmentFromDataUrl(dataUrl, name);
+            setAttachments((current) => [...current, attachment]);
+            setAttachmentError(null);
+            return true;
+        } catch (error) {
+            setAttachmentError(error instanceof Error ? error.message : String(error));
+            return false;
+        }
+    }, [options.disabledImages, options.disabledReason]);
+
     const uploadImages = useCallback(async () => {
         if (options.disabledImages) {
             setAttachmentError(options.disabledReason || 'Images are not available for this model.');
@@ -142,6 +158,7 @@ export function useComposerAttachments(options: {
         attachmentError,
         appendFiles,
         appendCapture,
+        appendDataUrl,
         uploadImages,
         removeAttachment,
         clearAttachments,

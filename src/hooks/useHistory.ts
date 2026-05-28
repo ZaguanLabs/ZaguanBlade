@@ -91,9 +91,14 @@ export function useHistory() {
             // Check storage mode settings
             let useLocal = false;
             try {
-                const settings = await invoke<any>('load_project_settings', { projectPath: projectId });
-                if (settings?.storage?.mode === 'local') {
+                const isLocalActive = await invoke<boolean>('is_local_model_active').catch(() => false);
+                if (isLocalActive) {
                     useLocal = true;
+                } else {
+                    const settings = await invoke<any>('load_project_settings', { projectPath: projectId });
+                    if (settings?.storage?.mode === 'local') {
+                        useLocal = true;
+                    }
                 }
             } catch (e) {
                 console.warn('[useHistory] Failed to load settings, defaulting to server mode', e);
@@ -148,11 +153,16 @@ export function useHistory() {
 
         let useLocal = false;
         try {
-            const currentPath = await invoke<string | null>('get_current_workspace');
-            if (currentPath) {
-                const settings = await invoke<any>('load_project_settings', { projectPath: currentPath });
-                if (settings?.storage?.mode === 'local') {
-                    useLocal = true;
+            const isLocalActive = await invoke<boolean>('is_local_model_active').catch(() => false);
+            if (isLocalActive) {
+                useLocal = true;
+            } else {
+                const currentPath = await invoke<string | null>('get_current_workspace');
+                if (currentPath) {
+                    const settings = await invoke<any>('load_project_settings', { projectPath: currentPath });
+                    if (settings?.storage?.mode === 'local') {
+                        useLocal = true;
+                    }
                 }
             }
         } catch (e) {

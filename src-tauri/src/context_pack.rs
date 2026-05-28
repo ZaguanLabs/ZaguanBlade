@@ -1,9 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::time::Instant;
 
 use crate::blade_protocol::{
     ContextFileResult, ContextMemoryItem, ContextPackConfidence, ContextPackError,
-    ContextPackPayload, ContextRange,
+    ContextPackPayload, ContextProjectInfo, ContextRange, ContextWorkspace,
 };
 use crate::language_service::LanguageService;
 use crate::local_artifacts::LocalArtifactStore;
@@ -15,11 +16,13 @@ use crate::tree_sitter::Symbol;
 pub struct ContextPackRequest {
     pub id: String,
     pub query: String,
+    pub queries: Vec<String>,
     pub intent: Option<String>,
     pub max_results: Option<usize>,
     pub include_tests: Option<bool>,
     pub include_docs: Option<bool>,
     pub include_memory: Option<bool>,
+    pub include_project_index_min: Option<bool>,
 }
 
 pub fn build_context_pack(
@@ -28,36 +31,57 @@ pub fn build_context_pack(
     open_files: &[String],
     request: &ContextPackRequest,
 ) -> ContextPackPayload {
-    let query = request.query.trim();
-    if query.is_empty() {
-        return error_payload("unsupported", "context_pack_request requires a non-empty query");
+    let started_at = Instant::now();
+    let queries = normalized_queries(&request.query, &request.queries);
+    if queries.is_empty() {
+        return error_payload("unsupported", "fast_context requires a non-empty query");
     }
 
     if !workspace_root.exists() || !workspace_root.is_dir() {
-        return error_payload("workspace_unavailable", "No usable workspace root is available");
+        return error_payload(
+            "workspace_unavailable",
+            "No usable workspace root is available",
+        );
     }
 
     let max_results = request.max_results.unwrap_or(8).clamp(1, 20);
     let include_tests = request.include_tests.unwrap_or(true);
     let include_docs = request.include_docs.unwrap_or(true);
     let include_memory = request.include_memory.unwrap_or(true);
+    let include_project_index_min = request.include_project_index_min.unwrap_or(true);
+    let normalized_active_file =
+        active_file.and_then(|path| normalize_workspace_path(workspace_root, path));
+    let normalized_open_files = normalize_workspace_paths(workspace_root, open_files);
+    let workspace = build_workspace_payload(
+        workspace_root,
+        normalized_active_file.clone(),
+        normalized_open_files.clone(),
+    );
+    let project_context = build_project_context(workspace_root, include_project_index_min);
 
     let service = match language_service_for_workspace(workspace_root) {
         Ok(service) => service,
-        Err(error) => return error_payload("index_unavailable", &error),
+        Err(error) => {
+            let mut payload = error_payload("index_unavailable", &error);
+            payload.queries_used = queries;
+            payload.workspace = Some(workspace);
+            payload.project_context = Some(project_context);
+            payload.timing_ms = Some(started_at.elapsed().as_millis() as u64);
+            return payload;
+        }
     };
 
-    let mut primary = collect_primary_files(
+    let mut primary = collect_primary_files_for_queries(
         &service,
-        query,
+        &queries,
         request.intent.as_deref(),
         max_results,
-        active_file,
-        open_files,
+        normalized_active_file.as_deref(),
+        &normalized_open_files,
     );
 
     if primary.is_empty() {
-        primary = collect_fallback_path_matches(workspace_root, query, max_results);
+        primary = collect_fallback_path_matches_for_queries(workspace_root, &queries, max_results);
     }
 
     let related_tests = if include_tests {
@@ -66,14 +90,15 @@ pub fn build_context_pack(
         Vec::new()
     };
 
+    let combined_query = queries.join(" ");
     let related_docs = if include_docs {
-        collect_related_docs(workspace_root, query, max_results.min(6))
+        collect_related_docs(workspace_root, &combined_query, max_results.min(6))
     } else {
         Vec::new()
     };
 
     let memories = if include_memory {
-        collect_memories(workspace_root, query, max_results.min(5))
+        collect_memories(workspace_root, &combined_query, max_results.min(5))
     } else {
         Vec::new()
     };
@@ -101,12 +126,21 @@ pub fn build_context_pack(
 
     let recommended_next_step = if let Some(first) = primary.first() {
         if let Some(second) = primary.get(1) {
-            format!("Read {} and {} first, then inspect the related tests if behavior is unclear.", first.path, second.path)
+            format!(
+                "Read {} and {} first, then inspect the related tests if behavior is unclear.",
+                first.path, second.path
+            )
         } else {
-            format!("Read {} first, then broaden with symbol or grep search if needed.", first.path)
+            format!(
+                "Read {} first, then broaden with symbol or grep search if needed.",
+                first.path
+            )
         }
     } else if let Some(doc) = related_docs.first() {
-        format!("Read {} first, then use normal code search to find the implementation path.", doc.path)
+        format!(
+            "Read {} first, then use normal code search to find the implementation path.",
+            doc.path
+        )
     } else {
         "Fall back to normal tool-based workspace exploration.".to_string()
     };
@@ -114,6 +148,9 @@ pub fn build_context_pack(
     let hypothesized_flow = build_hypothesized_flow(&primary);
 
     ContextPackPayload {
+        queries_used: queries,
+        workspace: Some(workspace),
+        project_context: Some(project_context),
         summary,
         confidence,
         primary_files: primary,
@@ -123,11 +160,15 @@ pub fn build_context_pack(
         hypothesized_flow,
         recommended_next_step,
         error: None,
+        timing_ms: Some(started_at.elapsed().as_millis() as u64),
     }
 }
 
 pub fn error_payload(code: &str, message: &str) -> ContextPackPayload {
     ContextPackPayload {
+        queries_used: Vec::new(),
+        workspace: None,
+        project_context: None,
         summary: String::new(),
         confidence: ContextPackConfidence::Low,
         primary_files: Vec::new(),
@@ -140,21 +181,118 @@ pub fn error_payload(code: &str, message: &str) -> ContextPackPayload {
             code: code.to_string(),
             message: message.to_string(),
         }),
+        timing_ms: None,
     }
 }
 
 fn language_service_for_workspace(workspace_root: &Path) -> Result<LanguageService, String> {
-    let db_path = get_zblade_dir(workspace_root).join("index").join("symbols.db");
+    let db_path = get_zblade_dir(workspace_root)
+        .join("index")
+        .join("symbols.db");
     let symbol_store = std::sync::Arc::new(
-        SymbolStore::new(&db_path).map_err(|error| format!("Failed to open symbol index: {}", error))?,
+        SymbolStore::new(&db_path)
+            .map_err(|error| format!("Failed to open symbol index: {}", error))?,
     );
     LanguageService::new(workspace_root.to_path_buf(), symbol_store)
         .map_err(|error| format!("Failed to initialize language service: {}", error))
 }
 
-fn collect_primary_files(
+fn normalized_queries(query: &str, queries: &[String]) -> Vec<String> {
+    let mut normalized = Vec::new();
+    let mut seen = HashSet::new();
+
+    for value in std::iter::once(query).chain(queries.iter().map(String::as_str)) {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let key = trimmed.to_ascii_lowercase();
+        if seen.insert(key) {
+            normalized.push(trimmed.to_string());
+        }
+        if normalized.len() >= 20 {
+            break;
+        }
+    }
+
+    normalized
+}
+
+fn normalize_workspace_path(workspace_root: &Path, path: &str) -> Option<String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let path = Path::new(trimmed);
+    if path.is_absolute() {
+        path.strip_prefix(workspace_root)
+            .ok()
+            .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+            .or_else(|| Some(trimmed.replace('\\', "/")))
+    } else {
+        Some(trimmed.trim_start_matches("./").replace('\\', "/"))
+    }
+}
+
+fn normalize_workspace_paths(workspace_root: &Path, paths: &[String]) -> Vec<String> {
+    let mut normalized = Vec::new();
+    let mut seen = HashSet::new();
+
+    for path in paths {
+        let Some(relative) = normalize_workspace_path(workspace_root, path) else {
+            continue;
+        };
+        if seen.insert(relative.clone()) {
+            normalized.push(relative);
+        }
+    }
+
+    normalized
+}
+
+fn build_workspace_payload(
+    workspace_root: &Path,
+    active_file: Option<String>,
+    open_files: Vec<String>,
+) -> ContextWorkspace {
+    ContextWorkspace {
+        root: workspace_root.to_string_lossy().to_string(),
+        active_file,
+        open_files,
+    }
+}
+
+fn build_project_context(
+    workspace_root: &Path,
+    include_project_index_min: bool,
+) -> ContextProjectInfo {
+    let context_dir = get_zblade_dir(workspace_root).join("context");
+    let project_index_min_path = context_dir.join("project_index_min.md");
+    let project_index_path = context_dir.join("project_index.md");
+    let project_index_min_available = project_index_min_path.is_file();
+    let project_index_available = project_index_path.is_file();
+    let project_index_min = if include_project_index_min && project_index_min_available {
+        std::fs::read_to_string(&project_index_min_path)
+            .ok()
+            .map(|content| truncate_chars(content.trim(), 16_000))
+            .filter(|content| !content.is_empty())
+    } else {
+        None
+    };
+
+    ContextProjectInfo {
+        project_index_min,
+        project_index_min_available,
+        project_index_available,
+        project_index_path: project_index_available
+            .then(|| ".zblade/context/project_index.md".to_string()),
+    }
+}
+
+fn collect_primary_files_for_queries(
     service: &LanguageService,
-    query: &str,
+    queries: &[String],
     intent: Option<&str>,
     max_results: usize,
     active_file: Option<&str>,
@@ -163,35 +301,45 @@ fn collect_primary_files(
     let mut by_path: HashMap<String, ContextFileResult> = HashMap::new();
     let search_limit = max_results.saturating_mul(6).max(20);
 
-    let Ok(results) = service.search_symbols_contextual(query, search_limit, active_file, open_files)
-    else {
-        return Vec::new();
-    };
-
-    for result in results {
-        let path = result.symbol.file_path.clone();
-        if should_skip_path(&path) || is_test_path(&path) || is_doc_path(&path) {
+    for query in queries {
+        let Ok(results) =
+            service.search_symbols_contextual(query, search_limit, active_file, open_files)
+        else {
             continue;
-        }
-        let score = score_symbol_result(result.score, &result.symbol, intent, active_file, open_files);
-        let reason = symbol_reason(&result.symbol, intent);
-        let suggested_ranges = vec![range_for_symbol(&result.symbol)];
+        };
 
-        by_path
-            .entry(path.clone())
-            .and_modify(|existing| {
-                if score > existing.score {
-                    existing.score = score;
-                    existing.reason = reason.clone();
-                    existing.suggested_ranges = suggested_ranges.clone();
-                }
-            })
-            .or_insert(ContextFileResult {
-                path,
-                score,
-                reason,
-                suggested_ranges,
-            });
+        for result in results {
+            let path = result.symbol.file_path.clone();
+            if should_skip_path(&path) || is_test_path(&path) || is_doc_path(&path) {
+                continue;
+            }
+            let score = score_symbol_result(
+                result.score,
+                &result.symbol,
+                intent,
+                active_file,
+                open_files,
+            );
+            let reason = symbol_reason(&result.symbol, intent);
+            let suggested_ranges = vec![range_for_symbol(&result.symbol)];
+
+            by_path
+                .entry(path.clone())
+                .and_modify(|existing| {
+                    existing.score = existing.score.saturating_add(4).min(100);
+                    if score > existing.score {
+                        existing.score = score;
+                        existing.reason = reason.clone();
+                        existing.suggested_ranges = suggested_ranges.clone();
+                    }
+                })
+                .or_insert(ContextFileResult {
+                    path,
+                    score,
+                    reason,
+                    suggested_ranges,
+                });
+        }
     }
 
     let mut items: Vec<ContextFileResult> = by_path.into_values().collect();
@@ -200,12 +348,15 @@ fn collect_primary_files(
     items
 }
 
-fn collect_fallback_path_matches(
+fn collect_fallback_path_matches_for_queries(
     workspace_root: &Path,
-    query: &str,
+    queries: &[String],
     max_results: usize,
 ) -> Vec<ContextFileResult> {
-    let tokens = query_tokens(query);
+    let tokens = queries
+        .iter()
+        .flat_map(|query| query_tokens(query))
+        .collect::<Vec<_>>();
     if tokens.is_empty() {
         return Vec::new();
     }
@@ -280,7 +431,11 @@ fn collect_related_tests(
             if rel_lower.contains(&stem_lower) || same_dir {
                 tests.push(ContextFileResult {
                     path: rel,
-                    score: if rel_lower.contains(&stem_lower) { 78 } else { 62 },
+                    score: if rel_lower.contains(&stem_lower) {
+                        78
+                    } else {
+                        62
+                    },
                     reason: format!("Likely test near or named after {}.", item.path),
                     suggested_ranges: Vec::new(),
                 });
@@ -294,7 +449,11 @@ fn collect_related_tests(
     tests
 }
 
-fn collect_related_docs(workspace_root: &Path, query: &str, limit: usize) -> Vec<ContextFileResult> {
+fn collect_related_docs(
+    workspace_root: &Path,
+    query: &str,
+    limit: usize,
+) -> Vec<ContextFileResult> {
     let tokens = query_tokens(query);
     if tokens.is_empty() {
         return Vec::new();
@@ -376,15 +535,33 @@ fn symbol_reason(symbol: &Symbol, intent: Option<&str>) -> String {
         symbol.qualified_name.as_str()
     };
     match intent {
-        Some("bug_fix") => format!("Matched {} `{}` while looking for likely bug-fix entry points.", kind, name),
-        Some("feature") => format!("Matched {} `{}` as a likely implementation entry point.", kind, name),
+        Some("bug_fix") => format!(
+            "Matched {} `{}` while looking for likely bug-fix entry points.",
+            kind, name
+        ),
+        Some("feature") => format!(
+            "Matched {} `{}` as a likely implementation entry point.",
+            kind, name
+        ),
         _ => format!("Matched indexed {} `{}`.", kind, name),
     }
 }
 
 fn range_for_symbol(symbol: &Symbol) -> ContextRange {
-    let start = symbol.range.start.line.saturating_add(1).saturating_sub(20).max(1);
-    let end = symbol.range.end.line.saturating_add(1).saturating_add(60).max(start);
+    let start = symbol
+        .range
+        .start
+        .line
+        .saturating_add(1)
+        .saturating_sub(20)
+        .max(1);
+    let end = symbol
+        .range
+        .end
+        .line
+        .saturating_add(1)
+        .saturating_add(60)
+        .max(start);
     ContextRange {
         start_line: start,
         end_line: end,
@@ -466,11 +643,13 @@ mod tests {
         let request = ContextPackRequest {
             id: "ctx-1".to_string(),
             query: "   ".to_string(),
+            queries: Vec::new(),
             intent: None,
             max_results: None,
             include_tests: None,
             include_docs: None,
             include_memory: None,
+            include_project_index_min: None,
         };
         let open_files: Vec<String> = Vec::new();
         let payload = build_context_pack(Path::new("."), None, &open_files, &request);
@@ -490,5 +669,33 @@ mod tests {
         assert!(is_test_path("tests/foo.rs"));
         assert!(is_doc_path("docs/guide.md"));
         assert!(!is_doc_path("src/lib.rs"));
+    }
+
+    #[test]
+    fn normalizes_queries_and_paths() {
+        let extra_queries = vec![
+            " fast context ".to_string(),
+            "context_pack_request".to_string(),
+            "".to_string(),
+        ];
+        let queries = normalized_queries("Fast Context", &extra_queries);
+        assert_eq!(queries, vec!["Fast Context", "context_pack_request"]);
+
+        let workspace_root = Path::new("/workspace/project");
+        assert_eq!(
+            normalize_workspace_path(workspace_root, "/workspace/project/src/main.rs"),
+            Some("src/main.rs".to_string())
+        );
+        assert_eq!(
+            normalize_workspace_paths(
+                workspace_root,
+                &[
+                    "/workspace/project/src/main.rs".to_string(),
+                    "src/main.rs".to_string(),
+                    "./src/lib.rs".to_string(),
+                ],
+            ),
+            vec!["src/main.rs".to_string(), "src/lib.rs".to_string()]
+        );
     }
 }

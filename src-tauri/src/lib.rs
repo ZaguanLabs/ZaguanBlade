@@ -44,6 +44,7 @@ pub mod protocol;
 pub mod protocol_dispatcher;
 pub mod providers;
 pub mod reasoning_parser;
+pub mod remote_control;
 pub mod screenshot;
 pub mod semantic_patch;
 pub mod startup;
@@ -51,6 +52,7 @@ pub mod symbol_index;
 pub mod terminal;
 pub mod tool_execution;
 pub mod tools;
+pub mod telegram_service;
 pub mod tree_sitter;
 pub mod uncommitted_changes;
 pub mod utils;
@@ -108,9 +110,34 @@ pub fn run() {
     tauri::Builder::default()
         .manage(AppState::new(resolved_path))
         .manage(terminal::TerminalManager::new())
-        .setup(|_app| {
+        .setup(|app| {
             let start = std::time::Instant::now();
             eprintln!("[PERF] setup initialization took {:?}", start.elapsed());
+
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                use tauri::Manager;
+                let state = handle.state::<AppState>();
+                let config_path = crate::config::default_api_config_path();
+                let config = crate::config::load_api_config(&config_path);
+                
+                if !config.telegram_bot_token.is_empty() {
+                    // Start polling
+                    let trimmed_token = config.telegram_bot_token.trim().to_string();
+                    let client = reqwest::Client::new();
+                    if let Ok(res) = client.get(&format!("https://api.telegram.org/bot{}/getMe", trimmed_token)).send().await {
+                        if let Ok(get_me) = res.json::<serde_json::Value>().await {
+                            if get_me["ok"].as_bool() == Some(true) {
+                                if let Some(bot_username) = get_me["result"]["username"].as_str() {
+                                    state.remote_control.set_configured(bot_username.to_string()).await;
+                                    crate::telegram_service::start_polling(handle.clone(), trimmed_token, bot_username.to_string()).await;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
             Ok(())
         })
         .plugin(tauri_plugin_opener::init())
@@ -180,6 +207,7 @@ pub fn run() {
             commands::chat::set_selected_model,
             commands::chat::get_selected_model,
             commands::chat::get_chat_status,
+            commands::chat::is_local_model_active,
             // Tools & Changes
             commands::tools::submit_command_result,
             commands::tools::approve_tool_decision,
@@ -233,6 +261,10 @@ pub fn run() {
             git::git_log,
             git::git_commit_stats,
             git::git_remote_url,
+            // Remote Control
+            commands::remote_control::get_remote_control_status,
+            commands::remote_control::set_telegram_bot_token,
+            commands::remote_control::disconnect_remote_control,
             // Ephemeral
             ephemeral_commands::create_ephemeral_document,
             ephemeral_commands::get_ephemeral_document,

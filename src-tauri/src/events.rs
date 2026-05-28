@@ -109,6 +109,20 @@ pub mod event_names {
 
     /// History entry added (snapshot created)
     pub const HISTORY_ENTRY_ADDED: &str = "history-entry-added";
+
+    // === Remote Control ===
+
+    /// Remote control status changed (pairing, connected, disconnected)
+    pub const REMOTE_CONTROL_STATUS: &str = "remote-control-status";
+
+    /// Remote command execution started
+    pub const REMOTE_COMMAND_STARTED: &str = "remote-command-started";
+
+    /// Remote command output chunk received
+    pub const REMOTE_COMMAND_OUTPUT: &str = "remote-command-output";
+
+    /// Remote command execution finished
+    pub const REMOTE_COMMAND_FINISHED: &str = "remote-command-finished";
 }
 
 /// Payload for history-entry-added event

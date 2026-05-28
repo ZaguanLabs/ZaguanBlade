@@ -909,112 +909,260 @@ pub async fn dispatch(
             blade_protocol::HistoryIntent::ListConversations { project_id } => {
                 println!("[History] ListConversations: project={}", project_id);
 
-                let ws_manager = state.ws_connection.clone();
+                let is_local = state.is_local_model_active().await;
+                if is_local {
+                    match state.with_conversation_store(|store| Ok(store.list_conversations())) {
+                        Ok(conversations) => {
+                            let summaries = conversations
+                                .into_iter()
+                                .map(|c| blade_protocol::ConversationSummary {
+                                    id: c.id,
+                                    project_id: project_id.clone(),
+                                    title: c.title,
+                                    created_at: c.created_at.to_rfc3339(),
+                                    last_active_at: c.updated_at.to_rfc3339(),
+                                    message_count: c.message_count as u32,
+                                    preview: String::new(),
+                                })
+                                .collect();
 
-                match ws_manager.request_history_list(project_id).await {
-                    Ok(conversations) => {
-                        emit_blade_event(
-                            &window,
-                            Some(intent_id.to_string()),
-                            blade_protocol::BladeEvent::History(
-                                blade_protocol::HistoryEvent::ConversationList { conversations },
-                            ),
-                        );
+                            emit_blade_event(
+                                &window,
+                                Some(intent_id.to_string()),
+                                blade_protocol::BladeEvent::History(
+                                    blade_protocol::HistoryEvent::ConversationList { conversations: summaries },
+                                ),
+                            );
 
-                        Ok(())
-                    }
-                    Err(e) => {
-                        let error = blade_protocol::BladeError::Internal {
-                            trace_id: intent_id.to_string(),
-                            message: e,
-                        };
-                        emit_system_event(
-                            &window,
-                            intent_id,
-                            blade_protocol::SystemEvent::IntentFailed {
+                            Ok(())
+                        }
+                        Err(e) => {
+                            let error = blade_protocol::BladeError::Internal {
+                                trace_id: intent_id.to_string(),
+                                message: e,
+                            };
+                            emit_system_event(
+                                &window,
                                 intent_id,
-                                error: error.clone(),
-                            },
-                        );
-                        Err(error)
+                                blade_protocol::SystemEvent::IntentFailed {
+                                    intent_id,
+                                    error: error.clone(),
+                                },
+                            );
+                            Err(error)
+                        }
+                    }
+                } else {
+                    let ws_manager = state.ws_connection.clone();
+
+                    match ws_manager.request_history_list(project_id).await {
+                        Ok(conversations) => {
+                            emit_blade_event(
+                                &window,
+                                Some(intent_id.to_string()),
+                                blade_protocol::BladeEvent::History(
+                                    blade_protocol::HistoryEvent::ConversationList { conversations },
+                                ),
+                            );
+
+                            Ok(())
+                        }
+                        Err(e) => {
+                            let error = blade_protocol::BladeError::Internal {
+                                trace_id: intent_id.to_string(),
+                                message: e,
+                            };
+                            emit_system_event(
+                                &window,
+                                intent_id,
+                                blade_protocol::SystemEvent::IntentFailed {
+                                    intent_id,
+                                    error: error.clone(),
+                                },
+                            );
+                            Err(error)
+                        }
                     }
                 }
             }
             blade_protocol::HistoryIntent::LoadConversation { session_id } => {
                 println!("[History] LoadConversation: session={}", session_id);
 
-                let ws_manager = state.ws_connection.clone();
+                let is_local = state.is_local_model_active().await;
+                if is_local {
+                    match state.with_conversation_store(|store| store.load_conversation(&session_id)) {
+                        Ok(stored) => {
+                            let messages = stored
+                                .messages
+                                .into_iter()
+                                .map(|m| blade_protocol::HistoryMessage {
+                                    role: m.role,
+                                    content: m.content,
+                                    tool_calls: None,
+                                    tool_call_id: m.tool_call_id,
+                                    created_at: chrono::Utc::now().to_rfc3339(),
+                                })
+                                .collect();
 
-                match ws_manager.request_history_detail(session_id).await {
-                    Ok(full_conversation) => {
-                        eprintln!(
-                            "[History] Loaded {} messages for session {}",
-                            full_conversation.messages.len(),
-                            full_conversation.session_id
-                        );
+                            let ws_path = state.workspace_root();
+                            let project_id = ws_path
+                                .as_deref()
+                                .and_then(|p| crate::project::get_or_create_project_id(p).ok())
+                                .unwrap_or_else(|| "unknown".to_string());
 
-                        {
-                            let mut conversation = state.conversation.lock().unwrap();
+                            let full_conversation = blade_protocol::FullConversation {
+                                session_id: stored.metadata.session_id.unwrap_or(session_id),
+                                project_id,
+                                title: stored.metadata.title,
+                                created_at: stored.metadata.created_at.to_rfc3339(),
+                                last_active_at: stored.metadata.updated_at.to_rfc3339(),
+                                message_count: stored.metadata.message_count as u32,
+                                messages,
+                            };
 
-                            conversation.clear();
-
-                            conversation.metadata.id = uuid::Uuid::new_v4().to_string();
-                            conversation.metadata.session_id =
-                                Some(full_conversation.session_id.clone());
-                            conversation.metadata.title = full_conversation.title.clone();
-
-                            for msg in &full_conversation.messages {
-                                let role = match msg.role.as_str() {
-                                    "user" => crate::protocol::ChatRole::User,
-                                    "assistant" => crate::protocol::ChatRole::Assistant,
-                                    "system" => crate::protocol::ChatRole::System,
-                                    "tool" => crate::protocol::ChatRole::Tool,
-                                    _ => crate::protocol::ChatRole::User,
-                                };
-
-                                let mut chat_msg =
-                                    crate::protocol::ChatMessage::new(role, msg.content.clone());
-
-                                if let Some(ref tc_val) = msg.tool_calls {
-                                    if let Ok(tool_calls) =
-                                        serde_json::from_value::<Vec<crate::protocol::ToolCall>>(
-                                            tc_val.clone(),
-                                        )
-                                    {
-                                        chat_msg.tool_calls = Some(tool_calls);
-                                    }
-                                }
-
-                                chat_msg.tool_call_id = msg.tool_call_id.clone();
-
-                                conversation.push(chat_msg);
-                            }
-
-                            eprintln!("[History] Updated backend conversation state");
-                        }
-
-                        {
-                            let mut mgr = state.chat_manager.lock().unwrap();
-                            mgr.session_id = Some(full_conversation.session_id.clone());
                             eprintln!(
-                                "[History] Updated ChatManager session_id to {}",
+                                "[History] Loaded {} messages locally for session {}",
+                                full_conversation.messages.len(),
                                 full_conversation.session_id
                             );
-                        }
 
-                        emit_blade_event(
-                            &window,
-                            Some(intent_id.to_string()),
-                            blade_protocol::BladeEvent::History(
-                                blade_protocol::HistoryEvent::ConversationLoaded(full_conversation),
-                            ),
-                        );
-                        Ok(())
+                            {
+                                let mut conversation = state.conversation.lock().unwrap();
+
+                                conversation.clear();
+
+                                conversation.metadata.id = stored.metadata.id.clone();
+                                conversation.metadata.session_id =
+                                    Some(full_conversation.session_id.clone());
+                                conversation.metadata.title = full_conversation.title.clone();
+
+                                for msg in &full_conversation.messages {
+                                    let role = match msg.role.as_str() {
+                                        "user" => crate::protocol::ChatRole::User,
+                                        "assistant" => crate::protocol::ChatRole::Assistant,
+                                        "system" => crate::protocol::ChatRole::System,
+                                        "tool" => crate::protocol::ChatRole::Tool,
+                                        _ => crate::protocol::ChatRole::User,
+                                    };
+
+                                    let mut chat_msg =
+                                        crate::protocol::ChatMessage::new(role, msg.content.clone());
+
+                                    if let Some(ref tc_val) = msg.tool_calls {
+                                        if let Ok(tool_calls) =
+                                            serde_json::from_value::<Vec<crate::protocol::ToolCall>>(
+                                                tc_val.clone(),
+                                            )
+                                        {
+                                            chat_msg.tool_calls = Some(tool_calls);
+                                        }
+                                    }
+
+                                    chat_msg.tool_call_id = msg.tool_call_id.clone();
+
+                                    conversation.push(chat_msg);
+                                }
+
+                                eprintln!("[History] Updated backend conversation state locally");
+                            }
+
+                            {
+                                let mut mgr = state.chat_manager.lock().unwrap();
+                                mgr.session_id = Some(full_conversation.session_id.clone());
+                                eprintln!(
+                                    "[History] Updated ChatManager session_id locally to {}",
+                                    full_conversation.session_id
+                                );
+                            }
+
+                            emit_blade_event(
+                                &window,
+                                Some(intent_id.to_string()),
+                                blade_protocol::BladeEvent::History(
+                                    blade_protocol::HistoryEvent::ConversationLoaded(full_conversation),
+                                ),
+                            );
+                            Ok(())
+                        }
+                        Err(e) => Err(blade_protocol::BladeError::Internal {
+                            trace_id: intent_id.to_string(),
+                            message: e,
+                        }),
                     }
-                    Err(e) => Err(blade_protocol::BladeError::Internal {
-                        trace_id: intent_id.to_string(),
-                        message: e,
-                    }),
+                } else {
+                    let ws_manager = state.ws_connection.clone();
+
+                    match ws_manager.request_history_detail(session_id).await {
+                        Ok(full_conversation) => {
+                            eprintln!(
+                                "[History] Loaded {} messages for session {}",
+                                full_conversation.messages.len(),
+                                full_conversation.session_id
+                            );
+
+                            {
+                                let mut conversation = state.conversation.lock().unwrap();
+
+                                conversation.clear();
+
+                                conversation.metadata.id = uuid::Uuid::new_v4().to_string();
+                                conversation.metadata.session_id =
+                                    Some(full_conversation.session_id.clone());
+                                conversation.metadata.title = full_conversation.title.clone();
+
+                                for msg in &full_conversation.messages {
+                                    let role = match msg.role.as_str() {
+                                        "user" => crate::protocol::ChatRole::User,
+                                        "assistant" => crate::protocol::ChatRole::Assistant,
+                                        "system" => crate::protocol::ChatRole::System,
+                                        "tool" => crate::protocol::ChatRole::Tool,
+                                        _ => crate::protocol::ChatRole::User,
+                                    };
+
+                                    let mut chat_msg =
+                                        crate::protocol::ChatMessage::new(role, msg.content.clone());
+
+                                    if let Some(ref tc_val) = msg.tool_calls {
+                                        if let Ok(tool_calls) =
+                                            serde_json::from_value::<Vec<crate::protocol::ToolCall>>(
+                                                tc_val.clone(),
+                                            )
+                                        {
+                                            chat_msg.tool_calls = Some(tool_calls);
+                                        }
+                                    }
+
+                                    chat_msg.tool_call_id = msg.tool_call_id.clone();
+
+                                    conversation.push(chat_msg);
+                                }
+
+                                eprintln!("[History] Updated backend conversation state");
+                            }
+
+                            {
+                                let mut mgr = state.chat_manager.lock().unwrap();
+                                mgr.session_id = Some(full_conversation.session_id.clone());
+                                eprintln!(
+                                    "[History] Updated ChatManager session_id to {}",
+                                    full_conversation.session_id
+                                );
+                            }
+
+                            emit_blade_event(
+                                &window,
+                                Some(intent_id.to_string()),
+                                blade_protocol::BladeEvent::History(
+                                    blade_protocol::HistoryEvent::ConversationLoaded(full_conversation),
+                                ),
+                            );
+                            Ok(())
+                        }
+                        Err(e) => Err(blade_protocol::BladeError::Internal {
+                            trace_id: intent_id.to_string(),
+                            message: e,
+                        }),
+                    }
                 }
             }
         },
@@ -1024,6 +1172,13 @@ pub async fn dispatch(
         }
         BladeIntent::Language(language_intent) => match language_intent {
             blade_protocol::LanguageIntent::ZlpMessage { data } => {
+                let is_local = state.is_local_model_active().await;
+                if is_local {
+                    return Err(blade_protocol::BladeError::Internal {
+                        trace_id: intent_id.to_string(),
+                        message: "ZLP messages are not supported when a local model is active".to_string(),
+                    });
+                }
                 let window_clone = window.clone();
                 let intent_id_clone = intent_id;
                 let request_payload = data.clone();

@@ -30,6 +30,8 @@ pub struct ApiConfig {
     pub markdown_view: String,
     #[serde(default)]
     pub language: String,
+    #[serde(default)]
+    pub telegram_bot_token: String,
 }
 
 #[derive(Default, Serialize, Deserialize, Clone)]
@@ -46,6 +48,8 @@ pub struct RemoteAiConfig {
     pub markdown_view: String,
     #[serde(default)]
     pub language: String,
+    #[serde(default)]
+    pub telegram_bot_token: String,
 }
 
 #[derive(Default, Serialize, Deserialize, Clone)]
@@ -73,6 +77,7 @@ impl ApiConfig {
             theme: self.theme.clone(),
             markdown_view: self.markdown_view.clone(),
             language: self.language.clone(),
+            telegram_bot_token: self.telegram_bot_token.clone(),
         }
     }
 
@@ -94,6 +99,7 @@ impl ApiConfig {
         self.theme = remote.theme.clone();
         self.markdown_view = remote.markdown_view.clone();
         self.language = remote.language.clone();
+        self.telegram_bot_token = remote.telegram_bot_token.clone();
     }
 
     pub fn apply_local_ai_config(&mut self, local: &LocalAiConfig) {

@@ -1215,11 +1215,14 @@ impl ChatManager {
                             crate::blade_ws_client::BladeWsEvent::ContextPackRequest {
                                 id,
                                 query,
+                                queries,
                                 intent,
                                 max_results,
                                 include_tests,
                                 include_docs,
                                 include_memory,
+                                include_project_index_min,
+                                response_type,
                             } => {
                                 let workspace_root = PathBuf::from(workspace_info.root.clone());
                                 let active_file = workspace_info.active_file.clone();
@@ -1231,11 +1234,13 @@ impl ChatManager {
                                 let request = crate::context_pack::ContextPackRequest {
                                     id: id.clone(),
                                     query,
+                                    queries,
                                     intent,
                                     max_results,
                                     include_tests,
                                     include_docs,
                                     include_memory,
+                                    include_project_index_min,
                                 };
 
                                 let payload = match tokio::time::timeout(
@@ -1262,8 +1267,9 @@ impl ChatManager {
                                     ),
                                 };
 
-                                if let Err(error) =
-                                    ws_client.send_context_pack_response(id, payload).await
+                                if let Err(error) = ws_client
+                                    .send_context_pack_response(id, response_type, payload)
+                                    .await
                                 {
                                     let _ = tx.send(ChatEvent::Error(format!(
                                         "Failed to send context pack response: {}",
@@ -1306,7 +1312,12 @@ impl ChatManager {
                                 ..
                             }
                             | crate::blade_ws_client::BladeWsEvent::ZlpResponse { .. }
-                            | crate::blade_ws_client::BladeWsEvent::ContextPackResponse { .. } => {}
+                            | crate::blade_ws_client::BladeWsEvent::ContextPackResponse {
+                                ..
+                            }
+                            | crate::blade_ws_client::BladeWsEvent::PairingTokenResponse { .. }
+                            | crate::blade_ws_client::BladeWsEvent::RemoteControlConnected { .. }
+                            | crate::blade_ws_client::BladeWsEvent::RemoteControlDisconnected => {}
                         }
                     }
                 }

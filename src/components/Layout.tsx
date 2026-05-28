@@ -302,6 +302,38 @@ const AppLayoutInner: React.FC = () => {
     const [autoApproveRunCommands, setAutoApproveRunCommands] = useState(false);
     const isGitSidebarVisible = isSidebarOpen && activeSidebar === 'git';
 
+    // Track window maximized and fullscreen state for resize borders
+    const [isMaximized, setIsMaximized] = useState(false);
+    const [isFullscreen, setIsFullscreen] = useState(false);
+
+    useEffect(() => {
+        let unlisten: (() => void) | undefined;
+        const setupListener = async () => {
+            setIsMaximized(await appWindow.isMaximized());
+            setIsFullscreen(await appWindow.isFullscreen());
+            unlisten = await appWindow.onResized(async () => {
+                setIsMaximized(await appWindow.isMaximized());
+                setIsFullscreen(await appWindow.isFullscreen());
+            });
+        };
+        setupListener();
+        return () => {
+            if (unlisten) unlisten();
+        };
+    }, [appWindow]);
+
+    const handleResizeMouseDown = useCallback((
+        e: React.MouseEvent,
+        direction: 'East' | 'North' | 'NorthEast' | 'NorthWest' | 'South' | 'SouthEast' | 'SouthWest' | 'West'
+    ) => {
+        if (e.button !== 0) return; // Only drag-resize on primary click
+        e.preventDefault();
+        e.stopPropagation();
+        appWindow.startResizeDragging(direction).catch((err) => {
+            console.error('[Layout] Failed to start resize dragging:', err);
+        });
+    }, [appWindow]);
+
     const chat = disableChatHook ? useNoopChat() : useChat({ autoApproveRunCommands });
     const [wasStoppedByUser, setWasStoppedByUser] = useState(false);
     const {
@@ -602,6 +634,22 @@ const AppLayoutInner: React.FC = () => {
         setInitialSettingsSection('configuration');
         setIsSettingsOpen(true);
     }, []);
+
+    // Listen for telegram_command events
+    useEffect(() => {
+        const unlistenPromise = listen<string>('telegram_command', (event) => {
+            const command = event.payload;
+            console.debug('[Layout] Received telegram_command:', command);
+            // Ensure we are not in an unready state
+            if (chat.sendMessage) {
+                chat.sendMessage(command);
+            }
+        });
+
+        return () => {
+            unlistenPromise.then(unlisten => unlisten());
+        };
+    }, [chat.sendMessage]);
 
     // First-time setup modal state (RFC-002)
     const [showStorageSetup, setShowStorageSetup] = useState(false);
@@ -908,7 +956,48 @@ const AppLayoutInner: React.FC = () => {
     const editorViewportBottomInset = !disableTerminalSurface && terminalHeight > 0 ? terminalHeight : 0;
 
     return (
-        <div className="h-screen w-screen bg-(--bg-app) overflow-hidden flex flex-col font-sans text-(--fg-primary)">
+        <div className="h-screen w-screen bg-(--bg-app) overflow-hidden flex flex-col relative font-sans text-(--fg-primary)">
+            {/* Window Resize Handles for Frameless/Undecorated Window */}
+            {!isMaximized && !isFullscreen && (
+                <>
+                    {/* Corners */}
+                    <div
+                        className="absolute top-0 left-0 w-2 h-2 z-[9999] cursor-nw-resize select-none"
+                        onMouseDown={(e) => handleResizeMouseDown(e, 'NorthWest')}
+                    />
+                    <div
+                        className="absolute top-0 right-0 w-2 h-2 z-[9999] cursor-ne-resize select-none"
+                        onMouseDown={(e) => handleResizeMouseDown(e, 'NorthEast')}
+                    />
+                    <div
+                        className="absolute bottom-0 left-0 w-2 h-2 z-[9999] cursor-sw-resize select-none"
+                        onMouseDown={(e) => handleResizeMouseDown(e, 'SouthWest')}
+                    />
+                    <div
+                        className="absolute bottom-0 right-0 w-2 h-2 z-[9999] cursor-se-resize select-none"
+                        onMouseDown={(e) => handleResizeMouseDown(e, 'SouthEast')}
+                    />
+
+                    {/* Borders */}
+                    <div
+                        className="absolute top-0 left-2 right-2 h-1 z-[9998] cursor-n-resize select-none"
+                        onMouseDown={(e) => handleResizeMouseDown(e, 'North')}
+                    />
+                    <div
+                        className="absolute bottom-0 left-2 right-2 h-1 z-[9998] cursor-s-resize select-none"
+                        onMouseDown={(e) => handleResizeMouseDown(e, 'South')}
+                    />
+                    <div
+                        className="absolute top-2 bottom-2 left-0 w-1 z-[9998] cursor-w-resize select-none"
+                        onMouseDown={(e) => handleResizeMouseDown(e, 'West')}
+                    />
+                    <div
+                        className="absolute top-2 bottom-2 right-0 w-1 z-[9998] cursor-e-resize select-none"
+                        onMouseDown={(e) => handleResizeMouseDown(e, 'East')}
+                    />
+                </>
+            )}
+
             {/* Unified App Bar: title bar + tab strip merged */}
             <AppBar
                 tabs={appBarTabs}

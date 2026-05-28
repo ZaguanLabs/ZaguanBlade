@@ -312,3 +312,9 @@ pub fn get_chat_status(state: State<'_, AppState>) -> bool {
     let mgr = state.chat_manager.lock().unwrap();
     mgr.streaming || mgr.rx.is_some()
 }
+
+#[tauri::command]
+pub async fn is_local_model_active(state: State<'_, AppState>) -> Result<bool, String> {
+    Ok(state.is_local_model_active().await)
+}
+

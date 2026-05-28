@@ -520,6 +520,7 @@ pub async fn handle_send_message<R: Runtime>(
 
     // 2. Start Stream
     let models = load_available_models(&state).await?;
+    let is_local_model = state.is_local_model_active().await;
     let workspace_path = {
         let workspace = state
             .workspace
@@ -527,28 +528,32 @@ pub async fn handle_send_message<R: Runtime>(
             .map_err(|e| format!("Failed to lock workspace: {}", e))?;
         workspace.workspace.clone()
     };
-    let storage_mode = Some(
-        tokio::task::spawn_blocking({
-            let workspace_path = workspace_path.clone();
-            move || {
-                workspace_path
-                    .as_ref()
-                    .map(|p| {
-                        let settings = project_settings::load_project_settings_or_default(p);
-                        match settings.storage.mode {
-                            project_settings::StorageMode::Local => "local".to_string(),
-                            project_settings::StorageMode::Server => "server".to_string(),
-                        }
-                    })
-                    .unwrap_or_else(|| "local".to_string())
-            }
-        })
-        .await
-        .unwrap_or_else(|error| {
-            eprintln!("[CHAT] storage mode task failed: {}", error);
-            "local".to_string()
-        }),
-    );
+    let storage_mode = if is_local_model {
+        Some("local".to_string())
+    } else {
+        Some(
+            tokio::task::spawn_blocking({
+                let workspace_path = workspace_path.clone();
+                move || {
+                    workspace_path
+                        .as_ref()
+                        .map(|p| {
+                            let settings = project_settings::load_project_settings_or_default(p);
+                            match settings.storage.mode {
+                                project_settings::StorageMode::Local => "local".to_string(),
+                                project_settings::StorageMode::Server => "server".to_string(),
+                            }
+                        })
+                        .unwrap_or_else(|| "local".to_string())
+                }
+            })
+            .await
+            .unwrap_or_else(|error| {
+                eprintln!("[CHAT] storage mode task failed: {}", error);
+                "local".to_string()
+            }),
+        )
+    };
     {
         let mut mgr = state
             .chat_manager
@@ -702,6 +707,7 @@ pub async fn handle_send_message<R: Runtime>(
                             workspace.workspace.clone()
                         };
                         let blocking_app_handle = app_handle.clone();
+                        let is_local_model_clone = is_local_model;
                         let autosave_result = tokio::task::spawn_blocking(move || {
                             let state = blocking_app_handle.state::<AppState>();
 
@@ -717,7 +723,7 @@ pub async fn handle_send_message<R: Runtime>(
                             if let Some(ws_path) = workspace_path {
                                 let settings =
                                     project_settings::load_project_settings_or_default(&ws_path);
-                                if settings.storage.mode == project_settings::StorageMode::Local {
+                                if settings.storage.mode == project_settings::StorageMode::Local || is_local_model_clone {
                                     // Convert to local artifact format
                                     let project_id = crate::project::get_or_create_project_id(&ws_path)
                                         .unwrap_or_else(|_| "unknown".to_string());
@@ -832,9 +838,15 @@ pub async fn handle_send_message<R: Runtime>(
                 blade_event_scheduler::queue_chat_message_delta(
                     &app_handle,
                     msg_id.clone(),
-                    Some(msg_id),
-                    chunk,
+                    Some(msg_id.clone()),
+                    chunk.clone(),
                 );
+
+                let app_handle_clone = app_handle.clone();
+                let chunk_clone = chunk.clone();
+                tauri::async_runtime::spawn(async move {
+                    crate::telegram_service::update_telegram_text(&app_handle_clone, &chunk_clone).await;
+                });
             } else if let DrainResult::Reasoning(msg_id, chunk) = result {
                 let msg_id = if msg_id.is_empty() {
                     "streaming-msg".to_string()
@@ -845,9 +857,15 @@ pub async fn handle_send_message<R: Runtime>(
                 blade_event_scheduler::queue_chat_reasoning_delta(
                     &app_handle,
                     msg_id.clone(),
-                    Some(msg_id),
-                    chunk,
+                    Some(msg_id.clone()),
+                    chunk.clone(),
                 );
+
+                let app_handle_clone = app_handle.clone();
+                let chunk_clone = chunk.clone();
+                tauri::async_runtime::spawn(async move {
+                    crate::telegram_service::update_telegram_reasoning(&app_handle_clone, &chunk_clone).await;
+                });
             } else if let DrainResult::Error(e) = result {
                 window
                     .emit(
@@ -865,7 +883,7 @@ pub async fn handle_send_message<R: Runtime>(
                 break;
             } else if let DrainResult::ToolCreated(msg, new_calls) = result {
                 let msg_id = msg.id.clone().unwrap_or_else(|| "unknown".to_string());
-                for tc in new_calls {
+                for tc in &new_calls {
                     blade_event_scheduler::queue_tool_update(
                         &app_handle,
                         Some(msg_id.clone()),
@@ -876,6 +894,12 @@ pub async fn handle_send_message<R: Runtime>(
                         Some(tc.clone()),
                     );
                 }
+
+                let app_handle_clone = app_handle.clone();
+                let new_calls_clone = new_calls.clone();
+                tauri::async_runtime::spawn(async move {
+                    crate::telegram_service::update_telegram_tools(&app_handle_clone, &new_calls_clone).await;
+                });
             } else if let DrainResult::ToolActivity {
                 tool_name,
                 file_path,
@@ -926,6 +950,12 @@ pub async fn handle_send_message<R: Runtime>(
                             Some(tc.clone()),
                         );
                     }
+
+                    let app_handle_clone = app_handle.clone();
+                    let tool_calls_clone = tool_calls.clone();
+                    tauri::async_runtime::spawn(async move {
+                        crate::telegram_service::update_telegram_tools(&app_handle_clone, &tool_calls_clone).await;
+                    });
                 }
             } else if let DrainResult::Progress {
                 message,
@@ -978,9 +1008,31 @@ pub async fn handle_send_message<R: Runtime>(
                     &app_handle,
                     None,
                     blade_protocol::BladeEvent::Chat(blade_protocol::ChatEvent::MessageCompleted {
-                        id,
+                        id: id.clone(),
                     }),
                 );
+
+                // Check if we should forward this message to Telegram
+                let app_handle_clone = app_handle.clone();
+                let id_clone = id.clone();
+                tauri::async_runtime::spawn(async move {
+                    if !crate::telegram_service::complete_telegram_interaction(&app_handle_clone, &id_clone).await {
+                        let state = app_handle_clone.state::<AppState>();
+                        let text_to_send = {
+                            let conversation = state.conversation.lock().unwrap();
+                            conversation.get_messages().iter()
+                                .find(|m| m.id.as_ref() == Some(&id_clone))
+                                .filter(|m| m.role == crate::protocol::ChatRole::Assistant)
+                                .map(|m| m.content.clone())
+                        };
+                        
+                        if let Some(text) = text_to_send {
+                            if let Err(e) = crate::telegram_service::send_to_telegram(&app_handle_clone, &text).await {
+                                eprintln!("[TELEGRAM] Failed to send response: {}", e);
+                            }
+                        }
+                    }
+                });
             } else if let DrainResult::ContextLengthExceeded {
                 message,
                 token_count,

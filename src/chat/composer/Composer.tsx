@@ -7,8 +7,16 @@ import { ComposerToolbar } from './ComposerToolbar';
 import { MentionSuggestions, type ComposerSuggestion } from './MentionSuggestions';
 import { useComposerAttachments } from './useComposerAttachments';
 import { usePathSuggestions, type WorkspacePathMatch } from './usePathSuggestions';
+import { ScreenshotAnnotationModal } from '../../components/image-annotation/ScreenshotAnnotationModal';
+import { ScreenshotCapturePreview } from '../../components/image-annotation/ScreenshotCapturePreview';
 
 const MAX_COMPOSER_HISTORY = 20;
+
+type PendingCapture = {
+    result: CaptureResult;
+    name: string;
+    dataUrl: string;
+};
 
 interface ComposerProps {
     onSend: (text: string, attachments?: ReturnType<typeof useComposerAttachments>['attachments'], mentions?: ComposerMention[], mode?: ChatMode) => void;
@@ -48,6 +56,8 @@ export const Composer: React.FC<ComposerProps> = ({
     const [mentionQuery, setMentionQuery] = useState<string | null>(null);
     const [selectedSuggestionIndex] = useState(0);
     const [selectedMentions, setSelectedMentions] = useState<Record<string, WorkspacePathMatch>>({});
+    const [pendingCapture, setPendingCapture] = useState<PendingCapture | null>(null);
+    const [editingCapture, setEditingCapture] = useState<PendingCapture | null>(null);
     const textareaRef = useRef<ComposerTextareaHandle>(null);
     const textareaDomCursorRef = useRef(0);
     const historyRef = useRef<string[]>([]);
@@ -163,7 +173,39 @@ export const Composer: React.FC<ComposerProps> = ({
     }, [text]);
 
     const capture = useCallback((result: CaptureResult, name: string) => {
-        void attachments.appendCapture(result, name);
+        setPendingCapture({
+            result,
+            name,
+            dataUrl: `data:${result.mime_type};base64,${result.data}`,
+        });
+    }, []);
+
+    const addPendingCapture = useCallback(() => {
+        if (!pendingCapture) {
+            return;
+        }
+        void attachments.appendCapture(pendingCapture.result, pendingCapture.name);
+        setPendingCapture(null);
+    }, [attachments, pendingCapture]);
+
+    const editPendingCapture = useCallback(() => {
+        if (!pendingCapture) {
+            return;
+        }
+        setEditingCapture(pendingCapture);
+        setPendingCapture(null);
+    }, [pendingCapture]);
+
+    const addEditedCapture = useCallback((dataUrl: string, name: string, copiedToClipboard: boolean) => {
+        void attachments.appendDataUrl(dataUrl, name).then((added) => {
+            if (added && !copiedToClipboard) {
+                attachments.setAttachmentError('Edited screenshot added. Clipboard copy is not available in this environment.');
+            }
+        });
+        if (copiedToClipboard) {
+            attachments.setAttachmentError(null);
+        }
+        setEditingCapture(null);
     }, [attachments]);
 
     React.useEffect(() => {
@@ -183,9 +225,10 @@ export const Composer: React.FC<ComposerProps> = ({
     const activeMentionChips = useMemo(() => collectMentions(text, selectedMentions), [selectedMentions, text]);
 
     return (
-        <div className="shrink-0 border-t border-(--border-subtle) bg-(--bg-panel)">
-            <div className="px-2 pb-2 pt-2">
-                <div className={`relative rounded-[calc(var(--panel-radius)*0.9)] border bg-(--bg-surface)/85 shadow-(--shadow-md) ${chatMode === 'planning' ? 'border-[color-mix(in_srgb,var(--accent-planning)_42%,transparent)]' : 'border-(--border-subtle)'}`}>
+        <>
+            <div className="shrink-0 border-t border-(--border-subtle) bg-(--bg-panel)">
+                <div className="px-2 pb-2 pt-2">
+                    <div className={`relative rounded-[calc(var(--panel-radius)*0.9)] border bg-(--bg-surface)/85 shadow-(--shadow-md) ${chatMode === 'planning' ? 'border-[color-mix(in_srgb,var(--accent-planning)_42%,transparent)]' : 'border-(--border-subtle)'}`}>
                     <ComposerToolbar
                         loading={loading}
                         disabled={disabled}
@@ -244,8 +287,26 @@ export const Composer: React.FC<ComposerProps> = ({
                             <span>{t('chat.composer.shiftEnterForNewline')}</span>
                         </div>
                     </div>
+                    </div>
                 </div>
             </div>
-        </div>
+            {pendingCapture && (
+                <ScreenshotCapturePreview
+                    dataUrl={pendingCapture.dataUrl}
+                    name={pendingCapture.name}
+                    onAdd={addPendingCapture}
+                    onEdit={editPendingCapture}
+                    onCancel={() => setPendingCapture(null)}
+                />
+            )}
+            {editingCapture && (
+                <ScreenshotAnnotationModal
+                    dataUrl={editingCapture.dataUrl}
+                    name={editingCapture.name}
+                    onCancel={() => setEditingCapture(null)}
+                    onDone={addEditedCapture}
+                />
+            )}
+        </>
     );
 };

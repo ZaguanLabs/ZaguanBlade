@@ -15,7 +15,7 @@ jobs:
       matrix:
         include:
           # macOS ARM64 (Apple Silicon)
-          - platform: 'macos-latest'
+          - platform: 'macos-15'
             args: '--target aarch64-apple-darwin --bundles app dmg'
             rust_target: 'aarch64-apple-darwin'
           # Linux x86_64

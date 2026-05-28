@@ -648,6 +648,12 @@ pub struct LanguageLocation {
 /// Response payload for a context pack request
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ContextPackPayload {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queries_used: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<ContextWorkspace>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_context: Option<ContextProjectInfo>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub summary: String,
     #[serde(default)]
@@ -666,6 +672,29 @@ pub struct ContextPackPayload {
     pub recommended_next_step: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<ContextPackError>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing_ms: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ContextWorkspace {
+    pub root: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open_files: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ContextProjectInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_index_min: Option<String>,
+    #[serde(default)]
+    pub project_index_min_available: bool,
+    #[serde(default)]
+    pub project_index_available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_index_path: Option<String>,
 }
 
 /// Confidence level for context pack results

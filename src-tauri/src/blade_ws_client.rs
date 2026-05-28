@@ -160,17 +160,33 @@ pub enum BladeWsEvent {
     ContextPackRequest {
         id: String,
         query: String,
+        queries: Vec<String>,
         intent: Option<String>,
         max_results: Option<usize>,
         include_tests: Option<bool>,
         include_docs: Option<bool>,
         include_memory: Option<bool>,
+        include_project_index_min: Option<bool>,
+        response_type: String,
     },
     /// Context pack response destined for zcoderd
     ContextPackResponse {
         id: String,
         payload: ContextPackPayload,
     },
+    /// Pairing token received from relay server
+    PairingTokenResponse {
+        token: String,
+        bot_username: String,
+        expires_in: u64,
+    },
+    /// Remote control connection status update from relay
+    RemoteControlConnected {
+        telegram_username: String,
+        telegram_chat_id: String,
+    },
+    /// Remote control disconnected
+    RemoteControlDisconnected,
 }
 
 /// Workspace information sent to zcoderd
@@ -831,6 +847,7 @@ impl BladeWsClient {
     pub async fn send_context_pack_response(
         &self,
         request_id: String,
+        response_type: String,
         payload: crate::blade_protocol::ContextPackPayload,
     ) -> Result<(), String> {
         let conn = self.connection.lock().await;
@@ -838,7 +855,7 @@ impl BladeWsClient {
 
         let msg = WsBaseMessage {
             id: request_id,
-            msg_type: "context_pack_response".to_string(),
+            msg_type: response_type,
             timestamp: chrono::Utc::now().timestamp_millis(),
             payload: Some(serde_json::to_value(payload).unwrap()),
         };
@@ -1406,44 +1423,111 @@ impl BladeWsClient {
                     session_id,
                 });
             }
-            "context_pack_request" => {
-                let id = msg.payload
+            "context_pack_request" | "fast_context" | "fast_context_request" => {
+                let id = msg
+                    .payload
                     .get("id")
                     .and_then(|v| v.as_str())
                     .unwrap_or(&correlation_id)
                     .to_string();
-                let query = msg.payload
+                let query = msg
+                    .payload
                     .get("query")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let intent = msg.payload
+                let queries = msg
+                    .payload
+                    .get("queries")
+                    .and_then(|v| v.as_array())
+                    .map(|values| {
+                        values
+                            .iter()
+                            .filter_map(|value| value.as_str())
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let intent = msg
+                    .payload
                     .get("intent")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
-                let max_results = msg.payload
+                let max_results = msg
+                    .payload
                     .get("max_results")
                     .and_then(|v| v.as_u64())
                     .map(|n| n as usize);
-                let include_tests = msg.payload
-                    .get("include_tests")
-                    .and_then(|v| v.as_bool());
-                let include_docs = msg.payload
-                    .get("include_docs")
-                    .and_then(|v| v.as_bool());
-                let include_memory = msg.payload
-                    .get("include_memory")
+                let include_tests = msg.payload.get("include_tests").and_then(|v| v.as_bool());
+                let include_docs = msg.payload.get("include_docs").and_then(|v| v.as_bool());
+                let include_memory = msg.payload.get("include_memory").and_then(|v| v.as_bool());
+                let include_project_index_min = msg
+                    .payload
+                    .get("include_project_index_min")
+                    .or_else(|| msg.payload.get("includeProjectIndexMin"))
                     .and_then(|v| v.as_bool());
 
                 let _ = tx.send(BladeWsEvent::ContextPackRequest {
                     id,
                     query,
+                    queries,
                     intent,
                     max_results,
                     include_tests,
                     include_docs,
                     include_memory,
+                    include_project_index_min,
+                    response_type: if msg.msg_type == "context_pack_request" {
+                        "context_pack_response".to_string()
+                    } else {
+                        "fast_context_response".to_string()
+                    },
                 });
+            }
+            "pairing_token_response" => {
+                let token = msg
+                    .payload
+                    .get("token")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let bot_username = msg
+                    .payload
+                    .get("bot_username")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("ZaguanAIBot") // Default if not provided
+                    .to_string();
+                let expires_in = msg
+                    .payload
+                    .get("expires_in")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(300);
+
+                let _ = tx.send(BladeWsEvent::PairingTokenResponse { token, bot_username, expires_in });
+            }
+            "remote_control_connected" => {
+                let telegram_username = msg
+                    .payload
+                    .get("telegram_username")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let telegram_chat_id = msg
+                    .payload
+                    .get("telegram_chat_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                let _ = tx.send(BladeWsEvent::RemoteControlConnected {
+                    telegram_username,
+                    telegram_chat_id,
+                });
+            }
+            "remote_control_disconnected" => {
+                let _ = tx.send(BladeWsEvent::RemoteControlDisconnected);
             }
             _ => {
                 // Intentionally ignore unknown message types.

@@ -4,9 +4,10 @@ import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { emit } from '@tauri-apps/api/event';
 import { getVersion } from '@tauri-apps/api/app';
-import { X, Database, Cloud, Shield, Zap, HardDrive, Server, ChevronRight, ChevronDown, Info, Loader2, Code, Key, CheckCircle2, Palette, Check } from 'lucide-react';
+import { X, Database, Cloud, Shield, Zap, HardDrive, Server, ChevronRight, ChevronDown, Info, Loader2, Code, Key, CheckCircle2, Palette, Check, Smartphone } from 'lucide-react';
 import type { BackendSettings, LocalAiConfig, RemoteAiConfig } from '../types/settings';
 import i18n, { normalizeAppLanguage, supportedAppLanguages, languageI18nKey, type AppLanguage } from '../i18n';
+import { QRCodeSVG } from 'qrcode.react';
 import zbladeLogoUrl from '../assets/zblade-in-app-logo.png';
 import { availableThemes, normalizeThemeId } from '../themes';
 import { formatUnknownBackendError } from '../utils/backendErrors';
@@ -219,7 +220,7 @@ interface SettingsModalProps {
     onRefreshModels?: () => Promise<import('../types/chat').ModelInfo[]>;
 }
 
-type SettingsSection = 'configuration' | 'account' | 'localai' | 'storage' | 'context' | 'privacy' | 'editor' | 'about';
+type SettingsSection = 'configuration' | 'account' | 'localai' | 'storage' | 'context' | 'privacy' | 'editor' | 'remote' | 'about';
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialSection, workspacePath, onRefreshModels }) => {
     const { t } = useTranslation();
@@ -410,6 +411,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
             { id: 'context', label: t('settings.navigation.context'), icon: <Zap className="w-4 h-4" /> },
             // { id: 'privacy', label: 'Privacy', icon: <Shield className="w-4 h-4" /> },
         ] as const : []),
+        { id: 'remote', label: 'Remote', icon: <Smartphone className="w-4 h-4" /> },
         { id: 'about', label: t('settings.navigation.about'), icon: <Info className="w-4 h-4" /> },
     ];
 
@@ -525,6 +527,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                                         onChange={(updates) => updateSettings('editor', updates)}
                                     />
                                 )}
+                                {activeSection === 'remote' && <RemoteSettings />}
                                 {activeSection === 'about' && <AboutSettings />}
                             </>
                         )}
@@ -1385,6 +1388,227 @@ const Toggle: React.FC<ToggleProps> = ({ checked, onChange }) => {
                     }`}
             />
         </button>
+    );
+};
+
+// ─── Remote Control Settings ─────────────────────────────────────────
+
+interface RemoteControlStatusData {
+    state: string;
+    paired: boolean;
+    telegram_chat_id: string | null;
+    connected_at: number | null;
+    bot_username: string | null;
+}
+
+const RemoteSettings: React.FC = () => {
+    const [status, setStatus] = useState<RemoteControlStatusData | null>(null);
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [tokenInput, setTokenInput] = useState('');
+
+    // Load initial status
+    useEffect(() => {
+        void (async () => {
+            try {
+                const s = await invoke<RemoteControlStatusData>('get_remote_control_status');
+                setStatus(s);
+            } catch (e) {
+                console.error('[Remote] Failed to load status:', e);
+            }
+        })();
+    }, []);
+
+    const handleConnectBot = async () => {
+        if (!tokenInput.trim()) return;
+        setIsLoading(true);
+        setError(null);
+        try {
+            const s = await invoke<RemoteControlStatusData>('set_telegram_bot_token', { token: tokenInput });
+            setStatus(s);
+            setTokenInput('');
+        } catch (e) {
+            setError(String(e));
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleDisconnect = async () => {
+        setIsLoading(true);
+        setError(null);
+        try {
+            const s = await invoke<RemoteControlStatusData>('disconnect_remote_control');
+            setStatus(s);
+        } catch (e) {
+            setError(String(e));
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const isDisconnected = !status || status.state === 'disconnected';
+    const isConnected = status?.state === 'connected';
+
+    const botUrl = status?.bot_username
+        ? `https://t.me/${status.bot_username}`
+        : null;
+
+    return (
+        <div className="space-y-6">
+            <div>
+                <h3 className="text-base font-semibold text-(--fg-primary) mb-1">Remote Control</h3>
+                <p className="text-sm text-(--fg-tertiary) mb-4">
+                    Pair Zaguán Blade with Telegram to run commands remotely and approve AI actions from your phone.
+                </p>
+            </div>
+
+            {error && (
+                <div className="rounded-[calc(var(--panel-radius)*0.75)] border border-[color-mix(in_srgb,var(--state-danger)_32%,transparent)] bg-[color-mix(in_srgb,var(--state-danger)_10%,transparent)] p-3 text-sm text-(--state-danger)">
+                    {error}
+                </div>
+            )}
+
+            {/* Disconnected State */}
+            {isDisconnected && (
+                <div className="border border-(--border-default) rounded-[calc(var(--panel-radius)+4px)] p-6 bg-[color-mix(in_srgb,var(--bg-panel)_88%,var(--bg-editor))] shadow-(--panel-shadow)">
+                    <div className="flex flex-col gap-5">
+                        <div className="flex items-center gap-4">
+                            <div className="p-3 rounded-full bg-[color-mix(in_srgb,var(--accent-ai)_12%,transparent)] shrink-0">
+                                <Smartphone className="w-8 h-8 text-(--accent-ai)" />
+                            </div>
+                            <div>
+                                <div className="text-sm font-medium text-(--fg-primary) mb-1">Create a Telegram Bot</div>
+                                <div className="text-xs text-(--fg-tertiary)">
+                                    To use remote control, you need to provide your own Telegram bot token. This keeps your connection entirely private and local.
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="text-xs text-(--fg-secondary) space-y-2 bg-[color-mix(in_srgb,var(--bg-surface)_50%,transparent)] p-3 rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle)">
+                            <p className="font-medium">How to get a Bot Token:</p>
+                            <ol className="list-decimal pl-4 space-y-1 text-(--fg-tertiary)">
+                                <li>Open Telegram and chat with <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" className="text-(--accent-ai) hover:underline">@BotFather</a></li>
+                                <li>Send the command <code className="bg-(--bg-editor) px-1 rounded">/newbot</code> and follow the prompts</li>
+                                <li>Copy the HTTP API Token provided at the end</li>
+                            </ol>
+                        </div>
+
+                        <div className="flex flex-col gap-2">
+                            <label className="text-xs font-medium text-(--fg-secondary)">Bot Token</label>
+                            <div className="flex gap-3">
+                                <input
+                                    type="password"
+                                    value={tokenInput}
+                                    onChange={(e) => setTokenInput(e.target.value)}
+                                    placeholder="1234567890:AAH..."
+                                    className="flex-1 px-3 py-2 bg-(--bg-input) border border-(--border-input) rounded-[calc(var(--panel-radius)*0.75)] text-sm text-(--fg-primary) placeholder:text-(--fg-tertiary) focus:outline-none focus:border-(--border-focus) focus:ring-1 focus:ring-(--border-focus) transition-all"
+                                />
+                                <button
+                                    onClick={handleConnectBot}
+                                    disabled={isLoading || !tokenInput.trim()}
+                                    className="shrink-0 flex items-center gap-2 rounded-[calc(var(--panel-radius)*0.65)] bg-(--accent-ai) px-5 py-2.5 text-sm font-medium text-(--fg-bright) transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Connect'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Connected State */}
+            {isConnected && (
+                <div className="space-y-4">
+                    {/* Connection Card */}
+                    <div className="border border-[color-mix(in_srgb,var(--state-success)_30%,var(--border-default))] rounded-[calc(var(--panel-radius)+4px)] p-5 bg-[color-mix(in_srgb,var(--state-success)_8%,var(--bg-panel))] shadow-(--panel-shadow)">
+                        <div className="flex items-start gap-4">
+                            <div className="p-2.5 rounded-[calc(var(--panel-radius)*0.65)] bg-[color-mix(in_srgb,var(--state-success)_18%,transparent)]">
+                                <CheckCircle2 className="w-6 h-6 text-[var(--state-success)]" />
+                            </div>
+                            <div className="flex-1">
+                                <div className="text-sm font-medium text-(--fg-primary)">
+                                    Telegram Bot Configured
+                                </div>
+                                {status.bot_username && (
+                                    <div className="text-xs text-(--fg-secondary) mt-0.5">
+                                        Bot Username: <span className="font-medium text-(--fg-primary)">@{status.bot_username}</span>
+                                    </div>
+                                )}
+                                <div className="text-[10px] text-(--fg-tertiary) mt-1">
+                                    Status: {status.paired ? 'Paired with your chat' : 'Waiting for you to send a message'}
+                                </div>
+                            </div>
+                            <button
+                                onClick={handleDisconnect}
+                                disabled={isLoading}
+                                className="rounded-[calc(var(--panel-radius)*0.65)] px-3 py-1.5 text-xs font-medium text-(--state-danger) border border-[color-mix(in_srgb,var(--state-danger)_30%,var(--border-default))] bg-[color-mix(in_srgb,var(--state-danger)_8%,transparent)] hover:bg-[color-mix(in_srgb,var(--state-danger)_16%,transparent)] transition-colors disabled:opacity-50"
+                            >
+                                Disconnect
+                            </button>
+                        </div>
+                    </div>
+                    
+                    {/* QR Code to chat with bot */}
+                    {botUrl && (
+                        <div className="border border-(--border-focus) rounded-[calc(var(--panel-radius)+4px)] p-6 bg-[color-mix(in_srgb,var(--accent-ai)_5%,var(--bg-panel))] shadow-(--panel-shadow)">
+                            <div className="flex flex-col items-center gap-5">
+                                <div className="text-center">
+                                    <div className="text-sm font-medium text-(--fg-primary) mb-1">Open Chat with your Bot</div>
+                                    <div className="text-xs text-(--fg-tertiary)">
+                                        Scan this code with your phone's camera, or click the link below, then send <code className="bg-(--bg-editor) px-1 rounded">/start</code> to pair and begin sending commands.
+                                    </div>
+                                </div>
+
+                                <div className="rounded-[calc(var(--panel-radius)+2px)] border-2 border-(--border-focus) p-3 bg-[#1a1a2e] shadow-(--shadow-lg)">
+                                    <QRCodeSVG 
+                                        value={botUrl} 
+                                        size={180} 
+                                        fgColor="#ffffff" 
+                                        bgColor="#1a1a2e" 
+                                        level="L"
+                                    />
+                                </div>
+
+                                <a
+                                    href={botUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="text-xs text-(--accent-ai) hover:brightness-110 font-mono break-all text-center max-w-[320px] underline underline-offset-2"
+                                >
+                                    {botUrl}
+                                </a>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Feature Info */}
+                    <div className="border border-(--border-default) rounded-[calc(var(--panel-radius)+2px)] p-4 bg-(--bg-surface) space-y-3">
+                        <div className="text-xs font-medium uppercase tracking-[0.16em] text-(--fg-secondary)">
+                            What you can do remotely
+                        </div>
+                        <div className="space-y-2">
+                            {[
+                                'Send terminal commands from Telegram',
+                                'Approve or reject AI command execution',
+                                'View command output and exit codes',
+                            ].map((item, i) => (
+                                <div key={i} className="flex items-center gap-2 text-xs text-(--fg-secondary)">
+                                    <span className="h-1.5 w-1.5 rounded-full bg-(--accent-ai) shrink-0" />
+                                    {item}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Info footer */}
+            <div className="flex items-center gap-2 text-[11px] text-(--fg-tertiary)">
+                <span className="h-2 w-2 rounded-full bg-(--accent-ai)" />
+                <span>Remote control requires Zaguán Blade to be running on your computer.</span>
+            </div>
+        </div>
     );
 };
 
