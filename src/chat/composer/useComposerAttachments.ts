@@ -83,15 +83,17 @@ export function useComposerAttachments(options: {
     const appendCapture = useCallback(async (result: { data: string; mime_type: string }, name: string) => {
         if (options.disabledImages) {
             setAttachmentError(options.disabledReason || 'Images are not available for this model.');
-            return;
+            return false;
         }
         try {
             const dataUrl = `data:${result.mime_type};base64,${result.data}`;
             const attachment = await attachmentFromDataUrl(dataUrl, name);
             setAttachments((current) => [...current, attachment]);
             setAttachmentError(null);
+            return true;
         } catch (error) {
             setAttachmentError(error instanceof Error ? error.message : String(error));
+            return false;
         }
     }, [options.disabledImages, options.disabledReason]);
 

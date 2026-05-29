@@ -184,8 +184,11 @@ export const Composer: React.FC<ComposerProps> = ({
         if (!pendingCapture) {
             return;
         }
-        void attachments.appendCapture(pendingCapture.result, pendingCapture.name);
-        setPendingCapture(null);
+        void attachments.appendCapture(pendingCapture.result, pendingCapture.name).then((added) => {
+            if (added) {
+                setPendingCapture(null);
+            }
+        });
     }, [attachments, pendingCapture]);
 
     const editPendingCapture = useCallback(() => {
@@ -198,15 +201,18 @@ export const Composer: React.FC<ComposerProps> = ({
 
     const addEditedCapture = useCallback((dataUrl: string, name: string, copiedToClipboard: boolean) => {
         void attachments.appendDataUrl(dataUrl, name).then((added) => {
-            if (added && !copiedToClipboard) {
-                attachments.setAttachmentError('Edited screenshot added. Clipboard copy is not available in this environment.');
+            if (!added) {
+                return;
+            }
+            setEditingCapture(null);
+            if (!copiedToClipboard) {
+                attachments.setAttachmentError(t('screenshot.editor.clipboardUnavailable'));
             }
         });
         if (copiedToClipboard) {
             attachments.setAttachmentError(null);
         }
-        setEditingCapture(null);
-    }, [attachments]);
+    }, [attachments, t]);
 
     React.useEffect(() => {
         if (!prefillRequest) {
@@ -240,6 +246,8 @@ export const Composer: React.FC<ComposerProps> = ({
                         setSelectedModelId={setSelectedModelId}
                         attachments={attachments.attachments}
                         attachmentError={attachments.attachmentError}
+                        imagesDisabled={isLocalOnly || isGlmModel}
+                        imageDisabledReason={imageDisabledReason}
                         onUploadImage={attachments.uploadImages}
                         onRemoveAttachment={attachments.removeAttachment}
                         onCapture={capture}

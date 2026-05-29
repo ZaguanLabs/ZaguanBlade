@@ -17,6 +17,8 @@ export const ComposerToolbar: React.FC<{
     setSelectedModelId: (modelId: string) => void;
     attachments: ImageAttachment[];
     attachmentError: string | null;
+    imagesDisabled: boolean;
+    imageDisabledReason?: string;
     onUploadImage: () => void;
     onRemoveAttachment: (id: string) => void;
     onCapture: (result: CaptureResult, name: string) => void;
@@ -34,6 +36,8 @@ export const ComposerToolbar: React.FC<{
     setSelectedModelId,
     attachments,
     attachmentError,
+    imagesDisabled,
+    imageDisabledReason,
     onUploadImage,
     onRemoveAttachment,
     onCapture,
@@ -46,6 +50,8 @@ export const ComposerToolbar: React.FC<{
             <div className="flex items-center gap-1.5">
                 <ScreenshotPickerLauncher
                     disabled={disabled}
+                    imagesDisabled={imagesDisabled}
+                    imageDisabledReason={imageDisabledReason}
                     onUploadImage={onUploadImage}
                     onCapture={onCapture}
                     onError={onAttachmentError}

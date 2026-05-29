@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowUpRight, Check, Circle, Eraser, MousePointer2, Pencil, Redo2, Square, Trash2, Type, Undo2, X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 type Tool = 'select' | 'arrow' | 'text' | 'rect' | 'filled-rect' | 'ellipse' | 'filled-ellipse' | 'pen';
 
@@ -353,9 +354,11 @@ export const ScreenshotAnnotationModal: React.FC<{
     onCancel: () => void;
     onDone: (dataUrl: string, name: string, copiedToClipboard: boolean) => void;
 }> = ({ dataUrl, name, onCancel, onDone }) => {
+    const { t } = useTranslation();
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const canvasWrapRef = useRef<HTMLDivElement>(null);
     const imageRef = useRef<HTMLImageElement | null>(null);
+    const draftRef = useRef<Annotation | null>(null);
     const textInputRef = useRef<HTMLTextAreaElement>(null);
     const [tool, setTool] = useState<Tool>('arrow');
     const [color, setColor] = useState('#ff4d4f');
@@ -370,17 +373,20 @@ export const ScreenshotAnnotationModal: React.FC<{
     const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
     const [textDraft, setTextDraft] = useState<TextDraft | null>(null);
     const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
+    const [imageLoadFailed, setImageLoadFailed] = useState(false);
 
     const tools = useMemo(() => [
-        { id: 'select' as const, label: 'Select', icon: MousePointer2 },
-        { id: 'arrow' as const, label: 'Arrow', icon: ArrowUpRight },
-        { id: 'text' as const, label: 'Text', icon: Type },
-        { id: 'rect' as const, label: 'Box', icon: Square },
-        { id: 'filled-rect' as const, label: 'Filled box', icon: Square },
-        { id: 'ellipse' as const, label: 'Circle', icon: Circle },
-        { id: 'filled-ellipse' as const, label: 'Filled circle', icon: Circle },
-        { id: 'pen' as const, label: 'Pencil', icon: Pencil },
-    ], []);
+        { id: 'select' as const, label: t('screenshot.editor.tools.select'), icon: MousePointer2 },
+        { id: 'arrow' as const, label: t('screenshot.editor.tools.arrow'), icon: ArrowUpRight },
+        { id: 'text' as const, label: t('screenshot.editor.tools.text'), icon: Type },
+        { id: 'rect' as const, label: t('screenshot.editor.tools.box'), icon: Square },
+        { id: 'filled-rect' as const, label: t('screenshot.editor.tools.filledBox'), icon: Square },
+        { id: 'ellipse' as const, label: t('screenshot.editor.tools.circle'), icon: Circle },
+        { id: 'filled-ellipse' as const, label: t('screenshot.editor.tools.filledCircle'), icon: Circle },
+        { id: 'pen' as const, label: t('screenshot.editor.tools.pencil'), icon: Pencil },
+    ], [t]);
+
+    const imageReady = Boolean(imageSize && imageRef.current && !imageLoadFailed);
 
     const selectedAnnotation = useMemo(
         () => annotations.find((annotation) => annotation.id === selectedAnnotationId) ?? null,
@@ -635,6 +641,7 @@ export const ScreenshotAnnotationModal: React.FC<{
             setAnnotations(previous);
             setSelectedAnnotationId(null);
             setDraft(null);
+            draftRef.current = null;
             setTextDraft(null);
             return current.slice(0, -1);
         });
@@ -650,6 +657,7 @@ export const ScreenshotAnnotationModal: React.FC<{
             setAnnotations(next);
             setSelectedAnnotationId(null);
             setDraft(null);
+            draftRef.current = null;
             setTextDraft(null);
             return current.slice(0, -1);
         });
@@ -662,10 +670,14 @@ export const ScreenshotAnnotationModal: React.FC<{
         commitAnnotations([], annotations);
         setSelectedAnnotationId(null);
         setDraft(null);
+        draftRef.current = null;
         setTextDraft(null);
     }, [annotations, commitAnnotations]);
 
     const finish = useCallback(async () => {
+        if (!imageReady) {
+            return;
+        }
         let nextAnnotations = annotations;
         if (textDraft) {
             const value = textDraft.value.trim();
@@ -698,10 +710,13 @@ export const ScreenshotAnnotationModal: React.FC<{
         const copied = await copyImageToClipboard(output);
         const nextName = name.replace(/\.(png|jpe?g|webp|gif)$/i, '') + '-annotated.png';
         onDone(output, nextName, copied);
-    }, [annotations, name, onDone, render, textDraft]);
+    }, [annotations, imageReady, name, onDone, render, textDraft]);
 
     useEffect(() => {
         let cancelled = false;
+        imageRef.current = null;
+        setImageSize(null);
+        setImageLoadFailed(false);
         loadImage(dataUrl).then((image) => {
             if (cancelled) {
                 return;
@@ -714,7 +729,11 @@ export const ScreenshotAnnotationModal: React.FC<{
                 canvas.height = image.naturalHeight || image.height;
             }
             requestAnimationFrame(() => render(null, [], null));
-        }).catch(() => undefined);
+        }).catch(() => {
+            if (!cancelled) {
+                setImageLoadFailed(true);
+            }
+        });
         return () => {
             cancelled = true;
         };
@@ -809,6 +828,9 @@ export const ScreenshotAnnotationModal: React.FC<{
     }, [annotations, beginTextEdit, commitTextDraft, cycleSelection, deleteSelected, finish, nudgeSelected, onCancel, redo, selectedAnnotation, selectedAnnotationId, textDraft, undo]);
 
     const handlePointerDown = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
+        if (!imageReady) {
+            return;
+        }
         const point = getPoint(event);
         if (!point) {
             return;
@@ -855,10 +877,14 @@ export const ScreenshotAnnotationModal: React.FC<{
                     ? { id, type: 'rect', start: point, end: point, color, strokeWidth, filled: tool === 'filled-rect' }
                     : { id, type: 'ellipse', start: point, end: point, color, strokeWidth, filled: tool === 'filled-ellipse' };
         setDraft(nextDraft);
+        draftRef.current = nextDraft;
         render(nextDraft, annotations, null);
-    }, [annotations, beginTextEdit, color, commitTextDraft, findAnnotationAtPoint, getPoint, getTextDraftPosition, render, strokeWidth, textDraft, tool]);
+    }, [annotations, beginTextEdit, color, commitTextDraft, findAnnotationAtPoint, getPoint, getTextDraftPosition, imageReady, render, strokeWidth, textDraft, tool]);
 
     const handlePointerMove = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
+        if (!imageReady) {
+            return;
+        }
         const point = getPoint(event);
         if (!point) {
             return;
@@ -876,21 +902,26 @@ export const ScreenshotAnnotationModal: React.FC<{
             setMoveDraft((current) => current ? { ...current, moved: true } : current);
             return;
         }
-        if (!drawing || !draft) {
+        const currentDraft = draftRef.current ?? draft;
+        if (!drawing || !currentDraft) {
             return;
         }
-        const nextDraft: Annotation = draft.type === 'pen'
-            ? { ...draft, points: [...draft.points, point] }
-            : draft.type === 'arrow'
-                ? { ...draft, end: point }
-                : draft.type === 'rect' || draft.type === 'ellipse'
-                    ? { ...draft, end: point }
-                    : draft;
+        const nextDraft: Annotation = currentDraft.type === 'pen'
+            ? { ...currentDraft, points: [...currentDraft.points, point] }
+            : currentDraft.type === 'arrow'
+                ? { ...currentDraft, end: point }
+                : currentDraft.type === 'rect' || currentDraft.type === 'ellipse'
+                    ? { ...currentDraft, end: point }
+                    : currentDraft;
+        draftRef.current = nextDraft;
         setDraft(nextDraft);
         render(nextDraft, annotations, null);
-    }, [annotations, draft, drawing, getPoint, moveDraft, render, resizeDraft]);
+    }, [annotations, draft, drawing, getPoint, imageReady, moveDraft, render, resizeDraft]);
 
     const handlePointerUp = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
+        if (!imageReady) {
+            return;
+        }
         if (resizeDraft) {
             event.currentTarget.releasePointerCapture(event.pointerId);
             if (resizeDraft.moved) {
@@ -909,29 +940,42 @@ export const ScreenshotAnnotationModal: React.FC<{
             setMoveDraft(null);
             return;
         }
-        if (!drawing || !draft) {
+        const currentDraft = draftRef.current ?? draft;
+        if (!drawing || !currentDraft) {
             return;
         }
         event.currentTarget.releasePointerCapture(event.pointerId);
         setDrawing(false);
         setDraft(null);
-        if (draft.type === 'pen' && draft.points.length < 2) {
+        let finalDraft = currentDraft;
+        const point = event.type === 'pointercancel' ? null : getPoint(event);
+        if (point) {
+            finalDraft = currentDraft.type === 'pen'
+                ? { ...currentDraft, points: [...currentDraft.points, point] }
+                : currentDraft.type === 'arrow'
+                    ? { ...currentDraft, end: point }
+                    : currentDraft.type === 'rect' || currentDraft.type === 'ellipse'
+                        ? { ...currentDraft, end: point }
+                        : currentDraft;
+        }
+        draftRef.current = null;
+        if (finalDraft.type === 'pen' && finalDraft.points.length < 2) {
             render(null, annotations, selectedAnnotationId);
             return;
         }
-        if ((draft.type === 'arrow' || draft.type === 'rect' || draft.type === 'ellipse') && Math.hypot(draft.end.x - draft.start.x, draft.end.y - draft.start.y) < 5) {
+        if ((finalDraft.type === 'arrow' || finalDraft.type === 'rect' || finalDraft.type === 'ellipse') && Math.hypot(finalDraft.end.x - finalDraft.start.x, finalDraft.end.y - finalDraft.start.y) < 5) {
             render(null, annotations, selectedAnnotationId);
             return;
         }
-        pushAnnotation(draft);
-    }, [annotations, draft, drawing, moveDraft, pushAnnotation, render, resizeDraft, selectedAnnotationId]);
+        pushAnnotation(finalDraft);
+    }, [annotations, draft, drawing, getPoint, imageReady, moveDraft, pushAnnotation, render, resizeDraft, selectedAnnotationId]);
 
     return (
         <div className="fixed inset-0 z-9999 flex items-center justify-center bg-(--bg-app)/85 p-4">
             <div className="flex max-h-[94vh] w-full max-w-7xl flex-col overflow-hidden rounded-(--panel-radius) border border-(--border-focus) bg-(--bg-surface) shadow-(--shadow-xl)">
                 <div className="flex shrink-0 items-center justify-between gap-3 border-b border-(--border-subtle) px-4 py-3">
                     <div className="min-w-0">
-                        <div className="text-sm font-semibold text-(--fg-primary)">Edit screenshot</div>
+                        <div className="text-sm font-semibold text-(--fg-primary)">{t('screenshot.editor.title')}</div>
                         <div className="truncate text-xs text-(--fg-tertiary)">{name}</div>
                     </div>
                     <button type="button" onClick={onCancel} className="rounded-[calc(var(--panel-radius)*0.35)] p-1 text-(--fg-tertiary) transition hover:bg-(--bg-surface-hover) hover:text-(--fg-primary)">
@@ -948,13 +992,14 @@ export const ScreenshotAnnotationModal: React.FC<{
                                     key={entry.id}
                                     type="button"
                                     title={entry.label}
+                                    disabled={!imageReady}
                                     onClick={() => {
                                         if (textDraft) {
                                             commitTextDraft();
                                         }
                                         setTool(entry.id);
                                     }}
-                                    className={`inline-flex h-8 items-center gap-1.5 rounded-[calc(var(--panel-radius)*0.45)] border px-2 text-[11px] font-medium transition ${active ? 'border-[color-mix(in_srgb,var(--accent-ai)_45%,transparent)] bg-[color-mix(in_srgb,var(--accent-ai)_14%,transparent)] text-(--fg-primary)' : 'border-(--border-subtle) bg-(--bg-app) text-(--fg-secondary) hover:text-(--fg-primary)'}`}
+                                    className={`inline-flex h-8 items-center gap-1.5 rounded-[calc(var(--panel-radius)*0.45)] border px-2 text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${active ? 'border-[color-mix(in_srgb,var(--accent-ai)_45%,transparent)] bg-[color-mix(in_srgb,var(--accent-ai)_14%,transparent)] text-(--fg-primary)' : 'border-(--border-subtle) bg-(--bg-app) text-(--fg-secondary) hover:text-(--fg-primary)'}`}
                                 >
                                     <Icon className={`h-3.5 w-3.5 ${entry.id.startsWith('filled') ? 'fill-current' : ''}`} />
                                     {entry.label}
@@ -968,7 +1013,8 @@ export const ScreenshotAnnotationModal: React.FC<{
                             <button
                                 key={entry}
                                 type="button"
-                                aria-label={`Use color ${entry}`}
+                                aria-label={t('screenshot.editor.useColor', { color: entry })}
+                                disabled={!imageReady}
                                 onClick={() => applyColor(entry)}
                                 className={`h-6 w-6 rounded-[calc(var(--panel-radius)*0.35)] border transition ${color === entry ? 'border-(--fg-primary) ring-2 ring-(--accent-ai)/35' : 'border-(--border-subtle)'}`}
                                 style={{ backgroundColor: entry }}
@@ -982,32 +1028,33 @@ export const ScreenshotAnnotationModal: React.FC<{
                         />
                     </div>
                     <label className="flex items-center gap-2 text-[11px] text-(--fg-tertiary)">
-                        Size
+                        {t('screenshot.editor.size')}
                         <input
                             type="range"
                             min={2}
                             max={14}
                             value={effectiveSize}
+                            disabled={!imageReady}
                             onChange={(event) => applySize(Number(event.target.value))}
                             className="w-24 accent-(--accent-ai)"
                         />
                     </label>
                     <div className="ml-auto flex items-center gap-1">
-                        <button type="button" onClick={undo} disabled={undoStack.length === 0} className="inline-flex h-8 items-center gap-1 rounded-[calc(var(--panel-radius)*0.45)] px-2 text-[11px] text-(--fg-secondary) transition hover:bg-(--bg-surface-hover) hover:text-(--fg-primary) disabled:opacity-40">
+                        <button type="button" onClick={undo} disabled={undoStack.length === 0 || !imageReady} className="inline-flex h-8 items-center gap-1 rounded-[calc(var(--panel-radius)*0.45)] px-2 text-[11px] text-(--fg-secondary) transition hover:bg-(--bg-surface-hover) hover:text-(--fg-primary) disabled:opacity-40">
                             <Undo2 className="h-3.5 w-3.5" />
-                            Undo
+                            {t('common.undo')}
                         </button>
-                        <button type="button" onClick={redo} disabled={redoStack.length === 0} className="inline-flex h-8 items-center gap-1 rounded-[calc(var(--panel-radius)*0.45)] px-2 text-[11px] text-(--fg-secondary) transition hover:bg-(--bg-surface-hover) hover:text-(--fg-primary) disabled:opacity-40">
+                        <button type="button" onClick={redo} disabled={redoStack.length === 0 || !imageReady} className="inline-flex h-8 items-center gap-1 rounded-[calc(var(--panel-radius)*0.45)] px-2 text-[11px] text-(--fg-secondary) transition hover:bg-(--bg-surface-hover) hover:text-(--fg-primary) disabled:opacity-40">
                             <Redo2 className="h-3.5 w-3.5" />
-                            Redo
+                            {t('screenshot.editor.redo')}
                         </button>
-                        <button type="button" onClick={deleteSelected} disabled={!selectedAnnotation} className="inline-flex h-8 items-center gap-1 rounded-[calc(var(--panel-radius)*0.45)] px-2 text-[11px] text-(--fg-secondary) transition hover:bg-(--bg-surface-hover) hover:text-(--fg-primary) disabled:opacity-40">
+                        <button type="button" onClick={deleteSelected} disabled={!selectedAnnotation || !imageReady} className="inline-flex h-8 items-center gap-1 rounded-[calc(var(--panel-radius)*0.45)] px-2 text-[11px] text-(--fg-secondary) transition hover:bg-(--bg-surface-hover) hover:text-(--fg-primary) disabled:opacity-40">
                             <Trash2 className="h-3.5 w-3.5" />
-                            Delete
+                            {t('common.delete')}
                         </button>
-                        <button type="button" onClick={clear} disabled={annotations.length === 0} className="inline-flex h-8 items-center gap-1 rounded-[calc(var(--panel-radius)*0.45)] px-2 text-[11px] text-(--fg-secondary) transition hover:bg-(--bg-surface-hover) hover:text-(--fg-primary) disabled:opacity-40">
+                        <button type="button" onClick={clear} disabled={annotations.length === 0 || !imageReady} className="inline-flex h-8 items-center gap-1 rounded-[calc(var(--panel-radius)*0.45)] px-2 text-[11px] text-(--fg-secondary) transition hover:bg-(--bg-surface-hover) hover:text-(--fg-primary) disabled:opacity-40">
                             <Eraser className="h-3.5 w-3.5" />
-                            Clear
+                            {t('common.clear')}
                         </button>
                     </div>
                 </div>
@@ -1019,7 +1066,7 @@ export const ScreenshotAnnotationModal: React.FC<{
                         onPointerUp={handlePointerUp}
                         onPointerCancel={handlePointerUp}
                         className="max-h-[calc(94vh-176px)] max-w-full touch-none select-none rounded-[calc(var(--panel-radius)*0.55)] border border-(--border-subtle) bg-(--bg-panel) shadow-(--shadow-md)"
-                        style={{ cursor: canvasCursor }}
+                        style={{ cursor: imageReady ? canvasCursor : 'wait' }}
                     />
                     {textDraft && (
                         <textarea
@@ -1036,7 +1083,7 @@ export const ScreenshotAnnotationModal: React.FC<{
                                     commitTextDraft();
                                 }
                             }}
-                            placeholder="Text"
+                            placeholder={t('screenshot.editor.textPlaceholder')}
                             className="absolute min-h-10 w-64 resize-none rounded-[calc(var(--panel-radius)*0.35)] border border-[color-mix(in_srgb,var(--accent-ai)_44%,transparent)] bg-(--bg-surface)/95 px-2 py-1 font-semibold text-(--fg-primary) shadow-(--shadow-lg) outline-none"
                             style={{
                                 left: textDraft.left,
@@ -1046,17 +1093,18 @@ export const ScreenshotAnnotationModal: React.FC<{
                             }}
                         />
                     )}
-                    {!imageSize && <div className="text-xs text-(--fg-tertiary)">Loading screenshot…</div>}
+                    {!imageReady && !imageLoadFailed && <div className="text-xs text-(--fg-tertiary)">{t('screenshot.editor.loading')}</div>}
+                    {imageLoadFailed && <div className="text-xs text-(--state-danger)">{t('screenshot.editor.loadFailed')}</div>}
                 </div>
                 <div className="flex shrink-0 items-center justify-between gap-2 border-t border-(--border-subtle) px-4 py-3">
-                    <div className="text-xs text-(--fg-tertiary)">Select moves annotations. Drag handles to resize. Color and Size edit selected. Ctrl/Cmd+Enter finishes.</div>
+                    <div className="text-xs text-(--fg-tertiary)">{t('screenshot.editor.help')}</div>
                     <div className="flex items-center gap-2">
                         <button type="button" onClick={onCancel} className="rounded-[calc(var(--panel-radius)*0.45)] px-3 py-1.5 text-xs font-medium text-(--fg-secondary) transition hover:bg-(--bg-surface-hover) hover:text-(--fg-primary)">
-                            Cancel
+                            {t('common.cancel')}
                         </button>
-                        <button type="button" onClick={finish} className="inline-flex items-center gap-1.5 rounded-[calc(var(--panel-radius)*0.45)] bg-(--accent-ai) px-3 py-1.5 text-xs font-medium text-(--fg-bright) transition hover:opacity-90">
+                        <button type="button" onClick={finish} disabled={!imageReady} className="inline-flex items-center gap-1.5 rounded-[calc(var(--panel-radius)*0.45)] bg-(--accent-ai) px-3 py-1.5 text-xs font-medium text-(--fg-bright) transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">
                             <Check className="h-3.5 w-3.5" />
-                            Done
+                            {t('common.finish')}
                         </button>
                     </div>
                 </div>

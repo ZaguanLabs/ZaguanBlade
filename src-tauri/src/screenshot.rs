@@ -23,46 +23,6 @@ pub struct CaptureResult {
     pub mime_type: String,
 }
 
-fn auto_crop_black(image: image::DynamicImage) -> image::DynamicImage {
-    let (w, h) = image.dimensions();
-    if w == 0 || h == 0 {
-        return image;
-    }
-    let rgba = image.to_rgba8();
-    let is_black = |x: u32, y: u32| -> bool {
-        let p = rgba.get_pixel(x, y);
-        p[0] == 0 && p[1] == 0 && p[2] == 0
-    };
-    // Find right boundary (scan from right)
-    let mut right = w;
-    'outer_r: for x in (0..w).rev() {
-        for y in (0..h).step_by(4) {
-            if !is_black(x, y) {
-                right = (x + 1).min(w);
-                break 'outer_r;
-            }
-        }
-    }
-    // Find bottom boundary (scan from bottom)
-    let mut bottom = h;
-    'outer_b: for y in (0..h).rev() {
-        for x in (0..right).step_by(4) {
-            if !is_black(x, y) {
-                bottom = (y + 1).min(h);
-                break 'outer_b;
-            }
-        }
-    }
-    // Only crop if we'd remove a significant black border (>10% of image)
-    if right < w * 9 / 10 || bottom < h * 9 / 10 {
-        // Ensure minimum size
-        let crop_w = right.max(1);
-        let crop_h = bottom.max(1);
-        return image.crop_imm(0, 0, crop_w, crop_h);
-    }
-    image
-}
-
 fn encode_png(image: image::DynamicImage) -> Result<CaptureResult, String> {
     let (width, height) = image.dimensions();
     let mut png_bytes = Vec::new();
@@ -191,8 +151,7 @@ pub fn capture_window(window_id: u32) -> Result<CaptureResult, String> {
         .find(|w| w.id().ok() == Some(window_id))
         .ok_or_else(|| "Window not found".to_string())?;
     let image = window.capture_image().map_err(|e| e.to_string())?;
-    let dyn_image = auto_crop_black(image::DynamicImage::ImageRgba8(image));
-    encode_png(dyn_image)
+    encode_png(image::DynamicImage::ImageRgba8(image))
 }
 
 pub fn capture_full_screen() -> Result<CaptureResult, String> {
@@ -218,7 +177,7 @@ pub fn capture_window_region(
         .find(|w| w.id().ok() == Some(window_id))
         .ok_or_else(|| "Window not found".to_string())?;
     let image = window.capture_image().map_err(|e| e.to_string())?;
-    let dyn_image = auto_crop_black(image::DynamicImage::ImageRgba8(image));
+    let dyn_image = image::DynamicImage::ImageRgba8(image);
     let (img_width, img_height) = dyn_image.dimensions();
     let safe_x = x.min(img_width.saturating_sub(1));
     let safe_y = y.min(img_height.saturating_sub(1));

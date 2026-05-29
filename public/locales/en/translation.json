@@ -786,6 +786,46 @@
       "captureRegion": "Capture Region",
       "uploadImage": "Upload Image"
     },
+    "launcher": {
+      "actions": "Actions",
+      "window": "Window",
+      "windowDescription": "Choose an app window to attach.",
+      "region": "Region",
+      "regionDescription": "Crop a selected window before attaching.",
+      "image": "Image",
+      "imageDescription": "Add an image from disk."
+    },
+    "preview": {
+      "title": "Screenshot captured",
+      "alt": "Captured screenshot"
+    },
+    "editor": {
+      "title": "Edit screenshot",
+      "clipboardUnavailable": "Edited screenshot added. Clipboard copy is not available in this environment.",
+      "size": "Size",
+      "redo": "Redo",
+      "textPlaceholder": "Text",
+      "loading": "Loading screenshot...",
+      "loadFailed": "Failed to load screenshot.",
+      "useColor": "Use color {{color}}",
+      "help": "Select moves annotations. Drag handles to resize. Color and Size edit selected. Ctrl/Cmd+Enter finishes.",
+      "tools": {
+        "select": "Select",
+        "arrow": "Arrow",
+        "text": "Text",
+        "box": "Box",
+        "filledBox": "Filled box",
+        "circle": "Circle",
+        "filledCircle": "Filled circle",
+        "pencil": "Pencil"
+      }
+    },
+    "errors": {
+      "listWindowsFailed": "Failed to list windows for capture.",
+      "captureWindowFailed": "Failed to capture window.",
+      "captureRegionFailed": "Failed to capture region.",
+      "noSourceWindow": "No source window selected."
+    },
     "loadingWindows": "Loading windows...",
     "noCapturableWindows": "No capturable windows found.",
     "dragToSelectArea": "Drag to select an area",

@@ -44,6 +44,22 @@ export const RegionSelector: React.FC<RegionSelectorProps> = ({
         setImgSize({ w: img.clientWidth, h: img.clientHeight });
     }, []);
 
+    useEffect(() => {
+        if (!isOpen || !wrapperRef.current) {
+            return;
+        }
+        const updateSize = () => {
+            const image = wrapperRef.current?.querySelector('img');
+            if (image) {
+                setImgSize({ w: image.clientWidth, h: image.clientHeight });
+            }
+        };
+        updateSize();
+        const observer = new ResizeObserver(updateSize);
+        observer.observe(wrapperRef.current);
+        return () => observer.disconnect();
+    }, [isOpen, dataUrl]);
+
     const getRelativePoint = useCallback((clientX: number, clientY: number): Point | null => {
         const rect = wrapperRef.current?.getBoundingClientRect();
         if (!rect) return null;

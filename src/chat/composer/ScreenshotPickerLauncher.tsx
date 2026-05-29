@@ -1,16 +1,20 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { ChevronDown, ImageUp, Monitor, Plus, ScanLine } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { WindowPicker } from '../../components/WindowPicker';
 import { RegionSelector } from '../../components/RegionSelector';
 import type { CaptureResult, WindowInfo } from '../../types/screenshot';
 
 export const ScreenshotPickerLauncher: React.FC<{
     disabled?: boolean;
+    imagesDisabled?: boolean;
+    imageDisabledReason?: string;
     onUploadImage: () => void;
     onCapture: (result: CaptureResult, name: string) => void;
     onError: (message: string) => void;
-}> = ({ disabled, onUploadImage, onCapture, onError }) => {
+}> = ({ disabled, imagesDisabled, imageDisabledReason, onUploadImage, onCapture, onError }) => {
+    const { t } = useTranslation();
     const menuRef = useRef<HTMLDivElement>(null);
     const [menuOpen, setMenuOpen] = useState(false);
     const [open, setOpen] = useState(false);
@@ -24,18 +28,22 @@ export const ScreenshotPickerLauncher: React.FC<{
         if (disabled) {
             return;
         }
+        if (imagesDisabled) {
+            onError(imageDisabledReason || t('chat.imageNotSupported'));
+            return;
+        }
         setMode(nextMode);
         setOpen(true);
         setLoading(true);
         try {
             setWindows(await invoke<WindowInfo[]>('list_capturable_windows'));
         } catch {
-            onError('Failed to list windows for capture.');
+            onError(t('screenshot.errors.listWindowsFailed'));
             setOpen(false);
         } finally {
             setLoading(false);
         }
-    }, [disabled, onError]);
+    }, [disabled, imageDisabledReason, imagesDisabled, onError, t]);
 
     useEffect(() => {
         if (!menuOpen) {
@@ -68,6 +76,14 @@ export const ScreenshotPickerLauncher: React.FC<{
         action();
     }, []);
 
+    const uploadImage = useCallback(() => {
+        if (imagesDisabled) {
+            onError(imageDisabledReason || t('chat.imageNotSupported'));
+            return;
+        }
+        onUploadImage();
+    }, [imageDisabledReason, imagesDisabled, onError, onUploadImage, t]);
+
     const selectWindow = useCallback(async (windowId: number) => {
         setLoading(true);
         try {
@@ -85,15 +101,15 @@ export const ScreenshotPickerLauncher: React.FC<{
                 onCapture(result, `window-${windowId}.png`);
             }
         } catch {
-            onError('Failed to capture window.');
+            onError(t('screenshot.errors.captureWindowFailed'));
         } finally {
             setLoading(false);
         }
-    }, [mode, onCapture, onError]);
+    }, [mode, onCapture, onError, t]);
 
     const confirmRegion = useCallback(async (region: { x: number; y: number; width: number; height: number }) => {
         if (regionSource == null) {
-            onError('No source window selected.');
+            onError(t('screenshot.errors.noSourceWindow'));
             return;
         }
         try {
@@ -106,12 +122,12 @@ export const ScreenshotPickerLauncher: React.FC<{
             });
             onCapture(result, 'region.png');
         } catch {
-            onError('Failed to capture region.');
+            onError(t('screenshot.errors.captureRegionFailed'));
         } finally {
             setRegionSource(null);
             setRegionCapture(null);
         }
-    }, [onCapture, onError, regionSource]);
+    }, [onCapture, onError, regionSource, t]);
 
     return (
         <>
@@ -127,7 +143,7 @@ export const ScreenshotPickerLauncher: React.FC<{
                     <span className="inline-flex h-4 w-4 items-center justify-center rounded-[calc(var(--panel-radius)*0.25)] bg-[color-mix(in_srgb,var(--accent-ai)_14%,transparent)] text-(--accent-ai)">
                         <Plus className="h-3 w-3" />
                     </span>
-                    Actions
+                    {t('screenshot.launcher.actions')}
                     <ChevronDown className={`h-3 w-3 transition-transform ${menuOpen ? 'rotate-180' : ''}`} />
                 </button>
                 {menuOpen && (
@@ -136,7 +152,7 @@ export const ScreenshotPickerLauncher: React.FC<{
                         className="absolute bottom-full left-0 z-50 mb-2 w-60 overflow-hidden rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-surface) p-1.5 shadow-(--shadow-lg)"
                     >
                         <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wider text-(--fg-tertiary)">
-                            Capture
+                            {t('screenshot.featureMenu.captureSection')}
                         </div>
                         <button
                             type="button"
@@ -148,8 +164,8 @@ export const ScreenshotPickerLauncher: React.FC<{
                                 <Monitor className="h-3.5 w-3.5" />
                             </span>
                             <span className="min-w-0">
-                                <span className="block text-[12px] font-medium">Window</span>
-                                <span className="block truncate text-[10px] text-(--fg-tertiary)">Choose an app window to attach.</span>
+                                <span className="block text-[12px] font-medium">{t('screenshot.launcher.window')}</span>
+                                <span className="block truncate text-[10px] text-(--fg-tertiary)">{t('screenshot.launcher.windowDescription')}</span>
                             </span>
                         </button>
                         <button
@@ -162,26 +178,26 @@ export const ScreenshotPickerLauncher: React.FC<{
                                 <ScanLine className="h-3.5 w-3.5" />
                             </span>
                             <span className="min-w-0">
-                                <span className="block text-[12px] font-medium">Region</span>
-                                <span className="block truncate text-[10px] text-(--fg-tertiary)">Crop a selected window before attaching.</span>
+                                <span className="block text-[12px] font-medium">{t('screenshot.launcher.region')}</span>
+                                <span className="block truncate text-[10px] text-(--fg-tertiary)">{t('screenshot.launcher.regionDescription')}</span>
                             </span>
                         </button>
                         <div className="my-1 border-t border-(--border-subtle)" />
                         <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wider text-(--fg-tertiary)">
-                            Attach
+                            {t('screenshot.featureMenu.attachSection')}
                         </div>
                         <button
                             type="button"
                             role="menuitem"
-                            onClick={() => runAction(onUploadImage)}
+                            onClick={() => runAction(uploadImage)}
                             className="flex w-full items-center gap-2 rounded-[calc(var(--panel-radius)*0.45)] px-2 py-2 text-left text-(--fg-secondary) transition-colors hover:bg-(--bg-app) hover:text-(--fg-primary)"
                         >
                             <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[calc(var(--panel-radius)*0.45)] border border-(--border-subtle) bg-(--bg-app) text-(--accent-mention)">
                                 <ImageUp className="h-3.5 w-3.5" />
                             </span>
                             <span className="min-w-0">
-                                <span className="block text-[12px] font-medium">Image</span>
-                                <span className="block truncate text-[10px] text-(--fg-tertiary)">Add an image from disk.</span>
+                                <span className="block text-[12px] font-medium">{t('screenshot.launcher.image')}</span>
+                                <span className="block truncate text-[10px] text-(--fg-tertiary)">{t('screenshot.launcher.imageDescription')}</span>
                             </span>
                         </button>
                     </div>
@@ -191,8 +207,8 @@ export const ScreenshotPickerLauncher: React.FC<{
                 isOpen={open}
                 windows={windows}
                 loading={loading}
-                title={mode === 'region' ? 'Select window for region capture' : 'Select window'}
-                subtitle={mode === 'region' ? 'Choose the source window.' : 'Choose the window to capture.'}
+                title={mode === 'region' ? t('screenshot.regionPickerTitle') : t('screenshot.windowPickerTitle')}
+                subtitle={mode === 'region' ? t('screenshot.regionPickerSubtitle') : t('screenshot.windowPickerSubtitle')}
                 onSelect={selectWindow}
                 onCancel={() => setOpen(false)}
             />

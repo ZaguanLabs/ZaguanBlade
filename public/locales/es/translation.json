@@ -782,6 +782,46 @@
       "captureRegion": "Capturar región",
       "uploadImage": "Subir imagen"
     },
+    "launcher": {
+      "actions": "Acciones",
+      "window": "Ventana",
+      "windowDescription": "Elige una ventana de aplicación para adjuntar.",
+      "region": "Región",
+      "regionDescription": "Recorta una ventana seleccionada antes de adjuntarla.",
+      "image": "Imagen",
+      "imageDescription": "Añade una imagen desde el disco."
+    },
+    "preview": {
+      "title": "Captura realizada",
+      "alt": "Captura realizada"
+    },
+    "editor": {
+      "title": "Editar captura",
+      "clipboardUnavailable": "Captura editada añadida. La copia al portapapeles no está disponible en este entorno.",
+      "size": "Tamaño",
+      "redo": "Rehacer",
+      "textPlaceholder": "Texto",
+      "loading": "Cargando captura...",
+      "loadFailed": "No se pudo cargar la captura.",
+      "useColor": "Usar color {{color}}",
+      "help": "Seleccionar mueve anotaciones. Arrastra los tiradores para redimensionar. Color y Tamaño editan la selección. Ctrl/Cmd+Intro finaliza.",
+      "tools": {
+        "select": "Seleccionar",
+        "arrow": "Flecha",
+        "text": "Texto",
+        "box": "Caja",
+        "filledBox": "Caja rellena",
+        "circle": "Círculo",
+        "filledCircle": "Círculo relleno",
+        "pencil": "Lápiz"
+      }
+    },
+    "errors": {
+      "listWindowsFailed": "No se pudieron listar las ventanas para captura.",
+      "captureWindowFailed": "No se pudo capturar la ventana.",
+      "captureRegionFailed": "No se pudo capturar la región.",
+      "noSourceWindow": "No se ha seleccionado una ventana de origen."
+    },
     "loadingWindows": "Cargando ventanas...",
     "noCapturableWindows": "No se han encontrado ventanas capturables.",
     "dragToSelectArea": "Arrastra para seleccionar un área",
