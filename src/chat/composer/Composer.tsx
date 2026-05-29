@@ -199,20 +199,14 @@ export const Composer: React.FC<ComposerProps> = ({
         setPendingCapture(null);
     }, [pendingCapture]);
 
-    const addEditedCapture = useCallback((dataUrl: string, name: string, copiedToClipboard: boolean) => {
+    const addEditedCapture = useCallback((dataUrl: string, name: string) => {
         void attachments.appendDataUrl(dataUrl, name).then((added) => {
             if (!added) {
                 return;
             }
             setEditingCapture(null);
-            if (!copiedToClipboard) {
-                attachments.setAttachmentError(t('screenshot.editor.clipboardUnavailable'));
-            }
         });
-        if (copiedToClipboard) {
-            attachments.setAttachmentError(null);
-        }
-    }, [attachments, t]);
+    }, [attachments]);
 
     React.useEffect(() => {
         if (!prefillRequest) {

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { ArrowUpRight, Check, Circle, Eraser, MousePointer2, Pencil, Redo2, Square, Trash2, Type, Undo2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -7,17 +7,19 @@ import {
     hitAnnotation,
     normalizeRect,
     paddedBounds,
-    recolorAnnotation,
     resizeAnnotation,
     resizeBoundsFromHandle,
     resizeHandleCursor,
-    resizeStrokeAnnotation,
     translateAnnotation,
     type Annotation,
     type Bounds,
     type Point,
     type ResizeHandle,
 } from './annotationGeometry';
+import {
+    annotationEditorReducer,
+    initialAnnotationEditorState,
+} from './annotationState';
 
 type Tool = 'select' | 'arrow' | 'text' | 'rect' | 'filled-rect' | 'ellipse' | 'filled-ellipse' | 'pen';
 
@@ -152,34 +154,11 @@ function drawSelection(ctx: CanvasRenderingContext2D, annotation: Annotation) {
     ctx.restore();
 }
 
-function dataUrlToBlob(dataUrl: string): Blob {
-    const [header, data] = dataUrl.split(',');
-    const mime = /^data:(.*?);base64$/.exec(header)?.[1] || 'image/png';
-    const binary = atob(data);
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) {
-        bytes[index] = binary.charCodeAt(index);
-    }
-    return new Blob([bytes], { type: mime });
-}
-
-async function copyImageToClipboard(dataUrl: string): Promise<boolean> {
-    if (!navigator.clipboard || typeof navigator.clipboard.write !== 'function' || typeof ClipboardItem === 'undefined') {
-        return false;
-    }
-    try {
-        await navigator.clipboard.write([new ClipboardItem({ 'image/png': dataUrlToBlob(dataUrl) })]);
-        return true;
-    } catch {
-        return false;
-    }
-}
-
 export const ScreenshotAnnotationModal: React.FC<{
     dataUrl: string;
     name: string;
     onCancel: () => void;
-    onDone: (dataUrl: string, name: string, copiedToClipboard: boolean) => void;
+    onDone: (dataUrl: string, name: string) => void;
 }> = ({ dataUrl, name, onCancel, onDone }) => {
     const { t } = useTranslation();
     const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -187,20 +166,18 @@ export const ScreenshotAnnotationModal: React.FC<{
     const imageRef = useRef<HTMLImageElement | null>(null);
     const draftRef = useRef<Annotation | null>(null);
     const textInputRef = useRef<HTMLTextAreaElement>(null);
+    const [annotationState, dispatchAnnotations] = useReducer(annotationEditorReducer, initialAnnotationEditorState);
     const [tool, setTool] = useState<Tool>('arrow');
     const [color, setColor] = useState('#ff4d4f');
     const [strokeWidth, setStrokeWidth] = useState(5);
-    const [annotations, setAnnotations] = useState<Annotation[]>([]);
-    const [undoStack, setUndoStack] = useState<Annotation[][]>([]);
-    const [redoStack, setRedoStack] = useState<Annotation[][]>([]);
     const [draft, setDraft] = useState<Annotation | null>(null);
     const [drawing, setDrawing] = useState(false);
     const [moveDraft, setMoveDraft] = useState<MoveDraft | null>(null);
     const [resizeDraft, setResizeDraft] = useState<ResizeDraft | null>(null);
-    const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
     const [textDraft, setTextDraft] = useState<TextDraft | null>(null);
     const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
     const [imageLoadFailed, setImageLoadFailed] = useState(false);
+    const { annotations, undoStack, redoStack, selectedAnnotationId } = annotationState;
 
     const tools = useMemo(() => [
         { id: 'select' as const, label: t('screenshot.editor.tools.select'), icon: MousePointer2 },
@@ -264,17 +241,10 @@ export const ScreenshotAnnotationModal: React.FC<{
         }
     }, []);
 
-    const commitAnnotations = useCallback((nextAnnotations: Annotation[], previousAnnotations = annotations) => {
-        setUndoStack((current) => [...current, previousAnnotations]);
-        setRedoStack([]);
-        setAnnotations(nextAnnotations);
-    }, [annotations]);
-
     const pushAnnotation = useCallback((annotation: Annotation) => {
-        commitAnnotations([...annotations, annotation], annotations);
-        setSelectedAnnotationId(annotation.id);
+        dispatchAnnotations({ type: 'push', annotation });
         setTool('select');
-    }, [annotations, commitAnnotations]);
+    }, []);
 
     const getCanvasPoint = useCallback((clientX: number, clientY: number): Point | null => {
         const canvas = canvasRef.current;
@@ -320,7 +290,7 @@ export const ScreenshotAnnotationModal: React.FC<{
         if (!position) {
             return;
         }
-        setSelectedAnnotationId(annotation.id);
+        dispatchAnnotations({ type: 'select', id: annotation.id });
         setTextDraft({
             id: annotation.id,
             point: annotation.point,
@@ -344,12 +314,16 @@ export const ScreenshotAnnotationModal: React.FC<{
                     return null;
                 }
                 if (!value) {
-                    commitAnnotations(annotations.filter((annotation) => annotation.id !== current.id), annotations);
-                    setSelectedAnnotationId(null);
+                    dispatchAnnotations({
+                        type: 'commit',
+                        annotations: annotations.filter((annotation) => annotation.id !== current.id),
+                        previousAnnotations: annotations,
+                        selectedAnnotationId: null,
+                    });
                     return null;
                 }
                 if (existing.text === value && existing.point.x === current.point.x && existing.point.y === current.point.y) {
-                    setSelectedAnnotationId(existing.id);
+                    dispatchAnnotations({ type: 'select', id: existing.id });
                     return null;
                 }
                 const updated: Annotation = {
@@ -359,8 +333,12 @@ export const ScreenshotAnnotationModal: React.FC<{
                     color: current.color,
                     fontSize: current.fontSize,
                 };
-                commitAnnotations(annotations.map((annotation) => annotation.id === current.id ? updated : annotation), annotations);
-                setSelectedAnnotationId(updated.id);
+                dispatchAnnotations({
+                    type: 'commit',
+                    annotations: annotations.map((annotation) => annotation.id === current.id ? updated : annotation),
+                    previousAnnotations: annotations,
+                    selectedAnnotationId: updated.id,
+                });
                 return null;
             }
             if (!value) {
@@ -374,134 +352,63 @@ export const ScreenshotAnnotationModal: React.FC<{
                 color: current.color,
                 fontSize: current.fontSize,
             };
-            commitAnnotations([...annotations, annotation], annotations);
-            setSelectedAnnotationId(annotation.id);
+            dispatchAnnotations({ type: 'push', annotation });
             setTool('select');
             return null;
         });
-    }, [annotations, commitAnnotations]);
+    }, [annotations]);
 
     const deleteSelected = useCallback(() => {
-        if (!selectedAnnotationId) {
-            return;
-        }
-        const nextAnnotations = annotations.filter((annotation) => annotation.id !== selectedAnnotationId);
-        if (nextAnnotations.length === annotations.length) {
-            return;
-        }
-        commitAnnotations(nextAnnotations, annotations);
-        setSelectedAnnotationId(null);
-    }, [annotations, commitAnnotations, selectedAnnotationId]);
+        dispatchAnnotations({ type: 'deleteSelected' });
+    }, []);
 
     const nudgeSelected = useCallback((dx: number, dy: number) => {
-        if (!selectedAnnotationId) {
-            return;
-        }
-        const selected = annotations.find((annotation) => annotation.id === selectedAnnotationId);
-        if (!selected) {
-            return;
-        }
-        commitAnnotations(
-            annotations.map((annotation) => annotation.id === selectedAnnotationId ? translateAnnotation(annotation, dx, dy) : annotation),
-            annotations
-        );
-        setSelectedAnnotationId(selectedAnnotationId);
-    }, [annotations, commitAnnotations, selectedAnnotationId]);
+        dispatchAnnotations({ type: 'nudgeSelected', dx, dy });
+    }, []);
 
     const cycleSelection = useCallback((direction: 1 | -1) => {
         if (annotations.length === 0) {
             return;
         }
-        const currentIndex = selectedAnnotationId
-            ? annotations.findIndex((annotation) => annotation.id === selectedAnnotationId)
-            : -1;
-        const nextIndex = currentIndex === -1
-            ? (direction === 1 ? 0 : annotations.length - 1)
-            : (currentIndex + direction + annotations.length) % annotations.length;
-        setSelectedAnnotationId(annotations[nextIndex].id);
+        dispatchAnnotations({ type: 'cycleSelection', direction });
         setTool('select');
-    }, [annotations, selectedAnnotationId]);
+    }, [annotations.length]);
 
     const applyColor = useCallback((nextColor: string) => {
         setColor(nextColor);
-        if (!selectedAnnotationId) {
-            return;
-        }
-        const selected = annotations.find((annotation) => annotation.id === selectedAnnotationId);
-        if (!selected || selected.color === nextColor) {
-            return;
-        }
-        commitAnnotations(
-            annotations.map((annotation) => annotation.id === selectedAnnotationId ? recolorAnnotation(annotation, nextColor) : annotation),
-            annotations
-        );
-        setSelectedAnnotationId(selectedAnnotationId);
-    }, [annotations, commitAnnotations, selectedAnnotationId]);
+        dispatchAnnotations({ type: 'applyColor', color: nextColor });
+    }, []);
 
     const applySize = useCallback((nextSize: number) => {
         setStrokeWidth(nextSize);
-        if (!selectedAnnotationId) {
-            return;
-        }
-        const selected = annotations.find((annotation) => annotation.id === selectedAnnotationId);
-        if (!selected) {
-            return;
-        }
-        const currentSize = selected.type === 'text' ? Math.round(selected.fontSize / 5) : selected.strokeWidth;
-        if (currentSize === nextSize) {
-            return;
-        }
-        commitAnnotations(
-            annotations.map((annotation) => annotation.id === selectedAnnotationId ? resizeStrokeAnnotation(annotation, nextSize) : annotation),
-            annotations
-        );
-        setSelectedAnnotationId(selectedAnnotationId);
-    }, [annotations, commitAnnotations, selectedAnnotationId]);
+        dispatchAnnotations({ type: 'applySize', size: nextSize });
+    }, []);
 
     const undo = useCallback(() => {
-        setUndoStack((current) => {
-            const previous = current[current.length - 1];
-            if (!previous) {
-                return current;
-            }
-            setRedoStack((stack) => [...stack, annotations]);
-            setAnnotations(previous);
-            setSelectedAnnotationId(null);
-            setDraft(null);
-            draftRef.current = null;
-            setTextDraft(null);
-            return current.slice(0, -1);
-        });
-    }, [annotations]);
+        dispatchAnnotations({ type: 'undo' });
+        setDraft(null);
+        draftRef.current = null;
+        setTextDraft(null);
+    }, []);
 
     const redo = useCallback(() => {
-        setRedoStack((current) => {
-            const next = current[current.length - 1];
-            if (!next) {
-                return current;
-            }
-            setUndoStack((stack) => [...stack, annotations]);
-            setAnnotations(next);
-            setSelectedAnnotationId(null);
-            setDraft(null);
-            draftRef.current = null;
-            setTextDraft(null);
-            return current.slice(0, -1);
-        });
-    }, [annotations]);
+        dispatchAnnotations({ type: 'redo' });
+        setDraft(null);
+        draftRef.current = null;
+        setTextDraft(null);
+    }, []);
 
     const clear = useCallback(() => {
         if (annotations.length === 0) {
             return;
         }
-        commitAnnotations([], annotations);
-        setSelectedAnnotationId(null);
+        dispatchAnnotations({ type: 'clear' });
         setDraft(null);
         draftRef.current = null;
         setTextDraft(null);
-    }, [annotations, commitAnnotations]);
+    }, [annotations.length]);
 
-    const finish = useCallback(async () => {
+    const finish = useCallback(() => {
         if (!imageReady) {
             return;
         }
@@ -534,14 +441,20 @@ export const ScreenshotAnnotationModal: React.FC<{
             return;
         }
         const output = canvas.toDataURL('image/png');
-        const copied = await copyImageToClipboard(output);
         const nextName = name.replace(/\.(png|jpe?g|webp|gif)$/i, '') + '-annotated.png';
-        onDone(output, nextName, copied);
+        onDone(output, nextName);
     }, [annotations, imageReady, name, onDone, render, textDraft]);
 
     useEffect(() => {
         let cancelled = false;
         imageRef.current = null;
+        draftRef.current = null;
+        dispatchAnnotations({ type: 'reset' });
+        setDraft(null);
+        setDrawing(false);
+        setMoveDraft(null);
+        setResizeDraft(null);
+        setTextDraft(null);
         setImageSize(null);
         setImageLoadFailed(false);
         loadImage(dataUrl).then((image) => {
@@ -605,7 +518,7 @@ export const ScreenshotAnnotationModal: React.FC<{
                 redo();
             } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a' && annotations.length > 0) {
                 event.preventDefault();
-                setSelectedAnnotationId(annotations[annotations.length - 1].id);
+                dispatchAnnotations({ type: 'selectLast' });
                 setTool('select');
             } else if (event.key === 'Tab' && annotations.length > 0) {
                 event.preventDefault();
@@ -625,7 +538,7 @@ export const ScreenshotAnnotationModal: React.FC<{
             } else if (event.key === 'Escape') {
                 if (selectedAnnotationId) {
                     event.preventDefault();
-                    setSelectedAnnotationId(null);
+                    dispatchAnnotations({ type: 'select', id: null });
                 } else {
                     onCancel();
                 }
@@ -668,7 +581,7 @@ export const ScreenshotAnnotationModal: React.FC<{
         }
         if (tool === 'select') {
             const hit = findAnnotationAtPoint(point);
-            setSelectedAnnotationId(hit?.id ?? null);
+            dispatchAnnotations({ type: 'select', id: hit?.id ?? null });
             if (hit?.type === 'text' && event.detail >= 2) {
                 beginTextEdit(hit);
                 return;
@@ -689,11 +602,11 @@ export const ScreenshotAnnotationModal: React.FC<{
             if (position) {
                 setTextDraft({ point, value: '', color, fontSize: Math.max(18, strokeWidth * 5), ...position });
             }
-            setSelectedAnnotationId(null);
+            dispatchAnnotations({ type: 'select', id: null });
             return;
         }
         event.currentTarget.setPointerCapture(event.pointerId);
-        setSelectedAnnotationId(null);
+        dispatchAnnotations({ type: 'select', id: null });
         setDrawing(true);
         const id = crypto.randomUUID();
         const nextDraft: Annotation = tool === 'arrow'
@@ -718,14 +631,20 @@ export const ScreenshotAnnotationModal: React.FC<{
         }
         if (resizeDraft) {
             const nextBounds = resizeBoundsFromHandle(resizeDraft.bounds, resizeDraft.handle, point);
-            setAnnotations(resizeDraft.previous.map((annotation) => annotation.id === resizeDraft.id ? resizeAnnotation(annotation, resizeDraft.bounds, nextBounds) : annotation));
+            dispatchAnnotations({
+                type: 'preview',
+                annotations: resizeDraft.previous.map((annotation) => annotation.id === resizeDraft.id ? resizeAnnotation(annotation, resizeDraft.bounds, nextBounds) : annotation),
+            });
             setResizeDraft((current) => current ? { ...current, moved: true } : current);
             return;
         }
         if (moveDraft) {
             const dx = point.x - moveDraft.origin.x;
             const dy = point.y - moveDraft.origin.y;
-            setAnnotations(moveDraft.previous.map((annotation) => annotation.id === moveDraft.id ? translateAnnotation(annotation, dx, dy) : annotation));
+            dispatchAnnotations({
+                type: 'preview',
+                annotations: moveDraft.previous.map((annotation) => annotation.id === moveDraft.id ? translateAnnotation(annotation, dx, dy) : annotation),
+            });
             setMoveDraft((current) => current ? { ...current, moved: true } : current);
             return;
         }
@@ -752,8 +671,7 @@ export const ScreenshotAnnotationModal: React.FC<{
         if (resizeDraft) {
             event.currentTarget.releasePointerCapture(event.pointerId);
             if (resizeDraft.moved) {
-                setUndoStack((current) => [...current, resizeDraft.previous]);
-                setRedoStack([]);
+                dispatchAnnotations({ type: 'recordHistory', previousAnnotations: resizeDraft.previous });
             }
             setResizeDraft(null);
             return;
@@ -761,8 +679,7 @@ export const ScreenshotAnnotationModal: React.FC<{
         if (moveDraft) {
             event.currentTarget.releasePointerCapture(event.pointerId);
             if (moveDraft.moved) {
-                setUndoStack((current) => [...current, moveDraft.previous]);
-                setRedoStack([]);
+                dispatchAnnotations({ type: 'recordHistory', previousAnnotations: moveDraft.previous });
             }
             setMoveDraft(null);
             return;

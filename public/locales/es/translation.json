@@ -797,7 +797,6 @@
     },
     "editor": {
       "title": "Editar captura",
-      "clipboardUnavailable": "Captura editada añadida. La copia al portapapeles no está disponible en este entorno.",
       "size": "Tamaño",
       "redo": "Rehacer",
       "textPlaceholder": "Texto",

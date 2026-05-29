@@ -801,7 +801,6 @@
     },
     "editor": {
       "title": "Edit screenshot",
-      "clipboardUnavailable": "Edited screenshot added. Clipboard copy is not available in this environment.",
       "size": "Size",
       "redo": "Redo",
       "textPlaceholder": "Text",
