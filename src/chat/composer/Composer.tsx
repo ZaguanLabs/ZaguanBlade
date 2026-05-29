@@ -9,6 +9,7 @@ import { useComposerAttachments } from './useComposerAttachments';
 import { usePathSuggestions, type WorkspacePathMatch } from './usePathSuggestions';
 import { ScreenshotAnnotationModal } from '../../components/image-annotation/ScreenshotAnnotationModal';
 import { ScreenshotCapturePreview } from '../../components/image-annotation/ScreenshotCapturePreview';
+import { extractBase64FromDataUrl, extractMimeTypeFromDataUrl } from '../../utils/imageUtils';
 
 const MAX_COMPOSER_HISTORY = 20;
 
@@ -199,14 +200,19 @@ export const Composer: React.FC<ComposerProps> = ({
         setPendingCapture(null);
     }, [pendingCapture]);
 
-    const addEditedCapture = useCallback((dataUrl: string, name: string) => {
-        void attachments.appendDataUrl(dataUrl, name).then((added) => {
-            if (!added) {
-                return;
-            }
-            setEditingCapture(null);
+    const finishEditingCapture = useCallback((dataUrl: string, name: string) => {
+        setPendingCapture({
+            dataUrl,
+            name,
+            result: {
+                data: extractBase64FromDataUrl(dataUrl),
+                width: editingCapture?.result.width ?? 0,
+                height: editingCapture?.result.height ?? 0,
+                mime_type: extractMimeTypeFromDataUrl(dataUrl) || 'image/png',
+            },
         });
-    }, [attachments]);
+        setEditingCapture(null);
+    }, [editingCapture]);
 
     React.useEffect(() => {
         if (!prefillRequest) {
@@ -306,7 +312,7 @@ export const Composer: React.FC<ComposerProps> = ({
                     dataUrl={editingCapture.dataUrl}
                     name={editingCapture.name}
                     onCancel={() => setEditingCapture(null)}
-                    onDone={addEditedCapture}
+                    onDone={finishEditingCapture}
                 />
             )}
         </>
