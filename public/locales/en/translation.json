@@ -378,9 +378,17 @@
           "label": "Blade Coder",
           "description": "A warm cinematic dark theme with soft beige highlights, rounded panels, and deep layered shadows."
         },
+        "nebula-dust": {
+          "label": "Nebula Dust",
+          "description": "A vibrant mature dark theme with aubergine surfaces, lavender AI accents, cyan energy, and restrained neon syntax."
+        },
         "blade-cream": {
           "label": "Blade Cream",
           "description": "A warm light theme with creamy surfaces, sage accents, coral highlights, and soft editorial contrast."
+        },
+        "alpine-frost": {
+          "label": "Alpine Frost",
+          "description": "A crisp cool light theme with icy surfaces, sapphire AI accents, teal syntax, and clean analytical contrast."
         },
         "blade-robot": {
           "label": "Blade Robot",

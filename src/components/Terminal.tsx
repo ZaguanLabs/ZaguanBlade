@@ -116,6 +116,11 @@ function getTerminalTheme(): TerminalTheme {
     return cachedTerminalTheme;
 }
 
+function refreshTerminalTheme(): TerminalTheme {
+    cachedTerminalTheme = null;
+    return getTerminalTheme();
+}
+
 interface TerminalProps {
     id?: string;
     cwd?: string;
@@ -497,7 +502,7 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
 
     useEffect(() => {
         if (!xtermRef.current) return;
-        xtermRef.current.options.theme = getTerminalTheme();
+        xtermRef.current.options.theme = refreshTerminalTheme();
     }, [themeId]);
 
     return (
