@@ -4,12 +4,15 @@ import { listen } from '@tauri-apps/api/event';
 import type { UncommittedChange } from '../types/uncommitted';
 
 interface UseUncommittedChangesOptions {
-  onFileChanged?: (filePath: string) => void;
+  onFileChanged?: (filePath: string, reason: UncommittedChangesUpdateReason) => void;
 }
+
+type UncommittedChangesUpdateReason = 'applied' | 'accepted' | 'rejected' | 'refresh';
 
 interface UncommittedChangesUpdatedDetail {
   sourceId?: string;
   filePaths?: string[];
+  reason?: UncommittedChangesUpdateReason;
 }
 
 export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
@@ -68,9 +71,9 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
     setChanges(prev => prev.filter(change => !predicate(change)));
   }, []);
 
-  const notifyUpdated = useCallback((filePaths?: string[]) => {
+  const notifyUpdated = useCallback((filePaths?: string[], reason: UncommittedChangesUpdateReason = 'refresh') => {
     window.dispatchEvent(new CustomEvent<UncommittedChangesUpdatedDetail>('uncommitted-changes-updated', {
-      detail: { sourceId: sourceIdRef.current, filePaths },
+      detail: { sourceId: sourceIdRef.current, filePaths, reason },
     }));
   }, []);
 
@@ -95,8 +98,8 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
           void refresh();
         }
 
-        if (options?.onFileChanged) {
-          affectedPaths.forEach(filePath => onFileChangedRef.current?.(filePath));
+        if (onFileChangedRef.current) {
+          affectedPaths.forEach(filePath => onFileChangedRef.current?.(filePath, 'applied'));
         }
       })();
     });
@@ -110,7 +113,8 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
       void refresh();
 
       if (onFileChangedRef.current) {
-        customEvent.detail?.filePaths?.forEach(filePath => onFileChangedRef.current?.(filePath));
+        const reason = customEvent.detail?.reason ?? 'refresh';
+        customEvent.detail?.filePaths?.forEach(filePath => onFileChangedRef.current?.(filePath, reason));
       }
     };
     window.addEventListener('uncommitted-changes-updated', handleGlobalRefresh as EventListener);
@@ -157,7 +161,7 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
     try {
       const removed = await invoke<UncommittedChange>('accept_change', { id });
       removeChanges(change => change.id === removed.id);
-      notifyUpdated([removed.file_path]);
+      notifyUpdated([removed.file_path], 'accepted');
       return true;
     } catch (error) {
       console.error('Failed to accept change:', error);
@@ -170,7 +174,7 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
       const removed = await invoke<UncommittedChange>('accept_file_changes', { filePath });
       const removedPath = normalizePath(removed.file_path);
       removeChanges(change => normalizePath(change.file_path) === removedPath);
-      notifyUpdated([removed.file_path]);
+      notifyUpdated([removed.file_path], 'accepted');
       return true;
     } catch (error) {
       console.error('Failed to accept file changes:', error);
@@ -182,7 +186,7 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
     try {
       const removed = await invoke<UncommittedChange[]>('accept_all_changes');
       setChanges([]);
-      notifyUpdated(removed.map(change => change.file_path));
+      notifyUpdated(removed.map(change => change.file_path), 'accepted');
       return true;
     } catch (error) {
       console.error('Failed to accept all changes:', error);
@@ -194,7 +198,7 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
     try {
       const removed = await invoke<UncommittedChange>('reject_change', { id });
       removeChanges(change => change.id === removed.id);
-      notifyUpdated([removed.file_path]);
+      notifyUpdated([removed.file_path], 'rejected');
       return true;
     } catch (error) {
       console.error('Failed to reject change:', error);
@@ -207,7 +211,7 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
       const removed = await invoke<UncommittedChange>('reject_file_changes', { filePath });
       const removedPath = normalizePath(removed.file_path);
       removeChanges(change => normalizePath(change.file_path) === removedPath);
-      notifyUpdated([removed.file_path]);
+      notifyUpdated([removed.file_path], 'rejected');
       return true;
     } catch (error) {
       console.error('Failed to reject file changes:', error);
@@ -219,7 +223,7 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
     try {
       const removed = await invoke<UncommittedChange[]>('reject_all_changes');
       setChanges([]);
-      notifyUpdated(removed.map(change => change.file_path));
+      notifyUpdated(removed.map(change => change.file_path), 'rejected');
       return true;
     } catch (error) {
       console.error('Failed to reject all changes:', error);

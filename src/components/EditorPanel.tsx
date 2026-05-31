@@ -32,6 +32,8 @@ const getDirectoryPath = (path: string): string => {
     return separatorIndex > 0 ? normalized.slice(0, separatorIndex) : normalized;
 };
 
+type UncommittedChangesUpdateReason = 'applied' | 'accepted' | 'rejected' | 'refresh';
+
 const WelcomePage: React.FC<{
     hasRemoteApiKey?: boolean | null;
     onOpenSettings?: () => void;
@@ -206,6 +208,8 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     const onContentStateChangeRef = useRef(onContentStateChange);
     const lastPropagatedDirtyRef = useRef(isDirty);
     const previousActiveFileRef = useRef(activeFile);
+    const authoritativeReloadRef = useRef(false);
+    const latestFileReadIntentIdRef = useRef<string | null>(null);
 
     const pathsMatch = (a: string, b: string): boolean => {
         if (a === b) return true;
@@ -215,12 +219,15 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     };
 
     useUncommittedChanges({
-        onFileChanged: (filePath) => {
+        onFileChanged: (filePath, reason: UncommittedChangesUpdateReason) => {
             if (!activeFile || !pathsMatch(filePath, activeFile)) {
                 return;
             }
 
             awaitingInitialSyncRef.current = false;
+            if (reason === 'rejected') {
+                authoritativeReloadRef.current = true;
+            }
             setReloadTrigger(prev => prev + 1);
         },
     });
@@ -341,6 +348,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             liveContentRef.current = '';
             externalContentVersionRef.current += 1;
             awaitingInitialSyncRef.current = false;
+            authoritativeReloadRef.current = false;
             pendingContentStateRef.current = null;
             lastPropagatedDirtyRef.current = false;
             return;
@@ -499,7 +507,16 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             if (bladeEvent.type === 'File') {
                 const fileEvent = bladeEvent.payload as FileEvent;
                 if (fileEvent.type === 'Content' && pathsMatch(fileEvent.payload.path, activeFile)) {
-                    if (lastPropagatedDirtyRef.current && fileEvent.payload.data !== getActiveEditorContent()) {
+                    if (
+                        envelope.causality_id
+                        && latestFileReadIntentIdRef.current
+                        && envelope.causality_id !== latestFileReadIntentIdRef.current
+                    ) {
+                        return;
+                    }
+
+                    const isAuthoritativeReload = authoritativeReloadRef.current;
+                    if (!isAuthoritativeReload && lastPropagatedDirtyRef.current && fileEvent.payload.data !== getActiveEditorContent()) {
                         console.debug('[EDITOR] Ignored stale content while local edits are dirty:', activeFile);
                         awaitingInitialSyncRef.current = false;
                         setLoading(false);
@@ -507,6 +524,8 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     }
 
                     console.debug('[EDITOR] Received content for:', activeFile);
+                    latestFileReadIntentIdRef.current = null;
+                    authoritativeReloadRef.current = false;
                     awaitingInitialSyncRef.current = false;
                     setContent(fileEvent.payload.data);
                     setContentOwnerPath(activeFile);
@@ -548,6 +567,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 setContent('');
                 setContentOwnerPath(null);
                 liveContentRef.current = '';
+                latestFileReadIntentIdRef.current = null;
                 return;
             }
 
@@ -561,10 +581,15 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             try {
                 if (typeof window !== 'undefined') {
                     // Send Read Intent
-                    await BladeDispatcher.file({
-                        type: 'Read',
-                        payload: { path: activeFile }
-                    });
+                    const readIntentId = crypto.randomUUID();
+                    latestFileReadIntentIdRef.current = readIntentId;
+                    await BladeDispatcher.dispatch("File", {
+                        type: "File",
+                        payload: {
+                            type: 'Read',
+                            payload: { path: activeFile }
+                        }
+                    }, undefined, readIntentId);
                     // Content will be set by the listener
                 }
             } catch (e) {
