@@ -108,14 +108,14 @@ const zaguanEditorThemeSpec = {
         backgroundColor: colors.gutterBg,
         color: colors.lineNumber,
         border: "none",
-        paddingRight: "12px",
+        paddingRight: "4px",
     },
     
     ".cm-lineNumbers .cm-gutterElement": {
         color: colors.lineNumber,
         opacity: "0.35",
-        padding: "0 12px 0 8px",
-        minWidth: "40px",
+        padding: "0 6px 0 6px",
+        minWidth: "32px",
         fontFamily: EDITOR_MONO_STACK,
         fontSize: "12px",
     },

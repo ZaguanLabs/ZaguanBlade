@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { EditorPanel } from './EditorPanel';
+import { EditorPanel, type EditorContentState } from './EditorPanel';
 import { TerminalPane, TerminalPaneHandle } from './TerminalPane';
 import { AppBar } from './AppBar';
 import { AlertTriangle, GitBranch, Settings, Clock } from 'lucide-react';
@@ -84,6 +84,19 @@ function findMatchingChangeRange(
         startLine,
         endLine: startLine + safeLineCount - 1,
     };
+}
+
+function getTabContentStateTargetId(tabs: Tab[], fallbackTabId: string | null, state: EditorContentState): string | null {
+    if (!state.filePath) {
+        return fallbackTabId;
+    }
+
+    const targetPath = normalizePath(state.filePath);
+    return tabs.find(tab => (
+        tab.type === 'file'
+        && tab.path
+        && normalizePath(tab.path) === targetPath
+    ))?.id ?? null;
 }
 
 function useNoopChat() {
@@ -426,18 +439,10 @@ const AppLayoutInner: React.FC = () => {
     );
     const pendingTabContentStateRef = useRef<{
         tabId: string;
-        state: {
-            savedContent?: string;
-            draftContent?: string;
-            isDirty: boolean;
-        };
+        state: EditorContentState;
     } | null>(null);
     const pendingTabContentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const activeContentSnapshotRef = useRef<(() => {
-        savedContent?: string;
-        draftContent?: string;
-        isDirty: boolean;
-    }) | null>(null);
+    const activeContentSnapshotRef = useRef<(() => EditorContentState) | null>(null);
 
     const requestShutdownDecision = useCallback((files: string[], overflowCount: number) => (
         new Promise<ShutdownDecision>((resolve) => {
@@ -564,15 +569,14 @@ const AppLayoutInner: React.FC = () => {
         };
     }, [activeTabId, flushPendingTabContentState]);
 
-    const handleActiveTabContentStateChange = useCallback((state: {
-        savedContent?: string;
-        draftContent?: string;
-        isDirty: boolean;
-    }) => {
+    const handleActiveTabContentStateChange = useCallback((state: EditorContentState) => {
         if (!activeTabId) return;
 
+        const targetTabId = getTabContentStateTargetId(tabs, activeTabId, state);
+        if (!targetTabId) return;
+
         pendingTabContentStateRef.current = {
-            tabId: activeTabId,
+            tabId: targetTabId,
             state,
         };
 
@@ -581,20 +585,16 @@ const AppLayoutInner: React.FC = () => {
         }
 
         if (!state.isDirty || state.draftContent === undefined) {
-            flushPendingTabContentState(activeTabId);
+            flushPendingTabContentState(targetTabId);
             return;
         }
 
         pendingTabContentTimerRef.current = setTimeout(() => {
-            flushPendingTabContentState(activeTabId);
+            flushPendingTabContentState(targetTabId);
         }, 120);
-    }, [activeTabId, flushPendingTabContentState]);
+    }, [activeTabId, flushPendingTabContentState, tabs]);
 
-    const handleRegisterContentSnapshot = useCallback((getSnapshot: (() => {
-        savedContent?: string;
-        draftContent?: string;
-        isDirty: boolean;
-    }) | null) => {
+    const handleRegisterContentSnapshot = useCallback((getSnapshot: (() => EditorContentState) | null) => {
         activeContentSnapshotRef.current = getSnapshot;
     }, []);
 
@@ -818,8 +818,9 @@ const AppLayoutInner: React.FC = () => {
         let tabsForShutdown = tabs;
 
         if (activeSnapshot && activeTabId) {
+            const activeSnapshotTabId = getTabContentStateTargetId(tabsForShutdown, activeTabId, activeSnapshot);
             tabsForShutdown = tabsForShutdown.map(tab => {
-                if (tab.id !== activeTabId) {
+                if (tab.id !== activeSnapshotTabId) {
                     return tab;
                 }
 
@@ -835,7 +836,8 @@ const AppLayoutInner: React.FC = () => {
         const pending = pendingTabContentStateRef.current;
         if (pending) {
             tabsForShutdown = tabsForShutdown.map(tab => {
-                if (tab.id !== pending.tabId) {
+                const pendingTabId = getTabContentStateTargetId(tabsForShutdown, pending.tabId, pending.state);
+                if (tab.id !== pendingTabId) {
                     return tab;
                 }
 

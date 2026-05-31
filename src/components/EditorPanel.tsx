@@ -34,6 +34,13 @@ const getDirectoryPath = (path: string): string => {
 
 type UncommittedChangesUpdateReason = 'applied' | 'accepted' | 'rejected' | 'refresh';
 
+export type EditorContentState = {
+    filePath?: string;
+    savedContent?: string;
+    draftContent?: string;
+    isDirty: boolean;
+};
+
 const WelcomePage: React.FC<{
     hasRemoteApiKey?: boolean | null;
     onOpenSettings?: () => void;
@@ -155,16 +162,8 @@ interface EditorPanelProps {
     savedContent?: string | null;
     draftContent?: string | null;
     isDirty?: boolean;
-    onContentStateChange?: (state: {
-        savedContent?: string;
-        draftContent?: string;
-        isDirty: boolean;
-    }) => void;
-    onRegisterContentSnapshot?: (getSnapshot: (() => {
-        savedContent?: string;
-        draftContent?: string;
-        isDirty: boolean;
-    }) | null) => void;
+    onContentStateChange?: (state: EditorContentState) => void;
+    onRegisterContentSnapshot?: (getSnapshot: (() => EditorContentState) | null) => void;
     onOpenSettings?: () => void;
 }
 
@@ -195,11 +194,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const contentStateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const externalFileReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const pendingContentStateRef = useRef<{
-        savedContent?: string;
-        draftContent?: string;
-        isDirty: boolean;
-    } | null>(null);
+    const pendingContentStateRef = useRef<EditorContentState | null>(null);
     const externalContentVersionRef = useRef(0);
     const documentVersionRef = useRef(0);
     const awaitingInitialSyncRef = useRef(false);
@@ -253,6 +248,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             const currentContent = getActiveEditorContent();
             const nextIsDirty = currentContent !== baseContentRef.current;
             return {
+                filePath: activeFile ?? undefined,
                 savedContent: nextIsDirty ? baseContentRef.current : currentContent,
                 draftContent: nextIsDirty ? currentContent : undefined,
                 isDirty: nextIsDirty,
@@ -262,7 +258,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         return () => {
             onRegisterContentSnapshot(null);
         };
-    }, [getActiveEditorContent, onRegisterContentSnapshot]);
+    }, [activeFile, getActiveEditorContent, onRegisterContentSnapshot]);
 
     const isMarkdownFile = activeFile?.endsWith('.md') || activeFile?.endsWith('.markdown') || false;
     const isPdfFile = activeFile?.endsWith('.pdf') || false;
@@ -304,11 +300,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         onContentStateChangeRef.current?.(pendingState);
     }, []);
 
-    const emitContentStateChange = useCallback((state: {
-        savedContent?: string;
-        draftContent?: string;
-        isDirty: boolean;
-    }) => {
+    const emitContentStateChange = useCallback((state: EditorContentState) => {
         const isFirstDirtyTransition = state.isDirty && !lastPropagatedDirtyRef.current;
 
         if (!state.isDirty) {
@@ -319,6 +311,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 
         if (isFirstDirtyTransition) {
             pendingContentStateRef.current = {
+                filePath: state.filePath,
                 savedContent: state.savedContent,
                 draftContent: undefined,
                 isDirty: true,
@@ -533,6 +526,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     baseContentRef.current = fileEvent.payload.data;
                     externalContentVersionRef.current += 1;
                     emitContentStateChange({
+                        filePath: fileEvent.payload.path,
                         savedContent: fileEvent.payload.data,
                         draftContent: undefined,
                         isDirty: false,
@@ -653,6 +647,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 baseContentRef.current = currentContent;
                 liveContentRef.current = currentContent;
                 emitContentStateChange({
+                    filePath: activeFile,
                     savedContent: currentContent,
                     draftContent: undefined,
                     isDirty: false,
@@ -671,6 +666,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         liveContentRef.current = nextText;
         const nextIsDirty = nextText !== baseContentRef.current;
         pendingContentStateRef.current = {
+            filePath: activeFile ?? undefined,
             savedContent: nextIsDirty ? baseContentRef.current : nextText,
             draftContent: nextIsDirty ? nextText : undefined,
             isDirty: nextIsDirty,
@@ -690,6 +686,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             liveContentRef.current = nextText;
             const nextIsDirty = nextText !== baseContentRef.current;
             pendingContentStateRef.current = {
+                filePath: activeFile ?? undefined,
                 savedContent: nextIsDirty ? baseContentRef.current : nextText,
                 draftContent: nextIsDirty ? nextText : undefined,
                 isDirty: nextIsDirty,
