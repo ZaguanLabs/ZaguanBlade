@@ -65,6 +65,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
     const bottomRef = useRef<HTMLDivElement>(null);
     const [scrollMode, setScrollMode] = useState<'following' | 'detached'>('following');
     const scrollModeRef = useRef<'following' | 'detached'>('following');
+    const wheelDetachedRef = useRef(false);
     const [smoothScrollResetKey, setSmoothScrollResetKey] = useState(0);
     const { rows } = useChatTimelineRows({
         messages,
@@ -100,7 +101,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
             setStableScrollMode('detached');
             return;
         }
-        if (scrollModeRef.current === 'detached' && distanceFromBottom <= FOLLOW_BOTTOM_THRESHOLD_PX) {
+        if (scrollModeRef.current === 'detached' && distanceFromBottom <= FOLLOW_BOTTOM_THRESHOLD_PX && !wheelDetachedRef.current) {
             setStableScrollMode('following');
         }
     }, [getDistanceFromBottom, setStableScrollMode]);
@@ -111,7 +112,12 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
             return;
         }
 
+        if (event.deltaY > 0) {
+            wheelDetachedRef.current = false;
+        }
+
         if (shouldDetachChatAutoScrollOnWheel(event.deltaY, element.scrollTop)) {
+            wheelDetachedRef.current = true;
             setStableScrollMode('detached');
         }
     }, [setStableScrollMode]);
@@ -126,6 +132,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
             return;
         }
         setSmoothScrollResetKey((value) => value + 1);
+        wheelDetachedRef.current = false;
         element.scrollTop = element.scrollHeight;
         setStableScrollMode('following');
     }, [setStableScrollMode]);
