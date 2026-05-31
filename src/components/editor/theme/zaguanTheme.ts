@@ -55,7 +55,7 @@ const colors = {
     matchingBracket: "var(--editor-matching-bracket)",
 
     // Gutter
-    gutterBg: "transparent",
+    gutterBg: "var(--editor-bg)",
     lineNumber: "var(--editor-line-number)",
     lineNumberActive: "var(--editor-line-number-active)",
 };
