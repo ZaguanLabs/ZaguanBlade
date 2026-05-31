@@ -451,6 +451,8 @@ impl WsConnectionManager {
         tools: Option<Vec<Value>>,
         tool_choice: Option<Value>,
         parallel_tool_calls: Option<bool>,
+        tag: Option<String>,
+        tags: Option<Vec<String>>,
     ) -> Result<(), String> {
         let client_lock = self.client.lock().await;
         let client = client_lock.as_ref().ok_or("Not connected")?;
@@ -467,6 +469,8 @@ impl WsConnectionManager {
                 tools,
                 tool_choice,
                 parallel_tool_calls,
+                tag,
+                tags,
             )
             .await
     }

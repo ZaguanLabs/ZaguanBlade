@@ -920,6 +920,8 @@ impl ChatManager {
                                         None,
                                         None,
                                         None,
+                                        None,
+                                        None,
                                     )
                                     .await
                                 {

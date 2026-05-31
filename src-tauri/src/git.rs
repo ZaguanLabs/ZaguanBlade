@@ -1421,6 +1421,8 @@ Do NOT include analysis, reasoning, explanations, or multiple options."#,
             Some(Vec::new()),
             Some(serde_json::json!("none")),
             Some(false),
+            Some("GitCommitMessage".to_string()),
+            None,
         )
         .await
         .map_err(|e| format!("Failed to send message: {}", e))?;
