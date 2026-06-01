@@ -563,30 +563,37 @@ const AppLayoutInner: React.FC = () => {
         pendingTabContentStateRef.current = null;
         editorBufferRegistryRef.current = applyEditorContentSnapshot(editorBufferRegistryRef.current, pending.state);
 
-        setTabs(prev => prev.map(tab => {
-            if (tab.id !== pending.tabId) {
-                return tab;
+        setTabs(prev => {
+            const targetTabId = getTabContentStateTargetId(prev, pending.tabId, pending.state);
+            if (!targetTabId) {
+                return prev;
             }
 
-            const nextSavedContent = pending.state.savedContent ?? tab.savedContent;
-            const nextDraftContent = pending.state.isDirty && pending.state.draftContent === undefined
-                ? tab.draftContent
-                : pending.state.draftContent;
-            if (
-                tab.savedContent === nextSavedContent
-                && tab.draftContent === nextDraftContent
-                && Boolean(tab.isDirty) === pending.state.isDirty
-            ) {
-                return tab;
-            }
+            return prev.map(tab => {
+                if (tab.id !== targetTabId) {
+                    return tab;
+                }
 
-            return {
-                ...tab,
-                savedContent: nextSavedContent,
-                draftContent: nextDraftContent,
-                isDirty: pending.state.isDirty,
-            };
-        }));
+                const nextSavedContent = pending.state.savedContent ?? tab.savedContent;
+                const nextDraftContent = pending.state.isDirty && pending.state.draftContent === undefined
+                    ? tab.draftContent
+                    : pending.state.draftContent;
+                if (
+                    tab.savedContent === nextSavedContent
+                    && tab.draftContent === nextDraftContent
+                    && Boolean(tab.isDirty) === pending.state.isDirty
+                ) {
+                    return tab;
+                }
+
+                return {
+                    ...tab,
+                    savedContent: nextSavedContent,
+                    draftContent: nextDraftContent,
+                    isDirty: pending.state.isDirty,
+                };
+            });
+        });
     }, [setTabs]);
 
     useEffect(() => {
