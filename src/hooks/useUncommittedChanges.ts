@@ -2,17 +2,15 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { UncommittedChange } from '../types/uncommitted';
+import {
+  createUncommittedChangesUpdatedEvent,
+  notifyUncommittedFilesChanged,
+  type UncommittedChangesUpdatedDetail,
+  type UncommittedChangesUpdateReason,
+} from '../utils/uncommittedChangeNotifications';
 
 interface UseUncommittedChangesOptions {
   onFileChanged?: (filePath: string, reason: UncommittedChangesUpdateReason) => void;
-}
-
-type UncommittedChangesUpdateReason = 'applied' | 'accepted' | 'rejected' | 'refresh';
-
-interface UncommittedChangesUpdatedDetail {
-  sourceId?: string;
-  filePaths?: string[];
-  reason?: UncommittedChangesUpdateReason;
 }
 
 export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
@@ -72,9 +70,11 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
   }, []);
 
   const notifyUpdated = useCallback((filePaths?: string[], reason: UncommittedChangesUpdateReason = 'refresh') => {
-    window.dispatchEvent(new CustomEvent<UncommittedChangesUpdatedDetail>('uncommitted-changes-updated', {
-      detail: { sourceId: sourceIdRef.current, filePaths, reason },
-    }));
+    window.dispatchEvent(createUncommittedChangesUpdatedEvent(sourceIdRef.current, filePaths, reason));
+  }, []);
+
+  const notifyLocalFileChanged = useCallback((filePaths: string[], reason: UncommittedChangesUpdateReason) => {
+    notifyUncommittedFilesChanged(filePaths, reason, onFileChangedRef.current);
   }, []);
 
   useEffect(() => {
@@ -161,75 +161,81 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
     try {
       const removed = await invoke<UncommittedChange>('accept_change', { id });
       removeChanges(change => change.id === removed.id);
+      notifyLocalFileChanged([removed.file_path], 'accepted');
       notifyUpdated([removed.file_path], 'accepted');
       return true;
     } catch (error) {
       console.error('Failed to accept change:', error);
       return false;
     }
-  }, [notifyUpdated, removeChanges]);
+  }, [notifyLocalFileChanged, notifyUpdated, removeChanges]);
 
   const acceptFile = useCallback(async (filePath: string): Promise<boolean> => {
     try {
       const removed = await invoke<UncommittedChange>('accept_file_changes', { filePath });
       const removedPath = normalizePath(removed.file_path);
       removeChanges(change => normalizePath(change.file_path) === removedPath);
+      notifyLocalFileChanged([removed.file_path], 'accepted');
       notifyUpdated([removed.file_path], 'accepted');
       return true;
     } catch (error) {
       console.error('Failed to accept file changes:', error);
       return false;
     }
-  }, [normalizePath, notifyUpdated, removeChanges]);
+  }, [normalizePath, notifyLocalFileChanged, notifyUpdated, removeChanges]);
 
   const acceptAll = useCallback(async (): Promise<boolean> => {
     try {
       const removed = await invoke<UncommittedChange[]>('accept_all_changes');
       setChanges([]);
+      notifyLocalFileChanged(removed.map(change => change.file_path), 'accepted');
       notifyUpdated(removed.map(change => change.file_path), 'accepted');
       return true;
     } catch (error) {
       console.error('Failed to accept all changes:', error);
       return false;
     }
-  }, [notifyUpdated]);
+  }, [notifyLocalFileChanged, notifyUpdated]);
 
   const rejectChange = useCallback(async (id: string): Promise<boolean> => {
     try {
       const removed = await invoke<UncommittedChange>('reject_change', { id });
       removeChanges(change => change.id === removed.id);
+      notifyLocalFileChanged([removed.file_path], 'rejected');
       notifyUpdated([removed.file_path], 'rejected');
       return true;
     } catch (error) {
       console.error('Failed to reject change:', error);
       return false;
     }
-  }, [notifyUpdated, removeChanges]);
+  }, [notifyLocalFileChanged, notifyUpdated, removeChanges]);
 
   const rejectFile = useCallback(async (filePath: string): Promise<boolean> => {
     try {
       const removed = await invoke<UncommittedChange>('reject_file_changes', { filePath });
       const removedPath = normalizePath(removed.file_path);
       removeChanges(change => normalizePath(change.file_path) === removedPath);
+      notifyLocalFileChanged([removed.file_path], 'rejected');
       notifyUpdated([removed.file_path], 'rejected');
       return true;
     } catch (error) {
       console.error('Failed to reject file changes:', error);
       return false;
     }
-  }, [normalizePath, notifyUpdated, removeChanges]);
+  }, [normalizePath, notifyLocalFileChanged, notifyUpdated, removeChanges]);
 
   const rejectAll = useCallback(async (): Promise<boolean> => {
     try {
       const removed = await invoke<UncommittedChange[]>('reject_all_changes');
       setChanges([]);
+      notifyLocalFileChanged(removed.map(change => change.file_path), 'rejected');
       notifyUpdated(removed.map(change => change.file_path), 'rejected');
       return true;
     } catch (error) {
       console.error('Failed to reject all changes:', error);
       return false;
     }
-  }, [notifyUpdated]);
+  }, [notifyLocalFileChanged, notifyUpdated]);
 
   return {
     changes,

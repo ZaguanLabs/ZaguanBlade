@@ -216,6 +216,27 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             }
 
             awaitingInitialSyncRef.current = false;
+            if (reason === 'accepted') {
+                if (!lastPropagatedDirtyRef.current) {
+                    const currentContent = editorRef.current?.getContent() ?? liveContentRef.current;
+                    liveContentRef.current = currentContent;
+                    baseContentRef.current = currentContent;
+                    if (contentStateTimerRef.current) {
+                        clearTimeout(contentStateTimerRef.current);
+                        contentStateTimerRef.current = null;
+                    }
+                    pendingContentStateRef.current = null;
+                    lastPropagatedDirtyRef.current = false;
+                    onContentStateChangeRef.current?.({
+                        filePath,
+                        savedContent: currentContent,
+                        draftContent: undefined,
+                        isDirty: false,
+                    });
+                }
+                return;
+            }
+
             if (reason === 'rejected') {
                 authoritativeReloadRef.current = true;
             }
@@ -811,7 +832,7 @@ function EditorWithChangeBar({
     highlightLines,
     handleNavigate,
 }: EditorWithChangeBarProps) {
-    const { getChangeForFile, acceptFile, rejectFile, refresh } = useUncommittedChanges();
+    const { getChangeForFile, acceptFile, rejectFile } = useUncommittedChanges();
     const change = getChangeForFile(activeFile);
 
     const handleAccept = async () => {
@@ -820,10 +841,6 @@ function EditorWithChangeBar({
 
     const handleReject = async () => {
         await rejectFile(activeFile);
-        // Reload file content after revert
-        setTimeout(() => {
-            refresh();
-        }, 100);
     };
 
     return (

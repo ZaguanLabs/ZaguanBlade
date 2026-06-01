@@ -28,7 +28,7 @@ export const MarkdownEditor = forwardRef<CodeEditorHandle, MarkdownEditorProps>(
     const previewContentRef = React.useRef(content);
     const editorRef = React.useRef<CodeEditorHandle>(null);
 
-    const { getChangeForFile, acceptFile, rejectFile, refresh } = useUncommittedChanges();
+    const { getChangeForFile, acceptFile, rejectFile } = useUncommittedChanges();
     const change = filename ? getChangeForFile(filename) : undefined;
 
     useImperativeHandle(ref, () => ({
@@ -69,9 +69,6 @@ export const MarkdownEditor = forwardRef<CodeEditorHandle, MarkdownEditorProps>(
     const handleReject = async () => {
         if (filename) {
             await rejectFile(filename);
-            setTimeout(() => {
-                refresh();
-            }, 100);
         }
     };
 
