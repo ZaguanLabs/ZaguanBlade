@@ -103,6 +103,26 @@ function getTabContentStateTargetId(tabs: Tab[], fallbackTabId: string | null, s
     ))?.id ?? null;
 }
 
+function getInactiveTabContentSnapshots(tabs: Tab[], activeTabId: string | null): EditorContentState[] {
+    return tabs.flatMap((tab): EditorContentState[] => {
+        if (
+            tab.id === activeTabId
+            || tab.type !== 'file'
+            || !tab.path
+            || (!tab.isDirty && tab.savedContent === undefined && tab.draftContent === undefined)
+        ) {
+            return [];
+        }
+
+        return [{
+            filePath: tab.path,
+            savedContent: tab.savedContent,
+            draftContent: tab.isDirty ? tab.draftContent : undefined,
+            isDirty: Boolean(tab.isDirty),
+        }];
+    });
+}
+
 function useNoopChat() {
     const [messages, setMessages] = useState<any[]>([]);
     const [selectedModelId, setSelectedModelId] = useState<string>('disabled');
@@ -609,27 +629,9 @@ const AppLayoutInner: React.FC = () => {
     }, [openFilePathsJson]);
 
     useEffect(() => {
-        const inactiveTabSnapshots = tabs.flatMap((tab): EditorContentState[] => {
-            if (
-                tab.id === activeTabId
-                || tab.type !== 'file'
-                || !tab.path
-                || (!tab.isDirty && tab.savedContent === undefined && tab.draftContent === undefined)
-            ) {
-                return [];
-            }
-
-            return [{
-                filePath: tab.path,
-                savedContent: tab.savedContent,
-                draftContent: tab.isDirty ? tab.draftContent : undefined,
-                isDirty: Boolean(tab.isDirty),
-            }];
-        });
-
         editorBufferRegistryRef.current = applyEditorContentSnapshots(
             editorBufferRegistryRef.current,
-            inactiveTabSnapshots,
+            getInactiveTabContentSnapshots(tabs, activeTabId),
         );
     }, [activeTabId, tabs]);
 
