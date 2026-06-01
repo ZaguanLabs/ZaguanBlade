@@ -25,7 +25,7 @@ import { recordDebugPerf } from '../utils/debugPerf';
 import {
     applyEditorContentSnapshot,
     applyEditorContentSnapshots,
-    getDirtyEditorSaveCandidates,
+    getOpenDirtyEditorSaveCandidates,
     normalizeEditorPath,
     pruneEditorBufferRegistry,
     type EditorBufferRegistry,
@@ -898,8 +898,10 @@ const AppLayoutInner: React.FC = () => {
                 .filter(tab => tab.type === 'file' && tab.path)
                 .map(tab => [normalizeEditorPath(tab.path!), tab]),
         );
-        const dirtySaveCandidates = getDirtyEditorSaveCandidates(registryForShutdown)
-            .filter(candidate => openFileTabsByPath.has(normalizeEditorPath(candidate.path)));
+        const dirtySaveCandidates = getOpenDirtyEditorSaveCandidates(
+            registryForShutdown,
+            Array.from(openFileTabsByPath.keys()),
+        );
 
         if (dirtySaveCandidates.length === 0) {
             return true;

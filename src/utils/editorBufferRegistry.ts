@@ -84,6 +84,15 @@ export function getDirtyEditorSaveCandidates(
         }));
 }
 
+export function getOpenDirtyEditorSaveCandidates(
+    registry: EditorBufferRegistry,
+    openPaths: string[],
+): DirtyEditorSaveCandidate[] {
+    const openPathSet = new Set(openPaths.map(normalizeEditorPath));
+    return getDirtyEditorSaveCandidates(registry)
+        .filter(candidate => openPathSet.has(normalizeEditorPath(candidate.path)));
+}
+
 export function pruneEditorBufferRegistry(
     registry: EditorBufferRegistry,
     retainedPaths: string[],
