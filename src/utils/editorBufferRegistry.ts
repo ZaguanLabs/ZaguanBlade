@@ -76,3 +76,17 @@ export function getDirtyEditorSaveCandidates(
             source: 'editor-buffer-registry' as const,
         }));
 }
+
+export function pruneEditorBufferRegistry(
+    registry: EditorBufferRegistry,
+    retainedPaths: string[],
+): EditorBufferRegistry {
+    const retained = new Set(retainedPaths.map(normalizeEditorPath));
+    const entries = Object.entries(registry).filter(([path]) => retained.has(path));
+
+    if (entries.length === Object.keys(registry).length) {
+        return registry;
+    }
+
+    return Object.fromEntries(entries);
+}

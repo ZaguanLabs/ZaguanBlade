@@ -4,6 +4,7 @@ import {
     applyEditorContentSnapshot,
     getDirtyEditorSaveCandidates,
     normalizeEditorPath,
+    pruneEditorBufferRegistry,
     type EditorBufferRegistry,
 } from './editorBufferRegistry';
 
@@ -82,4 +83,27 @@ test('getDirtyEditorSaveCandidates only emits dirty buffers with explicit drafts
             source: 'editor-buffer-registry',
         },
     ]);
+});
+
+test('pruneEditorBufferRegistry drops buffers for closed paths', () => {
+    const registry: EditorBufferRegistry = {
+        'src/a.ts': {
+            path: 'src/a.ts',
+            cleanContent: 'a-base',
+            draftContent: 'a-draft',
+            dirty: true,
+            version: 1,
+        },
+        'src/b.ts': {
+            path: 'src/b.ts',
+            cleanContent: 'b-base',
+            draftContent: 'b-draft',
+            dirty: true,
+            version: 1,
+        },
+    };
+
+    assert.deepEqual(pruneEditorBufferRegistry(registry, ['src\\a.ts']), {
+        'src/a.ts': registry['src/a.ts'],
+    });
 });

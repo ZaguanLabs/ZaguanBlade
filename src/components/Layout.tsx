@@ -26,6 +26,7 @@ import {
     applyEditorContentSnapshot,
     getDirtyEditorSaveCandidates,
     normalizeEditorPath,
+    pruneEditorBufferRegistry,
     type EditorBufferRegistry,
 } from '../utils/editorBufferRegistry';
 const ExplorerPanel = React.lazy(() => import('./ExplorerPanel').then(module => ({ default: module.ExplorerPanel })));
@@ -582,6 +583,7 @@ const AppLayoutInner: React.FC = () => {
 
         const targetTabId = getTabContentStateTargetId(tabs, activeTabId, state);
         if (!targetTabId) return;
+        editorBufferRegistryRef.current = applyEditorContentSnapshot(editorBufferRegistryRef.current, state);
 
         pendingTabContentStateRef.current = {
             tabId: targetTabId,
@@ -601,6 +603,13 @@ const AppLayoutInner: React.FC = () => {
             flushPendingTabContentState(targetTabId);
         }, 120);
     }, [activeTabId, flushPendingTabContentState, tabs]);
+
+    useEffect(() => {
+        editorBufferRegistryRef.current = pruneEditorBufferRegistry(
+            editorBufferRegistryRef.current,
+            (JSON.parse(openFilePathsJson) as string[]),
+        );
+    }, [openFilePathsJson]);
 
     const handleRegisterContentSnapshot = useCallback((getSnapshot: (() => EditorContentState) | null) => {
         activeContentSnapshotRef.current = getSnapshot;
