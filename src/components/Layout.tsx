@@ -52,10 +52,6 @@ interface ShutdownSaveErrorState {
     resolve: () => void;
 }
 
-function normalizePath(value: string): string {
-    return value.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
-}
-
 function isBoundarySuffixMatch(full: string, suffix: string): boolean {
     if (!full.endsWith(suffix)) return false;
     if (full.length === suffix.length) return true;
@@ -66,10 +62,10 @@ function findMatchingChangeRange(
     filePath: string,
     changes: { file_path: string; unified_diff: string; timestamp: number }[]
 ): { startLine: number; endLine: number } | null {
-    const target = normalizePath(filePath);
+    const target = normalizeEditorPath(filePath);
     const matches = changes
         .filter((change) => {
-            const candidate = normalizePath(change.file_path);
+            const candidate = normalizeEditorPath(change.file_path);
             return candidate === target
                 || isBoundarySuffixMatch(candidate, target)
                 || isBoundarySuffixMatch(target, candidate);
@@ -98,11 +94,11 @@ function getTabContentStateTargetId(tabs: Tab[], fallbackTabId: string | null, s
         return fallbackTabId;
     }
 
-    const targetPath = normalizePath(state.filePath);
+    const targetPath = normalizeEditorPath(state.filePath);
     return tabs.find(tab => (
         tab.type === 'file'
         && tab.path
-        && normalizePath(tab.path) === targetPath
+        && normalizeEditorPath(tab.path) === targetPath
     ))?.id ?? null;
 }
 
