@@ -607,6 +607,30 @@ const AppLayoutInner: React.FC = () => {
         );
     }, [openFilePathsJson]);
 
+    useEffect(() => {
+        let nextRegistry = editorBufferRegistryRef.current;
+
+        for (const tab of tabs) {
+            if (
+                tab.id === activeTabId
+                || tab.type !== 'file'
+                || !tab.path
+                || (!tab.isDirty && tab.savedContent === undefined && tab.draftContent === undefined)
+            ) {
+                continue;
+            }
+
+            nextRegistry = applyEditorContentSnapshot(nextRegistry, {
+                filePath: tab.path,
+                savedContent: tab.savedContent,
+                draftContent: tab.isDirty ? tab.draftContent : undefined,
+                isDirty: Boolean(tab.isDirty),
+            });
+        }
+
+        editorBufferRegistryRef.current = nextRegistry;
+    }, [activeTabId, tabs]);
+
     const handleRegisterContentSnapshot = useCallback((getSnapshot: (() => EditorContentState) | null) => {
         activeContentSnapshotRef.current = getSnapshot;
     }, []);
