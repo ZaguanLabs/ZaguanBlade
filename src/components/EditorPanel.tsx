@@ -376,7 +376,9 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 setContent(savedContent);
                 setContentOwnerPath(activeFile);
                 liveContentRef.current = savedContent;
-                applyContentToEditor(savedContent, isFileSwitch ? 'open' : 'external-clean-update', isFileSwitch);
+                if (isFileSwitch || contentOwnerPath !== activeFile) {
+                    applyContentToEditor(savedContent, isFileSwitch ? 'open' : 'external-clean-update', isFileSwitch);
+                }
                 awaitingInitialSyncRef.current = false;
                 return;
             }
@@ -420,7 +422,9 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             setContentOwnerPath(activeFile);
             liveContentRef.current = savedContent;
             baseContentRef.current = savedContent;
-            applyContentToEditor(savedContent, isFileSwitch ? 'open' : 'external-clean-update', isFileSwitch);
+            if (isFileSwitch || contentOwnerPath !== activeFile) {
+                applyContentToEditor(savedContent, isFileSwitch ? 'open' : 'external-clean-update', isFileSwitch);
+            }
             awaitingInitialSyncRef.current = false;
             return;
         }
