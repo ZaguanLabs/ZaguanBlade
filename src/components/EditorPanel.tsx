@@ -326,6 +326,25 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         }, 120);
     }, [flushPendingContentState]);
 
+    const applyContentToEditor = useCallback((
+        nextContent: string,
+        reason: 'open' | 'reload' | 'revert' | 'external-clean-update',
+        resetHistory: boolean,
+    ) => {
+        const editorHandle = editorRef.current;
+        if (!editorHandle || !activeFile) {
+            externalContentVersionRef.current += 1;
+            return;
+        }
+
+        editorHandle.replaceDocument({
+            path: activeFile,
+            content: nextContent,
+            resetHistory,
+            reason,
+        });
+    }, [activeFile]);
+
     useEffect(() => {
         const isFileSwitch = activeFile !== previousActiveFileRef.current;
         previousActiveFileRef.current = activeFile;
@@ -357,7 +376,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 setContent(savedContent);
                 setContentOwnerPath(activeFile);
                 liveContentRef.current = savedContent;
-                externalContentVersionRef.current += 1;
+                applyContentToEditor(savedContent, isFileSwitch ? 'open' : 'external-clean-update', isFileSwitch);
                 awaitingInitialSyncRef.current = false;
                 return;
             }
@@ -371,7 +390,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 setContent(draftContent);
                 setContentOwnerPath(activeFile);
                 liveContentRef.current = draftContent;
-                externalContentVersionRef.current += 1;
+                applyContentToEditor(draftContent, 'open', true);
             }
             if (savedContent != null) {
                 baseContentRef.current = savedContent;
@@ -389,7 +408,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 setContent(savedContent);
                 setContentOwnerPath(activeFile);
                 liveContentRef.current = savedContent;
-                externalContentVersionRef.current += 1;
+                applyContentToEditor(savedContent, 'open', true);
             }
 
             awaitingInitialSyncRef.current = false;
@@ -401,13 +420,13 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             setContentOwnerPath(activeFile);
             liveContentRef.current = savedContent;
             baseContentRef.current = savedContent;
-            externalContentVersionRef.current += 1;
+            applyContentToEditor(savedContent, isFileSwitch ? 'open' : 'external-clean-update', isFileSwitch);
             awaitingInitialSyncRef.current = false;
             return;
         }
 
         awaitingInitialSyncRef.current = true;
-    }, [activeFile, contentOwnerPath, draftContent, isDirty, savedContent, isMarkdownFile]);
+    }, [activeFile, applyContentToEditor, contentOwnerPath, draftContent, isDirty, savedContent, isMarkdownFile]);
 
     useEffect(() => {
         documentVersionRef.current = 0;
