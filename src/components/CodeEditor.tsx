@@ -150,12 +150,14 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
     const { showMenu } = useContextMenu();
     const contentRef = useRef(content);
     const filenameRef = useRef(filename);
+    const unifiedDiffRef = useRef(unifiedDiff);
     const lineWrapRef = useRef(lineWrap);
     const themeAppearanceRef = useRef(currentTheme.appearance);
     const editorActionsRef = useRef({ setCursorPosition, setSelection, clearSelection });
 
     contentRef.current = content;
     filenameRef.current = filename;
+    unifiedDiffRef.current = unifiedDiff;
     lineWrapRef.current = lineWrap;
     themeAppearanceRef.current = currentTheme.appearance;
     editorActionsRef.current = { setCursorPosition, setSelection, clearSelection };
@@ -164,8 +166,6 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
     const [inspectorData, setInspectorData] = React.useState<{ id: string; name: string } | null>(null);
 
 
-    // Track whether a content change was user-initiated (to avoid update loops)
-    const isUserEditRef = useRef(false);
     const languageRequestIdRef = useRef(0);
     const selectionSyncFrameRef = useRef<number | null>(null);
     const pendingSelectionSyncRef = useRef<{
@@ -278,7 +278,6 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
                 ])),
                 EditorView.updateListener.of((update) => {
                     if (update.docChanged) {
-                        isUserEditRef.current = true;
                         onDocumentChangeRef.current?.();
                     }
 
@@ -482,10 +481,10 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
 
             replaceDocument({
                 path: filename,
-                content,
+                content: contentRef.current,
                 resetHistory: true,
                 reason: 'open',
-                unifiedDiff,
+                unifiedDiff: unifiedDiffRef.current,
             });
 
         } else if (isExternalContentUpdate) {
@@ -493,16 +492,14 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
 
             replaceDocument({
                 path: filename,
-                content,
+                content: contentRef.current,
                 resetHistory: false,
                 reason: 'external-clean-update',
-                unifiedDiff,
+                unifiedDiff: unifiedDiffRef.current,
                 preserveScroll: true,
             });
         }
-        // Reset the user edit flag after processing
-        isUserEditRef.current = false;
-    }, [filename, content, externalContentVersion, onNavigate, unifiedDiff, isMarkdown, replaceDocument]);
+    }, [filename, externalContentVersion, replaceDocument]);
 
     // Apply diff decorations when unifiedDiff changes
     useEffect(() => {
