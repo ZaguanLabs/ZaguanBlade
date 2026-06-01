@@ -64,6 +64,13 @@ export function applyEditorContentSnapshot(
     };
 }
 
+export function applyEditorContentSnapshots(
+    registry: EditorBufferRegistry,
+    snapshots: EditorContentSnapshot[],
+): EditorBufferRegistry {
+    return snapshots.reduce(applyEditorContentSnapshot, registry);
+}
+
 export function getDirtyEditorSaveCandidates(
     registry: EditorBufferRegistry,
 ): DirtyEditorSaveCandidate[] {

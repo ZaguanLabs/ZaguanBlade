@@ -24,6 +24,7 @@ import type { BackendSettings } from '../types/settings';
 import { recordDebugPerf } from '../utils/debugPerf';
 import {
     applyEditorContentSnapshot,
+    applyEditorContentSnapshots,
     getDirtyEditorSaveCandidates,
     normalizeEditorPath,
     pruneEditorBufferRegistry,
@@ -608,27 +609,28 @@ const AppLayoutInner: React.FC = () => {
     }, [openFilePathsJson]);
 
     useEffect(() => {
-        let nextRegistry = editorBufferRegistryRef.current;
-
-        for (const tab of tabs) {
+        const inactiveTabSnapshots = tabs.flatMap((tab): EditorContentState[] => {
             if (
                 tab.id === activeTabId
                 || tab.type !== 'file'
                 || !tab.path
                 || (!tab.isDirty && tab.savedContent === undefined && tab.draftContent === undefined)
             ) {
-                continue;
+                return [];
             }
 
-            nextRegistry = applyEditorContentSnapshot(nextRegistry, {
+            return [{
                 filePath: tab.path,
                 savedContent: tab.savedContent,
                 draftContent: tab.isDirty ? tab.draftContent : undefined,
                 isDirty: Boolean(tab.isDirty),
-            });
-        }
+            }];
+        });
 
-        editorBufferRegistryRef.current = nextRegistry;
+        editorBufferRegistryRef.current = applyEditorContentSnapshots(
+            editorBufferRegistryRef.current,
+            inactiveTabSnapshots,
+        );
     }, [activeTabId, tabs]);
 
     const handleRegisterContentSnapshot = useCallback((getSnapshot: (() => EditorContentState) | null) => {

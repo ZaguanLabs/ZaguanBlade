@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
     applyEditorContentSnapshot,
+    applyEditorContentSnapshots,
     getDirtyEditorSaveCandidates,
     normalizeEditorPath,
     pruneEditorBufferRegistry,
@@ -49,6 +50,46 @@ test('applyEditorContentSnapshot clears draft when file becomes clean', () => {
         draftContent: undefined,
         dirty: false,
         version: 2,
+    });
+});
+
+test('applyEditorContentSnapshots applies snapshots in order', () => {
+    const registry = applyEditorContentSnapshots({}, [
+        {
+            filePath: 'src/a.ts',
+            savedContent: 'a-base',
+            draftContent: 'a-draft',
+            isDirty: true,
+        },
+        {
+            filePath: 'src/b.ts',
+            savedContent: 'b-base',
+            draftContent: 'b-draft',
+            isDirty: true,
+        },
+        {
+            filePath: 'src/a.ts',
+            savedContent: 'a-saved',
+            draftContent: undefined,
+            isDirty: false,
+        },
+    ]);
+
+    assert.deepEqual(registry, {
+        'src/a.ts': {
+            path: 'src/a.ts',
+            cleanContent: 'a-saved',
+            draftContent: undefined,
+            dirty: false,
+            version: 2,
+        },
+        'src/b.ts': {
+            path: 'src/b.ts',
+            cleanContent: 'b-base',
+            draftContent: 'b-draft',
+            dirty: true,
+            version: 1,
+        },
     });
 });
 
