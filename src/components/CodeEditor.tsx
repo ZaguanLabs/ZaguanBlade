@@ -130,6 +130,7 @@ export type CodeEditorReplaceDocumentInput = {
     reason: CodeEditorReplaceDocumentReason;
     unifiedDiff?: string;
     preserveScroll?: boolean;
+    forceEffects?: boolean;
 };
 
 
@@ -351,6 +352,10 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
         }
 
         if (!input.resetHistory && view.state.doc.toString() === input.content) {
+            if (!input.forceEffects) {
+                return;
+            }
+
             view.dispatch({
                 effects: [
                     setBaseContent.of(input.content),

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { formatUnknownBackendError } from '../utils/backendErrors';
+import type { UncommittedChange } from '../types/uncommitted';
+import { createUncommittedChangesUpdatedEvent } from '../utils/uncommittedChangeNotifications';
 
 export interface GitStatusSummary {
     isRepo: boolean;
@@ -144,8 +146,12 @@ export const useGitStatus = ({ includeFiles = false }: UseGitStatusOptions = {})
 
     const push = useCallback(async () => {
         // Align with push intent: if user is pushing, treat pending AI edits as accepted.
-        await invoke('accept_all_changes');
-        window.dispatchEvent(new CustomEvent('uncommitted-changes-updated'));
+        const removed = await invoke<UncommittedChange[]>('accept_all_changes');
+        window.dispatchEvent(createUncommittedChangesUpdatedEvent(
+            'git-push',
+            removed.map(change => change.file_path),
+            'accepted',
+        ));
         await invoke('git_push');
         await refresh();
     }, [refresh]);

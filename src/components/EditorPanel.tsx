@@ -233,6 +233,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     reason: 'external-clean-update',
                     unifiedDiff: undefined,
                     preserveScroll: true,
+                    forceEffects: true,
                 });
                 if (contentStateTimerRef.current) {
                     clearTimeout(contentStateTimerRef.current);
