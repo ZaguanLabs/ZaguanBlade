@@ -22,6 +22,12 @@ import { readDebugFlag, readDebugSurfaceFlag } from '../utils/debugFlags';
 import type { ChatMode } from '../types/chat';
 import type { BackendSettings } from '../types/settings';
 import { recordDebugPerf } from '../utils/debugPerf';
+import {
+    applyEditorContentSnapshot,
+    getDirtyEditorSaveCandidates,
+    normalizeEditorPath,
+    type EditorBufferRegistry,
+} from '../utils/editorBufferRegistry';
 const ExplorerPanel = React.lazy(() => import('./ExplorerPanel').then(module => ({ default: module.ExplorerPanel })));
 const LegacyChatPanel = React.lazy(() => import('./ChatPanel').then(module => ({ default: module.ChatPanel })));
 const ChatPanelV3 = React.lazy(() => import('../chat/rendering/ChatPanel').then(module => ({ default: module.ChatPanel })));
@@ -443,6 +449,7 @@ const AppLayoutInner: React.FC = () => {
     } | null>(null);
     const pendingTabContentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const activeContentSnapshotRef = useRef<(() => EditorContentState) | null>(null);
+    const editorBufferRegistryRef = useRef<EditorBufferRegistry>({});
 
     const requestShutdownDecision = useCallback((files: string[], overflowCount: number) => (
         new Promise<ShutdownDecision>((resolve) => {
@@ -536,6 +543,7 @@ const AppLayoutInner: React.FC = () => {
         }
 
         pendingTabContentStateRef.current = null;
+        editorBufferRegistryRef.current = applyEditorContentSnapshot(editorBufferRegistryRef.current, pending.state);
 
         setTabs(prev => prev.map(tab => {
             if (tab.id !== pending.tabId) {
@@ -816,8 +824,10 @@ const AppLayoutInner: React.FC = () => {
     const handleBeforeShutdown = useCallback(async () => {
         const activeSnapshot = activeContentSnapshotRef.current?.();
         let tabsForShutdown = tabs;
+        let registryForShutdown = editorBufferRegistryRef.current;
 
         if (activeSnapshot && activeTabId) {
+            registryForShutdown = applyEditorContentSnapshot(registryForShutdown, activeSnapshot);
             const activeSnapshotTabId = getTabContentStateTargetId(tabsForShutdown, activeTabId, activeSnapshot);
             tabsForShutdown = tabsForShutdown.map(tab => {
                 if (tab.id !== activeSnapshotTabId) {
@@ -835,6 +845,7 @@ const AppLayoutInner: React.FC = () => {
 
         const pending = pendingTabContentStateRef.current;
         if (pending) {
+            registryForShutdown = applyEditorContentSnapshot(registryForShutdown, pending.state);
             tabsForShutdown = tabsForShutdown.map(tab => {
                 const pendingTabId = getTabContentStateTargetId(tabsForShutdown, pending.tabId, pending.state);
                 if (tab.id !== pendingTabId) {
@@ -849,22 +860,27 @@ const AppLayoutInner: React.FC = () => {
                 };
             });
         }
+        editorBufferRegistryRef.current = registryForShutdown;
 
-        const dirtyFileTabs = tabsForShutdown.filter(tab => (
-            tab.type === 'file'
-            && tab.path
-            && tab.isDirty
-            && tab.draftContent !== undefined
-        ));
+        const openFileTabsByPath = new Map(
+            tabsForShutdown
+                .filter(tab => tab.type === 'file' && tab.path)
+                .map(tab => [normalizeEditorPath(tab.path!), tab]),
+        );
+        const dirtySaveCandidates = getDirtyEditorSaveCandidates(registryForShutdown)
+            .filter(candidate => openFileTabsByPath.has(normalizeEditorPath(candidate.path)));
 
-        if (dirtyFileTabs.length === 0) {
+        if (dirtySaveCandidates.length === 0) {
             return true;
         }
 
-        const filesForPrompt = dirtyFileTabs
+        const filesForPrompt = dirtySaveCandidates
             .slice(0, 5)
-            .map(tab => tab.title || tab.path || t('editor.untitled'));
-        const decision = await requestShutdownDecision(filesForPrompt, Math.max(0, dirtyFileTabs.length - filesForPrompt.length));
+            .map(candidate => {
+                const tab = openFileTabsByPath.get(normalizeEditorPath(candidate.path));
+                return tab?.title || candidate.path || t('editor.untitled');
+            });
+        const decision = await requestShutdownDecision(filesForPrompt, Math.max(0, dirtySaveCandidates.length - filesForPrompt.length));
 
         if (decision === 'cancel') {
             return false;
@@ -875,9 +891,9 @@ const AppLayoutInner: React.FC = () => {
         }
 
         try {
-            await Promise.all(dirtyFileTabs.map(tab => invoke('write_file_content', {
-                path: tab.path,
-                content: tab.draftContent ?? '',
+            await Promise.all(dirtySaveCandidates.map(candidate => invoke('write_file_content', {
+                path: candidate.path,
+                content: candidate.draft,
             })));
             pendingTabContentStateRef.current = null;
             if (pendingTabContentTimerRef.current) {

@@ -736,6 +736,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 ) : isMarkdownFile ? (
                     <Suspense fallback={<div className="h-full w-full bg-(--bg-editor)" />}>
                         <MarkdownEditor
+                            key={activeFile}
                             ref={editorRef}
                             content={activeEditorContent}
                             externalContentVersion={externalContentVersionRef.current}
@@ -801,6 +802,7 @@ function EditorWithChangeBar({
         <div className="relative h-full w-full">
             <Suspense fallback={<div className="h-full w-full bg-(--bg-editor)" />}>
                 <CodeEditor
+                    key={activeFile}
                     ref={editorRef}
                     content={content}
                     externalContentVersion={externalContentVersion}
