@@ -21,6 +21,8 @@ import { useUncommittedChanges } from '../hooks/useUncommittedChanges';
 import { formatBladeError, formatUnknownBackendError } from '../utils/backendErrors';
 import { recordDebugPerf } from '../utils/debugPerf';
 import type { EditorContentSnapshot } from '../utils/editorBufferRegistry';
+import { getEditorReviewTransition } from '../utils/editorReviewTransitions';
+import type { UncommittedChangesUpdateReason } from '../utils/uncommittedChangeNotifications';
 
 const CodeEditor = React.lazy(() => import('./CodeEditor'));
 const PdfViewer = React.lazy(() =>
@@ -32,8 +34,6 @@ const getDirectoryPath = (path: string): string => {
     const separatorIndex = normalized.lastIndexOf('/');
     return separatorIndex > 0 ? normalized.slice(0, separatorIndex) : normalized;
 };
-
-type UncommittedChangesUpdateReason = 'applied' | 'accepted' | 'rejected' | 'refresh';
 
 export type EditorContentState = EditorContentSnapshot;
 
@@ -216,29 +216,38 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             }
 
             awaitingInitialSyncRef.current = false;
-            if (reason === 'accepted') {
-                if (!lastPropagatedDirtyRef.current) {
-                    const currentContent = editorRef.current?.getContent() ?? liveContentRef.current;
-                    liveContentRef.current = currentContent;
-                    baseContentRef.current = currentContent;
-                    if (contentStateTimerRef.current) {
-                        clearTimeout(contentStateTimerRef.current);
-                        contentStateTimerRef.current = null;
-                    }
-                    pendingContentStateRef.current = null;
-                    lastPropagatedDirtyRef.current = false;
-                    onContentStateChangeRef.current?.({
-                        filePath,
-                        savedContent: currentContent,
-                        draftContent: undefined,
-                        isDirty: false,
-                    });
+            const reviewTransition = getEditorReviewTransition({
+                filePath,
+                reason,
+                locallyDirty: lastPropagatedDirtyRef.current,
+                currentContent: editorRef.current?.getContent() ?? liveContentRef.current,
+            });
+
+            if (reviewTransition.action === 'mark-clean') {
+                liveContentRef.current = reviewTransition.contentState.savedContent ?? '';
+                baseContentRef.current = reviewTransition.contentState.savedContent ?? '';
+                editorRef.current?.replaceDocument({
+                    path: filePath,
+                    content: reviewTransition.contentState.savedContent ?? '',
+                    resetHistory: false,
+                    reason: 'external-clean-update',
+                    unifiedDiff: undefined,
+                    preserveScroll: true,
+                });
+                if (contentStateTimerRef.current) {
+                    clearTimeout(contentStateTimerRef.current);
+                    contentStateTimerRef.current = null;
                 }
+                pendingContentStateRef.current = null;
+                lastPropagatedDirtyRef.current = false;
+                onContentStateChangeRef.current?.(reviewTransition.contentState);
                 return;
             }
 
-            if (reason === 'rejected') {
+            if (reviewTransition.action === 'request-authoritative-reload') {
                 authoritativeReloadRef.current = true;
+            } else if (reviewTransition.action === 'ignore') {
+                return;
             }
             setReloadTrigger(prev => prev + 1);
         },

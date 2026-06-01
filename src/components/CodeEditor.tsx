@@ -351,6 +351,13 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
         }
 
         if (!input.resetHistory && view.state.doc.toString() === input.content) {
+            view.dispatch({
+                effects: [
+                    setBaseContent.of(input.content),
+                    setDiffState.of(createDiffStateFromUnifiedDiff(input.unifiedDiff)),
+                ],
+            });
+            contentRef.current = input.content;
             return;
         }
 
