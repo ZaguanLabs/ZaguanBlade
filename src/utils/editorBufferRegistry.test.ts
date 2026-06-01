@@ -4,7 +4,9 @@ import {
     applyEditorContentSnapshot,
     applyEditorContentSnapshots,
     getDirtyEditorSaveCandidates,
+    getEditorContentSnapshotForPath,
     getOpenDirtyEditorSaveCandidates,
+    markEditorSaveCandidatesClean,
     normalizeEditorPath,
     pruneEditorBufferRegistry,
     type EditorBufferRegistry,
@@ -54,6 +56,30 @@ test('applyEditorContentSnapshot clears draft when file becomes clean', () => {
     });
 });
 
+test('applyEditorContentSnapshot preserves existing dirty draft when next dirty snapshot omits draft', () => {
+    const dirty = applyEditorContentSnapshot({}, {
+        filePath: 'src/file.ts',
+        savedContent: 'base',
+        draftContent: 'draft',
+        isDirty: true,
+    });
+    const metadataOnly = applyEditorContentSnapshot(dirty, {
+        filePath: 'src/file.ts',
+        savedContent: 'base',
+        draftContent: undefined,
+        isDirty: true,
+    });
+
+    assert.deepEqual(metadataOnly['src/file.ts'], {
+        path: 'src/file.ts',
+        cleanContent: 'base',
+        draftContent: 'draft',
+        dirty: true,
+        version: 1,
+    });
+    assert.equal(metadataOnly, dirty);
+});
+
 test('applyEditorContentSnapshots applies snapshots in order', () => {
     const registry = applyEditorContentSnapshots({}, [
         {
@@ -91,6 +117,39 @@ test('applyEditorContentSnapshots applies snapshots in order', () => {
             dirty: true,
             version: 1,
         },
+    });
+});
+
+test('getEditorContentSnapshotForPath prefers registry over fallback', () => {
+    const registry = applyEditorContentSnapshot({}, {
+        filePath: 'src/file.ts',
+        savedContent: 'base',
+        draftContent: 'draft',
+        isDirty: true,
+    });
+
+    assert.deepEqual(getEditorContentSnapshotForPath(registry, 'src\\file.ts', {
+        savedContent: 'fallback-base',
+        draftContent: 'fallback-draft',
+        isDirty: false,
+    }), {
+        filePath: 'src\\file.ts',
+        savedContent: 'base',
+        draftContent: 'draft',
+        isDirty: true,
+    });
+});
+
+test('getEditorContentSnapshotForPath falls back when registry has no path', () => {
+    assert.deepEqual(getEditorContentSnapshotForPath({}, 'src/file.ts', {
+        savedContent: 'fallback-base',
+        draftContent: 'fallback-draft',
+        isDirty: true,
+    }), {
+        filePath: 'src/file.ts',
+        savedContent: 'fallback-base',
+        draftContent: 'fallback-draft',
+        isDirty: true,
     });
 });
 
@@ -153,6 +212,67 @@ test('getOpenDirtyEditorSaveCandidates filters dirty buffers to open paths', () 
             source: 'editor-buffer-registry',
         },
     ]);
+});
+
+test('clean save snapshot removes open dirty save candidate', () => {
+    const dirty = applyEditorContentSnapshot({}, {
+        filePath: 'src/file.ts',
+        savedContent: 'base',
+        draftContent: 'draft',
+        isDirty: true,
+    });
+    const saved = applyEditorContentSnapshot(dirty, {
+        filePath: 'src/file.ts',
+        savedContent: 'draft',
+        draftContent: undefined,
+        isDirty: false,
+    });
+
+    assert.deepEqual(getOpenDirtyEditorSaveCandidates(saved, ['src/file.ts']), []);
+    assert.deepEqual(saved['src/file.ts'], {
+        path: 'src/file.ts',
+        cleanContent: 'draft',
+        draftContent: undefined,
+        dirty: false,
+        version: 2,
+    });
+});
+
+test('markEditorSaveCandidatesClean advances saved candidates to clean baselines', () => {
+    const registry: EditorBufferRegistry = {
+        'src/a.ts': {
+            path: 'src/a.ts',
+            cleanContent: 'a-base',
+            draftContent: 'a-draft',
+            dirty: true,
+            version: 1,
+        },
+        'src/b.ts': {
+            path: 'src/b.ts',
+            cleanContent: 'b-base',
+            draftContent: 'b-draft',
+            dirty: true,
+            version: 1,
+        },
+    };
+    const candidates = getOpenDirtyEditorSaveCandidates(registry, ['src/a.ts', 'src/b.ts']);
+    const saved = markEditorSaveCandidatesClean(registry, candidates);
+
+    assert.deepEqual(getOpenDirtyEditorSaveCandidates(saved, ['src/a.ts', 'src/b.ts']), []);
+    assert.deepEqual(saved['src/a.ts'], {
+        path: 'src/a.ts',
+        cleanContent: 'a-draft',
+        draftContent: undefined,
+        dirty: false,
+        version: 2,
+    });
+    assert.deepEqual(saved['src/b.ts'], {
+        path: 'src/b.ts',
+        cleanContent: 'b-draft',
+        draftContent: undefined,
+        dirty: false,
+        version: 2,
+    });
 });
 
 test('pruneEditorBufferRegistry drops buffers for closed paths', () => {

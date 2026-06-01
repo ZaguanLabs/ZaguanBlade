@@ -25,7 +25,9 @@ import { recordDebugPerf } from '../utils/debugPerf';
 import {
     applyEditorContentSnapshot,
     applyEditorContentSnapshots,
+    getEditorContentSnapshotForPath,
     getOpenDirtyEditorSaveCandidates,
+    markEditorSaveCandidatesClean,
     normalizeEditorPath,
     pruneEditorBufferRegistry,
     type EditorBufferRegistry,
@@ -103,7 +105,43 @@ function getTabContentStateTargetId(tabs: Tab[], fallbackTabId: string | null, s
     ))?.id ?? null;
 }
 
-function getInactiveTabContentSnapshots(tabs: Tab[], activeTabId: string | null): EditorContentState[] {
+function applyContentStateToTab(
+    tab: Tab,
+    state: EditorContentState,
+    options: { mirrorDraftContent?: boolean; mirrorDirtySavedContent?: boolean } = {},
+): Tab {
+    const shouldMirrorDirtySavedContent = options.mirrorDirtySavedContent ?? true;
+    const nextSavedContent = state.isDirty && !shouldMirrorDirtySavedContent
+        ? tab.savedContent
+        : state.savedContent ?? tab.savedContent;
+    const shouldMirrorDraftContent = options.mirrorDraftContent ?? true;
+    const nextDraftContent = !state.isDirty
+        ? undefined
+        : shouldMirrorDraftContent
+            ? state.draftContent ?? tab.draftContent
+            : undefined;
+
+    if (
+        tab.savedContent === nextSavedContent
+        && tab.draftContent === nextDraftContent
+        && Boolean(tab.isDirty) === state.isDirty
+    ) {
+        return tab;
+    }
+
+    return {
+        ...tab,
+        savedContent: nextSavedContent,
+        draftContent: nextDraftContent,
+        isDirty: state.isDirty,
+    };
+}
+
+function getInactiveTabContentSnapshots(
+    tabs: Tab[],
+    activeTabId: string | null,
+    registry: EditorBufferRegistry,
+): EditorContentState[] {
     return tabs.flatMap((tab): EditorContentState[] => {
         if (
             tab.id === activeTabId
@@ -114,10 +152,11 @@ function getInactiveTabContentSnapshots(tabs: Tab[], activeTabId: string | null)
             return [];
         }
 
+        const hasRegistryBuffer = Boolean(registry[normalizeEditorPath(tab.path)]);
         return [{
             filePath: tab.path,
-            savedContent: tab.savedContent,
-            draftContent: tab.isDirty ? tab.draftContent : undefined,
+            savedContent: hasRegistryBuffer ? undefined : tab.savedContent,
+            draftContent: hasRegistryBuffer ? undefined : tab.isDirty ? tab.draftContent : undefined,
             isDirty: Boolean(tab.isDirty),
         }];
     });
@@ -574,24 +613,10 @@ const AppLayoutInner: React.FC = () => {
                     return tab;
                 }
 
-                const nextSavedContent = pending.state.savedContent ?? tab.savedContent;
-                const nextDraftContent = pending.state.isDirty && pending.state.draftContent === undefined
-                    ? tab.draftContent
-                    : pending.state.draftContent;
-                if (
-                    tab.savedContent === nextSavedContent
-                    && tab.draftContent === nextDraftContent
-                    && Boolean(tab.isDirty) === pending.state.isDirty
-                ) {
-                    return tab;
-                }
-
-                return {
-                    ...tab,
-                    savedContent: nextSavedContent,
-                    draftContent: nextDraftContent,
-                    isDirty: pending.state.isDirty,
-                };
+                return applyContentStateToTab(tab, pending.state, {
+                    mirrorDraftContent: false,
+                    mirrorDirtySavedContent: false,
+                });
             });
         });
     }, [setTabs]);
@@ -638,7 +663,7 @@ const AppLayoutInner: React.FC = () => {
     useEffect(() => {
         editorBufferRegistryRef.current = applyEditorContentSnapshots(
             editorBufferRegistryRef.current,
-            getInactiveTabContentSnapshots(tabs, activeTabId),
+            getInactiveTabContentSnapshots(tabs, activeTabId, editorBufferRegistryRef.current),
         );
     }, [activeTabId, tabs]);
 
@@ -860,50 +885,30 @@ const AppLayoutInner: React.FC = () => {
     }, []);
 
     const terminalState = getTerminalState();
+    const activeEditorContentState = activeTab?.type === 'file'
+        ? getEditorContentSnapshotForPath(editorBufferRegistryRef.current, activeTab.path, {
+            savedContent: activeTab.savedContent,
+            draftContent: activeTab.draftContent,
+            isDirty: activeTab.isDirty,
+        })
+        : null;
 
     const handleBeforeShutdown = useCallback(async () => {
         const activeSnapshot = activeContentSnapshotRef.current?.();
-        let tabsForShutdown = tabs;
         let registryForShutdown = editorBufferRegistryRef.current;
 
-        if (activeSnapshot && activeTabId) {
+        if (activeSnapshot) {
             registryForShutdown = applyEditorContentSnapshot(registryForShutdown, activeSnapshot);
-            const activeSnapshotTabId = getTabContentStateTargetId(tabsForShutdown, activeTabId, activeSnapshot);
-            tabsForShutdown = tabsForShutdown.map(tab => {
-                if (tab.id !== activeSnapshotTabId) {
-                    return tab;
-                }
-
-                return {
-                    ...tab,
-                    savedContent: activeSnapshot.savedContent ?? tab.savedContent,
-                    draftContent: activeSnapshot.draftContent,
-                    isDirty: activeSnapshot.isDirty,
-                };
-            });
         }
 
         const pending = pendingTabContentStateRef.current;
         if (pending) {
             registryForShutdown = applyEditorContentSnapshot(registryForShutdown, pending.state);
-            tabsForShutdown = tabsForShutdown.map(tab => {
-                const pendingTabId = getTabContentStateTargetId(tabsForShutdown, pending.tabId, pending.state);
-                if (tab.id !== pendingTabId) {
-                    return tab;
-                }
-
-                return {
-                    ...tab,
-                    savedContent: pending.state.savedContent ?? tab.savedContent,
-                    draftContent: pending.state.draftContent,
-                    isDirty: pending.state.isDirty,
-                };
-            });
         }
         editorBufferRegistryRef.current = registryForShutdown;
 
         const openFileTabsByPath = new Map(
-            tabsForShutdown
+            tabs
                 .filter(tab => tab.type === 'file' && tab.path)
                 .map(tab => [normalizeEditorPath(tab.path!), tab]),
         );
@@ -937,6 +942,10 @@ const AppLayoutInner: React.FC = () => {
                 path: candidate.path,
                 content: candidate.draft,
             })));
+            editorBufferRegistryRef.current = markEditorSaveCandidatesClean(
+                editorBufferRegistryRef.current,
+                dirtySaveCandidates,
+            );
             pendingTabContentStateRef.current = null;
             if (pendingTabContentTimerRef.current) {
                 clearTimeout(pendingTabContentTimerRef.current);
@@ -949,7 +958,7 @@ const AppLayoutInner: React.FC = () => {
             await requestShutdownSaveErrorAck(errorMessage);
             return false;
         }
-    }, [activeTabId, requestShutdownDecision, requestShutdownSaveErrorAck, t, tabs]);
+    }, [requestShutdownDecision, requestShutdownSaveErrorAck, t, tabs]);
 
     // Project state persistence
     const { loaded: stateLoaded, isClosing } = disableProjectState
@@ -1239,9 +1248,9 @@ const AppLayoutInner: React.FC = () => {
                                         highlightLines={activeTab.highlightLines || null}
                                         workspaceRoot={workspacePath}
                                         hasRemoteApiKey={bootstrapHasApiKey}
-                                        savedContent={activeTab.savedContent ?? null}
-                                        draftContent={activeTab.draftContent ?? null}
-                                        isDirty={Boolean(activeTab.isDirty)}
+                                        savedContent={activeEditorContentState?.savedContent ?? null}
+                                        draftContent={activeEditorContentState?.draftContent ?? null}
+                                        isDirty={Boolean(activeEditorContentState?.isDirty)}
                                         onContentStateChange={handleActiveTabContentStateChange}
                                         onRegisterContentSnapshot={handleRegisterContentSnapshot}
                                         onOpenSettings={() => setIsSettingsOpen(true)}

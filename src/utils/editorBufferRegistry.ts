@@ -22,6 +22,12 @@ export type DirtyEditorSaveCandidate = {
     source: 'editor-buffer-registry';
 };
 
+export type EditorContentSnapshotFallback = {
+    savedContent?: string | null;
+    draftContent?: string | null;
+    isDirty?: boolean;
+};
+
 export function normalizeEditorPath(value: string): string {
     return value.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
 }
@@ -91,6 +97,35 @@ export function getOpenDirtyEditorSaveCandidates(
     const openPathSet = new Set(openPaths.map(normalizeEditorPath));
     return getDirtyEditorSaveCandidates(registry)
         .filter(candidate => openPathSet.has(normalizeEditorPath(candidate.path)));
+}
+
+export function markEditorSaveCandidatesClean(
+    registry: EditorBufferRegistry,
+    candidates: DirtyEditorSaveCandidate[],
+): EditorBufferRegistry {
+    return applyEditorContentSnapshots(
+        registry,
+        candidates.map(candidate => ({
+            filePath: candidate.path,
+            savedContent: candidate.draft,
+            draftContent: undefined,
+            isDirty: false,
+        })),
+    );
+}
+
+export function getEditorContentSnapshotForPath(
+    registry: EditorBufferRegistry,
+    path: string | undefined | null,
+    fallback: EditorContentSnapshotFallback = {},
+): EditorContentSnapshot {
+    const buffer = path ? registry[normalizeEditorPath(path)] : undefined;
+    return {
+        filePath: path ?? undefined,
+        savedContent: buffer?.cleanContent ?? fallback.savedContent ?? undefined,
+        draftContent: buffer?.draftContent ?? fallback.draftContent ?? undefined,
+        isDirty: buffer?.dirty ?? Boolean(fallback.isDirty),
+    };
 }
 
 export function pruneEditorBufferRegistry(
