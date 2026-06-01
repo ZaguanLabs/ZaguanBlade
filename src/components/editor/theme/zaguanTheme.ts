@@ -163,13 +163,14 @@ const zaguanEditorThemeSpec = {
     
     // Search
     ".cm-searchMatch": {
-        backgroundColor: "rgba(251, 191, 36, 0.3)",
-        outline: "1px solid rgba(251, 191, 36, 0.6)",
-        borderRadius: "2px",
+        backgroundColor: "color-mix(in srgb, var(--accent-warning) 28%, transparent)",
+        outline: "1px solid color-mix(in srgb, var(--accent-warning) 62%, transparent)",
+        borderRadius: "4px",
     },
     
     ".cm-searchMatch.cm-searchMatch-selected": {
-        backgroundColor: "rgba(251, 191, 36, 0.5)",
+        backgroundColor: "color-mix(in srgb, var(--accent-warning) 48%, transparent)",
+        outlineColor: "var(--accent-warning)",
     },
     
     // Panels (search, etc.)
@@ -177,6 +178,7 @@ const zaguanEditorThemeSpec = {
         backgroundColor: colors.bgPanel,
         color: colors.fg,
         borderBottom: `1px solid ${colors.border}`,
+        fontFamily: "var(--font-sans)",
     },
     
     ".cm-panels.cm-panels-top": {
@@ -186,37 +188,137 @@ const zaguanEditorThemeSpec = {
     ".cm-panels.cm-panels-bottom": {
         borderTop: `1px solid ${colors.border}`,
     },
+
+    ".cm-panel.cm-search": {
+        display: "flex",
+        alignItems: "center",
+        flexWrap: "wrap",
+        gap: "8px",
+        padding: "10px 12px",
+        backgroundColor: "color-mix(in srgb, var(--bg-panel) 94%, var(--accent-ai) 6%)",
+        borderBottom: `1px solid ${colors.border}`,
+        boxShadow: "var(--shadow-sm)",
+        fontFamily: "var(--font-sans)",
+        fontSize: "12px",
+        letterSpacing: "0",
+    },
+
+    ".cm-panel.cm-search > *": {
+        margin: "0",
+    },
+
+    ".cm-panel.cm-search label": {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "5px",
+        minHeight: "28px",
+        color: colors.fgMuted,
+        fontSize: "11px",
+        fontWeight: "500",
+        letterSpacing: "0.01em",
+        whiteSpace: "nowrap",
+        userSelect: "none",
+    },
     
     // Panel inputs
     ".cm-textfield": {
         backgroundColor: colors.bgSurface,
         color: colors.fg,
         border: `1px solid ${colors.border}`,
-        borderRadius: "4px",
-        padding: "4px 8px",
-        fontSize: "13px",
+        borderRadius: "calc(var(--panel-radius) * 0.55)",
+        padding: "6px 10px",
+        fontFamily: "var(--font-sans)",
+        fontSize: "12px",
+        fontWeight: "500",
+        lineHeight: "1.35",
         outline: "none",
+        minHeight: "30px",
+        boxShadow: "inset 0 1px 0 color-mix(in srgb, var(--fg-bright) 4%, transparent)",
+        transition: "border-color var(--transition-fast), box-shadow var(--transition-fast), background-color var(--transition-fast)",
+    },
+
+    ".cm-panel.cm-search .cm-textfield": {
+        minWidth: "220px",
+        maxWidth: "min(42vw, 360px)",
     },
     
     ".cm-textfield:focus": {
         borderColor: colors.accent,
-        boxShadow: `0 0 0 2px ${colors.selection}`,
+        backgroundColor: "color-mix(in srgb, var(--bg-surface) 92%, var(--accent-ai) 8%)",
+        boxShadow: `0 0 0 3px color-mix(in srgb, ${colors.accent} 18%, transparent)`,
     },
     
     ".cm-button": {
-        backgroundColor: colors.bgSurface,
+        backgroundColor: "color-mix(in srgb, var(--bg-surface) 92%, var(--fg-primary) 8%)",
         color: colors.fg,
         border: `1px solid ${colors.border}`,
-        borderRadius: "4px",
-        padding: "4px 12px",
-        fontSize: "13px",
+        borderRadius: "calc(var(--panel-radius) * 0.55)",
+        padding: "6px 10px",
+        fontFamily: "var(--font-sans)",
+        fontSize: "11px",
+        fontWeight: "650",
+        lineHeight: "1.35",
         cursor: "pointer",
-        transition: "all 0.15s ease",
+        minHeight: "30px",
+        boxShadow: "var(--shadow-sm)",
+        transition: "background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast)",
     },
     
     ".cm-button:hover": {
         backgroundColor: colors.bgSurfaceHover,
         borderColor: colors.borderFocus,
+        color: "var(--fg-bright)",
+        transform: "translateY(-1px)",
+        boxShadow: "var(--shadow-md)",
+    },
+
+    ".cm-button:active": {
+        transform: "translateY(0)",
+        boxShadow: "var(--shadow-sm)",
+    },
+
+    ".cm-panel.cm-search .cm-button[name='next'], .cm-panel.cm-search .cm-button[name='prev']": {
+        backgroundColor: "color-mix(in srgb, var(--accent-ai) 16%, var(--bg-surface) 84%)",
+        borderColor: "color-mix(in srgb, var(--accent-ai) 32%, var(--border-subtle) 68%)",
+        color: colors.fg,
+    },
+
+    ".cm-panel.cm-search .cm-button[name='next']:hover, .cm-panel.cm-search .cm-button[name='prev']:hover": {
+        backgroundColor: "color-mix(in srgb, var(--accent-ai) 26%, var(--bg-surface) 74%)",
+        borderColor: colors.accent,
+        color: "var(--fg-bright)",
+    },
+
+    ".cm-panel.cm-search .cm-button[name='close']": {
+        marginLeft: "auto",
+        width: "30px",
+        padding: "0",
+        borderRadius: "999px",
+        color: colors.fgMuted,
+        backgroundColor: "transparent",
+        borderColor: "transparent",
+        boxShadow: "none",
+        fontSize: "16px",
+        fontWeight: "500",
+    },
+
+    ".cm-panel.cm-search .cm-button[name='close']:hover": {
+        backgroundColor: "color-mix(in srgb, var(--state-danger) 16%, transparent)",
+        borderColor: "color-mix(in srgb, var(--state-danger) 28%, transparent)",
+        color: "var(--state-danger)",
+        boxShadow: "none",
+    },
+
+    ".cm-panel.cm-search input[type='checkbox']": {
+        width: "13px",
+        height: "13px",
+        margin: "0",
+        accentColor: colors.accent,
+        cursor: "pointer",
+    },
+
+    ".cm-panel.cm-search [name='matchCase'], .cm-panel.cm-search [name='regexp'], .cm-panel.cm-search [name='wholeWord']": {
+        marginLeft: "2px",
     },
     
     // Tooltips
