@@ -60,14 +60,6 @@ const replaceEditorDocument = (view: EditorView, content: string, unifiedDiff?: 
     }
 };
 
-const replaceEditorDocumentIfChanged = (view: EditorView, content: string, unifiedDiff?: string, preserveScroll = false) => {
-    if (view.state.doc.toString() === content) {
-        return;
-    }
-
-    replaceEditorDocument(view, content, unifiedDiff, preserveScroll);
-};
-
 const getEditingAidExtensions = (isMarkdown: boolean, docLength: number): Extension[] => {
     if (isMarkdown || docLength > EDITING_AID_MAX_DOC_LENGTH) {
         return [];
@@ -204,78 +196,12 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
         };
     }, []);
 
-    // Expose methods to parent via ref
-    useImperativeHandle(ref, () => ({
-        getView: () => viewRef.current,
-        getContent: () => viewRef.current?.state.doc.toString() ?? contentRef.current,
-        replaceDocument: (input) => {
-            const view = viewRef.current;
-            if (!view) return;
-            if (
-                input.path
-                && filenameRef.current
-                && normalizeEditorPath(input.path) !== normalizeEditorPath(filenameRef.current)
-            ) {
-                return;
-            }
+    const createEditorState = useCallback((targetContent: string, targetFilename?: string | null) => {
+        const targetIsMarkdown = targetFilename?.endsWith('.md') || targetFilename?.endsWith('.markdown') || false;
+        const targetShouldWrap = lineWrap ?? targetIsMarkdown;
 
-            replaceEditorDocument(
-                view,
-                input.content,
-                input.unifiedDiff,
-                input.preserveScroll,
-            );
-            contentRef.current = input.content;
-        },
-        setCursor: (line: number, col: number) => {
-            const view = viewRef.current;
-            if (!view) return;
-
-            const doc = view.state.doc;
-            const safeLine = Math.max(1, Math.min(line, doc.lines));
-            const lineObj = doc.line(safeLine);
-            const safeCol = Math.max(0, Math.min(col, lineObj.length));
-
-            const pos = lineObj.from + safeCol;
-
-            view.dispatch({
-                selection: { anchor: pos, head: pos },
-                effects: EditorView.scrollIntoView(pos, { y: "center" })
-            });
-            view.focus();
-        }
-    }));
-
-    const reconfigureLanguage = useCallback(async (targetFilename?: string) => {
-        const requestId = ++languageRequestIdRef.current;
-        const extensions = await loadLanguageExtension(targetFilename);
-
-        if (requestId !== languageRequestIdRef.current) {
-            return;
-        }
-
-        const view = viewRef.current;
-        if (!view) {
-            return;
-        }
-
-        view.dispatch({
-            effects: languageConf.current.reconfigure(extensions),
-        });
-    }, []);
-
-    // Initial setup
-    useEffect(() => {
-        if (!editorRef.current) return;
-        if (viewRef.current) return;
-
-        const initialContent = contentRef.current;
-        const initialFilename = filenameRef.current;
-        const initialIsMarkdown = isMarkdownRef.current;
-        const initialShouldWrap = shouldWrapRef.current;
-        const initialThemeAppearance = themeAppearanceRef.current;
-        const state = EditorState.create({
-            doc: initialContent,
+        return EditorState.create({
+            doc: targetContent,
             extensions: [
                 // Core editor features
                 lineNumbers(),
@@ -286,13 +212,13 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
                 dropCursor(),
                 rectangularSelection(),
                 crosshairCursor(),
-                editingAidConf.current.of(getEditingAidExtensions(initialIsMarkdown, initialContent.length)),
+                editingAidConf.current.of(getEditingAidExtensions(targetIsMarkdown, targetContent.length)),
 
                 // Editing features
                 history(),
                 indentOnInput(),
 
-                themeConf.current.of(getZaguanTheme(initialThemeAppearance === 'dark')),
+                themeConf.current.of(getZaguanTheme(themeAppearanceRef.current === 'dark')),
 
                 // UX enhancements
                 placeholder("Start typing or paste code here..."),
@@ -314,7 +240,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
                 aiGlowDecorations(),
 
                 // Line wrapping (enabled for markdown and when explicitly requested)
-                wrapConf.current.of(initialShouldWrap ? [EditorView.lineWrapping] : []),
+                wrapConf.current.of(targetShouldWrap ? [EditorView.lineWrapping] : []),
 
                 // Layout
                 EditorView.theme({
@@ -325,9 +251,9 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
                 // Language support (dynamic)
                 languageConf.current.of([]),
 
-                zlpConf.current.of(initialIsMarkdown ? [] : [
-                    zlpLinter(initialFilename || ''),
-                    zlpHoverTooltip(initialFilename || '')
+                zlpConf.current.of(targetIsMarkdown ? [] : [
+                    zlpLinter(targetFilename || ''),
+                    zlpHoverTooltip(targetFilename || '')
                 ]),
 
                 // Keymaps (high precedence for custom bindings)
@@ -396,6 +322,93 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
                 })
             ]
         });
+    }, [lineWrap]);
+
+    const reconfigureLanguage = useCallback(async (targetFilename?: string) => {
+        const requestId = ++languageRequestIdRef.current;
+        const extensions = await loadLanguageExtension(targetFilename);
+
+        if (requestId !== languageRequestIdRef.current) {
+            return;
+        }
+
+        const view = viewRef.current;
+        if (!view) {
+            return;
+        }
+
+        view.dispatch({
+            effects: languageConf.current.reconfigure(extensions),
+        });
+    }, []);
+
+    const replaceDocument = useCallback((input: CodeEditorReplaceDocumentInput) => {
+        const view = viewRef.current;
+        if (!view) return;
+        if (
+            input.path
+            && filenameRef.current
+            && normalizeEditorPath(input.path) !== normalizeEditorPath(filenameRef.current)
+        ) {
+            return;
+        }
+
+        if (!input.resetHistory && view.state.doc.toString() === input.content) {
+            return;
+        }
+
+        if (input.resetHistory) {
+            const targetFilename = input.path ?? filenameRef.current;
+            view.setState(createEditorState(input.content, targetFilename));
+            view.dispatch({
+                effects: [
+                    setBaseContent.of(input.content),
+                    setDiffState.of(createDiffStateFromUnifiedDiff(input.unifiedDiff)),
+                ],
+            });
+            void reconfigureLanguage(targetFilename ?? undefined);
+        } else {
+            replaceEditorDocument(
+                view,
+                input.content,
+                input.unifiedDiff,
+                input.preserveScroll,
+            );
+        }
+        contentRef.current = input.content;
+    }, [createEditorState, reconfigureLanguage]);
+
+    // Expose methods to parent via ref
+    useImperativeHandle(ref, () => ({
+        getView: () => viewRef.current,
+        getContent: () => viewRef.current?.state.doc.toString() ?? contentRef.current,
+        replaceDocument,
+        setCursor: (line: number, col: number) => {
+            const view = viewRef.current;
+            if (!view) return;
+
+            const doc = view.state.doc;
+            const safeLine = Math.max(1, Math.min(line, doc.lines));
+            const lineObj = doc.line(safeLine);
+            const safeCol = Math.max(0, Math.min(col, lineObj.length));
+
+            const pos = lineObj.from + safeCol;
+
+            view.dispatch({
+                selection: { anchor: pos, head: pos },
+                effects: EditorView.scrollIntoView(pos, { y: "center" })
+            });
+            view.focus();
+        }
+    }));
+
+    // Initial setup
+    useEffect(() => {
+        if (!editorRef.current) return;
+        if (viewRef.current) return;
+
+        const initialFilename = filenameRef.current;
+        const state = createEditorState(contentRef.current, initialFilename);
 
         const view = new EditorView({
             state,
@@ -410,7 +423,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
             view.destroy();
             viewRef.current = null;
         };
-    }, [reconfigureLanguage]);
+    }, [createEditorState, reconfigureLanguage]);
 
     useEffect(() => {
         const view = viewRef.current;
@@ -469,16 +482,29 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
             lastFilename.current = filename;
             lastExternalContentVersionRef.current = externalContentVersion;
 
-            replaceEditorDocument(view, content, unifiedDiff);
+            replaceDocument({
+                path: filename,
+                content,
+                resetHistory: true,
+                reason: 'open',
+                unifiedDiff,
+            });
 
         } else if (isExternalContentUpdate) {
             lastExternalContentVersionRef.current = externalContentVersion;
 
-            replaceEditorDocumentIfChanged(view, content, unifiedDiff, true);
+            replaceDocument({
+                path: filename,
+                content,
+                resetHistory: false,
+                reason: 'external-clean-update',
+                unifiedDiff,
+                preserveScroll: true,
+            });
         }
         // Reset the user edit flag after processing
         isUserEditRef.current = false;
-    }, [filename, content, externalContentVersion, onNavigate, unifiedDiff, isMarkdown]);
+    }, [filename, content, externalContentVersion, onNavigate, unifiedDiff, isMarkdown, replaceDocument]);
 
     // Apply diff decorations when unifiedDiff changes
     useEffect(() => {

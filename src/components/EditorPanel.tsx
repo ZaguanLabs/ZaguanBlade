@@ -516,6 +516,12 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     latestFileReadIntentIdRef.current = null;
                     authoritativeReloadRef.current = false;
                     awaitingInitialSyncRef.current = false;
+                    editorRef.current?.replaceDocument({
+                        path: fileEvent.payload.path,
+                        content: fileEvent.payload.data,
+                        resetHistory: true,
+                        reason: isAuthoritativeReload ? 'revert' : 'reload',
+                    });
                     setContent(fileEvent.payload.data);
                     setContentOwnerPath(activeFile);
                     liveContentRef.current = fileEvent.payload.data;
