@@ -151,16 +151,12 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
     const contentRef = useRef(content);
     const filenameRef = useRef(filename);
     const lineWrapRef = useRef(lineWrap);
-    const isMarkdownRef = useRef(isMarkdown);
-    const shouldWrapRef = useRef(shouldWrap);
     const themeAppearanceRef = useRef(currentTheme.appearance);
     const editorActionsRef = useRef({ setCursorPosition, setSelection, clearSelection });
 
     contentRef.current = content;
     filenameRef.current = filename;
     lineWrapRef.current = lineWrap;
-    isMarkdownRef.current = isMarkdown;
-    shouldWrapRef.current = shouldWrap;
     themeAppearanceRef.current = currentTheme.appearance;
     editorActionsRef.current = { setCursorPosition, setSelection, clearSelection };
 
