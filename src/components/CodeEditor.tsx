@@ -150,6 +150,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
     const { showMenu } = useContextMenu();
     const contentRef = useRef(content);
     const filenameRef = useRef(filename);
+    const lineWrapRef = useRef(lineWrap);
     const isMarkdownRef = useRef(isMarkdown);
     const shouldWrapRef = useRef(shouldWrap);
     const themeAppearanceRef = useRef(currentTheme.appearance);
@@ -157,6 +158,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
 
     contentRef.current = content;
     filenameRef.current = filename;
+    lineWrapRef.current = lineWrap;
     isMarkdownRef.current = isMarkdown;
     shouldWrapRef.current = shouldWrap;
     themeAppearanceRef.current = currentTheme.appearance;
@@ -198,7 +200,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
 
     const createEditorState = useCallback((targetContent: string, targetFilename?: string | null) => {
         const targetIsMarkdown = targetFilename?.endsWith('.md') || targetFilename?.endsWith('.markdown') || false;
-        const targetShouldWrap = lineWrap ?? targetIsMarkdown;
+        const targetShouldWrap = lineWrapRef.current ?? targetIsMarkdown;
 
         return EditorState.create({
             doc: targetContent,
@@ -322,7 +324,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
                 })
             ]
         });
-    }, [lineWrap]);
+    }, []);
 
     const reconfigureLanguage = useCallback(async (targetFilename?: string) => {
         const requestId = ++languageRequestIdRef.current;
