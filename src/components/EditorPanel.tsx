@@ -20,6 +20,7 @@ import { Breadcrumb } from './editor/Breadcrumb';
 import { useUncommittedChanges } from '../hooks/useUncommittedChanges';
 import { formatBladeError, formatUnknownBackendError } from '../utils/backendErrors';
 import { recordDebugPerf } from '../utils/debugPerf';
+import type { EditorContentSnapshot } from '../utils/editorBufferRegistry';
 
 const CodeEditor = React.lazy(() => import('./CodeEditor'));
 const PdfViewer = React.lazy(() =>
@@ -34,12 +35,7 @@ const getDirectoryPath = (path: string): string => {
 
 type UncommittedChangesUpdateReason = 'applied' | 'accepted' | 'rejected' | 'refresh';
 
-export type EditorContentState = {
-    filePath?: string;
-    savedContent?: string;
-    draftContent?: string;
-    isDirty: boolean;
-};
+export type EditorContentState = EditorContentSnapshot;
 
 const WelcomePage: React.FC<{
     hasRemoteApiKey?: boolean | null;
