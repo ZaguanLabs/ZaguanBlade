@@ -234,6 +234,27 @@ test('getOpenDirtyEditorSaveCandidates filters dirty buffers to open paths', () 
     ]);
 });
 
+test('getOpenDirtyEditorSaveCandidates normalizes open paths', () => {
+    const registry: EditorBufferRegistry = {
+        'src/file.ts': {
+            path: 'src/file.ts',
+            cleanContent: 'base',
+            draftContent: 'draft',
+            dirty: true,
+            version: 1,
+        },
+    };
+
+    assert.deepEqual(getOpenDirtyEditorSaveCandidates(registry, ['src\\file.ts']), [
+        {
+            path: 'src/file.ts',
+            baseline: 'base',
+            draft: 'draft',
+            source: 'editor-buffer-registry',
+        },
+    ]);
+});
+
 test('clean save snapshot removes open dirty save candidate', () => {
     const dirty = applyEditorContentSnapshot({}, {
         filePath: 'src/file.ts',
@@ -320,6 +341,113 @@ test('markEditorSaveCandidatesClean normalizes saved candidate paths', () => {
         version: 2,
     });
     assert.deepEqual(getDirtyEditorSaveCandidates(saved), []);
+});
+
+test('scenario: switching files restores content by exact path without leaking previous draft', () => {
+    const registry = applyEditorContentSnapshots({}, [
+        {
+            filePath: 'src/a.ts',
+            savedContent: 'a-base',
+            draftContent: 'a-draft',
+            isDirty: true,
+        },
+        {
+            filePath: 'src/b.ts',
+            savedContent: 'b-base',
+            draftContent: undefined,
+            isDirty: false,
+        },
+    ]);
+
+    assert.deepEqual(getEditorContentSnapshotForPath(registry, 'src/b.ts', {
+        savedContent: 'a-base',
+        draftContent: 'a-draft',
+        isDirty: true,
+    }), {
+        filePath: 'src/b.ts',
+        savedContent: 'b-base',
+        draftContent: undefined,
+        isDirty: false,
+    });
+    assert.deepEqual(getEditorContentSnapshotForPath(registry, 'src/a.ts'), {
+        filePath: 'src/a.ts',
+        savedContent: 'a-base',
+        draftContent: 'a-draft',
+        isDirty: true,
+    });
+});
+
+test('scenario: dirty inactive file is the only shutdown save candidate while clean active file is open', () => {
+    const registry = applyEditorContentSnapshots({}, [
+        {
+            filePath: 'src/a.ts',
+            savedContent: 'a-base',
+            draftContent: 'a-draft',
+            isDirty: true,
+        },
+        {
+            filePath: 'src/b.ts',
+            savedContent: 'b-base',
+            draftContent: undefined,
+            isDirty: false,
+        },
+    ]);
+
+    assert.deepEqual(getOpenDirtyEditorSaveCandidates(registry, ['src/a.ts', 'src/b.ts']), [
+        {
+            path: 'src/a.ts',
+            baseline: 'a-base',
+            draft: 'a-draft',
+            source: 'editor-buffer-registry',
+        },
+    ]);
+});
+
+test('scenario: same filename in different directories keeps separate drafts and candidates', () => {
+    const registry = applyEditorContentSnapshots({}, [
+        {
+            filePath: 'src/left/file.ts',
+            savedContent: 'left-base',
+            draftContent: 'left-draft',
+            isDirty: true,
+        },
+        {
+            filePath: 'src/right/file.ts',
+            savedContent: 'right-base',
+            draftContent: 'right-draft',
+            isDirty: true,
+        },
+    ]);
+
+    assert.deepEqual(getEditorContentSnapshotForPath(registry, 'src/left/file.ts'), {
+        filePath: 'src/left/file.ts',
+        savedContent: 'left-base',
+        draftContent: 'left-draft',
+        isDirty: true,
+    });
+    assert.deepEqual(getEditorContentSnapshotForPath(registry, 'src/right/file.ts'), {
+        filePath: 'src/right/file.ts',
+        savedContent: 'right-base',
+        draftContent: 'right-draft',
+        isDirty: true,
+    });
+    assert.deepEqual(getOpenDirtyEditorSaveCandidates(registry, [
+        'src/left/file.ts',
+        'src/right/file.ts',
+    ]), [
+        {
+            path: 'src/left/file.ts',
+            baseline: 'left-base',
+            draft: 'left-draft',
+            source: 'editor-buffer-registry',
+        },
+        {
+            path: 'src/right/file.ts',
+            baseline: 'right-base',
+            draft: 'right-draft',
+            source: 'editor-buffer-registry',
+        },
+    ]);
 });
 
 test('pruneEditorBufferRegistry drops buffers for closed paths', () => {

@@ -34,6 +34,11 @@ export const MarkdownEditor = forwardRef<CodeEditorHandle, MarkdownEditorProps>(
     useImperativeHandle(ref, () => ({
         getView: () => editorRef.current?.getView() ?? null,
         getContent: () => editorRef.current?.getContent() ?? previewContentRef.current,
+        replaceDocument: (input) => {
+            editorRef.current?.replaceDocument(input);
+            previewContentRef.current = input.content;
+            setPreviewContent(input.content);
+        },
         setCursor: (line: number, col: number) => {
             editorRef.current?.setCursor(line, col);
         },

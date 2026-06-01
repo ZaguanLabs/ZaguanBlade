@@ -34,6 +34,7 @@ import { Copy, Scissors, Clipboard, Undo2, Redo2, Search, Network } from "lucide
 import { ZLPService } from "../services/zlp";
 import { StructureNode } from "../types/zlp";
 import { GraphInspector } from "./GraphInspector";
+import { normalizeEditorPath } from "../utils/editorBufferRegistry";
 
 const EDITING_AID_MAX_DOC_LENGTH = 500_000;
 
@@ -123,9 +124,21 @@ interface CodeEditorProps {
 export interface CodeEditorHandle {
     getView: () => EditorView | null;
     getContent: () => string;
+    replaceDocument: (input: CodeEditorReplaceDocumentInput) => void;
     /** Set cursor position and scroll into view (line is 1-based, col is 0-based) */
     setCursor: (line: number, col: number) => void;
 }
+
+export type CodeEditorReplaceDocumentReason = 'open' | 'reload' | 'revert' | 'external-clean-update';
+
+export type CodeEditorReplaceDocumentInput = {
+    path?: string | null;
+    content: string;
+    resetHistory: boolean;
+    reason: CodeEditorReplaceDocumentReason;
+    unifiedDiff?: string;
+    preserveScroll?: boolean;
+};
 
 
 const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onDocumentChange, onSave, filename, externalContentVersion = 0, highlightLines, onNavigate, lineWrap, unifiedDiff }, ref) => {
@@ -195,6 +208,25 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
     useImperativeHandle(ref, () => ({
         getView: () => viewRef.current,
         getContent: () => viewRef.current?.state.doc.toString() ?? contentRef.current,
+        replaceDocument: (input) => {
+            const view = viewRef.current;
+            if (!view) return;
+            if (
+                input.path
+                && filenameRef.current
+                && normalizeEditorPath(input.path) !== normalizeEditorPath(filenameRef.current)
+            ) {
+                return;
+            }
+
+            replaceEditorDocument(
+                view,
+                input.content,
+                input.unifiedDiff,
+                input.preserveScroll,
+            );
+            contentRef.current = input.content;
+        },
         setCursor: (line: number, col: number) => {
             const view = viewRef.current;
             if (!view) return;
