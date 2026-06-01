@@ -120,11 +120,20 @@ export function getEditorContentSnapshotForPath(
     fallback: EditorContentSnapshotFallback = {},
 ): EditorContentSnapshot {
     const buffer = path ? registry[normalizeEditorPath(path)] : undefined;
+    if (buffer) {
+        return {
+            filePath: path ?? undefined,
+            savedContent: buffer.cleanContent,
+            draftContent: buffer.draftContent,
+            isDirty: buffer.dirty,
+        };
+    }
+
     return {
         filePath: path ?? undefined,
-        savedContent: buffer?.cleanContent ?? fallback.savedContent ?? undefined,
-        draftContent: buffer?.draftContent ?? fallback.draftContent ?? undefined,
-        isDirty: buffer?.dirty ?? Boolean(fallback.isDirty),
+        savedContent: fallback.savedContent ?? undefined,
+        draftContent: fallback.draftContent ?? undefined,
+        isDirty: Boolean(fallback.isDirty),
     };
 }
 

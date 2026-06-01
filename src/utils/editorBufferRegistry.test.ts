@@ -140,6 +140,26 @@ test('getEditorContentSnapshotForPath prefers registry over fallback', () => {
     });
 });
 
+test('getEditorContentSnapshotForPath does not merge stale fallback fields into registry buffer', () => {
+    const registry = applyEditorContentSnapshot({}, {
+        filePath: 'src/file.ts',
+        savedContent: 'saved',
+        draftContent: undefined,
+        isDirty: false,
+    });
+
+    assert.deepEqual(getEditorContentSnapshotForPath(registry, 'src/file.ts', {
+        savedContent: 'stale-base',
+        draftContent: 'stale-draft',
+        isDirty: true,
+    }), {
+        filePath: 'src/file.ts',
+        savedContent: 'saved',
+        draftContent: undefined,
+        isDirty: false,
+    });
+});
+
 test('getEditorContentSnapshotForPath falls back when registry has no path', () => {
     assert.deepEqual(getEditorContentSnapshotForPath({}, 'src/file.ts', {
         savedContent: 'fallback-base',
@@ -273,6 +293,33 @@ test('markEditorSaveCandidatesClean advances saved candidates to clean baselines
         dirty: false,
         version: 2,
     });
+});
+
+test('markEditorSaveCandidatesClean normalizes saved candidate paths', () => {
+    const registry: EditorBufferRegistry = {
+        'src/file.ts': {
+            path: 'src/file.ts',
+            cleanContent: 'base',
+            draftContent: 'draft',
+            dirty: true,
+            version: 1,
+        },
+    };
+    const saved = markEditorSaveCandidatesClean(registry, [{
+        path: 'src\\file.ts',
+        baseline: 'base',
+        draft: 'draft',
+        source: 'editor-buffer-registry',
+    }]);
+
+    assert.deepEqual(saved['src/file.ts'], {
+        path: 'src/file.ts',
+        cleanContent: 'draft',
+        draftContent: undefined,
+        dirty: false,
+        version: 2,
+    });
+    assert.deepEqual(getDirtyEditorSaveCandidates(saved), []);
 });
 
 test('pruneEditorBufferRegistry drops buffers for closed paths', () => {
