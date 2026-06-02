@@ -256,6 +256,18 @@ export function getOpenDirtyEditorSaveCandidates(
         .filter(candidate => openPathSet.has(normalizeEditorPath(candidate.path)));
 }
 
+export function getOpenDirtyEditorSaveCandidatesFromMirrors<T extends EditorContentMirrorState>(
+    registry: EditorBufferRegistry,
+    mirrors: T[],
+): DirtyEditorSaveCandidate[] {
+    return getOpenDirtyEditorSaveCandidates(
+        registry,
+        mirrors
+            .map(mirror => mirror.path)
+            .filter((path): path is string => Boolean(path)),
+    );
+}
+
 export function markEditorSaveCandidatesClean(
     registry: EditorBufferRegistry,
     candidates: DirtyEditorSaveCandidate[],

@@ -29,7 +29,7 @@ import {
     getEditorContentSnapshotForMirror,
     getEditorContentSnapshotsFromMirrors,
     getEditorContentSnapshotTargetId,
-    getOpenDirtyEditorSaveCandidates,
+    getOpenDirtyEditorSaveCandidatesFromMirrors,
     markEditorSaveCandidatesClean,
     normalizeEditorPath,
     pruneEditorBufferRegistry,
@@ -94,34 +94,6 @@ function findMatchingChangeRange(
         startLine,
         endLine: startLine + safeLineCount - 1,
     };
-}
-
-function getTabContentStateTargetId(tabs: Tab[], fallbackTabId: string | null, state: EditorContentState): string | null {
-    return getEditorContentSnapshotTargetId(
-        tabs.filter(tab => tab.type === 'file'),
-        fallbackTabId,
-        state,
-    );
-}
-
-function applyContentStateToTab(
-    tab: Tab,
-    state: EditorContentState,
-    options: { mirrorDraftContent?: boolean; mirrorDirtySavedContent?: boolean } = {},
-): Tab {
-    return applyEditorContentSnapshotToMirror(tab, state, options);
-}
-
-function getInactiveTabContentSnapshots(
-    tabs: Tab[],
-    activeTabId: string | null,
-    registry: EditorBufferRegistry,
-): EditorContentState[] {
-    return getEditorContentSnapshotsFromMirrors(
-        registry,
-        tabs.filter(tab => tab.type === 'file'),
-        activeTabId,
-    );
 }
 
 function useNoopChat() {
@@ -565,7 +537,11 @@ const AppLayoutInner: React.FC = () => {
         editorBufferRegistryRef.current = applyEditorContentSnapshot(editorBufferRegistryRef.current, pending.state);
 
         setTabs(prev => {
-            const targetTabId = getTabContentStateTargetId(prev, pending.tabId, pending.state);
+            const targetTabId = getEditorContentSnapshotTargetId(
+                prev.filter(tab => tab.type === 'file'),
+                pending.tabId,
+                pending.state,
+            );
             if (!targetTabId) {
                 return prev;
             }
@@ -575,7 +551,7 @@ const AppLayoutInner: React.FC = () => {
                     return tab;
                 }
 
-                return applyContentStateToTab(tab, pending.state, {
+                return applyEditorContentSnapshotToMirror(tab, pending.state, {
                     mirrorDraftContent: false,
                     mirrorDirtySavedContent: false,
                 });
@@ -592,7 +568,11 @@ const AppLayoutInner: React.FC = () => {
     const handleActiveTabContentStateChange = useCallback((state: EditorContentState) => {
         if (!activeTabId) return;
 
-        const targetTabId = getTabContentStateTargetId(tabs, activeTabId, state);
+        const targetTabId = getEditorContentSnapshotTargetId(
+            tabs.filter(tab => tab.type === 'file'),
+            activeTabId,
+            state,
+        );
         if (!targetTabId) return;
         editorBufferRegistryRef.current = applyEditorContentSnapshot(editorBufferRegistryRef.current, state);
 
@@ -625,7 +605,11 @@ const AppLayoutInner: React.FC = () => {
     useEffect(() => {
         editorBufferRegistryRef.current = applyEditorContentSnapshots(
             editorBufferRegistryRef.current,
-            getInactiveTabContentSnapshots(tabs, activeTabId, editorBufferRegistryRef.current),
+            getEditorContentSnapshotsFromMirrors(
+                editorBufferRegistryRef.current,
+                tabs.filter(tab => tab.type === 'file'),
+                activeTabId,
+            ),
         );
     }, [activeTabId, tabs]);
 
@@ -870,9 +854,9 @@ const AppLayoutInner: React.FC = () => {
                 .filter(tab => tab.type === 'file' && tab.path)
                 .map(tab => [normalizeEditorPath(tab.path!), tab]),
         );
-        const dirtySaveCandidates = getOpenDirtyEditorSaveCandidates(
+        const dirtySaveCandidates = getOpenDirtyEditorSaveCandidatesFromMirrors(
             registryForShutdown,
-            Array.from(openFileTabsByPath.keys()),
+            tabs.filter(tab => tab.type === 'file'),
         );
 
         if (dirtySaveCandidates.length === 0) {
