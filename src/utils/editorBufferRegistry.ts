@@ -289,6 +289,25 @@ export function getDirtyEditorSaveCandidateDisplayNames<T extends EditorContentD
     });
 }
 
+export function getTabDirtyStates<T extends EditorContentTargetMirror>(
+    registry: EditorBufferRegistry,
+    mirrors: T[],
+): Map<string, boolean> {
+    const dirtyStates = new Map<string, boolean>();
+
+    for (const mirror of mirrors) {
+        if (!mirror.path) {
+            dirtyStates.set(mirror.id, false);
+            continue;
+        }
+
+        const buffer = registry[normalizeEditorPath(mirror.path)];
+        dirtyStates.set(mirror.id, buffer?.dirty ?? false);
+    }
+
+    return dirtyStates;
+}
+
 export function markEditorSaveCandidatesClean(
     registry: EditorBufferRegistry,
     candidates: DirtyEditorSaveCandidate[],
@@ -324,6 +343,135 @@ export function getEditorContentSnapshotForPath(
         savedContent: fallback.savedContent ?? undefined,
         draftContent: fallback.draftContent ?? undefined,
         isDirty: Boolean(fallback.isDirty),
+    };
+}
+
+export type EditorInitialContentConfig = {
+    content: string;
+    baselineContent: string;
+    shouldLoad: boolean;
+    resetHistory: boolean;
+    reason: 'open' | 'external-clean-update' | null;
+    awaitingInitialSync: boolean;
+};
+
+export type GetEditorInitialContentConfigInput = {
+    activeFile: string | null;
+    savedContent: string | null | undefined;
+    draftContent: string | null | undefined;
+    isDirty: boolean;
+    isMarkdownFile: boolean;
+    isFileSwitch: boolean;
+    contentOwnerPath: string | null;
+};
+
+export function getEditorInitialContentConfig({
+    activeFile,
+    savedContent,
+    draftContent,
+    isDirty,
+    isMarkdownFile,
+    isFileSwitch,
+    contentOwnerPath,
+}: GetEditorInitialContentConfigInput): EditorInitialContentConfig {
+    if (!activeFile) {
+        return {
+            content: '',
+            baselineContent: '',
+            shouldLoad: false,
+            resetHistory: false,
+            reason: null,
+            awaitingInitialSync: false,
+        };
+    }
+
+    if (!isMarkdownFile) {
+        if (savedContent != null) {
+            if (isDirty) {
+                return {
+                    content: savedContent,
+                    baselineContent: savedContent,
+                    shouldLoad: false,
+                    resetHistory: false,
+                    reason: null,
+                    awaitingInitialSync: false,
+                };
+            }
+
+            const shouldLoad = isFileSwitch || contentOwnerPath !== activeFile;
+            return {
+                content: savedContent,
+                baselineContent: savedContent,
+                shouldLoad,
+                resetHistory: isFileSwitch,
+                reason: shouldLoad ? (isFileSwitch ? 'open' : 'external-clean-update') : null,
+                awaitingInitialSync: false,
+            };
+        }
+
+        return {
+            content: '',
+            baselineContent: '',
+            shouldLoad: false,
+            resetHistory: false,
+            reason: null,
+            awaitingInitialSync: true,
+        };
+    }
+
+    if (isDirty && draftContent != null) {
+        const shouldLoad = isFileSwitch || contentOwnerPath !== activeFile;
+        return {
+            content: draftContent,
+            baselineContent: savedContent ?? '',
+            shouldLoad,
+            resetHistory: true,
+            reason: shouldLoad ? 'open' : null,
+            awaitingInitialSync: false,
+        };
+    }
+
+    if (isDirty) {
+        if (savedContent != null && isFileSwitch) {
+            return {
+                content: savedContent,
+                baselineContent: savedContent,
+                shouldLoad: true,
+                resetHistory: true,
+                reason: 'open',
+                awaitingInitialSync: false,
+            };
+        }
+
+        return {
+            content: savedContent ?? '',
+            baselineContent: savedContent ?? '',
+            shouldLoad: false,
+            resetHistory: false,
+            reason: null,
+            awaitingInitialSync: false,
+        };
+    }
+
+    if (savedContent != null) {
+        const shouldLoad = isFileSwitch || contentOwnerPath !== activeFile;
+        return {
+            content: savedContent,
+            baselineContent: savedContent,
+            shouldLoad,
+            resetHistory: isFileSwitch,
+            reason: shouldLoad ? (isFileSwitch ? 'open' : 'external-clean-update') : null,
+            awaitingInitialSync: false,
+        };
+    }
+
+    return {
+        content: '',
+        baselineContent: '',
+        shouldLoad: false,
+        resetHistory: false,
+        reason: null,
+        awaitingInitialSync: true,
     };
 }
 

@@ -13,8 +13,10 @@ import {
     getEditorContentSnapshotFromMirror,
     getEditorContentSnapshotsFromMirrors,
     getEditorContentSnapshotTargetId,
+    getEditorInitialContentConfig,
     getOpenDirtyEditorSaveCandidates,
     getOpenDirtyEditorSaveCandidatesFromMirrors,
+    getTabDirtyStates,
     markEditorSaveCandidatesClean,
     normalizeEditorPath,
     pruneEditorBufferRegistry,
@@ -643,6 +645,265 @@ test('getDirtyEditorSaveCandidateDisplayNames falls back to candidate path and f
             source: 'editor-buffer-registry',
         },
     ], [], 'Untitled'), ['src/file.ts', 'Untitled']);
+});
+
+test('getTabDirtyStates derives dirty state from registry buffers', () => {
+    const registry: EditorBufferRegistry = {
+        'src/a.ts': {
+            path: 'src/a.ts',
+            cleanContent: 'a-base',
+            draftContent: 'a-draft',
+            dirty: true,
+            version: 1,
+        },
+        'src/b.ts': {
+            path: 'src/b.ts',
+            cleanContent: 'b-base',
+            draftContent: undefined,
+            dirty: false,
+            version: 1,
+        },
+    };
+
+    const dirtyStates = getTabDirtyStates(registry, [
+        { id: 'tab-1', path: 'src/a.ts' },
+        { id: 'tab-2', path: 'src/b.ts' },
+        { id: 'tab-3', path: 'src\\c.ts' },
+        { id: 'tab-4' },
+    ]);
+
+    assert.equal(dirtyStates.get('tab-1'), true);
+    assert.equal(dirtyStates.get('tab-2'), false);
+    assert.equal(dirtyStates.get('tab-3'), false);
+    assert.equal(dirtyStates.get('tab-4'), false);
+});
+
+test('getEditorInitialContentConfig returns empty config when no active file', () => {
+    assert.deepEqual(getEditorInitialContentConfig({
+        activeFile: null,
+        savedContent: 'saved',
+        draftContent: 'draft',
+        isDirty: true,
+        isMarkdownFile: false,
+        isFileSwitch: false,
+        contentOwnerPath: null,
+    }), {
+        content: '',
+        baselineContent: '',
+        shouldLoad: false,
+        resetHistory: false,
+        reason: null,
+        awaitingInitialSync: false,
+    });
+});
+
+test('getEditorInitialContentConfig loads clean non-markdown file on file switch', () => {
+    assert.deepEqual(getEditorInitialContentConfig({
+        activeFile: 'src/file.ts',
+        savedContent: 'saved',
+        draftContent: null,
+        isDirty: false,
+        isMarkdownFile: false,
+        isFileSwitch: true,
+        contentOwnerPath: 'src/other.ts',
+    }), {
+        content: 'saved',
+        baselineContent: 'saved',
+        shouldLoad: true,
+        resetHistory: true,
+        reason: 'open',
+        awaitingInitialSync: false,
+    });
+});
+
+test('getEditorInitialContentConfig loads clean non-markdown file on external update', () => {
+    assert.deepEqual(getEditorInitialContentConfig({
+        activeFile: 'src/file.ts',
+        savedContent: 'saved',
+        draftContent: null,
+        isDirty: false,
+        isMarkdownFile: false,
+        isFileSwitch: false,
+        contentOwnerPath: 'src/file.ts',
+    }), {
+        content: 'saved',
+        baselineContent: 'saved',
+        shouldLoad: false,
+        resetHistory: false,
+        reason: null,
+        awaitingInitialSync: false,
+    });
+});
+
+test('getEditorInitialContentConfig loads clean non-markdown file when content owner path differs', () => {
+    assert.deepEqual(getEditorInitialContentConfig({
+        activeFile: 'src/file.ts',
+        savedContent: 'saved',
+        draftContent: null,
+        isDirty: false,
+        isMarkdownFile: false,
+        isFileSwitch: false,
+        contentOwnerPath: 'src/other.ts',
+    }), {
+        content: 'saved',
+        baselineContent: 'saved',
+        shouldLoad: true,
+        resetHistory: false,
+        reason: 'external-clean-update',
+        awaitingInitialSync: false,
+    });
+});
+
+test('getEditorInitialContentConfig does not load dirty non-markdown file', () => {
+    assert.deepEqual(getEditorInitialContentConfig({
+        activeFile: 'src/file.ts',
+        savedContent: 'saved',
+        draftContent: null,
+        isDirty: true,
+        isMarkdownFile: false,
+        isFileSwitch: false,
+        contentOwnerPath: 'src/file.ts',
+    }), {
+        content: 'saved',
+        baselineContent: 'saved',
+        shouldLoad: false,
+        resetHistory: false,
+        reason: null,
+        awaitingInitialSync: false,
+    });
+});
+
+test('getEditorInitialContentConfig awaits initial sync when no saved content for non-markdown', () => {
+    assert.deepEqual(getEditorInitialContentConfig({
+        activeFile: 'src/file.ts',
+        savedContent: null,
+        draftContent: null,
+        isDirty: false,
+        isMarkdownFile: false,
+        isFileSwitch: true,
+        contentOwnerPath: null,
+    }), {
+        content: '',
+        baselineContent: '',
+        shouldLoad: false,
+        resetHistory: false,
+        reason: null,
+        awaitingInitialSync: true,
+    });
+});
+
+test('getEditorInitialContentConfig loads dirty markdown file with draft', () => {
+    assert.deepEqual(getEditorInitialContentConfig({
+        activeFile: 'README.md',
+        savedContent: 'saved',
+        draftContent: 'draft',
+        isDirty: true,
+        isMarkdownFile: true,
+        isFileSwitch: true,
+        contentOwnerPath: 'src/other.md',
+    }), {
+        content: 'draft',
+        baselineContent: 'saved',
+        shouldLoad: true,
+        resetHistory: true,
+        reason: 'open',
+        awaitingInitialSync: false,
+    });
+});
+
+test('getEditorInitialContentConfig loads dirty markdown file with draft when content owner path differs', () => {
+    assert.deepEqual(getEditorInitialContentConfig({
+        activeFile: 'README.md',
+        savedContent: 'saved',
+        draftContent: 'draft',
+        isDirty: true,
+        isMarkdownFile: true,
+        isFileSwitch: false,
+        contentOwnerPath: 'src/other.md',
+    }), {
+        content: 'draft',
+        baselineContent: 'saved',
+        shouldLoad: true,
+        resetHistory: true,
+        reason: 'open',
+        awaitingInitialSync: false,
+    });
+});
+
+test('getEditorInitialContentConfig loads dirty markdown file without draft on file switch', () => {
+    assert.deepEqual(getEditorInitialContentConfig({
+        activeFile: 'README.md',
+        savedContent: 'saved',
+        draftContent: null,
+        isDirty: true,
+        isMarkdownFile: true,
+        isFileSwitch: true,
+        contentOwnerPath: 'src/other.md',
+    }), {
+        content: 'saved',
+        baselineContent: 'saved',
+        shouldLoad: true,
+        resetHistory: true,
+        reason: 'open',
+        awaitingInitialSync: false,
+    });
+});
+
+test('getEditorInitialContentConfig does not load dirty markdown file without draft on same file', () => {
+    assert.deepEqual(getEditorInitialContentConfig({
+        activeFile: 'README.md',
+        savedContent: 'saved',
+        draftContent: null,
+        isDirty: true,
+        isMarkdownFile: true,
+        isFileSwitch: false,
+        contentOwnerPath: 'README.md',
+    }), {
+        content: 'saved',
+        baselineContent: 'saved',
+        shouldLoad: false,
+        resetHistory: false,
+        reason: null,
+        awaitingInitialSync: false,
+    });
+});
+
+test('getEditorInitialContentConfig loads clean markdown file', () => {
+    assert.deepEqual(getEditorInitialContentConfig({
+        activeFile: 'README.md',
+        savedContent: 'saved',
+        draftContent: null,
+        isDirty: false,
+        isMarkdownFile: true,
+        isFileSwitch: true,
+        contentOwnerPath: 'src/other.md',
+    }), {
+        content: 'saved',
+        baselineContent: 'saved',
+        shouldLoad: true,
+        resetHistory: true,
+        reason: 'open',
+        awaitingInitialSync: false,
+    });
+});
+
+test('getEditorInitialContentConfig awaits initial sync when no saved content for markdown', () => {
+    assert.deepEqual(getEditorInitialContentConfig({
+        activeFile: 'README.md',
+        savedContent: null,
+        draftContent: null,
+        isDirty: false,
+        isMarkdownFile: true,
+        isFileSwitch: true,
+        contentOwnerPath: null,
+    }), {
+        content: '',
+        baselineContent: '',
+        shouldLoad: false,
+        resetHistory: false,
+        reason: null,
+        awaitingInitialSync: true,
+    });
 });
 
 test('clean save snapshot removes open dirty save candidate', () => {

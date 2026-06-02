@@ -13,9 +13,6 @@ export interface Tab {
     content?: string;
     suggestedName?: string;
     highlightLines?: { startLine: number; endLine: number };
-    savedContent?: string;
-    draftContent?: string;
-    isDirty?: boolean;
 }
 
 // Helper to convert backend TabInfo to frontend Tab
@@ -148,22 +145,6 @@ export function useTabManager(uncommittedChanges: UncommittedChange[]) {
         count: uncommittedChanges.length,
         paths: new Set(uncommittedChanges.map(c => c.file_path)),
     }), [uncommittedChanges]);
-
-    const appBarTabs = useMemo((): AppBarTab[] => tabs.map(t => {
-        const isFileTab = t.type === 'file' && !!t.path;
-        const path = t.path;
-
-        return {
-            id: t.id,
-            title: t.title,
-            path: t.path,
-            isEphemeral: t.type === 'ephemeral',
-            isDirty: Boolean(t.isDirty),
-            hasVirtualChanges: isFileTab ? uncommittedChangesMetadata.paths.has(path!) : false,
-            isAiEdited: isFileTab ? aiEditedFilePaths.has(path!) : false,
-            hasUnreadAiEdit: isFileTab ? unseenAiEditedFilePaths.has(path!) : false,
-        };
-    }), [tabs, uncommittedChangesMetadata, aiEditedFilePaths, unseenAiEditedFilePaths]);
 
     const handleTabClick = useCallback((tabId: string) => {
         setActiveTabId(tabId);
@@ -378,7 +359,6 @@ export function useTabManager(uncommittedChanges: UncommittedChange[]) {
         setActiveTabId,
         activeTab,
         activeFilename,
-        appBarTabs,
         aiEditedFilePaths,
         setAiEditedFilePaths,
         unseenAiEditedFilePaths,

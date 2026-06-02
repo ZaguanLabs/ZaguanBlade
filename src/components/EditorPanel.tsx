@@ -23,6 +23,7 @@ import { recordDebugPerf } from '../utils/debugPerf';
 import {
     createEditorContentSnapshot,
     getEditorContentStatePropagation,
+    getEditorInitialContentConfig,
     type EditorContentSnapshot,
 } from '../utils/editorBufferRegistry';
 import { getEditorReviewTransition } from '../utils/editorReviewTransitions';
@@ -199,7 +200,6 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     const documentVersionRef = useRef(0);
     const awaitingInitialSyncRef = useRef(false);
     const syncedDocumentPathRef = useRef<string | null>(null);
-    const loadingRef = useRef(loading);
     const onContentStateChangeRef = useRef(onContentStateChange);
     const lastPropagatedDirtyRef = useRef(isDirty);
     const previousActiveFileRef = useRef(activeFile);
@@ -257,10 +257,6 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             setReloadTrigger(prev => prev + 1);
         },
     });
-
-    useEffect(() => {
-        loadingRef.current = loading;
-    }, [loading]);
 
     useEffect(() => {
         onContentStateChangeRef.current = onContentStateChange;
@@ -388,74 +384,25 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             return;
         }
 
-        if (!isMarkdownFile) {
-            if (savedContent != null) {
-                baseContentRef.current = savedContent;
-            }
+        const config = getEditorInitialContentConfig({
+            activeFile,
+            savedContent,
+            draftContent,
+            isDirty,
+            isMarkdownFile,
+            isFileSwitch,
+            contentOwnerPath,
+        });
 
-            if (isDirty) {
-                awaitingInitialSyncRef.current = false;
-                return;
-            }
+        setContent(config.content);
+        setContentOwnerPath(activeFile);
+        baseContentRef.current = config.baselineContent;
+        liveContentRef.current = config.content;
+        awaitingInitialSyncRef.current = config.awaitingInitialSync;
 
-            if (savedContent != null) {
-                setContent(savedContent);
-                setContentOwnerPath(activeFile);
-                liveContentRef.current = savedContent;
-                if (isFileSwitch || contentOwnerPath !== activeFile) {
-                    applyContentToEditor(savedContent, isFileSwitch ? 'open' : 'external-clean-update', isFileSwitch);
-                }
-                awaitingInitialSyncRef.current = false;
-                return;
-            }
-
-            awaitingInitialSyncRef.current = true;
-            return;
+        if (config.shouldLoad && config.reason) {
+            applyContentToEditor(config.content, config.reason, config.resetHistory);
         }
-
-        if (isDirty && draftContent != null) {
-            if (isFileSwitch || contentOwnerPath !== activeFile) {
-                setContent(draftContent);
-                setContentOwnerPath(activeFile);
-                liveContentRef.current = draftContent;
-                applyContentToEditor(draftContent, 'open', true);
-            }
-            if (savedContent != null) {
-                baseContentRef.current = savedContent;
-            }
-            awaitingInitialSyncRef.current = false;
-            return;
-        }
-
-        if (isDirty) {
-            if (savedContent != null) {
-                baseContentRef.current = savedContent;
-            }
-
-            if (isFileSwitch && savedContent != null) {
-                setContent(savedContent);
-                setContentOwnerPath(activeFile);
-                liveContentRef.current = savedContent;
-                applyContentToEditor(savedContent, 'open', true);
-            }
-
-            awaitingInitialSyncRef.current = false;
-            return;
-        }
-
-        if (savedContent != null) {
-            setContent(savedContent);
-            setContentOwnerPath(activeFile);
-            liveContentRef.current = savedContent;
-            baseContentRef.current = savedContent;
-            if (isFileSwitch || contentOwnerPath !== activeFile) {
-                applyContentToEditor(savedContent, isFileSwitch ? 'open' : 'external-clean-update', isFileSwitch);
-            }
-            awaitingInitialSyncRef.current = false;
-            return;
-        }
-
-        awaitingInitialSyncRef.current = true;
     }, [activeFile, applyContentToEditor, contentOwnerPath, draftContent, isDirty, savedContent, isMarkdownFile]);
 
     useEffect(() => {
@@ -592,7 +539,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             } else if (bladeEvent.type === 'System') {
                 const sysEvent = bladeEvent.payload;
                 if (sysEvent.type === 'IntentFailed') {
-                    if (loadingRef.current) {
+                    if (loading) {
                         const err = sysEvent.payload.error;
                         if ('details' in err && (err.details as any).id?.includes(activeFile)) {
                             setError(`${t('editor.loadFailed')}: ${formatBladeError(err)}`);
@@ -606,7 +553,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         return () => {
             unsubscribe();
         };
-    }, [activeFile, emitContentStateChange, getActiveEditorContent, t]);
+    }, [activeFile, emitContentStateChange, getActiveEditorContent, loading, t]);
 
     useEffect(() => {
         async function loadFile() {

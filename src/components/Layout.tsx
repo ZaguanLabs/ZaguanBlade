@@ -31,6 +31,7 @@ import {
     getEditorContentSnapshotsFromMirrors,
     getEditorContentSnapshotTargetId,
     getOpenDirtyEditorSaveCandidatesFromMirrors,
+    getTabDirtyStates,
     markEditorSaveCandidatesClean,
     normalizeEditorPath,
     pruneEditorBufferRegistry,
@@ -166,16 +167,6 @@ function useNoopTabManager(uncommittedChanges: { file_path: string }[]) {
         [tabs, activeTabId],
     );
     const activeFilename = activeTab?.title ?? null;
-    const appBarTabs = useMemo(() => tabs.map((tab) => ({
-        id: tab.id,
-        title: tab.title,
-        path: tab.path,
-        isEphemeral: tab.type === 'ephemeral',
-        isDirty: Boolean(tab.isDirty),
-        hasVirtualChanges: Boolean(tab.path && uncommittedChanges.some(change => change.file_path === tab.path)),
-        isAiEdited: Boolean(tab.path && aiEditedFilePaths.has(tab.path)),
-        hasUnreadAiEdit: Boolean(tab.path && unseenAiEditedFilePaths.has(tab.path)),
-    })), [tabs, uncommittedChanges, aiEditedFilePaths, unseenAiEditedFilePaths]);
 
     const handleTabClick = useCallback((tabId: string) => {
         setActiveTabId(tabId);
@@ -267,8 +258,9 @@ function useNoopTabManager(uncommittedChanges: { file_path: string }[]) {
         setActiveTabId,
         activeTab,
         activeFilename,
-        appBarTabs,
+        aiEditedFilePaths,
         setAiEditedFilePaths,
+        unseenAiEditedFilePaths,
         setUnseenAiEditedFilePaths,
         processingFilesRef,
         handleTabClick,
@@ -418,7 +410,8 @@ const AppLayoutInner: React.FC = () => {
         : useTabManager(uncommittedChanges);
     const {
         tabs, setTabs, activeTabId, setActiveTabId, activeTab, activeFilename,
-        appBarTabs, setAiEditedFilePaths, setUnseenAiEditedFilePaths,
+        aiEditedFilePaths, setAiEditedFilePaths,
+        unseenAiEditedFilePaths, setUnseenAiEditedFilePaths,
         processingFilesRef, handleTabClick, handleFileSelect, handleTabClose,
         handleTabReorder, handleTabMoveToBeginning, handleTabMoveToEnd,
         handleTabCloseAll, handleTabCloseOthers, handleEphemeralSave,
@@ -442,6 +435,17 @@ const AppLayoutInner: React.FC = () => {
     const pendingTabContentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const activeContentSnapshotRef = useRef<(() => EditorContentState) | null>(null);
     const editorBufferRegistryRef = useRef<EditorBufferRegistry>({});
+    const tabDirtyStates = useMemo(() => getTabDirtyStates(editorBufferRegistryRef.current, tabs), [tabs]);
+    const appBarTabs = useMemo(() => tabs.map((tab) => ({
+        id: tab.id,
+        title: tab.title,
+        path: tab.path,
+        isEphemeral: tab.type === 'ephemeral',
+        isDirty: tabDirtyStates.get(tab.id) ?? false,
+        hasVirtualChanges: Boolean(tab.path && uncommittedChanges.some(change => change.file_path === tab.path)),
+        isAiEdited: Boolean(tab.path && aiEditedFilePaths.has(tab.path)),
+        hasUnreadAiEdit: Boolean(tab.path && unseenAiEditedFilePaths.has(tab.path)),
+    })), [tabs, tabDirtyStates, uncommittedChanges, aiEditedFilePaths, unseenAiEditedFilePaths]);
 
     const requestShutdownDecision = useCallback((files: string[], overflowCount: number) => (
         new Promise<ShutdownDecision>((resolve) => {
