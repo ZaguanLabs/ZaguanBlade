@@ -10,6 +10,7 @@ import {
     getEditorContentSnapshotForMirror,
     getEditorContentSnapshotForPath,
     getEditorContentSnapshotFromMirror,
+    getEditorContentSnapshotsFromMirrors,
     getEditorContentSnapshotTargetId,
     getOpenDirtyEditorSaveCandidates,
     markEditorSaveCandidatesClean,
@@ -188,6 +189,60 @@ test('getEditorContentSnapshotFromMirror ignores mirrors without path or content
         path: 'src/file.ts',
         isDirty: false,
     }, false), null);
+});
+
+test('getEditorContentSnapshotsFromMirrors projects mirrors except excluded mirror', () => {
+    assert.deepEqual(getEditorContentSnapshotsFromMirrors({}, [
+        {
+            id: 'active',
+            path: 'src/active.ts',
+            savedContent: 'active saved',
+            draftContent: 'active draft',
+            isDirty: true,
+        },
+        {
+            id: 'inactive',
+            path: 'src/inactive.ts',
+            savedContent: 'inactive saved',
+            draftContent: 'inactive draft',
+            isDirty: true,
+        },
+        {
+            id: 'clean-empty',
+            path: 'src/clean-empty.ts',
+            isDirty: false,
+        },
+    ], 'active'), [{
+        filePath: 'src/inactive.ts',
+        savedContent: 'inactive saved',
+        draftContent: 'inactive draft',
+        isDirty: true,
+    }]);
+});
+
+test('getEditorContentSnapshotsFromMirrors omits mirrored content when registry has buffer', () => {
+    const registry: EditorBufferRegistry = {
+        'src/file.ts': {
+            path: 'src/file.ts',
+            cleanContent: 'registry saved',
+            draftContent: 'registry draft',
+            dirty: true,
+            version: 1,
+        },
+    };
+
+    assert.deepEqual(getEditorContentSnapshotsFromMirrors(registry, [{
+        id: 'tab-1',
+        path: 'src/file.ts',
+        savedContent: 'mirror saved',
+        draftContent: 'mirror draft',
+        isDirty: true,
+    }]), [{
+        filePath: 'src/file.ts',
+        savedContent: undefined,
+        draftContent: undefined,
+        isDirty: true,
+    }]);
 });
 
 test('getEditorContentSnapshotTargetId falls back when snapshot has no file path', () => {

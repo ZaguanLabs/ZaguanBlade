@@ -51,6 +51,8 @@ export type EditorContentTargetMirror = {
     path?: string;
 };
 
+export type EditorContentSnapshotMirror = EditorContentMirrorState & EditorContentTargetMirror;
+
 export type ApplyEditorContentSnapshotToMirrorOptions = {
     mirrorDraftContent?: boolean;
     mirrorDirtySavedContent?: boolean;
@@ -147,6 +149,24 @@ export function getEditorContentSnapshotFromMirror(
         draftContent: hasRegistryBuffer ? undefined : mirror.isDirty ? mirror.draftContent : undefined,
         isDirty: Boolean(mirror.isDirty),
     };
+}
+
+export function getEditorContentSnapshotsFromMirrors<T extends EditorContentSnapshotMirror>(
+    registry: EditorBufferRegistry,
+    mirrors: T[],
+    excludedMirrorId: string | null = null,
+): EditorContentSnapshot[] {
+    return mirrors.flatMap((mirror): EditorContentSnapshot[] => {
+        if (mirror.id === excludedMirrorId) {
+            return [];
+        }
+
+        const snapshot = getEditorContentSnapshotFromMirror(
+            mirror,
+            Boolean(mirror.path && registry[normalizeEditorPath(mirror.path)]),
+        );
+        return snapshot ? [snapshot] : [];
+    });
 }
 
 export function getEditorContentSnapshotTargetId<T extends EditorContentTargetMirror>(

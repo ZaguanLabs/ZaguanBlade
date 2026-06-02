@@ -27,7 +27,7 @@ import {
     applyEditorContentSnapshotToMirror,
     applyEditorContentSnapshots,
     getEditorContentSnapshotForMirror,
-    getEditorContentSnapshotFromMirror,
+    getEditorContentSnapshotsFromMirrors,
     getEditorContentSnapshotTargetId,
     getOpenDirtyEditorSaveCandidates,
     markEditorSaveCandidatesClean,
@@ -117,22 +117,11 @@ function getInactiveTabContentSnapshots(
     activeTabId: string | null,
     registry: EditorBufferRegistry,
 ): EditorContentState[] {
-    return tabs.flatMap((tab): EditorContentState[] => {
-        if (
-            tab.id === activeTabId
-            || tab.type !== 'file'
-            || !tab.path
-            || (!tab.isDirty && tab.savedContent === undefined && tab.draftContent === undefined)
-        ) {
-            return [];
-        }
-
-        const snapshot = getEditorContentSnapshotFromMirror(
-            tab,
-            Boolean(registry[normalizeEditorPath(tab.path)]),
-        );
-        return snapshot ? [snapshot] : [];
-    });
+    return getEditorContentSnapshotsFromMirrors(
+        registry,
+        tabs.filter(tab => tab.type === 'file'),
+        activeTabId,
+    );
 }
 
 function useNoopChat() {
