@@ -1,5 +1,5 @@
 use crate::app_state::AppState;
-use crate::uncommitted_changes::UncommittedChange;
+use crate::uncommitted_changes::{refresh_change_from_contents, UncommittedChange};
 use std::fs;
 use tauri::{AppHandle, Manager, State};
 
@@ -68,6 +68,20 @@ fn resolve_change_for_file_path(state: &AppState, file_path: &str) -> Option<Unc
         .find(|change| !change.unified_diff.trim().is_empty())
 }
 
+fn refresh_tracked_change(
+    state: &AppState,
+    change: UncommittedChange,
+) -> Option<UncommittedChange> {
+    let history_service = state.history_service().ok()?;
+    let base_content = history_service
+        .get_snapshot_content(&change.snapshot_id)
+        .ok()?;
+    let new_content = fs::read_to_string(&change.file_path).ok()?;
+    let current_modified_ms = crate::uncommitted_changes::file_modified_ms(&change.file_path);
+
+    refresh_change_from_contents(change, &base_content, &new_content, current_modified_ms)
+}
+
 #[tauri::command]
 pub async fn get_uncommitted_changes(
     _state: State<'_, AppState>,
@@ -87,33 +101,31 @@ pub async fn get_uncommitted_changes(
         for mut change in existing {
             let current_modified_ms =
                 crate::uncommitted_changes::file_modified_ms(&change.file_path);
-            if current_modified_ms == change.file_modified_ms {
-                refreshed.push(change);
-                continue;
-            }
-
             let snapshot = history_service.get_snapshot_content(&change.snapshot_id);
             let current = fs::read_to_string(&change.file_path);
 
             if let (Ok(base_content), Ok(new_content)) = (snapshot, current) {
-                let unified_diff =
-                    crate::uncommitted_changes::generate_unified_diff(&base_content, &new_content);
-                let (added, removed) = crate::uncommitted_changes::count_diff_stats(&unified_diff);
+                let refreshed_change = refresh_change_from_contents(
+                    change.clone(),
+                    &base_content,
+                    &new_content,
+                    current_modified_ms,
+                );
 
-                if change.unified_diff != unified_diff
-                    || change.added_lines != added
-                    || change.removed_lines != removed
+                let Some(next_change) = refreshed_change else {
+                    changed_any = true;
+                    continue;
+                };
+
+                if change.unified_diff != next_change.unified_diff
+                    || change.added_lines != next_change.added_lines
+                    || change.removed_lines != next_change.removed_lines
+                    || change.file_modified_ms != next_change.file_modified_ms
                 {
-                    change.unified_diff = unified_diff;
-                    change.added_lines = added;
-                    change.removed_lines = removed;
                     changed_any = true;
                 }
 
-                if change.file_modified_ms != current_modified_ms {
-                    change.file_modified_ms = current_modified_ms;
-                    changed_any = true;
-                }
+                change = next_change;
             }
 
             refreshed.push(change);
@@ -139,7 +151,19 @@ pub fn get_uncommitted_change_for_file(
     state: State<'_, AppState>,
     file_path: String,
 ) -> Option<UncommittedChange> {
-    resolve_change_for_file_path(&*state, &file_path)
+    let app_state = state.inner();
+    let resolved = resolve_change_for_file_path(app_state, &file_path)?;
+    let refreshed = refresh_tracked_change(app_state, resolved.clone());
+    match refreshed {
+        Some(change) => {
+            state.uncommitted_changes.track(change.clone());
+            Some(change)
+        }
+        None => {
+            state.uncommitted_changes.accept(&resolved.id);
+            None
+        }
+    }
 }
 
 #[tauri::command]

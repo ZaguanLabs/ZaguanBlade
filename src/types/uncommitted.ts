@@ -6,4 +6,5 @@ export interface UncommittedChange {
   added_lines: number;
   removed_lines: number;
   timestamp: number;
+  file_modified_ms?: number | null;
 }

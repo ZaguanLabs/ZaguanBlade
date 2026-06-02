@@ -8,6 +8,10 @@ import {
   type UncommittedChangesUpdatedDetail,
   type UncommittedChangesUpdateReason,
 } from '../utils/uncommittedChangeNotifications';
+import {
+  normalizeUncommittedPath,
+  upsertUncommittedChangeState,
+} from '../utils/uncommittedChangesState';
 
 interface UseUncommittedChangesOptions {
   onFileChanged?: (filePath: string, reason: UncommittedChangesUpdateReason) => void;
@@ -24,7 +28,7 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
   }, [options?.onFileChanged]);
 
   const normalizePath = useCallback((value: string): string => {
-    return value.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
+    return normalizeUncommittedPath(value);
   }, []);
 
   const isBoundarySuffixMatch = useCallback((full: string, suffix: string): boolean => {
@@ -36,7 +40,7 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
   const refresh = useCallback(async () => {
     try {
       const result = await invoke<UncommittedChange[]>('get_uncommitted_changes');
-      setChanges(result);
+      setChanges(result.filter(change => change.unified_diff.trim().length > 0));
     } catch (error) {
       console.error('Failed to get uncommitted changes:', error);
     } finally {
@@ -44,26 +48,11 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
     }
   }, []);
 
-  const upsertChange = useCallback((nextChange: UncommittedChange | null) => {
+  const upsertChange = useCallback((filePath: string, nextChange: UncommittedChange | null) => {
     setChanges(prev => {
-      if (!nextChange) {
-        return prev;
-      }
-
-      const nextPath = normalizePath(nextChange.file_path);
-      const existing = prev.find(change => normalizePath(change.file_path) === nextPath);
-
-      // Preserve existing non-empty diff when new diff is empty.
-      // This prevents the diff view from disappearing when the user edits the file
-      // and the backend re-diffs with an empty result.
-      if (existing && existing.unified_diff.trim().length > 0 && nextChange.unified_diff.trim().length === 0) {
-        return prev;
-      }
-
-      const filtered = prev.filter(change => normalizePath(change.file_path) !== nextPath);
-      return [...filtered, nextChange].sort((a, b) => a.timestamp - b.timestamp);
+      return upsertUncommittedChangeState(prev, filePath, nextChange);
     });
-  }, [normalizePath]);
+  }, []);
 
   const removeChanges = useCallback((predicate: (change: UncommittedChange) => boolean) => {
     setChanges(prev => prev.filter(change => !predicate(change)));
@@ -92,7 +81,12 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
               filePath,
             }))
           );
-          nextChanges.forEach(upsertChange);
+          nextChanges.forEach((nextChange, index) => {
+            const affectedPath = affectedPaths[index] ?? nextChange?.file_path;
+            if (affectedPath) {
+              upsertChange(affectedPath, nextChange);
+            }
+          });
         } catch (error) {
           console.error('Failed to get uncommitted change for file:', error);
           void refresh();

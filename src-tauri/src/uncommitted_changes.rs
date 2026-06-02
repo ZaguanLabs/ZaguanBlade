@@ -207,6 +207,27 @@ pub fn count_diff_stats(diff: &str) -> (usize, usize) {
     (added, removed)
 }
 
+pub fn refresh_change_from_contents(
+    mut change: UncommittedChange,
+    base_content: &str,
+    new_content: &str,
+    current_modified_ms: Option<u64>,
+) -> Option<UncommittedChange> {
+    let unified_diff = generate_unified_diff(base_content, new_content);
+    let (added, removed) = count_diff_stats(&unified_diff);
+
+    if added == 0 && removed == 0 {
+        return None;
+    }
+
+    change.unified_diff = unified_diff;
+    change.added_lines = added;
+    change.removed_lines = removed;
+    change.file_modified_ms = current_modified_ms;
+
+    Some(change)
+}
+
 pub fn file_modified_ms(path: &PathBuf) -> Option<u64> {
     let metadata = std::fs::metadata(path).ok()?;
     let modified = metadata.modified().ok()?;
@@ -320,6 +341,52 @@ mod tests {
         assert_eq!(
             removed, 0,
             "insertion-only change should not remove lines. diff:\n{diff}"
+        );
+    }
+
+    #[test]
+    fn refresh_change_from_contents_drops_noop_diff() {
+        let change = UncommittedChange {
+            id: "test-1".to_string(),
+            file_path: PathBuf::from("/test/file.rs"),
+            snapshot_id: "snap-1".to_string(),
+            unified_diff: "-old\n+new".to_string(),
+            added_lines: 1,
+            removed_lines: 1,
+            timestamp: 12345,
+            file_modified_ms: Some(1),
+        };
+
+        let refreshed =
+            refresh_change_from_contents(change, "same\ncontent\n", "same\ncontent\n", Some(2));
+
+        assert!(refreshed.is_none());
+    }
+
+    #[test]
+    fn refresh_change_from_contents_recomputes_stats_and_mtime() {
+        let change = UncommittedChange {
+            id: "test-1".to_string(),
+            file_path: PathBuf::from("/test/file.rs"),
+            snapshot_id: "snap-1".to_string(),
+            unified_diff: "-old\n+new".to_string(),
+            added_lines: 1,
+            removed_lines: 1,
+            timestamp: 12345,
+            file_modified_ms: Some(1),
+        };
+
+        let refreshed =
+            refresh_change_from_contents(change, "one\ntwo\n", "one\ntwo\nthree\n", Some(2))
+                .expect("changed content should keep a refreshed record");
+
+        assert_eq!(refreshed.added_lines, 1);
+        assert_eq!(refreshed.removed_lines, 0);
+        assert_eq!(refreshed.file_modified_ms, Some(2));
+        assert!(
+            refreshed.unified_diff.contains("+three"),
+            "refreshed diff should reflect current disk content:\n{}",
+            refreshed.unified_diff
         );
     }
 }
