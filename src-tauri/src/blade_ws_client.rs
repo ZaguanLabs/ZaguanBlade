@@ -336,14 +336,16 @@ struct HistoryDetailRequestPayload {
 /// Incoming WebSocket message
 #[derive(Debug, Deserialize)]
 struct WsIncomingMessage {
-    #[allow(dead_code)]
+    #[serde(default)]
     id: String,
     #[serde(default)]
     request_id: Option<String>,
     #[serde(rename = "type")]
     msg_type: String,
     #[allow(dead_code)]
+    #[serde(default)]
     timestamp: i64,
+    #[serde(default)]
     payload: Value,
 }
 
@@ -1463,6 +1465,7 @@ impl BladeWsClient {
                 });
             }
             "context_pack_request" | "fast_context" | "fast_context_request" => {
+                let include = msg.payload.get("include");
                 let id = msg
                     .payload
                     .get("id")
@@ -1497,15 +1500,33 @@ impl BladeWsClient {
                 let max_results = msg
                     .payload
                     .get("max_results")
+                    .or_else(|| msg.payload.get("maxResults"))
                     .and_then(|v| v.as_u64())
                     .map(|n| n as usize);
-                let include_tests = msg.payload.get("include_tests").and_then(|v| v.as_bool());
-                let include_docs = msg.payload.get("include_docs").and_then(|v| v.as_bool());
-                let include_memory = msg.payload.get("include_memory").and_then(|v| v.as_bool());
+                let include_tests = msg
+                    .payload
+                    .get("include_tests")
+                    .or_else(|| msg.payload.get("includeTests"))
+                    .or_else(|| include.and_then(|v| v.get("tests")))
+                    .and_then(|v| v.as_bool());
+                let include_docs = msg
+                    .payload
+                    .get("include_docs")
+                    .or_else(|| msg.payload.get("includeDocs"))
+                    .or_else(|| include.and_then(|v| v.get("docs")))
+                    .and_then(|v| v.as_bool());
+                let include_memory = msg
+                    .payload
+                    .get("include_memory")
+                    .or_else(|| msg.payload.get("includeMemory"))
+                    .or_else(|| include.and_then(|v| v.get("memory")))
+                    .and_then(|v| v.as_bool());
                 let include_project_index_min = msg
                     .payload
                     .get("include_project_index_min")
                     .or_else(|| msg.payload.get("includeProjectIndexMin"))
+                    .or_else(|| include.and_then(|v| v.get("project_index_min")))
+                    .or_else(|| include.and_then(|v| v.get("projectIndexMin")))
                     .and_then(|v| v.as_bool());
 
                 let _ = tx.send(BladeWsEvent::ContextPackRequest {
@@ -1544,7 +1565,11 @@ impl BladeWsClient {
                     .and_then(|v| v.as_u64())
                     .unwrap_or(300);
 
-                let _ = tx.send(BladeWsEvent::PairingTokenResponse { token, bot_username, expires_in });
+                let _ = tx.send(BladeWsEvent::PairingTokenResponse {
+                    token,
+                    bot_username,
+                    expires_in,
+                });
             }
             "remote_control_connected" => {
                 let telegram_username = msg
@@ -1597,5 +1622,98 @@ impl BladeWsClient {
         }
 
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_documented_context_pack_request_without_timestamp() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let message = r#"{
+            "type": "context_pack_request",
+            "id": "ctx-123",
+            "payload": {
+                "query": "Fix checkout modal",
+                "intent": "bug_fix",
+                "max_results": 8,
+                "include_tests": true,
+                "include_docs": true,
+                "include_memory": true
+            }
+        }"#;
+
+        BladeWsClient::parse_message(message, &tx).unwrap();
+
+        match rx.try_recv().unwrap() {
+            BladeWsEvent::ContextPackRequest {
+                id,
+                query,
+                intent,
+                max_results,
+                include_tests,
+                include_docs,
+                include_memory,
+                response_type,
+                ..
+            } => {
+                assert_eq!(id, "ctx-123");
+                assert_eq!(query, "Fix checkout modal");
+                assert_eq!(intent.as_deref(), Some("bug_fix"));
+                assert_eq!(max_results, Some(8));
+                assert_eq!(include_tests, Some(true));
+                assert_eq!(include_docs, Some(true));
+                assert_eq!(include_memory, Some(true));
+                assert_eq!(response_type, "context_pack_response");
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_fast_context_request_with_nested_include_flags() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let message = r#"{
+            "type": "fast_context",
+            "id": "ctx-456",
+            "payload": {
+                "queries": ["symbols db", "fast context"],
+                "maxResults": 12,
+                "include": {
+                    "tests": false,
+                    "docs": true,
+                    "memory": false,
+                    "project_index_min": true
+                }
+            }
+        }"#;
+
+        BladeWsClient::parse_message(message, &tx).unwrap();
+
+        match rx.try_recv().unwrap() {
+            BladeWsEvent::ContextPackRequest {
+                id,
+                queries,
+                max_results,
+                include_tests,
+                include_docs,
+                include_memory,
+                include_project_index_min,
+                response_type,
+                ..
+            } => {
+                assert_eq!(id, "ctx-456");
+                assert_eq!(queries, vec!["symbols db", "fast context"]);
+                assert_eq!(max_results, Some(12));
+                assert_eq!(include_tests, Some(false));
+                assert_eq!(include_docs, Some(true));
+                assert_eq!(include_memory, Some(false));
+                assert_eq!(include_project_index_min, Some(true));
+                assert_eq!(response_type, "fast_context_response");
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
     }
 }

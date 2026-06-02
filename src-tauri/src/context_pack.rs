@@ -698,4 +698,34 @@ mod tests {
             vec!["src/main.rs".to_string(), "src/lib.rs".to_string()]
         );
     }
+
+    #[test]
+    fn builds_project_context_from_zblade_context_files() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let context_dir = temp_dir.path().join(".zblade/context");
+        std::fs::create_dir_all(&context_dir).unwrap();
+        std::fs::write(
+            context_dir.join("project_index_min.md"),
+            "minimal project context",
+        )
+        .unwrap();
+        std::fs::write(context_dir.join("project_index.md"), "full project context").unwrap();
+
+        let project_context = build_project_context(temp_dir.path(), true);
+
+        assert_eq!(
+            project_context.project_index_min.as_deref(),
+            Some("minimal project context")
+        );
+        assert!(project_context.project_index_min_available);
+        assert!(project_context.project_index_available);
+        assert_eq!(
+            project_context.project_index_path.as_deref(),
+            Some(".zblade/context/project_index.md")
+        );
+
+        let project_context = build_project_context(temp_dir.path(), false);
+        assert!(project_context.project_index_min.is_none());
+        assert!(project_context.project_index_min_available);
+    }
 }
