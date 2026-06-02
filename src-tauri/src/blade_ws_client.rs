@@ -802,6 +802,36 @@ impl BladeWsClient {
         Ok(())
     }
 
+    pub async fn send_stop_generation_and_close(&self, session_id: String) -> Result<(), String> {
+        let conn = self.connection.lock().await;
+        let conn = conn.as_ref().ok_or("Not connected")?;
+
+        let payload = StopGenerationPayload {
+            session_id,
+            api_key: self.api_key.clone(),
+            reason: "user_requested_stop".to_string(),
+        };
+
+        let msg = WsBaseMessage {
+            id: format!("stop-generation-{}", chrono::Utc::now().timestamp_millis()),
+            msg_type: "stop_generation".to_string(),
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            payload: Some(serde_json::to_value(payload).unwrap()),
+        };
+
+        let json =
+            serde_json::to_string(&msg).map_err(|e| format!("JSON serialization error: {}", e))?;
+
+        conn.tx
+            .send(WsMessage::Send(json))
+            .map_err(|e| format!("Failed to send stop generation request: {}", e))?;
+        conn.tx
+            .send(WsMessage::Close)
+            .map_err(|e| format!("Failed to close stopped generation connection: {}", e))?;
+
+        Ok(())
+    }
+
     /// Send conversation context in response to get_conversation_context request (RFC-002)
     pub async fn send_conversation_context(
         &self,

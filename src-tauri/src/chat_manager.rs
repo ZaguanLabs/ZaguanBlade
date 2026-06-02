@@ -1317,8 +1317,12 @@ impl ChatManager {
                             | crate::blade_ws_client::BladeWsEvent::ContextPackResponse {
                                 ..
                             }
-                            | crate::blade_ws_client::BladeWsEvent::PairingTokenResponse { .. }
-                            | crate::blade_ws_client::BladeWsEvent::RemoteControlConnected { .. }
+                            | crate::blade_ws_client::BladeWsEvent::PairingTokenResponse {
+                                ..
+                            }
+                            | crate::blade_ws_client::BladeWsEvent::RemoteControlConnected {
+                                ..
+                            }
                             | crate::blade_ws_client::BladeWsEvent::RemoteControlDisconnected => {}
                         }
                     }
@@ -3188,15 +3192,11 @@ impl ChatManager {
     }
 
     /// Request to stop the current streaming response
-    pub fn request_stop(&mut self) -> bool {
+    pub fn begin_stop(&mut self) -> bool {
         let was_active = self.abort_handle.is_some()
             || self.streaming
             || self.rx.is_some()
             || self.agentic_loop.is_active();
-
-        if let Some(handle) = self.abort_handle.take() {
-            handle.abort();
-        }
 
         self.streaming = false;
         self.rx = None;
@@ -3206,12 +3206,24 @@ impl ChatManager {
         was_active
     }
 
+    pub fn abort_stream_task(&mut self) {
+        if let Some(handle) = self.abort_handle.take() {
+            handle.abort();
+        }
+    }
+
+    pub fn request_stop(&mut self) -> bool {
+        let was_active = self.begin_stop();
+        self.abort_stream_task();
+        was_active
+    }
+
     pub fn stop_requested(&self) -> bool {
         self.stop_requested
     }
 
-    pub fn stop_signal_target(&self) -> Option<(Arc<BladeWsClient>, String)> {
-        Some((self.ws_client.as_ref()?.clone(), self.session_id.clone()?))
+    pub fn stop_signal_target(&self) -> Option<(Arc<BladeWsClient>, Option<String>)> {
+        Some((self.ws_client.as_ref()?.clone(), self.session_id.clone()))
     }
 
     /// Check if a stream can be stopped

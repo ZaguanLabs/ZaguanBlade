@@ -38,7 +38,6 @@ pub async fn send_message<R: Runtime>(
     )
     .await
 }
-
 #[tauri::command]
 pub async fn list_models(
     state: State<'_, AppState>,
@@ -218,18 +217,49 @@ pub async fn save_conversation(state: State<'_, AppState>, app: AppHandle) -> Re
 pub fn stop_generation(state: State<'_, AppState>, app_handle: tauri::AppHandle) -> bool {
     let mut mgr = state.chat_manager.lock().unwrap();
     let stop_signal_target = mgr.stop_signal_target();
-    let stopped = mgr.request_stop();
+    let stopped = mgr.begin_stop();
     drop(mgr);
 
-    if let Some((ws_client, session_id)) = stop_signal_target {
+    if let Some((ws_client, session_id_hint)) = stop_signal_target {
+        let app_for_stop = app_handle.clone();
         tauri::async_runtime::spawn(async move {
-            if let Err(error) = ws_client.send_stop_generation(session_id).await {
+            let session_id = if session_id_hint.is_some() {
+                session_id_hint
+            } else {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_millis(750);
+                let mut resolved = None;
+                while std::time::Instant::now() < deadline {
+                    if let Some(session_id) = ws_client.get_session_id().await {
+                        resolved = Some(session_id);
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                }
+                resolved
+            };
+
+            if let Some(session_id) = session_id {
+                if let Err(error) = ws_client.send_stop_generation_and_close(session_id).await {
+                    eprintln!(
+                        "[STOP] Failed to send stop_generation to zcoderd: {}",
+                        error
+                    );
+                    ws_client.close().await;
+                }
+            } else {
                 eprintln!(
-                    "[STOP] Failed to send stop_generation to zcoderd: {}",
-                    error
+                    "[STOP] No session ID available for remote stop; closing WebSocket connection"
                 );
+                ws_client.close().await;
             }
+
+            let state = app_for_stop.state::<AppState>();
+            let mut mgr = state.chat_manager.lock().unwrap();
+            mgr.abort_stream_task();
         });
+    } else {
+        let mut mgr = state.chat_manager.lock().unwrap();
+        mgr.abort_stream_task();
     }
 
     // Clear any pending command batch when stopping
