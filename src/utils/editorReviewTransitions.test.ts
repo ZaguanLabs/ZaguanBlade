@@ -41,13 +41,13 @@ test('rejected active review requests authoritative reload', () => {
   });
 });
 
-test('non-review updates are ignored by review transition helper', () => {
+test('applied active review requests authoritative reload', () => {
   assert.deepEqual(getEditorReviewTransition({
     filePath: 'src/file.ts',
     reason: 'applied',
-    locallyDirty: false,
-    currentContent: 'content',
+    locallyDirty: true,
+    currentContent: 'stale dirty content',
   }), {
-    action: 'ignore',
+    action: 'request-authoritative-reload',
   });
 });

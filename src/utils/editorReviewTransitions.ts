@@ -37,7 +37,7 @@ export function getEditorReviewTransition(input: EditorReviewTransitionInput): E
     };
   }
 
-  if (input.reason === 'rejected') {
+  if (input.reason === 'rejected' || input.reason === 'applied') {
     return { action: 'request-authoritative-reload' };
   }
 
