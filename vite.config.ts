@@ -1,5 +1,13 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { fileURLToPath, URL } from "node:url";
+
+const isNodeModulePackage = (id: string, packageName: string): boolean => {
+    const normalizedId = id.replace(/\\/g, '/');
+    return normalizedId.includes(`/node_modules/${packageName}/`)
+        || normalizedId.endsWith(`/node_modules/${packageName}`)
+        || normalizedId.includes(`/node_modules/.pnpm/`) && normalizedId.includes(`/node_modules/${packageName}/`);
+};
 
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
@@ -19,7 +27,10 @@ export default defineConfig(async () => ({
         },
     },
     resolve: {
+        preserveSymlinks: true,
         dedupe: [
+            "react",
+            "react-dom",
             "@codemirror/state",
             "@codemirror/view",
             "@codemirror/language",
@@ -27,9 +38,14 @@ export default defineConfig(async () => ({
             "@lezer/highlight",
             "@lezer/lr",
         ],
-        alias: {
-            "@": "/src",
-        },
+        alias: [
+            { find: /^react$/, replacement: fileURLToPath(new URL("./node_modules/react/index.js", import.meta.url)) },
+            { find: /^react\/jsx-runtime$/, replacement: fileURLToPath(new URL("./node_modules/react/jsx-runtime.js", import.meta.url)) },
+            { find: /^react\/jsx-dev-runtime$/, replacement: fileURLToPath(new URL("./node_modules/react/jsx-dev-runtime.js", import.meta.url)) },
+            { find: /^react-dom$/, replacement: fileURLToPath(new URL("./node_modules/react-dom/index.js", import.meta.url)) },
+            { find: /^react-dom\/client$/, replacement: fileURLToPath(new URL("./node_modules/react-dom/client.js", import.meta.url)) },
+            { find: "@", replacement: "/src" },
+        ],
     },
     build: {
         chunkSizeWarningLimit: 1200,
@@ -46,6 +62,16 @@ export default defineConfig(async () => ({
             output: {
                 manualChunks: (id) => {
                     if (id.includes('node_modules')) {
+                        if (
+                            isNodeModulePackage(id, 'react') ||
+                            isNodeModulePackage(id, 'react-dom') ||
+                            isNodeModulePackage(id, 'scheduler') ||
+                            id.includes('/react/jsx-runtime') ||
+                            id.includes('/react/jsx-dev-runtime') ||
+                            (id.includes('commonjs-proxy') && id.includes('react'))
+                        ) {
+                            return 'vendor-react';
+                        }
                         // CodeMirror (Editor)
                         if (id.includes('@codemirror/lang-')) {
                             return 'vendor-codemirror-lang';
@@ -65,29 +91,9 @@ export default defineConfig(async () => ({
                         if (id.includes('pdfjs-dist')) {
                             return 'vendor-pdf';
                         }
-                        // Markdown + syntax highlighting are only needed once rich content renders.
                         if (
-                            id.includes('react-syntax-highlighter') ||
-                            id.includes('react-markdown') ||
-                            id.includes('refractor') ||
-                            id.includes('prismjs') ||
-                            id.includes('remark') ||
-                            id.includes('rehype') ||
-                            id.includes('unified') ||
-                            id.includes('unist') ||
-                            id.includes('vfile') ||
-                            id.includes('micromark') ||
-                            id.includes('mdast')
-                        ) {
-                            return 'vendor-markdown';
-                        }
-                        // Core React Framework
-                        if (
-                            id.includes('/react/') ||
-                            id.includes('/react-dom/') ||
                             id.includes('/react-router') ||
                             id.includes('@remix-run') ||
-                            id.includes('/scheduler/') ||
                             id.includes('i18next')
                         ) {
                             return 'vendor-react';
