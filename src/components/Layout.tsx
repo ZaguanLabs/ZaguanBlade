@@ -33,6 +33,7 @@ import {
     markEditorSaveCandidatesClean,
     normalizeEditorPath,
     pruneEditorBufferRegistry,
+    shouldFlushEditorContentSnapshotImmediately,
     type EditorBufferRegistry,
 } from '../utils/editorBufferRegistry';
 const ExplorerPanel = React.lazy(() => import('./ExplorerPanel').then(module => ({ default: module.ExplorerPanel })));
@@ -615,7 +616,7 @@ const AppLayoutInner: React.FC = () => {
             clearTimeout(pendingTabContentTimerRef.current);
         }
 
-        if (!state.isDirty || state.draftContent === undefined) {
+        if (shouldFlushEditorContentSnapshotImmediately(state)) {
             flushPendingTabContentState(targetTabId);
             return;
         }

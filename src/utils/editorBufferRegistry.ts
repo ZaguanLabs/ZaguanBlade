@@ -165,6 +165,10 @@ export function getEditorContentSnapshotTargetId<T extends EditorContentTargetMi
     ))?.id ?? null;
 }
 
+export function shouldFlushEditorContentSnapshotImmediately(snapshot: EditorContentSnapshot): boolean {
+    return !snapshot.isDirty || snapshot.draftContent === undefined;
+}
+
 export function applyEditorContentSnapshot(
     registry: EditorBufferRegistry,
     snapshot: EditorContentSnapshot,

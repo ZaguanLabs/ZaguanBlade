@@ -14,6 +14,7 @@ import {
     markEditorSaveCandidatesClean,
     normalizeEditorPath,
     pruneEditorBufferRegistry,
+    shouldFlushEditorContentSnapshotImmediately,
     type EditorBufferRegistry,
 } from './editorBufferRegistry';
 
@@ -216,6 +217,33 @@ test('getEditorContentSnapshotTargetId returns null when no path matches', () =>
         savedContent: 'content',
         isDirty: false,
     }), null);
+});
+
+test('shouldFlushEditorContentSnapshotImmediately flushes clean snapshots immediately', () => {
+    assert.equal(shouldFlushEditorContentSnapshotImmediately({
+        filePath: 'src/file.ts',
+        savedContent: 'saved',
+        draftContent: undefined,
+        isDirty: false,
+    }), true);
+});
+
+test('shouldFlushEditorContentSnapshotImmediately flushes metadata-only dirty snapshots immediately', () => {
+    assert.equal(shouldFlushEditorContentSnapshotImmediately({
+        filePath: 'src/file.ts',
+        savedContent: 'saved',
+        draftContent: undefined,
+        isDirty: true,
+    }), true);
+});
+
+test('shouldFlushEditorContentSnapshotImmediately debounces dirty snapshots with draft content', () => {
+    assert.equal(shouldFlushEditorContentSnapshotImmediately({
+        filePath: 'src/file.ts',
+        savedContent: 'saved',
+        draftContent: 'draft',
+        isDirty: true,
+    }), false);
 });
 
 test('applyEditorContentSnapshot stores dirty drafts by normalized path', () => {
