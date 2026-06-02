@@ -274,6 +274,17 @@ export function getEditorContentSnapshotForPath(
     };
 }
 
+export function getEditorContentSnapshotForMirror(
+    registry: EditorBufferRegistry,
+    mirror: EditorContentMirrorState,
+): EditorContentSnapshot {
+    return getEditorContentSnapshotForPath(registry, mirror.path, {
+        savedContent: mirror.savedContent,
+        draftContent: mirror.draftContent,
+        isDirty: mirror.isDirty,
+    });
+}
+
 export function pruneEditorBufferRegistry(
     registry: EditorBufferRegistry,
     retainedPaths: string[],

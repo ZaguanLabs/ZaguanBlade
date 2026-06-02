@@ -26,7 +26,7 @@ import {
     applyEditorContentSnapshot,
     applyEditorContentSnapshotToMirror,
     applyEditorContentSnapshots,
-    getEditorContentSnapshotForPath,
+    getEditorContentSnapshotForMirror,
     getEditorContentSnapshotFromMirror,
     getEditorContentSnapshotTargetId,
     getOpenDirtyEditorSaveCandidates,
@@ -859,11 +859,7 @@ const AppLayoutInner: React.FC = () => {
 
     const terminalState = getTerminalState();
     const activeEditorContentState = activeTab?.type === 'file'
-        ? getEditorContentSnapshotForPath(editorBufferRegistryRef.current, activeTab.path, {
-            savedContent: activeTab.savedContent,
-            draftContent: activeTab.draftContent,
-            isDirty: activeTab.isDirty,
-        })
+        ? getEditorContentSnapshotForMirror(editorBufferRegistryRef.current, activeTab)
         : null;
 
     const handleBeforeShutdown = useCallback(async () => {

@@ -7,6 +7,7 @@ import {
     createEditorContentSnapshot,
     getEditorContentStatePropagation,
     getDirtyEditorSaveCandidates,
+    getEditorContentSnapshotForMirror,
     getEditorContentSnapshotForPath,
     getEditorContentSnapshotFromMirror,
     getEditorContentSnapshotTargetId,
@@ -399,6 +400,44 @@ test('getEditorContentSnapshotForPath falls back when registry has no path', () 
         filePath: 'src/file.ts',
         savedContent: 'fallback-base',
         draftContent: 'fallback-draft',
+        isDirty: true,
+    });
+});
+
+test('getEditorContentSnapshotForMirror uses mirror fields as fallback', () => {
+    assert.deepEqual(getEditorContentSnapshotForMirror({}, {
+        path: 'src/file.ts',
+        savedContent: 'mirror saved',
+        draftContent: 'mirror draft',
+        isDirty: true,
+    }), {
+        filePath: 'src/file.ts',
+        savedContent: 'mirror saved',
+        draftContent: 'mirror draft',
+        isDirty: true,
+    });
+});
+
+test('getEditorContentSnapshotForMirror prefers registry buffer over mirror fields', () => {
+    const registry: EditorBufferRegistry = {
+        'src/file.ts': {
+            path: 'src/file.ts',
+            cleanContent: 'registry saved',
+            draftContent: 'registry draft',
+            dirty: true,
+            version: 1,
+        },
+    };
+
+    assert.deepEqual(getEditorContentSnapshotForMirror(registry, {
+        path: 'src/file.ts',
+        savedContent: 'mirror saved',
+        draftContent: 'mirror draft',
+        isDirty: false,
+    }), {
+        filePath: 'src/file.ts',
+        savedContent: 'registry saved',
+        draftContent: 'registry draft',
         isDirty: true,
     });
 });
