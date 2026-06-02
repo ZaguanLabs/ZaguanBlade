@@ -39,3 +39,13 @@ test('createUncommittedChangesUpdatedEvent preserves source, paths, and semantic
     reason: 'rejected',
   });
 });
+
+test('createUncommittedChangesUpdatedEvent preserves accepted multi-file updates', () => {
+  const event = createUncommittedChangesUpdatedEvent('git-push', ['src/a.ts', 'src/b.ts'], 'accepted');
+
+  assert.deepEqual(event.detail, {
+    sourceId: 'git-push',
+    filePaths: ['src/a.ts', 'src/b.ts'],
+    reason: 'accepted',
+  });
+});

@@ -28,8 +28,57 @@ export type EditorContentSnapshotFallback = {
     isDirty?: boolean;
 };
 
+export type CreateEditorContentSnapshotInput = {
+    filePath?: string;
+    baselineContent: string;
+    currentContent: string;
+};
+
+export type EditorContentStatePropagation = {
+    immediate?: EditorContentSnapshot;
+    debounced?: EditorContentSnapshot;
+};
+
 export function normalizeEditorPath(value: string): string {
     return value.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
+}
+
+export function createEditorContentSnapshot({
+    filePath,
+    baselineContent,
+    currentContent,
+}: CreateEditorContentSnapshotInput): EditorContentSnapshot {
+    const isDirty = currentContent !== baselineContent;
+
+    return {
+        filePath,
+        savedContent: isDirty ? baselineContent : currentContent,
+        draftContent: isDirty ? currentContent : undefined,
+        isDirty,
+    };
+}
+
+export function getEditorContentStatePropagation(
+    snapshot: EditorContentSnapshot,
+    wasDirty: boolean,
+): EditorContentStatePropagation {
+    if (!snapshot.isDirty) {
+        return { immediate: snapshot };
+    }
+
+    if (!wasDirty) {
+        return {
+            immediate: {
+                filePath: snapshot.filePath,
+                savedContent: snapshot.savedContent,
+                draftContent: undefined,
+                isDirty: true,
+            },
+            debounced: snapshot,
+        };
+    }
+
+    return { debounced: snapshot };
 }
 
 export function applyEditorContentSnapshot(

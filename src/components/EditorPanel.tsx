@@ -20,7 +20,11 @@ import { Breadcrumb } from './editor/Breadcrumb';
 import { useUncommittedChanges } from '../hooks/useUncommittedChanges';
 import { formatBladeError, formatUnknownBackendError } from '../utils/backendErrors';
 import { recordDebugPerf } from '../utils/debugPerf';
-import type { EditorContentSnapshot } from '../utils/editorBufferRegistry';
+import {
+    createEditorContentSnapshot,
+    getEditorContentStatePropagation,
+    type EditorContentSnapshot,
+} from '../utils/editorBufferRegistry';
 import { getEditorReviewTransition } from '../utils/editorReviewTransitions';
 import type { UncommittedChangesUpdateReason } from '../utils/uncommittedChangeNotifications';
 
@@ -273,13 +277,11 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 
         onRegisterContentSnapshot(() => {
             const currentContent = getActiveEditorContent();
-            const nextIsDirty = currentContent !== baseContentRef.current;
-            return {
+            return createEditorContentSnapshot({
                 filePath: activeFile ?? undefined,
-                savedContent: nextIsDirty ? baseContentRef.current : currentContent,
-                draftContent: nextIsDirty ? currentContent : undefined,
-                isDirty: nextIsDirty,
-            };
+                baselineContent: baseContentRef.current,
+                currentContent,
+            });
         });
 
         return () => {
@@ -328,25 +330,18 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     }, []);
 
     const emitContentStateChange = useCallback((state: EditorContentState) => {
-        const isFirstDirtyTransition = state.isDirty && !lastPropagatedDirtyRef.current;
+        const propagation = getEditorContentStatePropagation(state, lastPropagatedDirtyRef.current);
 
-        if (!state.isDirty) {
-            pendingContentStateRef.current = state;
+        if (propagation.immediate) {
+            pendingContentStateRef.current = propagation.immediate;
             flushPendingContentState();
+        }
+
+        if (!propagation.debounced) {
             return;
         }
 
-        if (isFirstDirtyTransition) {
-            pendingContentStateRef.current = {
-                filePath: state.filePath,
-                savedContent: state.savedContent,
-                draftContent: undefined,
-                isDirty: true,
-            };
-            flushPendingContentState();
-        }
-
-        pendingContentStateRef.current = state;
+        pendingContentStateRef.current = propagation.debounced;
 
         if (contentStateTimerRef.current) {
             clearTimeout(contentStateTimerRef.current);
@@ -723,35 +718,11 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         scheduleDocumentSync();
         const nextText = getActiveEditorContent();
         liveContentRef.current = nextText;
-        const nextIsDirty = nextText !== baseContentRef.current;
-        pendingContentStateRef.current = {
+        emitContentStateChange(createEditorContentSnapshot({
             filePath: activeFile ?? undefined,
-            savedContent: nextIsDirty ? baseContentRef.current : nextText,
-            draftContent: nextIsDirty ? nextText : undefined,
-            isDirty: nextIsDirty,
-        };
-
-        if (!lastPropagatedDirtyRef.current) {
-            flushPendingContentState();
-        }
-
-        if (contentStateTimerRef.current) {
-            clearTimeout(contentStateTimerRef.current);
-        }
-
-        contentStateTimerRef.current = setTimeout(() => {
-            contentStateTimerRef.current = null;
-            const nextText = liveContentRef.current;
-            liveContentRef.current = nextText;
-            const nextIsDirty = nextText !== baseContentRef.current;
-            pendingContentStateRef.current = {
-                filePath: activeFile ?? undefined,
-                savedContent: nextIsDirty ? baseContentRef.current : nextText,
-                draftContent: nextIsDirty ? nextText : undefined,
-                isDirty: nextIsDirty,
-            };
-            flushPendingContentState();
-        }, 120);
+            baselineContent: baseContentRef.current,
+            currentContent: nextText,
+        }));
     };
 
     const handleNavigate = (path: string, line: number, character: number) => {

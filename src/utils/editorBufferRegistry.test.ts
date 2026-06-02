@@ -3,6 +3,8 @@ import test from 'node:test';
 import {
     applyEditorContentSnapshot,
     applyEditorContentSnapshots,
+    createEditorContentSnapshot,
+    getEditorContentStatePropagation,
     getDirtyEditorSaveCandidates,
     getEditorContentSnapshotForPath,
     getOpenDirtyEditorSaveCandidates,
@@ -14,6 +16,74 @@ import {
 
 test('normalizeEditorPath canonicalizes separators and trailing slash', () => {
     assert.equal(normalizeEditorPath('foo\\bar//baz/'), 'foo/bar/baz');
+});
+
+test('createEditorContentSnapshot derives clean state from matching current and baseline content', () => {
+    assert.deepEqual(createEditorContentSnapshot({
+        filePath: 'src/file.ts',
+        baselineContent: 'same',
+        currentContent: 'same',
+    }), {
+        filePath: 'src/file.ts',
+        savedContent: 'same',
+        draftContent: undefined,
+        isDirty: false,
+    });
+});
+
+test('createEditorContentSnapshot derives dirty state from changed current content', () => {
+    assert.deepEqual(createEditorContentSnapshot({
+        filePath: 'src/file.ts',
+        baselineContent: 'baseline',
+        currentContent: 'draft',
+    }), {
+        filePath: 'src/file.ts',
+        savedContent: 'baseline',
+        draftContent: 'draft',
+        isDirty: true,
+    });
+});
+
+test('getEditorContentStatePropagation flushes clean snapshots immediately', () => {
+    const clean = createEditorContentSnapshot({
+        filePath: 'src/file.ts',
+        baselineContent: 'same',
+        currentContent: 'same',
+    });
+
+    assert.deepEqual(getEditorContentStatePropagation(clean, true), {
+        immediate: clean,
+    });
+});
+
+test('getEditorContentStatePropagation emits metadata-only first dirty transition before debounced draft', () => {
+    const dirty = createEditorContentSnapshot({
+        filePath: 'src/file.ts',
+        baselineContent: 'baseline',
+        currentContent: 'draft',
+    });
+
+    assert.deepEqual(getEditorContentStatePropagation(dirty, false), {
+        immediate: {
+            filePath: 'src/file.ts',
+            savedContent: 'baseline',
+            draftContent: undefined,
+            isDirty: true,
+        },
+        debounced: dirty,
+    });
+});
+
+test('getEditorContentStatePropagation debounces subsequent dirty drafts', () => {
+    const dirty = createEditorContentSnapshot({
+        filePath: 'src/file.ts',
+        baselineContent: 'baseline',
+        currentContent: 'draft',
+    });
+
+    assert.deepEqual(getEditorContentStatePropagation(dirty, true), {
+        debounced: dirty,
+    });
 });
 
 test('applyEditorContentSnapshot stores dirty drafts by normalized path', () => {
