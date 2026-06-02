@@ -579,12 +579,11 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     if (!editorHandle) {
                         externalContentVersionRef.current += 1;
                     }
-                    emitContentStateChange({
+                    emitContentStateChange(createEditorContentSnapshot({
                         filePath: fileEvent.payload.path,
-                        savedContent: fileEvent.payload.data,
-                        draftContent: undefined,
-                        isDirty: false,
-                    });
+                        baselineContent: fileEvent.payload.data,
+                        currentContent: fileEvent.payload.data,
+                    }));
                     setLoading(false);
                     setError(null);
                 } else if (fileEvent.type === 'Written' && pathsMatch(fileEvent.payload.path, activeFile)) {
@@ -700,12 +699,11 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 });
                 baseContentRef.current = currentContent;
                 liveContentRef.current = currentContent;
-                emitContentStateChange({
+                emitContentStateChange(createEditorContentSnapshot({
                     filePath: activeFile,
-                    savedContent: currentContent,
-                    draftContent: undefined,
-                    isDirty: false,
-                });
+                    baselineContent: currentContent,
+                    currentContent,
+                }));
                 console.debug("Save intent dispatched:", activeFile);
                 // ToDo: Toast notification
             } catch (e) {
