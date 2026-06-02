@@ -26,6 +26,7 @@ import {
     applyEditorContentSnapshot,
     applyEditorContentSnapshotToMirror,
     applyEditorContentSnapshots,
+    getDirtyEditorSaveCandidateDisplayNames,
     getEditorContentSnapshotForMirror,
     getEditorContentSnapshotsFromMirrors,
     getEditorContentSnapshotTargetId,
@@ -849,11 +850,6 @@ const AppLayoutInner: React.FC = () => {
         }
         editorBufferRegistryRef.current = registryForShutdown;
 
-        const openFileTabsByPath = new Map(
-            tabs
-                .filter(tab => tab.type === 'file' && tab.path)
-                .map(tab => [normalizeEditorPath(tab.path!), tab]),
-        );
         const dirtySaveCandidates = getOpenDirtyEditorSaveCandidatesFromMirrors(
             registryForShutdown,
             tabs.filter(tab => tab.type === 'file'),
@@ -863,12 +859,11 @@ const AppLayoutInner: React.FC = () => {
             return true;
         }
 
-        const filesForPrompt = dirtySaveCandidates
-            .slice(0, 5)
-            .map(candidate => {
-                const tab = openFileTabsByPath.get(normalizeEditorPath(candidate.path));
-                return tab?.title || candidate.path || t('editor.untitled');
-            });
+        const filesForPrompt = getDirtyEditorSaveCandidateDisplayNames(
+            dirtySaveCandidates.slice(0, 5),
+            tabs.filter(tab => tab.type === 'file'),
+            t('editor.untitled'),
+        );
         const decision = await requestShutdownDecision(filesForPrompt, Math.max(0, dirtySaveCandidates.length - filesForPrompt.length));
 
         if (decision === 'cancel') {

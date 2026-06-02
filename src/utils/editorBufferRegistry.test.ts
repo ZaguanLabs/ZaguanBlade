@@ -7,6 +7,7 @@ import {
     createEditorContentSnapshot,
     getEditorContentStatePropagation,
     getDirtyEditorSaveCandidates,
+    getDirtyEditorSaveCandidateDisplayNames,
     getEditorContentSnapshotForMirror,
     getEditorContentSnapshotForPath,
     getEditorContentSnapshotFromMirror,
@@ -609,6 +610,39 @@ test('getOpenDirtyEditorSaveCandidatesFromMirrors filters dirty buffers to mirro
             source: 'editor-buffer-registry',
         },
     ]);
+});
+
+test('getDirtyEditorSaveCandidateDisplayNames uses mirror titles by normalized path', () => {
+    assert.deepEqual(getDirtyEditorSaveCandidateDisplayNames([
+        {
+            path: 'src/file.ts',
+            baseline: 'base',
+            draft: 'draft',
+            source: 'editor-buffer-registry',
+        },
+    ], [
+        {
+            path: 'src\\file.ts',
+            title: 'File title',
+        },
+    ], 'Untitled'), ['File title']);
+});
+
+test('getDirtyEditorSaveCandidateDisplayNames falls back to candidate path and fallback name', () => {
+    assert.deepEqual(getDirtyEditorSaveCandidateDisplayNames([
+        {
+            path: 'src/file.ts',
+            baseline: 'base',
+            draft: 'draft',
+            source: 'editor-buffer-registry',
+        },
+        {
+            path: '',
+            baseline: 'base',
+            draft: 'draft',
+            source: 'editor-buffer-registry',
+        },
+    ], [], 'Untitled'), ['src/file.ts', 'Untitled']);
 });
 
 test('clean save snapshot removes open dirty save candidate', () => {

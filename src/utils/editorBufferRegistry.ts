@@ -53,6 +53,10 @@ export type EditorContentTargetMirror = {
 
 export type EditorContentSnapshotMirror = EditorContentMirrorState & EditorContentTargetMirror;
 
+export type EditorContentDisplayMirror = EditorContentMirrorState & {
+    title?: string;
+};
+
 export type ApplyEditorContentSnapshotToMirrorOptions = {
     mirrorDraftContent?: boolean;
     mirrorDirtySavedContent?: boolean;
@@ -266,6 +270,23 @@ export function getOpenDirtyEditorSaveCandidatesFromMirrors<T extends EditorCont
             .map(mirror => mirror.path)
             .filter((path): path is string => Boolean(path)),
     );
+}
+
+export function getDirtyEditorSaveCandidateDisplayNames<T extends EditorContentDisplayMirror>(
+    candidates: DirtyEditorSaveCandidate[],
+    mirrors: T[],
+    fallbackName: string,
+): string[] {
+    const mirrorsByPath = new Map(
+        mirrors
+            .filter(mirror => mirror.path)
+            .map(mirror => [normalizeEditorPath(mirror.path!), mirror]),
+    );
+
+    return candidates.map(candidate => {
+        const mirror = mirrorsByPath.get(normalizeEditorPath(candidate.path));
+        return mirror?.title || candidate.path || fallbackName;
+    });
 }
 
 export function markEditorSaveCandidatesClean(
