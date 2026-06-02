@@ -9,6 +9,7 @@ import {
     getDirtyEditorSaveCandidates,
     getEditorContentSnapshotForPath,
     getEditorContentSnapshotFromMirror,
+    getEditorContentSnapshotTargetId,
     getOpenDirtyEditorSaveCandidates,
     markEditorSaveCandidatesClean,
     normalizeEditorPath,
@@ -185,6 +186,36 @@ test('getEditorContentSnapshotFromMirror ignores mirrors without path or content
         path: 'src/file.ts',
         isDirty: false,
     }, false), null);
+});
+
+test('getEditorContentSnapshotTargetId falls back when snapshot has no file path', () => {
+    assert.equal(getEditorContentSnapshotTargetId([
+        { id: 'tab-1', path: 'src/file.ts' },
+    ], 'active-tab', {
+        savedContent: 'content',
+        isDirty: false,
+    }), 'active-tab');
+});
+
+test('getEditorContentSnapshotTargetId resolves normalized matching mirror path', () => {
+    assert.equal(getEditorContentSnapshotTargetId([
+        { id: 'tab-1', path: 'src/other.ts' },
+        { id: 'tab-2', path: 'src\\file.ts' },
+    ], 'active-tab', {
+        filePath: 'src//file.ts',
+        savedContent: 'content',
+        isDirty: false,
+    }), 'tab-2');
+});
+
+test('getEditorContentSnapshotTargetId returns null when no path matches', () => {
+    assert.equal(getEditorContentSnapshotTargetId([
+        { id: 'tab-1', path: 'src/other.ts' },
+    ], 'active-tab', {
+        filePath: 'src/file.ts',
+        savedContent: 'content',
+        isDirty: false,
+    }), null);
 });
 
 test('applyEditorContentSnapshot stores dirty drafts by normalized path', () => {

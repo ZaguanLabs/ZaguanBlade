@@ -28,6 +28,7 @@ import {
     applyEditorContentSnapshots,
     getEditorContentSnapshotForPath,
     getEditorContentSnapshotFromMirror,
+    getEditorContentSnapshotTargetId,
     getOpenDirtyEditorSaveCandidates,
     markEditorSaveCandidatesClean,
     normalizeEditorPath,
@@ -95,16 +96,11 @@ function findMatchingChangeRange(
 }
 
 function getTabContentStateTargetId(tabs: Tab[], fallbackTabId: string | null, state: EditorContentState): string | null {
-    if (!state.filePath) {
-        return fallbackTabId;
-    }
-
-    const targetPath = normalizeEditorPath(state.filePath);
-    return tabs.find(tab => (
-        tab.type === 'file'
-        && tab.path
-        && normalizeEditorPath(tab.path) === targetPath
-    ))?.id ?? null;
+    return getEditorContentSnapshotTargetId(
+        tabs.filter(tab => tab.type === 'file'),
+        fallbackTabId,
+        state,
+    );
 }
 
 function applyContentStateToTab(

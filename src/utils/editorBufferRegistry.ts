@@ -46,6 +46,11 @@ export type EditorContentMirrorState = {
     isDirty?: boolean;
 };
 
+export type EditorContentTargetMirror = {
+    id: string;
+    path?: string;
+};
+
 export type ApplyEditorContentSnapshotToMirrorOptions = {
     mirrorDraftContent?: boolean;
     mirrorDirtySavedContent?: boolean;
@@ -142,6 +147,22 @@ export function getEditorContentSnapshotFromMirror(
         draftContent: hasRegistryBuffer ? undefined : mirror.isDirty ? mirror.draftContent : undefined,
         isDirty: Boolean(mirror.isDirty),
     };
+}
+
+export function getEditorContentSnapshotTargetId<T extends EditorContentTargetMirror>(
+    mirrors: T[],
+    fallbackMirrorId: string | null,
+    snapshot: EditorContentSnapshot,
+): string | null {
+    if (!snapshot.filePath) {
+        return fallbackMirrorId;
+    }
+
+    const targetPath = normalizeEditorPath(snapshot.filePath);
+    return mirrors.find(mirror => (
+        mirror.path
+        && normalizeEditorPath(mirror.path) === targetPath
+    ))?.id ?? null;
 }
 
 export function applyEditorContentSnapshot(
