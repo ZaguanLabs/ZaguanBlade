@@ -580,6 +580,9 @@ pub enum LanguageEvent {
         symbol_count: usize,
         duration_ms: u64,
     },
+    IndexStatus {
+        health: crate::language_service::IndexHealthSnapshot,
+    },
     SymbolsFound {
         intent_id: Uuid,
         symbols: Vec<LanguageSymbol>,

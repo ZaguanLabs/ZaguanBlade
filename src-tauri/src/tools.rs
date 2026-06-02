@@ -2401,6 +2401,7 @@ fn symbol_search_tool<R: tauri::Runtime>(
             "count": result_count,
             "timing_ms": started.elapsed().as_millis(),
             "source": "language_service",
+            "index_health": service.index_health_snapshot(),
             "truncated": false
         }
     });

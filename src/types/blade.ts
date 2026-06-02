@@ -285,10 +285,35 @@ export type LanguageIntent =
 export type LanguageEvent =
     | { type: "FileIndexed"; payload: { file_path: string; symbol_count: number } }
     | { type: "WorkspaceIndexed"; payload: { file_count: number; symbol_count: number; duration_ms: number } }
+    | { type: "IndexStatus"; payload: { health: IndexHealthSnapshot } }
     | { type: "SymbolsFound"; payload: { intent_id: string; symbols: LanguageSymbol[] } }
     | { type: "SymbolAt"; payload: { intent_id: string; symbol: LanguageSymbol | null } }
     | { type: "FullContextGenerated"; payload: { intent_id: string; file_path: string; file_count: number } }
     | { type: "ZlpResponse"; payload: { original_request_id: string; result: any } };
+
+export type IndexHealthStatus =
+    | "unknown"
+    | "checking"
+    | "fresh"
+    | "indexing"
+    | "partial"
+    | "stale"
+    | "error";
+
+export type IndexHealthSnapshot = {
+    status: IndexHealthStatus;
+    indexed_files: number;
+    supported_files: number;
+    stale_files: number;
+    missing_files: number;
+    orphaned_files: number;
+    queued_files: number;
+    active_workers: number;
+    symbol_count: number;
+    last_full_scan_ms: number | null;
+    last_incremental_update_ms: number | null;
+    message: string;
+};
 
 export type LanguagePosition = {
     line: number;

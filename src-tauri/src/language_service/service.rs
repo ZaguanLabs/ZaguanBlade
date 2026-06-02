@@ -16,6 +16,7 @@ use crate::tree_sitter::{
     SymbolRelationship, SymbolRelationshipType, SymbolType, TreeSitterParser,
 };
 use crate::worktree::WorktreeStore;
+use serde::{Deserialize, Serialize};
 
 /// Unified language service
 pub struct LanguageService {
@@ -31,6 +32,62 @@ pub struct LanguageService {
 
     /// In-memory cache of recently parsed files
     file_cache: RwLock<HashMap<String, CachedFile>>,
+    index_health: RwLock<IndexHealthSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum IndexHealthStatus {
+    Unknown,
+    Checking,
+    Fresh,
+    Indexing,
+    Partial,
+    Stale,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexHealthSnapshot {
+    pub status: IndexHealthStatus,
+    pub indexed_files: usize,
+    pub supported_files: usize,
+    pub stale_files: usize,
+    pub missing_files: usize,
+    pub orphaned_files: usize,
+    pub queued_files: usize,
+    pub active_workers: usize,
+    pub symbol_count: usize,
+    pub last_full_scan_ms: Option<u64>,
+    pub last_incremental_update_ms: Option<u64>,
+    pub message: String,
+}
+
+impl Default for IndexHealthSnapshot {
+    fn default() -> Self {
+        Self {
+            status: IndexHealthStatus::Unknown,
+            indexed_files: 0,
+            supported_files: 0,
+            stale_files: 0,
+            missing_files: 0,
+            orphaned_files: 0,
+            queued_files: 0,
+            active_workers: 0,
+            symbol_count: 0,
+            last_full_scan_ms: None,
+            last_incremental_update_ms: None,
+            message: "Code intelligence status unknown".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct IndexReconciliationReport {
+    pub health: IndexHealthSnapshot,
+    pub files_indexed: usize,
+    pub files_removed: usize,
+    pub duration_ms: u64,
 }
 
 /// Cached file data
@@ -554,11 +611,203 @@ impl LanguageService {
             buffer_snapshots: BufferSnapshotStore::new(),
 
             file_cache: RwLock::new(HashMap::new()),
+            index_health: RwLock::new(IndexHealthSnapshot::default()),
         })
     }
 
     pub fn set_worktree_store(&self, store: Arc<WorktreeStore>) {
         *self.worktree_store.write().unwrap() = Some(store);
+    }
+
+    pub fn index_health_snapshot(&self) -> IndexHealthSnapshot {
+        self.index_health.read().unwrap().clone()
+    }
+
+    pub fn set_index_health(&self, health: IndexHealthSnapshot) {
+        *self.index_health.write().unwrap() = health;
+    }
+
+    pub fn audit_index_health(&self) -> Result<IndexHealthSnapshot, LanguageError> {
+        let started = std::time::Instant::now();
+        let supported_files = self.supported_language_files(".");
+        let supported_set = supported_files.iter().cloned().collect::<HashSet<_>>();
+        let indexed_files = self.symbol_store.list_all_indexed_files()?;
+        let indexed_map = indexed_files
+            .iter()
+            .map(|record| (record.file_path.clone(), record.clone()))
+            .collect::<HashMap<_, _>>();
+        let mut stale_files = 0usize;
+        let mut missing_files = 0usize;
+        let mut orphaned_files = 0usize;
+
+        for file_path in &supported_files {
+            let Some(record) = indexed_map.get(file_path) else {
+                missing_files += 1;
+                continue;
+            };
+            let resolved = self.resolve_path(file_path);
+            let current_hash = std::fs::read_to_string(resolved)
+                .map(|content| compute_hash(&content))
+                .unwrap_or_default();
+            if current_hash.is_empty() || current_hash != record.file_hash {
+                stale_files += 1;
+            }
+        }
+
+        for record in &indexed_files {
+            if !supported_set.contains(&record.file_path) {
+                orphaned_files += 1;
+            }
+        }
+
+        let queued_files = stale_files + missing_files;
+        let status = if supported_files.is_empty() {
+            IndexHealthStatus::Fresh
+        } else if indexed_files.is_empty() {
+            IndexHealthStatus::Partial
+        } else if queued_files > 0 || orphaned_files > 0 {
+            IndexHealthStatus::Stale
+        } else {
+            IndexHealthStatus::Fresh
+        };
+        let message = match status {
+            IndexHealthStatus::Fresh => "Code intelligence ready".to_string(),
+            IndexHealthStatus::Partial => {
+                format!("Code intelligence partial: {} files pending", queued_files)
+            }
+            IndexHealthStatus::Stale => {
+                format!(
+                    "Refreshing code intelligence: {} files pending",
+                    queued_files
+                )
+            }
+            _ => "Checking symbol index".to_string(),
+        };
+
+        Ok(IndexHealthSnapshot {
+            status,
+            indexed_files: indexed_files.len(),
+            supported_files: supported_files.len(),
+            stale_files,
+            missing_files,
+            orphaned_files,
+            queued_files,
+            active_workers: 0,
+            symbol_count: self.symbol_store.count()?,
+            last_full_scan_ms: Some(started.elapsed().as_millis() as u64),
+            last_incremental_update_ms: None,
+            message,
+        })
+    }
+
+    pub fn reconcile_index(&self) -> Result<IndexReconciliationReport, LanguageError> {
+        self.reconcile_index_with_progress(|_| {})
+    }
+
+    pub fn reconcile_index_with_progress<F>(
+        &self,
+        mut progress: F,
+    ) -> Result<IndexReconciliationReport, LanguageError>
+    where
+        F: FnMut(&IndexHealthSnapshot),
+    {
+        let started = std::time::Instant::now();
+        let mut health = self.audit_index_health()?;
+        health.status = IndexHealthStatus::Checking;
+        health.message = "Checking symbol index".to_string();
+        self.set_index_health(health.clone());
+        progress(&health);
+
+        let supported_files = self.supported_language_files(".");
+        let supported_set = supported_files.iter().cloned().collect::<HashSet<_>>();
+        let indexed_files = self.symbol_store.list_all_indexed_files()?;
+        let indexed_map = indexed_files
+            .iter()
+            .map(|record| (record.file_path.clone(), record.clone()))
+            .collect::<HashMap<_, _>>();
+        let mut queued_files = Vec::new();
+        let mut files_removed = 0usize;
+
+        for record in &indexed_files {
+            if !supported_set.contains(&record.file_path) {
+                self.remove_file(&record.file_path)?;
+                files_removed += 1;
+            }
+        }
+
+        for file_path in supported_files {
+            let needs_index = match indexed_map.get(&file_path) {
+                Some(record) => {
+                    let current_hash = std::fs::read_to_string(self.resolve_path(&file_path))
+                        .map(|content| compute_hash(&content))
+                        .unwrap_or_default();
+                    current_hash.is_empty() || current_hash != record.file_hash
+                }
+                None => true,
+            };
+            if needs_index {
+                queued_files.push(file_path);
+            }
+        }
+
+        let total_queued = queued_files.len();
+        let mut files_indexed = 0usize;
+        if total_queued > 0 || files_removed > 0 {
+            health.status = IndexHealthStatus::Indexing;
+            health.queued_files = total_queued;
+            health.active_workers = usize::from(total_queued > 0);
+            health.message = format!("Building symbol index... 0/{} files", total_queued);
+            self.set_index_health(health.clone());
+            progress(&health);
+        }
+
+        for file_path in queued_files {
+            match self.index_file(&file_path) {
+                Ok(_) => {
+                    files_indexed += 1;
+                }
+                Err(error) => {
+                    eprintln!("[LanguageService] Failed to index {}: {}", file_path, error);
+                }
+            }
+            health.queued_files = total_queued.saturating_sub(files_indexed);
+            health.active_workers = usize::from(health.queued_files > 0);
+            health.message = format!(
+                "Building symbol index... {}/{} files",
+                files_indexed, total_queued
+            );
+            self.set_index_health(health.clone());
+            progress(&health);
+        }
+
+        let mut final_health = self.audit_index_health()?;
+        final_health.last_full_scan_ms = Some(started.elapsed().as_millis() as u64);
+        final_health.last_incremental_update_ms = Some(started.elapsed().as_millis() as u64);
+        final_health.active_workers = 0;
+        final_health.queued_files = final_health.stale_files + final_health.missing_files;
+        final_health.status = if final_health.queued_files == 0 && final_health.orphaned_files == 0
+        {
+            IndexHealthStatus::Fresh
+        } else {
+            IndexHealthStatus::Partial
+        };
+        final_health.message = if final_health.status == IndexHealthStatus::Fresh {
+            "Code intelligence ready".to_string()
+        } else {
+            format!(
+                "Code intelligence partial: {} files pending",
+                final_health.queued_files
+            )
+        };
+        self.set_index_health(final_health.clone());
+        progress(&final_health);
+
+        Ok(IndexReconciliationReport {
+            health: final_health,
+            files_indexed,
+            files_removed,
+            duration_ms: started.elapsed().as_millis() as u64,
+        })
     }
 
     pub fn get_buffer_snapshot(
@@ -1267,6 +1516,58 @@ impl LanguageService {
         }
 
         Ok(())
+    }
+
+    fn supported_language_files(&self, scope: &str) -> Vec<String> {
+        if let Some(store) = self.worktree_store.read().unwrap().clone() {
+            return store.supported_language_files(scope);
+        }
+
+        let mut files = Vec::new();
+        let root = self.resolve_path(scope);
+        let scope_prefix = if scope.is_empty() || scope == "." {
+            String::new()
+        } else {
+            scope.trim_matches('/').to_string()
+        };
+        self.collect_supported_language_files_recursive(&root, &scope_prefix, &mut files);
+        files
+    }
+
+    fn collect_supported_language_files_recursive(
+        &self,
+        dir_path: &Path,
+        relative_path: &str,
+        files: &mut Vec<String>,
+    ) {
+        let Ok(entries) = std::fs::read_dir(dir_path) else {
+            return;
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            if file_name.starts_with('.')
+                || matches!(
+                    file_name.as_str(),
+                    "node_modules" | "target" | "dist" | "build" | "vendor"
+                )
+            {
+                continue;
+            }
+
+            let relative = if relative_path.is_empty() {
+                file_name
+            } else {
+                format!("{}/{}", relative_path, file_name)
+            };
+
+            if path.is_dir() {
+                self.collect_supported_language_files_recursive(&path, &relative, files);
+            } else if path.is_file() && Language::from_path(&relative).is_some() {
+                files.push(relative);
+            }
+        }
     }
 
     fn refresh_stale_indexed_files(
@@ -2915,6 +3216,73 @@ mod tests {
 
         // Should find authenticate and authorize
         assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn audit_index_health_detects_missing_and_stale_files() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("auth.ts"),
+            "export function authenticate() {}",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("git.ts"),
+            "export function oldName() {}",
+        )
+        .unwrap();
+        service.index_file("git.ts").unwrap();
+        fs::write(
+            temp_dir.path().join("git.ts"),
+            "export function GitCommitMessage() {}",
+        )
+        .unwrap();
+
+        let health = service.audit_index_health().unwrap();
+
+        assert_eq!(health.status, IndexHealthStatus::Stale);
+        assert_eq!(health.supported_files, 2);
+        assert_eq!(health.missing_files, 1);
+        assert_eq!(health.stale_files, 1);
+        assert_eq!(health.queued_files, 2);
+    }
+
+    #[test]
+    fn reconcile_index_refreshes_stale_files_and_removes_orphans() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("old.ts"),
+            "export function oldSymbol() {}",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("current.ts"),
+            "export function beforeChange() {}",
+        )
+        .unwrap();
+        service.index_file("old.ts").unwrap();
+        service.index_file("current.ts").unwrap();
+        fs::remove_file(temp_dir.path().join("old.ts")).unwrap();
+        fs::write(
+            temp_dir.path().join("current.ts"),
+            "export function GitCommitMessage() {}",
+        )
+        .unwrap();
+
+        let report = service.reconcile_index().unwrap();
+        let health = service.index_health_snapshot();
+        let results = service.search_symbols("GitCommitMessage", 10).unwrap();
+
+        assert_eq!(report.files_removed, 1);
+        assert_eq!(report.files_indexed, 1);
+        assert_eq!(health.status, IndexHealthStatus::Fresh);
+        assert_eq!(health.queued_files, 0);
+        assert!(results
+            .iter()
+            .any(|result| result.symbol.name == "GitCommitMessage"));
+        assert!(service.get_file_symbols_raw("old.ts").unwrap().is_empty());
     }
 
     #[test]

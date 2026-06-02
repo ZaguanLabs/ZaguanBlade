@@ -27,6 +27,7 @@ pub struct SymbolReference {
 #[derive(Debug, Clone)]
 pub struct IndexedFileRecord {
     pub file_path: String,
+    pub file_hash: String,
     pub indexed_at: i64,
     pub symbol_count: usize,
 }
@@ -687,7 +688,7 @@ impl SymbolStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             r#"
-            SELECT file_path, indexed_at, symbol_count
+            SELECT file_path, file_hash, indexed_at, symbol_count
             FROM indexed_files
             ORDER BY symbol_count DESC, file_path ASC
             LIMIT ?1
@@ -698,8 +699,33 @@ impl SymbolStore {
             .query_map(params![limit as i64], |row| {
                 Ok(IndexedFileRecord {
                     file_path: row.get::<_, String>(0)?,
-                    indexed_at: row.get::<_, i64>(1)?,
-                    symbol_count: row.get::<_, i64>(2)? as usize,
+                    file_hash: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    indexed_at: row.get::<_, i64>(2)?,
+                    symbol_count: row.get::<_, i64>(3)? as usize,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(records)
+    }
+
+    pub fn list_all_indexed_files(&self) -> Result<Vec<IndexedFileRecord>, SymbolStoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT file_path, file_hash, indexed_at, symbol_count
+            FROM indexed_files
+            ORDER BY file_path ASC
+            "#,
+        )?;
+
+        let records = stmt
+            .query_map([], |row| {
+                Ok(IndexedFileRecord {
+                    file_path: row.get::<_, String>(0)?,
+                    file_hash: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    indexed_at: row.get::<_, i64>(2)?,
+                    symbol_count: row.get::<_, i64>(3)? as usize,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;

@@ -18,9 +18,11 @@ import { useGitStatus } from '../hooks/useGitStatus';
 import { useTabManager, type Tab } from '../hooks/useTabManager';
 import { useResizeHandlers } from '../hooks/useResizeHandlers';
 import { useLayoutEvents } from '../hooks/useLayoutEvents';
+import { subscribeBladeNestedEventType } from '../services/bladeEvents';
 import { readDebugFlag, readDebugSurfaceFlag } from '../utils/debugFlags';
 import type { ChatMode } from '../types/chat';
 import type { BackendSettings } from '../types/settings';
+import type { IndexHealthSnapshot } from '../types/blade';
 import { recordDebugPerf } from '../utils/debugPerf';
 import {
     applyEditorContentSnapshot,
@@ -303,6 +305,7 @@ const AppLayoutInner: React.FC = () => {
     const [shutdownPrompt, setShutdownPrompt] = useState<ShutdownPromptState | null>(null);
     const [shutdownSaveError, setShutdownSaveError] = useState<ShutdownSaveErrorState | null>(null);
     const [autoApproveRunCommands, setAutoApproveRunCommands] = useState(false);
+    const [indexHealth, setIndexHealth] = useState<IndexHealthSnapshot | null>(null);
     const isGitSidebarVisible = isSidebarOpen && activeSidebar === 'git';
 
     // Track window maximized and fullscreen state for resize borders
@@ -499,6 +502,12 @@ const AppLayoutInner: React.FC = () => {
     useEffect(() => {
         setOpenFiles(JSON.parse(openFilePathsJson) as string[]);
     }, [openFilePathsJson, setOpenFiles]);
+
+    useEffect(() => {
+        return subscribeBladeNestedEventType('Language', 'IndexStatus', (payload) => {
+            setIndexHealth(payload.health);
+        });
+    }, []);
 
     const handleOpenChatFile = useCallback((path: string) => {
         const highlightLines = findMatchingChangeRange(path, uncommittedChanges);
@@ -1424,6 +1433,23 @@ const AppLayoutInner: React.FC = () => {
                     {/* Saving Indicator */}
                     {isClosing && (
                         <span className="text-(--accent-secondary) animate-pulse font-semibold">{t('statusBar.saving')}</span>
+                    )}
+                    {indexHealth && (
+                        <span
+                            className={[
+                                'inline-flex items-center gap-1 rounded-[calc(var(--panel-radius)*0.35)] px-1.5 py-0.5 font-semibold',
+                                indexHealth.status === 'error'
+                                    ? 'text-(--state-danger)'
+                                    : indexHealth.status === 'stale' || indexHealth.status === 'partial'
+                                        ? 'text-(--accent-warning)'
+                                        : indexHealth.status === 'checking' || indexHealth.status === 'indexing'
+                                            ? 'text-(--accent-ai) animate-pulse'
+                                            : 'text-(--accent-mention)',
+                            ].join(' ')}
+                            title={`${indexHealth.indexed_files}/${indexHealth.supported_files} files indexed, ${indexHealth.symbol_count} symbols`}
+                        >
+                            {indexHealth.message}
+                        </span>
                     )}
                     <span>{t('editor.encoding')}</span>
                     <span>{(() => {
