@@ -39,6 +39,18 @@ export type EditorContentStatePropagation = {
     debounced?: EditorContentSnapshot;
 };
 
+export type EditorContentMirrorState = {
+    path?: string;
+    savedContent?: string;
+    draftContent?: string;
+    isDirty?: boolean;
+};
+
+export type ApplyEditorContentSnapshotToMirrorOptions = {
+    mirrorDraftContent?: boolean;
+    mirrorDirtySavedContent?: boolean;
+};
+
 export function normalizeEditorPath(value: string): string {
     return value.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
 }
@@ -79,6 +91,57 @@ export function getEditorContentStatePropagation(
     }
 
     return { debounced: snapshot };
+}
+
+export function applyEditorContentSnapshotToMirror<T extends EditorContentMirrorState>(
+    mirror: T,
+    snapshot: EditorContentSnapshot,
+    options: ApplyEditorContentSnapshotToMirrorOptions = {},
+): T {
+    const shouldMirrorDirtySavedContent = options.mirrorDirtySavedContent ?? true;
+    const nextSavedContent = snapshot.isDirty && !shouldMirrorDirtySavedContent
+        ? mirror.savedContent
+        : snapshot.savedContent ?? mirror.savedContent;
+    const shouldMirrorDraftContent = options.mirrorDraftContent ?? true;
+    const nextDraftContent = !snapshot.isDirty
+        ? undefined
+        : shouldMirrorDraftContent
+            ? snapshot.draftContent ?? mirror.draftContent
+            : undefined;
+
+    if (
+        mirror.savedContent === nextSavedContent
+        && mirror.draftContent === nextDraftContent
+        && Boolean(mirror.isDirty) === snapshot.isDirty
+    ) {
+        return mirror;
+    }
+
+    return {
+        ...mirror,
+        savedContent: nextSavedContent,
+        draftContent: nextDraftContent,
+        isDirty: snapshot.isDirty,
+    };
+}
+
+export function getEditorContentSnapshotFromMirror(
+    mirror: EditorContentMirrorState,
+    hasRegistryBuffer: boolean,
+): EditorContentSnapshot | null {
+    if (
+        !mirror.path
+        || (!mirror.isDirty && mirror.savedContent === undefined && mirror.draftContent === undefined)
+    ) {
+        return null;
+    }
+
+    return {
+        filePath: mirror.path,
+        savedContent: hasRegistryBuffer ? undefined : mirror.savedContent,
+        draftContent: hasRegistryBuffer ? undefined : mirror.isDirty ? mirror.draftContent : undefined,
+        isDirty: Boolean(mirror.isDirty),
+    };
 }
 
 export function applyEditorContentSnapshot(

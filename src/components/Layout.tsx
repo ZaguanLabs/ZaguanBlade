@@ -24,8 +24,10 @@ import type { BackendSettings } from '../types/settings';
 import { recordDebugPerf } from '../utils/debugPerf';
 import {
     applyEditorContentSnapshot,
+    applyEditorContentSnapshotToMirror,
     applyEditorContentSnapshots,
     getEditorContentSnapshotForPath,
+    getEditorContentSnapshotFromMirror,
     getOpenDirtyEditorSaveCandidates,
     markEditorSaveCandidatesClean,
     normalizeEditorPath,
@@ -110,31 +112,7 @@ function applyContentStateToTab(
     state: EditorContentState,
     options: { mirrorDraftContent?: boolean; mirrorDirtySavedContent?: boolean } = {},
 ): Tab {
-    const shouldMirrorDirtySavedContent = options.mirrorDirtySavedContent ?? true;
-    const nextSavedContent = state.isDirty && !shouldMirrorDirtySavedContent
-        ? tab.savedContent
-        : state.savedContent ?? tab.savedContent;
-    const shouldMirrorDraftContent = options.mirrorDraftContent ?? true;
-    const nextDraftContent = !state.isDirty
-        ? undefined
-        : shouldMirrorDraftContent
-            ? state.draftContent ?? tab.draftContent
-            : undefined;
-
-    if (
-        tab.savedContent === nextSavedContent
-        && tab.draftContent === nextDraftContent
-        && Boolean(tab.isDirty) === state.isDirty
-    ) {
-        return tab;
-    }
-
-    return {
-        ...tab,
-        savedContent: nextSavedContent,
-        draftContent: nextDraftContent,
-        isDirty: state.isDirty,
-    };
+    return applyEditorContentSnapshotToMirror(tab, state, options);
 }
 
 function getInactiveTabContentSnapshots(
@@ -152,13 +130,11 @@ function getInactiveTabContentSnapshots(
             return [];
         }
 
-        const hasRegistryBuffer = Boolean(registry[normalizeEditorPath(tab.path)]);
-        return [{
-            filePath: tab.path,
-            savedContent: hasRegistryBuffer ? undefined : tab.savedContent,
-            draftContent: hasRegistryBuffer ? undefined : tab.isDirty ? tab.draftContent : undefined,
-            isDirty: Boolean(tab.isDirty),
-        }];
+        const snapshot = getEditorContentSnapshotFromMirror(
+            tab,
+            Boolean(registry[normalizeEditorPath(tab.path)]),
+        );
+        return snapshot ? [snapshot] : [];
     });
 }
 

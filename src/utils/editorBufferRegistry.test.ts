@@ -2,11 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
     applyEditorContentSnapshot,
+    applyEditorContentSnapshotToMirror,
     applyEditorContentSnapshots,
     createEditorContentSnapshot,
     getEditorContentStatePropagation,
     getDirtyEditorSaveCandidates,
     getEditorContentSnapshotForPath,
+    getEditorContentSnapshotFromMirror,
     getOpenDirtyEditorSaveCandidates,
     markEditorSaveCandidatesClean,
     normalizeEditorPath,
@@ -84,6 +86,105 @@ test('getEditorContentStatePropagation debounces subsequent dirty drafts', () =>
     assert.deepEqual(getEditorContentStatePropagation(dirty, true), {
         debounced: dirty,
     });
+});
+
+test('applyEditorContentSnapshotToMirror mirrors clean snapshots and clears draft content', () => {
+    const mirror = {
+        savedContent: 'old saved',
+        draftContent: 'old draft',
+        isDirty: true,
+        extra: 'preserved',
+    };
+
+    assert.deepEqual(applyEditorContentSnapshotToMirror(mirror, {
+        filePath: 'src/file.ts',
+        savedContent: 'saved',
+        draftContent: undefined,
+        isDirty: false,
+    }), {
+        savedContent: 'saved',
+        draftContent: undefined,
+        isDirty: false,
+        extra: 'preserved',
+    });
+});
+
+test('applyEditorContentSnapshotToMirror can avoid mirroring dirty draft and saved content', () => {
+    const mirror = {
+        savedContent: 'existing saved',
+        draftContent: 'existing draft',
+        isDirty: false,
+        extra: 'preserved',
+    };
+
+    assert.deepEqual(applyEditorContentSnapshotToMirror(mirror, {
+        filePath: 'src/file.ts',
+        savedContent: 'next saved',
+        draftContent: 'next draft',
+        isDirty: true,
+    }, {
+        mirrorDraftContent: false,
+        mirrorDirtySavedContent: false,
+    }), {
+        savedContent: 'existing saved',
+        draftContent: undefined,
+        isDirty: true,
+        extra: 'preserved',
+    });
+});
+
+test('applyEditorContentSnapshotToMirror returns same mirror when no mirrored state changes', () => {
+    const mirror = {
+        savedContent: 'saved',
+        draftContent: undefined,
+        isDirty: false,
+    };
+
+    assert.equal(applyEditorContentSnapshotToMirror(mirror, {
+        filePath: 'src/file.ts',
+        savedContent: 'saved',
+        draftContent: undefined,
+        isDirty: false,
+    }), mirror);
+});
+
+test('getEditorContentSnapshotFromMirror projects dirty mirror content when registry has no buffer', () => {
+    assert.deepEqual(getEditorContentSnapshotFromMirror({
+        path: 'src/file.ts',
+        savedContent: 'saved',
+        draftContent: 'draft',
+        isDirty: true,
+    }, false), {
+        filePath: 'src/file.ts',
+        savedContent: 'saved',
+        draftContent: 'draft',
+        isDirty: true,
+    });
+});
+
+test('getEditorContentSnapshotFromMirror omits mirrored content when registry has the buffer', () => {
+    assert.deepEqual(getEditorContentSnapshotFromMirror({
+        path: 'src/file.ts',
+        savedContent: 'stale saved',
+        draftContent: 'stale draft',
+        isDirty: true,
+    }, true), {
+        filePath: 'src/file.ts',
+        savedContent: undefined,
+        draftContent: undefined,
+        isDirty: true,
+    });
+});
+
+test('getEditorContentSnapshotFromMirror ignores mirrors without path or content state', () => {
+    assert.equal(getEditorContentSnapshotFromMirror({
+        savedContent: 'saved',
+        isDirty: false,
+    }, false), null);
+    assert.equal(getEditorContentSnapshotFromMirror({
+        path: 'src/file.ts',
+        isDirty: false,
+    }, false), null);
 });
 
 test('applyEditorContentSnapshot stores dirty drafts by normalized path', () => {
