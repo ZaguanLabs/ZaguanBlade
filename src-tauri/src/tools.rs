@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -505,16 +505,37 @@ mod tests {
     use super::{
         apply_multi_patch_to_string, apply_patch_to_string, apply_patch_to_string_with_line_hint,
         apply_semantic_patch_with_service, apply_semantic_patch_writes_with_service, execute_tool,
-        grep_search, parse_grep_timeout_ms, stage_semantic_patch_writes, PatchHunk,
-        SemanticPatchWrite, ToolResult, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS,
-        GREP_TIMEOUT_MIN_MS,
+        grep_search, parse_grep_timeout_ms, stage_semantic_patch_writes, symbol_inventory_entries,
+        symbol_inventory_summary, PatchHunk, SemanticPatchWrite, ToolResult,
+        GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS, GREP_TIMEOUT_MIN_MS,
     };
     use crate::semantic_patch::{InsertPosition, PatchOperation, PatchTarget, SemanticPatch};
     use crate::symbol_index::SymbolStore;
+    use crate::tree_sitter::{Position, Range, Symbol, SymbolType};
     use std::collections::HashMap;
     use std::fs;
     use std::sync::Arc;
     use tempfile::tempdir;
+
+    fn test_symbol(
+        id: &str,
+        name: &str,
+        symbol_type: SymbolType,
+        start_line: u32,
+        parent_id: Option<&str>,
+    ) -> Symbol {
+        let mut symbol = Symbol::new(
+            name.to_string(),
+            symbol_type,
+            "src/example.ts".to_string(),
+            Range::new(Position::new(start_line, 0), Position::new(start_line, 10)),
+        );
+        symbol.id = id.to_string();
+        symbol.qualified_name = format!("src/example.ts::{}", name);
+        symbol.parent_id = parent_id.map(str::to_string);
+        symbol.signature = Some(format!("{}()", name));
+        symbol
+    }
 
     #[test]
     fn apply_patch_rejects_ambiguous_exact_matches() {
@@ -530,6 +551,41 @@ mod tests {
             apply_patch_to_string_with_line_hint(content, "TARGET", "REPLACED", Some(4), Some(4))
                 .unwrap();
         assert_eq!(updated, "A\nTARGET\nB\nREPLACED\nC\n");
+    }
+
+    #[test]
+    fn symbol_inventory_summary_counts_types_and_hierarchy() {
+        let symbols = vec![
+            test_symbol("module", "example", SymbolType::Module, 0, None),
+            test_symbol("class", "UserService", SymbolType::Class, 1, None),
+            test_symbol("method", "getUser", SymbolType::Method, 2, Some("class")),
+        ];
+
+        let summary = symbol_inventory_summary(&symbols);
+
+        assert_eq!(summary["total_symbols"], 3);
+        assert_eq!(summary["top_level_symbols"], 2);
+        assert_eq!(summary["symbols_with_children"], 1);
+        assert_eq!(summary["by_type"]["class"], 1);
+        assert_eq!(summary["by_type"]["method"], 1);
+        assert_eq!(summary["by_type"]["module"], 1);
+    }
+
+    #[test]
+    fn symbol_inventory_entries_are_ordered_bounded_and_include_child_counts() {
+        let symbols = vec![
+            test_symbol("method", "getUser", SymbolType::Method, 20, Some("class")),
+            test_symbol("class", "UserService", SymbolType::Class, 10, None),
+            test_symbol("helper", "helper", SymbolType::Function, 30, None),
+        ];
+
+        let entries = symbol_inventory_entries(&symbols, 2);
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["name"], "UserService");
+        assert_eq!(entries[0]["child_count"], 1);
+        assert_eq!(entries[0]["line_range"]["start_line"], 10);
+        assert_eq!(entries[1]["name"], "getUser");
     }
 
     #[test]
@@ -2281,6 +2337,89 @@ fn symbol_to_json(symbol: &crate::tree_sitter::Symbol) -> serde_json::Value {
     })
 }
 
+fn symbol_inventory_entry_to_json(
+    symbol: &crate::tree_sitter::Symbol,
+    child_count: usize,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": symbol.id,
+        "name": symbol.name,
+        "qualified_name": symbol.qualified_name,
+        "symbol_type": symbol.symbol_type.to_string(),
+        "signature": symbol.signature,
+        "line_range": {
+            "start_line": symbol.range.start.line,
+            "end_line": symbol.range.end.line,
+        },
+        "range": {
+            "start": {
+                "line": symbol.range.start.line,
+                "character": symbol.range.start.character,
+            },
+            "end": {
+                "line": symbol.range.end.line,
+                "character": symbol.range.end.character,
+            }
+        },
+        "parent_id": symbol.parent_id,
+        "child_count": child_count,
+        "docstring": symbol.docstring,
+    })
+}
+
+fn symbol_inventory_summary(symbols: &[crate::tree_sitter::Symbol]) -> serde_json::Value {
+    let mut by_type = BTreeMap::<String, usize>::new();
+    let mut top_level_symbols = 0usize;
+    let mut symbols_with_children = 0usize;
+    let mut child_counts = HashMap::<String, usize>::new();
+
+    for symbol in symbols {
+        *by_type.entry(symbol.symbol_type.to_string()).or_default() += 1;
+        if symbol.parent_id.is_none() {
+            top_level_symbols += 1;
+        }
+        if let Some(parent_id) = symbol.parent_id.as_ref() {
+            *child_counts.entry(parent_id.clone()).or_default() += 1;
+        }
+    }
+
+    for symbol in symbols {
+        if child_counts.get(&symbol.id).copied().unwrap_or_default() > 0 {
+            symbols_with_children += 1;
+        }
+    }
+
+    serde_json::json!({
+        "total_symbols": symbols.len(),
+        "top_level_symbols": top_level_symbols,
+        "symbols_with_children": symbols_with_children,
+        "by_type": by_type,
+    })
+}
+
+fn symbol_inventory_entries(
+    symbols: &[crate::tree_sitter::Symbol],
+    max_symbols: usize,
+) -> Vec<serde_json::Value> {
+    let mut child_counts = HashMap::<String, usize>::new();
+    for symbol in symbols {
+        if let Some(parent_id) = symbol.parent_id.as_ref() {
+            *child_counts.entry(parent_id.clone()).or_default() += 1;
+        }
+    }
+
+    let mut sorted = symbols.to_vec();
+    sorted.sort_by_key(|symbol| (symbol.range.start.line, symbol.range.start.character));
+    sorted
+        .into_iter()
+        .take(max_symbols)
+        .map(|symbol| {
+            let child_count = child_counts.get(&symbol.id).copied().unwrap_or_default();
+            symbol_inventory_entry_to_json(&symbol, child_count)
+        })
+        .collect()
+}
+
 fn symbol_reference_to_json(reference: &crate::symbol_index::SymbolReference) -> serde_json::Value {
     serde_json::json!({
         "source_symbol": symbol_to_json(&reference.source_symbol),
@@ -2478,13 +2617,19 @@ fn symbol_outline_tool<R: tauri::Runtime>(
         Ok(service) => service,
         Err(err) => return ToolResult::err(err),
     };
+    let started = Instant::now();
+    let include_outline = get_bool_arg(args, &["include_outline"], true);
+    let max_symbols = get_bounded_usize_arg(args, &["max_symbols", "limit"], 200, 1000);
     let symbols = match service.get_file_symbols(&path) {
         Ok(symbols) => symbols,
         Err(err) => return ToolResult::err(err.to_string()),
     };
+    let total_symbols = symbols.len();
+    let summary = symbol_inventory_summary(&symbols);
+    let inventory_symbols = symbol_inventory_entries(&symbols, max_symbols);
 
     let mut by_parent: HashMap<Option<String>, Vec<crate::tree_sitter::Symbol>> = HashMap::new();
-    for symbol in symbols {
+    for symbol in symbols.iter().cloned() {
         by_parent
             .entry(symbol.parent_id.clone())
             .or_default()
@@ -2492,7 +2637,23 @@ fn symbol_outline_tool<R: tauri::Runtime>(
     }
     let payload = serde_json::json!({
         "path": path,
-        "outline": outline_nodes_for_parent(&by_parent, None)
+        "summary": summary,
+        "symbols": inventory_symbols,
+        "outline": if include_outline {
+            serde_json::Value::Array(outline_nodes_for_parent(&by_parent, None))
+        } else {
+            serde_json::Value::Null
+        },
+        "_meta": {
+            "tool": "symbol_outline",
+            "source": "language_service",
+            "timing_ms": started.elapsed().as_millis(),
+            "index_health": service.index_health_snapshot(),
+            "total_symbols": total_symbols,
+            "returned_symbols": total_symbols.min(max_symbols),
+            "truncated": total_symbols > max_symbols,
+            "include_outline": include_outline
+        }
     });
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
 }

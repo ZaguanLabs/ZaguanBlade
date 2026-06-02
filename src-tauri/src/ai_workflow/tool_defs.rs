@@ -82,12 +82,15 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "symbol_outline",
             "function": {
                 "name": "symbol_outline",
-                "description": "Return the hierarchical symbol outline for one file using the local code-intelligence index",
+                "description": "Return a compact symbol inventory and optional hierarchical outline for one file using the local code-intelligence index",
                 "strict": false,
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "path": { "type": "string", "description": "File path whose symbol hierarchy should be returned" }
+                        "path": { "type": "string", "description": "File path whose symbol inventory should be returned" },
+                        "max_symbols": { "type": "integer", "description": "Maximum flat inventory symbols to return, capped by the backend" },
+                        "limit": { "type": "integer", "description": "Alias for max_symbols" },
+                        "include_outline": { "type": "boolean", "description": "Whether to include the nested hierarchy in addition to the flat inventory" }
                     },
                     "required": ["path"],
                     "additionalProperties": false
