@@ -686,7 +686,6 @@ test('getEditorInitialContentConfig returns empty config when no active file', (
         isDirty: true,
         isMarkdownFile: false,
         isFileSwitch: false,
-        contentOwnerPath: null,
     }), {
         content: '',
         baselineContent: '',
@@ -705,7 +704,6 @@ test('getEditorInitialContentConfig loads clean non-markdown file on file switch
         isDirty: false,
         isMarkdownFile: false,
         isFileSwitch: true,
-        contentOwnerPath: 'src/other.ts',
     }), {
         content: 'saved',
         baselineContent: 'saved',
@@ -724,32 +722,12 @@ test('getEditorInitialContentConfig loads clean non-markdown file on external up
         isDirty: false,
         isMarkdownFile: false,
         isFileSwitch: false,
-        contentOwnerPath: 'src/file.ts',
     }), {
         content: 'saved',
         baselineContent: 'saved',
         shouldLoad: false,
         resetHistory: false,
         reason: null,
-        awaitingInitialSync: false,
-    });
-});
-
-test('getEditorInitialContentConfig loads clean non-markdown file when content owner path differs', () => {
-    assert.deepEqual(getEditorInitialContentConfig({
-        activeFile: 'src/file.ts',
-        savedContent: 'saved',
-        draftContent: null,
-        isDirty: false,
-        isMarkdownFile: false,
-        isFileSwitch: false,
-        contentOwnerPath: 'src/other.ts',
-    }), {
-        content: 'saved',
-        baselineContent: 'saved',
-        shouldLoad: true,
-        resetHistory: false,
-        reason: 'external-clean-update',
         awaitingInitialSync: false,
     });
 });
@@ -762,7 +740,6 @@ test('getEditorInitialContentConfig does not load dirty non-markdown file', () =
         isDirty: true,
         isMarkdownFile: false,
         isFileSwitch: false,
-        contentOwnerPath: 'src/file.ts',
     }), {
         content: 'saved',
         baselineContent: 'saved',
@@ -781,7 +758,6 @@ test('getEditorInitialContentConfig awaits initial sync when no saved content fo
         isDirty: false,
         isMarkdownFile: false,
         isFileSwitch: true,
-        contentOwnerPath: null,
     }), {
         content: '',
         baselineContent: '',
@@ -800,26 +776,6 @@ test('getEditorInitialContentConfig loads dirty markdown file with draft', () =>
         isDirty: true,
         isMarkdownFile: true,
         isFileSwitch: true,
-        contentOwnerPath: 'src/other.md',
-    }), {
-        content: 'draft',
-        baselineContent: 'saved',
-        shouldLoad: true,
-        resetHistory: true,
-        reason: 'open',
-        awaitingInitialSync: false,
-    });
-});
-
-test('getEditorInitialContentConfig loads dirty markdown file with draft when content owner path differs', () => {
-    assert.deepEqual(getEditorInitialContentConfig({
-        activeFile: 'README.md',
-        savedContent: 'saved',
-        draftContent: 'draft',
-        isDirty: true,
-        isMarkdownFile: true,
-        isFileSwitch: false,
-        contentOwnerPath: 'src/other.md',
     }), {
         content: 'draft',
         baselineContent: 'saved',
@@ -838,7 +794,6 @@ test('getEditorInitialContentConfig loads dirty markdown file without draft on f
         isDirty: true,
         isMarkdownFile: true,
         isFileSwitch: true,
-        contentOwnerPath: 'src/other.md',
     }), {
         content: 'saved',
         baselineContent: 'saved',
@@ -857,7 +812,6 @@ test('getEditorInitialContentConfig does not load dirty markdown file without dr
         isDirty: true,
         isMarkdownFile: true,
         isFileSwitch: false,
-        contentOwnerPath: 'README.md',
     }), {
         content: 'saved',
         baselineContent: 'saved',
@@ -876,7 +830,6 @@ test('getEditorInitialContentConfig loads clean markdown file', () => {
         isDirty: false,
         isMarkdownFile: true,
         isFileSwitch: true,
-        contentOwnerPath: 'src/other.md',
     }), {
         content: 'saved',
         baselineContent: 'saved',
@@ -895,7 +848,6 @@ test('getEditorInitialContentConfig awaits initial sync when no saved content fo
         isDirty: false,
         isMarkdownFile: true,
         isFileSwitch: true,
-        contentOwnerPath: null,
     }), {
         content: '',
         baselineContent: '',
@@ -1099,6 +1051,53 @@ test('scenario: same filename in different directories keeps separate drafts and
             source: 'editor-buffer-registry',
         },
     ]);
+});
+
+test('scenario: stale read for file A does not affect file B', () => {
+    const registry: EditorBufferRegistry = {
+        'src/a.ts': {
+            path: 'src/a.ts',
+            cleanContent: 'a-base',
+            draftContent: 'a-draft',
+            dirty: true,
+            version: 1,
+        },
+        'src/b.ts': {
+            path: 'src/b.ts',
+            cleanContent: 'b-base',
+            draftContent: undefined,
+            dirty: false,
+            version: 1,
+        },
+    };
+
+    // Simulate a late read for file A arriving after switching to file B
+    const lateSnapshot = createEditorContentSnapshot({
+        filePath: 'src/a.ts',
+        baselineContent: 'a-base',
+        currentContent: 'a-draft',
+    });
+
+    // Applying the late snapshot should only affect file A
+    const updated = applyEditorContentSnapshot(registry, lateSnapshot);
+
+    // File B should remain unchanged
+    assert.deepEqual(updated['src/b.ts'], {
+        path: 'src/b.ts',
+        cleanContent: 'b-base',
+        draftContent: undefined,
+        dirty: false,
+        version: 1,
+    });
+
+    // File A should still have its draft
+    assert.deepEqual(updated['src/a.ts'], {
+        path: 'src/a.ts',
+        cleanContent: 'a-base',
+        draftContent: 'a-draft',
+        dirty: true,
+        version: 1,
+    });
 });
 
 test('pruneEditorBufferRegistry drops buffers for closed paths', () => {

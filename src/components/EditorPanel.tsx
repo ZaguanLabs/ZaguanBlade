@@ -183,7 +183,6 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     recordDebugPerf('EditorPanel.render');
     const { t } = useTranslation();
     const [content, setContent] = useState(() => draftContent ?? savedContent ?? '');
-    const [contentOwnerPath, setContentOwnerPath] = useState<string | null>(() => activeFile);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [reloadTrigger, setReloadTrigger] = useState(0);
@@ -373,7 +372,6 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 
         if (!activeFile) {
             setContent('');
-            setContentOwnerPath(null);
             baseContentRef.current = '';
             liveContentRef.current = '';
             externalContentVersionRef.current += 1;
@@ -391,11 +389,9 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             isDirty,
             isMarkdownFile,
             isFileSwitch,
-            contentOwnerPath,
         });
 
         setContent(config.content);
-        setContentOwnerPath(activeFile);
         baseContentRef.current = config.baselineContent;
         liveContentRef.current = config.content;
         awaitingInitialSyncRef.current = config.awaitingInitialSync;
@@ -403,7 +399,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         if (config.shouldLoad && config.reason) {
             applyContentToEditor(config.content, config.reason, config.resetHistory);
         }
-    }, [activeFile, applyContentToEditor, contentOwnerPath, draftContent, isDirty, savedContent, isMarkdownFile]);
+    }, [activeFile, applyContentToEditor, draftContent, isDirty, savedContent, isMarkdownFile]);
 
     useEffect(() => {
         documentVersionRef.current = 0;
@@ -520,7 +516,6 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                         reason: isAuthoritativeReload ? 'revert' : 'reload',
                     });
                     setContent(fileEvent.payload.data);
-                    setContentOwnerPath(activeFile);
                     liveContentRef.current = fileEvent.payload.data;
                     baseContentRef.current = fileEvent.payload.data;
                     if (!editorHandle) {
@@ -559,7 +554,6 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         async function loadFile() {
             if (!activeFile) {
                 setContent('');
-                setContentOwnerPath(null);
                 liveContentRef.current = '';
                 latestFileReadIntentIdRef.current = null;
                 return;
@@ -677,10 +671,8 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     };
 
     const immediateTabContent = isDirty && draftContent != null ? draftContent : savedContent;
-    const hasActiveEditorContent = contentOwnerPath === activeFile || immediateTabContent != null;
-    const activeEditorContent = contentOwnerPath === activeFile
-        ? content
-        : immediateTabContent ?? '';
+    const hasActiveEditorContent = immediateTabContent != null;
+    const activeEditorContent = immediateTabContent ?? content;
 
     if (!activeFile) {
         return <WelcomePage hasRemoteApiKey={hasRemoteApiKey} onOpenSettings={onOpenSettings} />;

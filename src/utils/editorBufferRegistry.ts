@@ -362,7 +362,6 @@ export type GetEditorInitialContentConfigInput = {
     isDirty: boolean;
     isMarkdownFile: boolean;
     isFileSwitch: boolean;
-    contentOwnerPath: string | null;
 };
 
 export function getEditorInitialContentConfig({
@@ -372,7 +371,6 @@ export function getEditorInitialContentConfig({
     isDirty,
     isMarkdownFile,
     isFileSwitch,
-    contentOwnerPath,
 }: GetEditorInitialContentConfigInput): EditorInitialContentConfig {
     if (!activeFile) {
         return {
@@ -398,7 +396,7 @@ export function getEditorInitialContentConfig({
                 };
             }
 
-            const shouldLoad = isFileSwitch || contentOwnerPath !== activeFile;
+            const shouldLoad = isFileSwitch;
             return {
                 content: savedContent,
                 baselineContent: savedContent,
@@ -420,7 +418,7 @@ export function getEditorInitialContentConfig({
     }
 
     if (isDirty && draftContent != null) {
-        const shouldLoad = isFileSwitch || contentOwnerPath !== activeFile;
+        const shouldLoad = isFileSwitch;
         return {
             content: draftContent,
             baselineContent: savedContent ?? '',
@@ -454,7 +452,7 @@ export function getEditorInitialContentConfig({
     }
 
     if (savedContent != null) {
-        const shouldLoad = isFileSwitch || contentOwnerPath !== activeFile;
+        const shouldLoad = isFileSwitch;
         return {
             content: savedContent,
             baselineContent: savedContent,
