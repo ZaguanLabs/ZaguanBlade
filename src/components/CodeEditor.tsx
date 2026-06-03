@@ -38,6 +38,33 @@ import { normalizeEditorPath } from "../utils/editorBufferRegistry";
 
 const EDITING_AID_MAX_DOC_LENGTH = 500_000;
 
+const runPreservingScroll = (view: EditorView, run: () => void) => {
+    const scroller = view.scrollDOM;
+    const scrollTop = scroller.scrollTop;
+    const scrollLeft = scroller.scrollLeft;
+
+    run();
+
+    const restoreScroll = () => {
+        if (!scroller.isConnected) {
+            return;
+        }
+
+        scroller.scrollTop = scrollTop;
+        scroller.scrollLeft = scrollLeft;
+    };
+
+    restoreScroll();
+    requestAnimationFrame(() => {
+        restoreScroll();
+        requestAnimationFrame(restoreScroll);
+    });
+};
+
+const dispatchPreservingScroll = (view: EditorView, spec: TransactionSpec) => {
+    runPreservingScroll(view, () => view.dispatch(spec));
+};
+
 const replaceEditorDocument = (view: EditorView, content: string, unifiedDiff?: string, preserveScroll = false) => {
     const diffState = createDiffStateFromUnifiedDiff(unifiedDiff);
     const { main } = view.state.selection;
@@ -72,30 +99,6 @@ const getEditingAidExtensions = (isMarkdown: boolean, docLength: number): Extens
         autocompletion(),
     ];
 };
-
-const dispatchPreservingScroll = (view: EditorView, spec: TransactionSpec) => {
-    const scroller = view.scrollDOM;
-    const scrollTop = scroller.scrollTop;
-    const scrollLeft = scroller.scrollLeft;
-
-    view.dispatch(spec);
-
-    const restoreScroll = () => {
-        if (!scroller.isConnected) {
-            return;
-        }
-
-        scroller.scrollTop = scrollTop;
-        scroller.scrollLeft = scrollLeft;
-    };
-
-    restoreScroll();
-    requestAnimationFrame(() => {
-        restoreScroll();
-        requestAnimationFrame(restoreScroll);
-    });
-};
-
 
 interface CodeEditorProps {
     content: string;
@@ -356,25 +359,37 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
                 return;
             }
 
-            view.dispatch({
+            const effectsSpec = {
                 effects: [
                     setBaseContent.of(input.content),
                     setDiffState.of(createDiffStateFromUnifiedDiff(input.unifiedDiff)),
                 ],
-            });
+            };
+            if (input.preserveScroll) {
+                dispatchPreservingScroll(view, effectsSpec);
+            } else {
+                view.dispatch(effectsSpec);
+            }
             contentRef.current = input.content;
             return;
         }
 
         if (input.resetHistory) {
             const targetFilename = input.path ?? filenameRef.current;
-            view.setState(createEditorState(input.content, targetFilename));
-            view.dispatch({
-                effects: [
-                    setBaseContent.of(input.content),
-                    setDiffState.of(createDiffStateFromUnifiedDiff(input.unifiedDiff)),
-                ],
-            });
+            const resetEditorState = () => {
+                view.setState(createEditorState(input.content, targetFilename));
+                view.dispatch({
+                    effects: [
+                        setBaseContent.of(input.content),
+                        setDiffState.of(createDiffStateFromUnifiedDiff(input.unifiedDiff)),
+                    ],
+                });
+            };
+            if (input.preserveScroll) {
+                runPreservingScroll(view, resetEditorState);
+            } else {
+                resetEditorState();
+            }
             void reconfigureLanguage(targetFilename ?? undefined);
         } else {
             replaceEditorDocument(

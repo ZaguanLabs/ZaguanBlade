@@ -108,16 +108,7 @@ async fn generate_commit_message_via_openai_compat(
     let openai_compat_base_url = normalize_openai_compat_url(&api_config.openai_compat_url);
     let url = format!("{}/v1/chat/completions", openai_compat_base_url);
 
-    let body = json!({
-        "model": model_name,
-        "messages": [
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        "stream": false
-    });
+    let body = build_openai_compat_commit_message_body(model_name, prompt);
 
     let client = reqwest::Client::new();
     let response = client
@@ -155,6 +146,19 @@ async fn generate_commit_message_via_openai_compat(
     } else {
         Ok(message)
     }
+}
+
+fn build_openai_compat_commit_message_body(model_name: &str, prompt: &str) -> serde_json::Value {
+    json!({
+        "model": model_name,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "stream": false
+    })
 }
 
 fn parse_git_status(output: &str) -> GitStatusSummary {
@@ -581,16 +585,7 @@ async fn generate_commit_message_via_ollama(
     let model_name = model_id.strip_prefix("ollama/").unwrap_or(model_id);
     let url = format!("{}/api/chat", api_config.ollama_url.trim_end_matches('/'));
 
-    let body = json!({
-        "model": model_name,
-        "messages": [
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        "stream": false
-    });
+    let body = build_ollama_commit_message_body(model_name, prompt);
 
     let client = reqwest::Client::new();
     let mut request = client.post(&url).json(&body);
@@ -640,6 +635,19 @@ async fn generate_commit_message_via_ollama(
     } else {
         Ok(message)
     }
+}
+
+fn build_ollama_commit_message_body(model_name: &str, prompt: &str) -> serde_json::Value {
+    json!({
+        "model": model_name,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "stream": false
+    })
 }
 
 fn collect_git_paths(output: &str) -> Vec<String> {
@@ -950,6 +958,34 @@ mod tests {
         assert!(!summary.has_upstream);
         assert_eq!(summary.ahead, 0);
         assert_eq!(summary.behind, 0);
+    }
+
+    #[test]
+    fn local_ai_commit_message_requests_do_not_include_system_prompt() {
+        for body in [
+            build_ollama_commit_message_body("llama3.2", "Generate a commit message"),
+            build_openai_compat_commit_message_body("local-model", "Generate a commit message"),
+        ] {
+            let messages = body
+                .get("messages")
+                .and_then(|value| value.as_array())
+                .expect("messages array");
+
+            assert_eq!(messages.len(), 1);
+            assert_eq!(
+                messages
+                    .first()
+                    .and_then(|message| message.get("role"))
+                    .and_then(|role| role.as_str()),
+                Some("user")
+            );
+            assert!(
+                messages.iter().all(|message| message
+                    .get("role")
+                    .and_then(|role| role.as_str())
+                    != Some("system"))
+            );
+        }
     }
 }
 

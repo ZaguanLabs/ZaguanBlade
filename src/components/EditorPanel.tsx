@@ -509,11 +509,13 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     authoritativeReloadRef.current = false;
                     awaitingInitialSyncRef.current = false;
                     const editorHandle = editorRef.current;
+                    const preserveScroll = editorHandle?.getContent() === fileEvent.payload.data;
                     editorHandle?.replaceDocument({
                         path: fileEvent.payload.path,
                         content: fileEvent.payload.data,
                         resetHistory: true,
                         reason: isAuthoritativeReload ? 'revert' : 'reload',
+                        preserveScroll,
                     });
                     setContent(fileEvent.payload.data);
                     liveContentRef.current = fileEvent.payload.data;
