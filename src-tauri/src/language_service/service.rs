@@ -1367,6 +1367,17 @@ impl LanguageService {
             .search_semantic_anchors(query, file_path, limit)?)
     }
 
+    pub fn get_file_semantic_anchors(
+        &self,
+        file_path: &str,
+        limit: usize,
+    ) -> Result<Vec<SemanticAnchor>, LanguageError> {
+        self.ensure_file_fresh(file_path)?;
+        Ok(self
+            .symbol_store
+            .get_semantic_anchors_in_file(file_path, limit)?)
+    }
+
     pub fn get_symbol_at(
         &self,
         file_path: &str,

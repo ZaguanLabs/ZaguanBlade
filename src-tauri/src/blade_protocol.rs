@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::language_service::IndexHealthSnapshot;
+
 // ==============================================================================
 // 0. Version (v1.5) - Added versioned event transport for batched blade-event delivery
 // ==============================================================================
@@ -671,6 +673,12 @@ pub struct ContextPackPayload {
     pub memories: Vec<ContextMemoryItem>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hypothesized_flow: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enriched_files: Vec<ContextFileEnrichment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related_files: Vec<ContextRelatedFile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index_health: Option<IndexHealthSnapshot>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub recommended_next_step: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -724,6 +732,49 @@ pub struct ContextFileResult {
     pub reason: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub suggested_ranges: Vec<ContextRange>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ContextFileEnrichment {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub symbol_summaries: Vec<ContextSymbolSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub semantic_anchors: Vec<ContextSemanticAnchorSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related_files: Vec<ContextRelatedFile>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub suggested_ranges: Vec<ContextRange>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub confidence: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub next_step: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ContextSymbolSummary {
+    pub name: String,
+    pub qualified_name: String,
+    pub kind: String,
+    pub line: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ContextSemanticAnchorSummary {
+    pub kind: String,
+    pub value: String,
+    pub line: u32,
+    pub preview: String,
+    pub confidence: f32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ContextRelatedFile {
+    pub path: String,
+    pub relationship: String,
+    pub reason: String,
+    #[serde(default)]
+    pub score: u32,
 }
 
 /// A line range suggestion for reading a file

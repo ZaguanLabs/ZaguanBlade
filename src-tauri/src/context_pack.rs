@@ -3,14 +3,15 @@ use std::path::Path;
 use std::time::Instant;
 
 use crate::blade_protocol::{
-    ContextFileResult, ContextMemoryItem, ContextPackConfidence, ContextPackError,
-    ContextPackPayload, ContextProjectInfo, ContextRange, ContextWorkspace,
+    ContextFileEnrichment, ContextFileResult, ContextMemoryItem, ContextPackConfidence,
+    ContextPackError, ContextPackPayload, ContextProjectInfo, ContextRange, ContextRelatedFile,
+    ContextSemanticAnchorSummary, ContextSymbolSummary, ContextWorkspace,
 };
 use crate::language_service::LanguageService;
 use crate::local_artifacts::LocalArtifactStore;
 use crate::project_settings::get_zblade_dir;
 use crate::symbol_index::SymbolStore;
-use crate::tree_sitter::Symbol;
+use crate::tree_sitter::{Symbol, SymbolRelationshipType, SymbolType};
 
 #[derive(Debug, Clone)]
 pub struct ContextPackRequest {
@@ -103,13 +104,11 @@ pub fn build_context_pack(
         Vec::new()
     };
 
-    let confidence = if primary.len() >= 3 && primary.first().is_some_and(|item| item.score >= 75) {
-        ContextPackConfidence::High
-    } else if !primary.is_empty() {
-        ContextPackConfidence::Medium
-    } else {
-        ContextPackConfidence::Low
-    };
+    let index_health = service.audit_index_health().ok();
+    let enriched_files = enrich_primary_files(&service, &primary, max_results);
+    let related_files = collect_related_files_from_enrichments(&enriched_files, max_results);
+
+    let confidence = context_pack_confidence(&primary, &enriched_files, index_health.as_ref());
 
     let summary = if let Some(first) = primary.first() {
         format!(
@@ -158,6 +157,9 @@ pub fn build_context_pack(
         related_docs,
         memories,
         hypothesized_flow,
+        enriched_files,
+        related_files,
+        index_health,
         recommended_next_step,
         error: None,
         timing_ms: Some(started_at.elapsed().as_millis() as u64),
@@ -176,6 +178,9 @@ pub fn error_payload(code: &str, message: &str) -> ContextPackPayload {
         related_docs: Vec::new(),
         memories: Vec::new(),
         hypothesized_flow: Vec::new(),
+        enriched_files: Vec::new(),
+        related_files: Vec::new(),
+        index_health: None,
         recommended_next_step: String::new(),
         error: Some(ContextPackError {
             code: code.to_string(),
@@ -395,6 +400,296 @@ fn collect_fallback_path_matches_for_queries(
     items.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
     items.truncate(max_results);
     items
+}
+
+fn enrich_primary_files(
+    service: &LanguageService,
+    primary: &[ContextFileResult],
+    max_results: usize,
+) -> Vec<ContextFileEnrichment> {
+    primary
+        .iter()
+        .take(max_results)
+        .filter_map(|item| enrich_context_file(service, item).ok())
+        .collect()
+}
+
+fn enrich_context_file(
+    service: &LanguageService,
+    item: &ContextFileResult,
+) -> Result<ContextFileEnrichment, String> {
+    let symbols = service
+        .get_file_symbols(&item.path)
+        .map_err(|error| error.to_string())?;
+    let symbol_summaries = symbols
+        .iter()
+        .filter(|symbol| is_context_key_symbol(symbol))
+        .take(12)
+        .map(|symbol| ContextSymbolSummary {
+            name: symbol.name.clone(),
+            qualified_name: symbol.qualified_name.clone(),
+            kind: symbol.symbol_type.to_string(),
+            line: symbol.range.start.line.saturating_add(1),
+        })
+        .collect::<Vec<_>>();
+
+    let semantic_anchors = collect_context_semantic_anchors(service, &item.path, &symbols)?;
+    let related_files = collect_context_related_files(service, &item.path, &symbols)?;
+    let suggested_ranges = merge_context_ranges(
+        item.suggested_ranges
+            .iter()
+            .copied()
+            .chain(
+                symbols
+                    .iter()
+                    .filter(|symbol| is_context_key_symbol(symbol))
+                    .take(4)
+                    .map(range_for_symbol),
+            )
+            .chain(semantic_anchors.iter().take(3).map(|anchor| ContextRange {
+                start_line: anchor.line.saturating_add(1).saturating_sub(8).max(1),
+                end_line: anchor.line.saturating_add(1).saturating_add(24),
+            })),
+    );
+    let confidence = if item.score >= 80 && !symbol_summaries.is_empty() {
+        "high"
+    } else if item.score >= 55 || !symbol_summaries.is_empty() || !semantic_anchors.is_empty() {
+        "medium"
+    } else {
+        "low"
+    }
+    .to_string();
+    let next_step = if let Some(range) = suggested_ranges.first() {
+        format!(
+            "Read {} lines {}-{} first, then follow related_files if the edit surface is unclear.",
+            item.path, range.start_line, range.end_line
+        )
+    } else {
+        format!(
+            "Read {} first, then broaden with symbol_references if needed.",
+            item.path
+        )
+    };
+
+    Ok(ContextFileEnrichment {
+        path: item.path.clone(),
+        symbol_summaries,
+        semantic_anchors,
+        related_files,
+        suggested_ranges,
+        confidence,
+        next_step,
+    })
+}
+
+fn collect_context_semantic_anchors(
+    service: &LanguageService,
+    file_path: &str,
+    symbols: &[Symbol],
+) -> Result<Vec<ContextSemanticAnchorSummary>, String> {
+    let mut anchors = Vec::new();
+    let mut seen = HashSet::new();
+
+    for anchor in service
+        .get_file_semantic_anchors(file_path, 8)
+        .map_err(|error| error.to_string())?
+    {
+        let key = (anchor.kind.clone(), anchor.value.clone(), anchor.line);
+        if seen.insert(key) {
+            anchors.push(ContextSemanticAnchorSummary {
+                kind: anchor.kind,
+                value: anchor.value,
+                line: anchor.line.saturating_add(1),
+                preview: truncate_chars(&anchor.preview, 220),
+                confidence: anchor.confidence,
+            });
+        }
+    }
+
+    for symbol in symbols
+        .iter()
+        .filter(|symbol| is_context_key_symbol(symbol))
+        .take(8)
+    {
+        for result in service
+            .search_semantic_anchors(&symbol.name, Some(file_path), 4)
+            .map_err(|error| error.to_string())?
+        {
+            let key = (
+                result.anchor.kind.clone(),
+                result.anchor.value.clone(),
+                result.anchor.line,
+            );
+            if seen.insert(key) {
+                anchors.push(ContextSemanticAnchorSummary {
+                    kind: result.anchor.kind,
+                    value: result.anchor.value,
+                    line: result.anchor.line.saturating_add(1),
+                    preview: truncate_chars(&result.anchor.preview, 220),
+                    confidence: result.anchor.confidence,
+                });
+            }
+            if anchors.len() >= 8 {
+                return Ok(anchors);
+            }
+        }
+    }
+
+    anchors.sort_by(|a, b| {
+        b.confidence
+            .partial_cmp(&a.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.line.cmp(&b.line))
+    });
+    anchors.truncate(8);
+    Ok(anchors)
+}
+
+fn collect_context_related_files(
+    service: &LanguageService,
+    file_path: &str,
+    symbols: &[Symbol],
+) -> Result<Vec<ContextRelatedFile>, String> {
+    let mut related = Vec::new();
+    let mut seen = HashSet::new();
+
+    for imported in service
+        .get_file_relationship_targets(file_path, SymbolRelationshipType::Import, 8)
+        .map_err(|error| error.to_string())?
+    {
+        if imported != file_path && seen.insert(imported.clone()) {
+            related.push(ContextRelatedFile {
+                path: imported.clone(),
+                relationship: "import".to_string(),
+                reason: format!("Imported by {}.", file_path),
+                score: 82,
+            });
+        }
+    }
+
+    for symbol in symbols
+        .iter()
+        .filter(|symbol| is_context_key_symbol(symbol))
+        .take(6)
+    {
+        for reference in service
+            .find_references_to_symbol(symbol, 6)
+            .map_err(|error| error.to_string())?
+        {
+            let related_path = reference.source_symbol.file_path;
+            if related_path == file_path || !seen.insert(related_path.clone()) {
+                continue;
+            }
+            related.push(ContextRelatedFile {
+                path: related_path.clone(),
+                relationship: reference.relationship_type.to_string(),
+                reason: format!(
+                    "{} references {}.",
+                    related_path,
+                    if symbol.qualified_name.is_empty() {
+                        symbol.name.as_str()
+                    } else {
+                        symbol.qualified_name.as_str()
+                    }
+                ),
+                score: if reference.target_symbol_id.is_some() {
+                    78
+                } else {
+                    62
+                },
+            });
+            if related.len() >= 12 {
+                return Ok(related);
+            }
+        }
+    }
+
+    Ok(related)
+}
+
+fn collect_related_files_from_enrichments(
+    enriched_files: &[ContextFileEnrichment],
+    limit: usize,
+) -> Vec<ContextRelatedFile> {
+    let mut seen = HashSet::new();
+    let mut related = enriched_files
+        .iter()
+        .flat_map(|file| file.related_files.iter().cloned())
+        .filter(|file| seen.insert(file.path.clone()))
+        .collect::<Vec<_>>();
+    related.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
+    related.truncate(limit.saturating_mul(2).max(limit));
+    related
+}
+
+fn context_pack_confidence(
+    primary: &[ContextFileResult],
+    enriched_files: &[ContextFileEnrichment],
+    index_health: Option<&crate::language_service::IndexHealthSnapshot>,
+) -> ContextPackConfidence {
+    let fresh_or_unknown = index_health
+        .map(|health| {
+            matches!(
+                health.status,
+                crate::language_service::IndexHealthStatus::Fresh
+            )
+        })
+        .unwrap_or(true);
+    let enriched_count = enriched_files
+        .iter()
+        .filter(|file| file.confidence == "high" || file.confidence == "medium")
+        .count();
+
+    if fresh_or_unknown
+        && primary.len() >= 3
+        && primary.first().is_some_and(|item| item.score >= 75)
+        && enriched_count >= 2
+    {
+        ContextPackConfidence::High
+    } else if !primary.is_empty() || enriched_count > 0 {
+        ContextPackConfidence::Medium
+    } else {
+        ContextPackConfidence::Low
+    }
+}
+
+fn is_context_key_symbol(symbol: &Symbol) -> bool {
+    !symbol.name.is_empty()
+        && !matches!(symbol.qualified_name.as_str(), "__file__")
+        && matches!(
+            symbol.symbol_type,
+            SymbolType::Function
+                | SymbolType::Method
+                | SymbolType::Class
+                | SymbolType::Struct
+                | SymbolType::Interface
+                | SymbolType::Type
+                | SymbolType::Enum
+                | SymbolType::Trait
+                | SymbolType::Module
+        )
+}
+
+fn merge_context_ranges<I>(ranges: I) -> Vec<ContextRange>
+where
+    I: IntoIterator<Item = ContextRange>,
+{
+    let mut merged = Vec::<ContextRange>::new();
+    for range in ranges {
+        if range.end_line < range.start_line {
+            continue;
+        }
+        if merged.iter().any(|existing| {
+            existing.start_line <= range.end_line && range.start_line <= existing.end_line
+        }) {
+            continue;
+        }
+        merged.push(range);
+        if merged.len() >= 6 {
+            break;
+        }
+    }
+    merged
 }
 
 fn collect_related_tests(
@@ -697,6 +992,110 @@ mod tests {
             ),
             vec!["src/main.rs".to_string(), "src/lib.rs".to_string()]
         );
+    }
+
+    fn test_language_service(root: &Path) -> LanguageService {
+        let db_path = root.join(".zblade/index/symbols.db");
+        let store = std::sync::Arc::new(SymbolStore::new(&db_path).unwrap());
+        LanguageService::new(root.to_path_buf(), store).unwrap()
+    }
+
+    #[test]
+    fn enriches_context_file_with_symbols_anchors_and_ranges() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let service = test_language_service(temp_dir.path());
+        std::fs::write(
+            temp_dir.path().join("service.ts"),
+            r#"
+            export const route = "/api/blade/context-pack";
+            export function buildContextPack() {
+                return route;
+            }
+            "#,
+        )
+        .unwrap();
+        service.index_file("service.ts").unwrap();
+
+        let item = ContextFileResult {
+            path: "service.ts".to_string(),
+            score: 88,
+            reason: "test".to_string(),
+            suggested_ranges: vec![ContextRange {
+                start_line: 1,
+                end_line: 20,
+            }],
+        };
+        let enrichment = enrich_context_file(&service, &item).unwrap();
+
+        assert_eq!(enrichment.path, "service.ts");
+        assert_eq!(enrichment.confidence, "high");
+        assert!(enrichment
+            .symbol_summaries
+            .iter()
+            .any(|symbol| symbol.name == "buildContextPack"));
+        assert!(enrichment
+            .semantic_anchors
+            .iter()
+            .any(|anchor| anchor.value == "/api/blade/context-pack"));
+        assert!(!enrichment.suggested_ranges.is_empty());
+    }
+
+    #[test]
+    fn enrichment_collects_related_import_files() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let service = test_language_service(temp_dir.path());
+        std::fs::write(
+            temp_dir.path().join("utils.ts"),
+            "export function helperName() { return 'ok'; }",
+        )
+        .unwrap();
+        std::fs::write(
+            temp_dir.path().join("main.ts"),
+            r#"
+            import { helperName } from "./utils";
+            export function runMain() { return helperName(); }
+            "#,
+        )
+        .unwrap();
+        service.index_file("utils.ts").unwrap();
+        service.index_file("main.ts").unwrap();
+
+        let item = ContextFileResult {
+            path: "main.ts".to_string(),
+            score: 82,
+            reason: "test".to_string(),
+            suggested_ranges: Vec::new(),
+        };
+        let enrichment = enrich_context_file(&service, &item).unwrap();
+
+        assert!(enrichment
+            .related_files
+            .iter()
+            .any(|file| file.path == "utils.ts" && file.relationship == "import"));
+    }
+
+    #[test]
+    fn context_pack_confidence_uses_enrichment_and_index_health() {
+        let primary = vec![ContextFileResult {
+            path: "service.ts".to_string(),
+            score: 90,
+            reason: "test".to_string(),
+            suggested_ranges: Vec::new(),
+        }];
+        let enriched = vec![ContextFileEnrichment {
+            path: "service.ts".to_string(),
+            symbol_summaries: Vec::new(),
+            semantic_anchors: Vec::new(),
+            related_files: Vec::new(),
+            suggested_ranges: Vec::new(),
+            confidence: "medium".to_string(),
+            next_step: String::new(),
+        }];
+
+        assert!(matches!(
+            context_pack_confidence(&primary, &enriched, None),
+            ContextPackConfidence::Medium
+        ));
     }
 
     #[test]
