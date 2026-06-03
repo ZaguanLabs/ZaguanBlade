@@ -205,6 +205,8 @@ const READ_MANY_FILES_MAX_BYTES_PER_FILE_CAP: usize = 512 * 1024;
 const GREP_TIMEOUT_DEFAULT_MS: u64 = 8_000;
 const GREP_TIMEOUT_MIN_MS: u64 = 500;
 const GREP_TIMEOUT_MAX_MS: u64 = 30_000;
+const GREP_SEARCH_DEFAULT_MAX_RESULTS: usize = 20;
+const GREP_SEARCH_MAX_RESULTS_CAP: usize = 20;
 const DEPENDENCY_DIRS: &[&str] = &["node_modules", "vendor"];
 
 const TOOL_METRICS_SAMPLE_CAP: usize = 512;
@@ -992,6 +994,82 @@ mod tests {
         assert!(result.success);
         assert!(result.content.contains("needle"));
         assert!(!result.content.trim_start().starts_with('{'));
+    }
+
+    #[test]
+    fn grep_search_honors_max_results() {
+        let workspace = tempdir().expect("tempdir");
+        let file_path = workspace.path().join("many.txt");
+        fs::write(
+            &file_path,
+            "needle one\nneedle two\nneedle three\nneedle four\nneedle five\n",
+        )
+        .expect("write test file");
+
+        let result = grep_search(
+            workspace.path(),
+            &serde_json::from_str::<HashMap<String, serde_json::Value>>(
+                r#"{"pattern":"needle","path":".","timeout_ms":8000,"max_results":2}"#,
+            )
+            .expect("parse args"),
+            true,
+        );
+
+        assert!(result.success);
+        assert_eq!(result.content.lines().count(), 2);
+        assert!(result.content.contains("needle one"));
+        assert!(result.content.contains("needle two"));
+        assert!(!result.content.contains("needle three"));
+    }
+
+    #[test]
+    fn grep_search_defaults_to_twenty_results() {
+        let workspace = tempdir().expect("tempdir");
+        let file_path = workspace.path().join("many.txt");
+        let text = (1..=25)
+            .map(|idx| format!("needle {idx}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&file_path, format!("{text}\n")).expect("write test file");
+
+        let result = grep_search(
+            workspace.path(),
+            &serde_json::from_str::<HashMap<String, serde_json::Value>>(
+                r#"{"pattern":"needle","path":".","timeout_ms":8000}"#,
+            )
+            .expect("parse args"),
+            true,
+        );
+
+        assert!(result.success);
+        assert_eq!(result.content.lines().count(), 20);
+        assert!(result.content.contains("needle 20"));
+        assert!(!result.content.contains("needle 21"));
+    }
+
+    #[test]
+    fn grep_search_clamps_max_results_to_twenty() {
+        let workspace = tempdir().expect("tempdir");
+        let file_path = workspace.path().join("many.txt");
+        let text = (1..=25)
+            .map(|idx| format!("needle {idx}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&file_path, format!("{text}\n")).expect("write test file");
+
+        let result = grep_search(
+            workspace.path(),
+            &serde_json::from_str::<HashMap<String, serde_json::Value>>(
+                r#"{"pattern":"needle","path":".","timeout_ms":8000,"max_results":999}"#,
+            )
+            .expect("parse args"),
+            true,
+        );
+
+        assert!(result.success);
+        assert_eq!(result.content.lines().count(), 20);
+        assert!(result.content.contains("needle 20"));
+        assert!(!result.content.contains("needle 21"));
     }
 
     #[test]
@@ -2202,6 +2280,20 @@ fn parse_grep_timeout_ms(args: &HashMap<String, serde_json::Value>) -> u64 {
         .unwrap_or(GREP_TIMEOUT_DEFAULT_MS)
 }
 
+fn parse_grep_max_results(args: &HashMap<String, serde_json::Value>) -> usize {
+    let max_results = get_bounded_usize_arg(
+        args,
+        &["max_results", "limit"],
+        GREP_SEARCH_DEFAULT_MAX_RESULTS,
+        GREP_SEARCH_MAX_RESULTS_CAP,
+    );
+    if max_results == 0 {
+        GREP_SEARCH_DEFAULT_MAX_RESULTS
+    } else {
+        max_results
+    }
+}
+
 fn build_grep_next_step_hint(include_dependencies: bool) -> String {
     if include_dependencies {
         "Narrow the search path, refine the pattern, or lower dependency scope to reduce grep timeout risk.".to_string()
@@ -2221,6 +2313,7 @@ fn grep_search(
     let path = get_str_arg(args, &["path"]).unwrap_or_else(|| ".".to_string());
     let include_dependencies = get_bool_arg(args, &["include_dependencies"], false);
     let timeout_ms = parse_grep_timeout_ms(args);
+    let max_results = parse_grep_max_results(args);
     let force_timeout = get_bool_arg(args, &["__test_force_timeout"], false);
 
     let abs = match resolve_path_in_workspace(workspace_root, Path::new(&path)) {
@@ -2292,6 +2385,9 @@ fn grep_search(
                 out.push('\n');
                 partial_results.push(hit);
                 result_count += 1;
+                if result_count >= max_results {
+                    break 'file_loop;
+                }
                 if force_timeout {
                     timed_out = true;
                     break 'file_loop;
@@ -2891,7 +2987,12 @@ fn symbol_search_tool<R: tauri::Runtime>(
         Err(err) => return ToolResult::err(err),
     };
     let started = Instant::now();
-    let results = match service.search_symbols_filtered(&query, file_filter.as_deref(), symbol_types, limit) {
+    let results = match service.search_symbols_filtered(
+        &query,
+        file_filter.as_deref(),
+        symbol_types,
+        limit,
+    ) {
         Ok(results) => results,
         Err(err) => return ToolResult::err(err.to_string()),
     };
@@ -2936,7 +3037,6 @@ fn symbol_search_tool<R: tauri::Runtime>(
     });
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
 }
-
 
 fn symbol_search_confidence(result_count: usize, top_score: Option<f32>) -> &'static str {
     let top_score = top_score.unwrap_or(0.0);
