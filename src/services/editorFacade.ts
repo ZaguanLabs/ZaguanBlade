@@ -127,7 +127,8 @@ export const EditorFacade = {
         BladeDispatcher.editor({
             type: 'SyncDocument',
             payload: { path, content, version }
-        }).catch(() => {
+        }).catch((error) => {
+            console.warn('[EditorFacade] Failed to sync live document:', path, error);
         });
     },
 
@@ -135,7 +136,8 @@ export const EditorFacade = {
         BladeDispatcher.editor({
             type: 'CloseDocument',
             payload: { path }
-        }).catch(() => {
+        }).catch((error) => {
+            console.warn('[EditorFacade] Failed to close live document:', path, error);
         });
     },
 

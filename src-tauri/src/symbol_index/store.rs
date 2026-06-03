@@ -32,6 +32,8 @@ pub struct IndexedFileRecord {
     pub file_hash: String,
     pub indexed_at: i64,
     pub symbol_count: usize,
+    pub file_size: Option<u64>,
+    pub modified_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,7 +137,9 @@ impl SymbolStore {
                 file_path TEXT PRIMARY KEY,
                 file_hash TEXT,
                 indexed_at INTEGER NOT NULL,
-                symbol_count INTEGER NOT NULL
+                symbol_count INTEGER NOT NULL,
+                file_size INTEGER,
+                modified_at INTEGER
             );
 
             CREATE TABLE IF NOT EXISTS symbol_relationships (
@@ -183,6 +187,8 @@ impl SymbolStore {
         )?;
         ensure_column(&conn, "symbols", "content_hash", "TEXT NOT NULL DEFAULT ''")?;
         ensure_column(&conn, "symbol_relationships", "target_symbol_id", "TEXT")?;
+        ensure_column(&conn, "indexed_files", "file_size", "INTEGER")?;
+        ensure_column(&conn, "indexed_files", "modified_at", "INTEGER")?;
 
         conn.execute_batch(
             r#"
@@ -423,6 +429,8 @@ impl SymbolStore {
         &self,
         file_path: &str,
         file_hash: &str,
+        file_size: Option<u64>,
+        modified_at: Option<i64>,
         symbols: &[Symbol],
         anchors: &[SemanticAnchor],
         relationships: &[SymbolRelationship],
@@ -514,10 +522,18 @@ impl SymbolStore {
 
         tx.execute(
             r#"
-            INSERT OR REPLACE INTO indexed_files (file_path, file_hash, indexed_at, symbol_count)
-            VALUES (?1, ?2, ?3, ?4)
+            INSERT OR REPLACE INTO indexed_files
+            (file_path, file_hash, indexed_at, symbol_count, file_size, modified_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
             "#,
-            params![file_path, file_hash, now, symbols.len() as i64],
+            params![
+                file_path,
+                file_hash,
+                now,
+                symbols.len() as i64,
+                file_size.map(|size| size as i64),
+                modified_at
+            ],
         )?;
 
         tx.commit()?;
@@ -1013,7 +1029,7 @@ impl SymbolStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             r#"
-            SELECT file_path, file_hash, indexed_at, symbol_count
+            SELECT file_path, file_hash, indexed_at, symbol_count, file_size, modified_at
             FROM indexed_files
             ORDER BY symbol_count DESC, file_path ASC
             LIMIT ?1
@@ -1022,12 +1038,7 @@ impl SymbolStore {
 
         let records = stmt
             .query_map(params![limit as i64], |row| {
-                Ok(IndexedFileRecord {
-                    file_path: row.get::<_, String>(0)?,
-                    file_hash: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                    indexed_at: row.get::<_, i64>(2)?,
-                    symbol_count: row.get::<_, i64>(3)? as usize,
-                })
+                indexed_file_record_from_row(row)
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -1038,7 +1049,7 @@ impl SymbolStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             r#"
-            SELECT file_path, file_hash, indexed_at, symbol_count
+            SELECT file_path, file_hash, indexed_at, symbol_count, file_size, modified_at
             FROM indexed_files
             ORDER BY file_path ASC
             "#,
@@ -1046,12 +1057,7 @@ impl SymbolStore {
 
         let records = stmt
             .query_map([], |row| {
-                Ok(IndexedFileRecord {
-                    file_path: row.get::<_, String>(0)?,
-                    file_hash: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                    indexed_at: row.get::<_, i64>(2)?,
-                    symbol_count: row.get::<_, i64>(3)? as usize,
-                })
+                indexed_file_record_from_row(row)
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -1075,6 +1081,17 @@ impl SymbolStore {
         file_hash: &str,
         symbol_count: usize,
     ) -> Result<(), SymbolStoreError> {
+        self.mark_file_indexed_with_metadata(file_path, file_hash, symbol_count, None, None)
+    }
+
+    pub fn mark_file_indexed_with_metadata(
+        &self,
+        file_path: &str,
+        file_hash: &str,
+        symbol_count: usize,
+        file_size: Option<u64>,
+        modified_at: Option<i64>,
+    ) -> Result<(), SymbolStoreError> {
         let conn = self.conn.lock().unwrap();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1083,10 +1100,18 @@ impl SymbolStore {
 
         conn.execute(
             r#"
-            INSERT OR REPLACE INTO indexed_files (file_path, file_hash, indexed_at, symbol_count)
-            VALUES (?1, ?2, ?3, ?4)
+            INSERT OR REPLACE INTO indexed_files
+            (file_path, file_hash, indexed_at, symbol_count, file_size, modified_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
             "#,
-            params![file_path, file_hash, now, symbol_count as i64],
+            params![
+                file_path,
+                file_hash,
+                now,
+                symbol_count as i64,
+                file_size.map(|size| size as i64),
+                modified_at
+            ],
         )?;
         Ok(())
     }
@@ -1109,6 +1134,30 @@ impl SymbolStore {
         match result {
             Some(stored_hash) => Ok(stored_hash != file_hash),
             None => Ok(true), // Not indexed yet
+        }
+    }
+
+    pub fn needs_reindex_for_metadata(
+        &self,
+        file_path: &str,
+        file_size: u64,
+        modified_at: i64,
+    ) -> Result<Option<bool>, SymbolStoreError> {
+        let conn = self.conn.lock().unwrap();
+        let result: Option<(Option<i64>, Option<i64>)> = conn
+            .query_row(
+                "SELECT file_size, modified_at FROM indexed_files WHERE file_path = ?1",
+                params![file_path],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok();
+
+        match result {
+            Some((Some(stored_size), Some(stored_modified_at))) => {
+                Ok(Some(stored_size != file_size as i64 || stored_modified_at != modified_at))
+            }
+            Some(_) => Ok(None),
+            None => Ok(Some(true)),
         }
     }
 
@@ -1144,6 +1193,19 @@ impl SymbolStore {
 
         Ok(references)
     }
+}
+
+fn indexed_file_record_from_row(row: &rusqlite::Row) -> rusqlite::Result<IndexedFileRecord> {
+    Ok(IndexedFileRecord {
+        file_path: row.get::<_, String>(0)?,
+        file_hash: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+        indexed_at: row.get::<_, i64>(2)?,
+        symbol_count: row.get::<_, i64>(3)? as usize,
+        file_size: row
+            .get::<_, Option<i64>>(4)?
+            .and_then(|size| u64::try_from(size).ok()),
+        modified_at: row.get::<_, Option<i64>>(5)?,
+    })
 }
 
 /// Convert a database row to a Symbol
@@ -1616,5 +1678,40 @@ mod tests {
 
         // Different hash, needs reindex
         assert!(store.needs_reindex("test.ts", "def456").unwrap());
+    }
+
+    #[test]
+    fn test_file_indexing_metadata_tracking() {
+        let store = SymbolStore::in_memory().unwrap();
+
+        assert_eq!(
+            store
+                .needs_reindex_for_metadata("test.ts", 128, 1_234)
+                .unwrap(),
+            Some(true)
+        );
+
+        store
+            .mark_file_indexed_with_metadata("test.ts", "abc123", 5, Some(128), Some(1_234))
+            .unwrap();
+
+        assert_eq!(
+            store
+                .needs_reindex_for_metadata("test.ts", 128, 1_234)
+                .unwrap(),
+            Some(false)
+        );
+        assert_eq!(
+            store
+                .needs_reindex_for_metadata("test.ts", 129, 1_234)
+                .unwrap(),
+            Some(true)
+        );
+        assert_eq!(
+            store
+                .needs_reindex_for_metadata("test.ts", 128, 1_235)
+                .unwrap(),
+            Some(true)
+        );
     }
 }

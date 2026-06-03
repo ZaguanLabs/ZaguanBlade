@@ -138,6 +138,12 @@ struct CachedFile {
     symbols: Vec<Symbol>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct FileIndexMetadata {
+    file_size: u64,
+    modified_at: i64,
+}
+
 /// Error type for language service operations
 #[derive(Debug)]
 pub enum LanguageError {
@@ -662,6 +668,51 @@ impl LanguageService {
         *self.index_health.write().unwrap() = health;
     }
 
+    fn indexed_file_needs_refresh(
+        &self,
+        file_path: &str,
+        record: &crate::symbol_index::store::IndexedFileRecord,
+        refresh_metadata_when_hash_matches: bool,
+    ) -> Result<bool, LanguageError> {
+        if self
+            .buffer_snapshots
+            .contains_live(&self.snapshot_key(file_path))
+        {
+            return Ok(false);
+        }
+
+        let resolved = self.resolve_path(file_path);
+        let Ok(metadata) = file_index_metadata(&resolved) else {
+            return Ok(true);
+        };
+
+        if record.file_size == Some(metadata.file_size)
+            && record.modified_at == Some(metadata.modified_at)
+        {
+            return Ok(false);
+        }
+
+        let Ok(content) = std::fs::read_to_string(&resolved) else {
+            return Ok(true);
+        };
+        let current_hash = compute_hash(&content);
+        if current_hash.is_empty() || current_hash != record.file_hash {
+            return Ok(true);
+        }
+
+        if refresh_metadata_when_hash_matches {
+            self.symbol_store.mark_file_indexed_with_metadata(
+                file_path,
+                &record.file_hash,
+                record.symbol_count,
+                Some(metadata.file_size),
+                Some(metadata.modified_at),
+            )?;
+        }
+
+        Ok(false)
+    }
+
     pub fn audit_index_health(&self) -> Result<IndexHealthSnapshot, LanguageError> {
         let started = std::time::Instant::now();
         let supported_files = self.supported_language_files(".");
@@ -680,11 +731,7 @@ impl LanguageService {
                 missing_files += 1;
                 continue;
             };
-            let resolved = self.resolve_path(file_path);
-            let current_hash = std::fs::read_to_string(resolved)
-                .map(|content| compute_hash(&content))
-                .unwrap_or_default();
-            if current_hash.is_empty() || current_hash != record.file_hash {
+            if self.indexed_file_needs_refresh(file_path, record, false)? {
                 stale_files += 1;
             }
         }
@@ -773,12 +820,7 @@ impl LanguageService {
 
         for file_path in supported_files {
             let needs_index = match indexed_map.get(&file_path) {
-                Some(record) => {
-                    let current_hash = std::fs::read_to_string(self.resolve_path(&file_path))
-                        .map(|content| compute_hash(&content))
-                        .unwrap_or_default();
-                    current_hash.is_empty() || current_hash != record.file_hash
-                }
+                Some(record) => self.indexed_file_needs_refresh(&file_path, record, true)?,
                 None => true,
             };
             if needs_index {
@@ -1052,9 +1094,15 @@ impl LanguageService {
 
     /// Index a single file
     pub fn index_file(&self, file_path: &str) -> Result<Vec<Symbol>, LanguageError> {
+        let disk_metadata = file_index_metadata(&self.resolve_path(file_path)).ok();
         let snapshot = self.load_snapshot_for_indexing(file_path)?;
         let content = snapshot.content();
         let hash = snapshot.hash().to_string();
+        let index_metadata = if snapshot.is_live() {
+            None
+        } else {
+            disk_metadata
+        };
 
         // Check if reindexing is needed
         if !self.symbol_store.needs_reindex(file_path, &hash)? {
@@ -1110,8 +1158,15 @@ impl LanguageService {
         // Delete old symbols and insert new ones
         let semantic_anchors = extract_semantic_anchors(file_path, &content);
         self.resolve_relationship_targets(file_path, &symbols, &mut relationships)?;
-        self.symbol_store
-            .replace_file_index(file_path, &hash, &symbols, &semantic_anchors, &relationships)?;
+        self.symbol_store.replace_file_index(
+            file_path,
+            &hash,
+            index_metadata.map(|metadata| metadata.file_size),
+            index_metadata.map(|metadata| metadata.modified_at),
+            &symbols,
+            &semantic_anchors,
+            &relationships,
+        )?;
 
         // Update cache
         {
@@ -1285,6 +1340,9 @@ impl LanguageService {
     ) -> Result<Vec<SearchResult>, LanguageError> {
         if let Some(path) = file_path {
             self.ensure_file_fresh(path)?;
+        } else {
+            let indexed_files = self.symbol_store.list_all_indexed_files()?;
+            self.refresh_stale_indexed_files(&indexed_files)?;
         }
 
         let mut search_query = SearchQuery::text(query).with_limit(limit);
@@ -1837,15 +1895,7 @@ impl LanguageService {
                 continue;
             }
 
-            let modified_after_index = resolved
-                .metadata()
-                .ok()
-                .and_then(|metadata| metadata.modified().ok())
-                .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|duration| duration.as_secs() as i64 > record.indexed_at)
-                .unwrap_or(false);
-
-            if modified_after_index {
+            if self.indexed_file_needs_refresh(&record.file_path, record, true)? {
                 let _ = self.index_file(&record.file_path)?;
             }
         }
@@ -3420,6 +3470,23 @@ fn compute_hash(content: &str) -> String {
     let mut hasher = DefaultHasher::new();
     content.hash(&mut hasher);
     format!("{:x}", hasher.finish())
+}
+
+fn file_index_metadata(path: &Path) -> std::io::Result<FileIndexMetadata> {
+    let metadata = std::fs::metadata(path)?;
+    Ok(FileIndexMetadata {
+        file_size: metadata.len(),
+        modified_at: metadata_modified_at(&metadata),
+    })
+}
+
+fn metadata_modified_at(metadata: &std::fs::Metadata) -> i64 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos().min(i64::MAX as u128) as i64)
+        .unwrap_or_default()
 }
 
 fn parse_with_thread_local_parser(
