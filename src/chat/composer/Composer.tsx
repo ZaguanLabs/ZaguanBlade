@@ -61,6 +61,9 @@ export const Composer: React.FC<ComposerProps> = ({
     const [editingCapture, setEditingCapture] = useState<PendingCapture | null>(null);
     const textareaRef = useRef<ComposerTextareaHandle>(null);
     const textareaDomCursorRef = useRef(0);
+    const textRef = useRef('');
+    const submitLockedRef = useRef(false);
+    const submitUnlockTimerRef = useRef<number | null>(null);
     const historyRef = useRef<string[]>([]);
     const historyIndexRef = useRef<number | null>(null);
     const historyDraftRef = useRef('');
@@ -85,14 +88,37 @@ export const Composer: React.FC<ComposerProps> = ({
         ];
     }, [mentionQuery, pathSuggestions]);
 
+    React.useEffect(() => {
+        textRef.current = text;
+    }, [text]);
+
+    React.useEffect(() => () => {
+        if (submitUnlockTimerRef.current !== null) {
+            window.clearTimeout(submitUnlockTimerRef.current);
+        }
+    }, []);
+
     const submit = useCallback(() => {
         if (disabled) {
             return;
         }
-        if (!text.trim() && attachments.attachments.length === 0) {
+        if (submitLockedRef.current) {
             return;
         }
-        const submittedText = text;
+        const submittedText = textRef.current;
+        const submittedAttachments = attachments.attachments;
+        if (!submittedText.trim() && submittedAttachments.length === 0) {
+            return;
+        }
+        submitLockedRef.current = true;
+        textRef.current = '';
+        if (submitUnlockTimerRef.current !== null) {
+            window.clearTimeout(submitUnlockTimerRef.current);
+        }
+        submitUnlockTimerRef.current = window.setTimeout(() => {
+            submitLockedRef.current = false;
+            submitUnlockTimerRef.current = null;
+        }, 250);
         const trimmedText = submittedText.trim();
         if (trimmedText) {
             const previousHistory = historyRef.current;
@@ -102,15 +128,16 @@ export const Composer: React.FC<ComposerProps> = ({
         }
         historyIndexRef.current = null;
         historyDraftRef.current = '';
-        onSend(submittedText, attachments.attachments, collectMentions(submittedText, selectedMentions), chatMode);
+        onSend(submittedText, submittedAttachments, collectMentions(submittedText, selectedMentions), chatMode);
         setText('');
         setMentionQuery(null);
         setSelectedMentions({});
         attachments.clearAttachments();
         requestAnimationFrame(() => textareaRef.current?.resize());
-    }, [attachments, chatMode, disabled, onSend, selectedMentions, text]);
+    }, [attachments, chatMode, disabled, onSend, selectedMentions]);
 
     const updateTextFromHistory = useCallback((nextText: string) => {
+        textRef.current = nextText;
         setText(nextText);
         setMentionQuery(null);
         requestAnimationFrame(() => {
@@ -162,6 +189,7 @@ export const Composer: React.FC<ComposerProps> = ({
             ? suggestion.entry
             : { path: suggestion.name, is_dir: false };
         const next = replaceActiveTrigger(text, cursor, entry);
+        textRef.current = next.text;
         setText(next.text);
         if (suggestion.kind === 'path') {
             setSelectedMentions((current) => ({
@@ -218,6 +246,7 @@ export const Composer: React.FC<ComposerProps> = ({
         if (!prefillRequest) {
             return;
         }
+        textRef.current = prefillRequest.text;
         setText(prefillRequest.text);
         setChatMode(prefillRequest.mode);
         setSelectedMentions(Object.fromEntries((prefillRequest.mentions || []).map((mention) => [
@@ -275,6 +304,7 @@ export const Composer: React.FC<ComposerProps> = ({
                                 ref={textareaRef}
                                 text={text}
                                 setText={(value) => {
+                                    textRef.current = value;
                                     setText(value);
                                     textareaDomCursorRef.current = value.length;
                                 }}
