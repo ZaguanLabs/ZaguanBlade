@@ -37,7 +37,26 @@ impl IndexerManager {
 
         let index = Arc::new(RwLock::new(index));
 
-        let watcher = match IndexWatcher::new(index.clone()) {
+        let after_update_index = index.clone();
+        let after_update = Arc::new(move || {
+            let manager = Self {
+                workspace_root: after_update_index
+                    .read()
+                    .map(|idx| idx.root.clone())
+                    .unwrap_or_default(),
+                index: after_update_index.clone(),
+                _watcher: Arc::new(None),
+            };
+
+            if let Err(e) = manager.refresh_project_context_files_sync() {
+                eprintln!("[Indexer] Failed to refresh project context files: {}", e);
+            }
+            if let Err(e) = manager.save_cache() {
+                eprintln!("[Indexer] Failed to save refreshed index cache: {}", e);
+            }
+        });
+
+        let watcher = match IndexWatcher::new(index.clone(), Some(after_update)) {
             Ok(w) => {
                 eprintln!("[Indexer] File watcher started");
                 Some(w)
@@ -54,17 +73,22 @@ impl IndexerManager {
             _watcher: Arc::new(watcher),
         };
 
-        // Write project_index.md immediately after indexing
-        if let Err(e) = manager.write_project_index_sync() {
-            eprintln!("[Indexer] Failed to write project_index.md: {}", e);
+        if let Err(e) = manager.refresh_project_context_files_sync() {
+            eprintln!("[Indexer] Failed to write project context files: {}", e);
         }
-
-        // Write compact deterministic index for first-turn warmup context
-        if let Err(e) = manager.write_project_index_min_sync() {
-            eprintln!("[Indexer] Failed to write project_index_min.md: {}", e);
+        if let Err(e) = manager.save_cache() {
+            eprintln!("[Indexer] Failed to save index cache: {}", e);
         }
 
         Ok(manager)
+    }
+
+    fn refresh_project_context_files_sync(
+        &self,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.write_project_index_sync()?;
+        self.write_project_index_min_sync()?;
+        Ok(())
     }
 
     /// Write project_index.md synchronously (for use after initial indexing)

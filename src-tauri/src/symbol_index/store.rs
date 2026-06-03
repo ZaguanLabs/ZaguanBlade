@@ -419,6 +419,111 @@ impl SymbolStore {
         Ok(relationships.len())
     }
 
+    pub fn replace_file_index(
+        &self,
+        file_path: &str,
+        file_hash: &str,
+        symbols: &[Symbol],
+        anchors: &[SemanticAnchor],
+        relationships: &[SymbolRelationship],
+    ) -> Result<(), SymbolStoreError> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        tx.execute(
+            "DELETE FROM symbol_relationships WHERE source_file_path = ?1",
+            params![file_path],
+        )?;
+        tx.execute(
+            "DELETE FROM semantic_anchors WHERE file_path = ?1",
+            params![file_path],
+        )?;
+        tx.execute("DELETE FROM symbols WHERE file_path = ?1", params![file_path])?;
+
+        for symbol in symbols {
+            tx.execute(
+                r#"
+                INSERT OR REPLACE INTO symbols
+                (id, name, qualified_name, symbol_type, file_path, start_line, start_char, end_line, end_char,
+                 byte_offset, byte_length, parent_id, docstring, signature, content_hash, indexed_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                "#,
+                params![
+                    &symbol.id,
+                    &symbol.name,
+                    &symbol.qualified_name,
+                    symbol.symbol_type.to_string(),
+                    &symbol.file_path,
+                    symbol.range.start.line,
+                    symbol.range.start.character,
+                    symbol.range.end.line,
+                    symbol.range.end.character,
+                    symbol.byte_offset as i64,
+                    symbol.byte_length as i64,
+                    symbol.parent_id.as_deref(),
+                    symbol.docstring.as_deref(),
+                    symbol.signature.as_deref(),
+                    &symbol.content_hash,
+                    now,
+                ],
+            )?;
+        }
+
+        for anchor in anchors {
+            tx.execute(
+                r#"
+                INSERT OR REPLACE INTO semantic_anchors
+                (id, file_path, kind, value, line, character, preview, confidence, indexed_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                "#,
+                params![
+                    &anchor.id,
+                    &anchor.file_path,
+                    &anchor.kind,
+                    &anchor.value,
+                    anchor.line,
+                    anchor.character,
+                    &anchor.preview,
+                    anchor.confidence,
+                    now,
+                ],
+            )?;
+        }
+
+        for relationship in relationships {
+            tx.execute(
+                r#"
+                INSERT OR REPLACE INTO symbol_relationships
+                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                "#,
+                params![
+                    &relationship.source_symbol_id,
+                    &relationship.source_file_path,
+                    &relationship.target_name,
+                    relationship.target_symbol_id.as_deref(),
+                    relationship.relationship_type.to_string(),
+                    relationship.line,
+                ],
+            )?;
+        }
+
+        tx.execute(
+            r#"
+            INSERT OR REPLACE INTO indexed_files (file_path, file_hash, indexed_at, symbol_count)
+            VALUES (?1, ?2, ?3, ?4)
+            "#,
+            params![file_path, file_hash, now, symbols.len() as i64],
+        )?;
+
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn get_relationship_targets(
         &self,
         source_symbol_id: &str,

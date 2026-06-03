@@ -14,6 +14,7 @@ pub struct IndexWatcher {
 impl IndexWatcher {
     pub fn new(
         index: Arc<RwLock<ProjectIndex>>,
+        after_update: Option<Arc<dyn Fn() + Send + Sync>>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let (tx, rx) = mpsc::channel();
 
@@ -34,14 +35,18 @@ impl IndexWatcher {
         watcher.watch(&root, RecursiveMode::Recursive)?;
 
         std::thread::spawn(move || {
-            debounced_update_loop(index, rx);
+            debounced_update_loop(index, rx, after_update);
         });
 
         Ok(Self { _watcher: watcher })
     }
 }
 
-fn debounced_update_loop(index: Arc<RwLock<ProjectIndex>>, rx: mpsc::Receiver<Event>) {
+fn debounced_update_loop(
+    index: Arc<RwLock<ProjectIndex>>,
+    rx: mpsc::Receiver<Event>,
+    after_update: Option<Arc<dyn Fn() + Send + Sync>>,
+) {
     let mut pending_changes: HashSet<PathBuf> = HashSet::new();
     let mut last_change = Instant::now();
     let debounce_duration = Duration::from_secs(2);
@@ -71,7 +76,11 @@ fn debounced_update_loop(index: Arc<RwLock<ProjectIndex>>, rx: mpsc::Receiver<Ev
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     if !pending_changes.is_empty() && last_change.elapsed() > debounce_duration {
-                        apply_changes(&index, &pending_changes);
+                        if apply_changes(&index, &pending_changes) {
+                            if let Some(callback) = after_update.as_ref() {
+                                callback();
+                            }
+                        }
                         pending_changes.clear();
                     }
                 }
@@ -100,32 +109,39 @@ fn extract_paths(event: &Event) -> Vec<PathBuf> {
         .collect()
 }
 
-fn apply_changes(index: &Arc<RwLock<ProjectIndex>>, paths: &HashSet<PathBuf>) {
+fn apply_changes(index: &Arc<RwLock<ProjectIndex>>, paths: &HashSet<PathBuf>) -> bool {
     let mut idx = match index.write() {
         Ok(guard) => guard,
         Err(e) => {
             eprintln!("Failed to acquire write lock: {}", e);
-            return;
+            return false;
         }
     };
 
+    let mut changed = false;
     for path in paths {
         if path.exists() {
             match FileMetadata::from_path(path) {
                 Ok(metadata) => {
                     idx.update_file(path.clone(), metadata);
+                    changed = true;
                 }
                 Err(e) => {
                     eprintln!("Failed to read metadata for {:?}: {}", path, e);
                 }
             }
         } else {
+            let existed = idx.files.contains_key(path);
             idx.remove_file(path);
+            changed |= existed;
         }
     }
 
-    let root = idx.root.clone();
-    idx.tree = build_tree(&idx.files, &root);
+    if changed {
+        let root = idx.root.clone();
+        idx.tree = build_tree(&idx.files, &root);
+    }
+    changed
 }
 
 #[cfg(test)]
@@ -141,7 +157,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let index = Arc::new(RwLock::new(index_workspace(temp_dir.path()).unwrap()));
 
-        let _watcher = IndexWatcher::new(index.clone()).unwrap();
+        let _watcher = IndexWatcher::new(index.clone(), None).unwrap();
 
         let new_file = temp_dir.path().join("new.rs");
         fs::write(&new_file, "fn test() {}").unwrap();
@@ -159,7 +175,7 @@ mod tests {
         fs::write(&test_file, "fn main() {}").unwrap();
 
         let index = Arc::new(RwLock::new(index_workspace(temp_dir.path()).unwrap()));
-        let _watcher = IndexWatcher::new(index.clone()).unwrap();
+        let _watcher = IndexWatcher::new(index.clone(), None).unwrap();
 
         fs::remove_file(&test_file).unwrap();
 
@@ -167,5 +183,24 @@ mod tests {
 
         let idx = index.read().unwrap();
         assert!(!idx.files.contains_key(&test_file));
+    }
+
+    #[test]
+    fn test_apply_changes_reports_whether_index_changed() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.rs");
+        fs::write(&test_file, "fn main() {}").unwrap();
+
+        let index = Arc::new(RwLock::new(index_workspace(temp_dir.path()).unwrap()));
+        let mut paths = HashSet::new();
+        paths.insert(test_file.clone());
+
+        assert!(apply_changes(&index, &paths));
+
+        let missing_file = temp_dir.path().join("missing.rs");
+        let mut paths = HashSet::new();
+        paths.insert(missing_file);
+
+        assert!(!apply_changes(&index, &paths));
     }
 }

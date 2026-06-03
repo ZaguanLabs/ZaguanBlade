@@ -6,7 +6,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { EditorPanel, type EditorContentState } from './EditorPanel';
 import { TerminalPane, TerminalPaneHandle } from './TerminalPane';
 import { AppBar } from './AppBar';
-import { AlertTriangle, GitBranch, Settings, Clock, Loader2, DatabaseZap } from 'lucide-react';
+import { AlertTriangle, GitBranch, Settings, Clock, Loader2 } from 'lucide-react';
 import { useStartupBootstrap } from '../contexts/StartupBootstrapContext';
 import { EditorProvider, useEditorActions } from '../contexts/EditorContext';
 import { useChatPanelV3Flag } from '../contexts/ChatPanelFlagContext';
@@ -1446,6 +1446,17 @@ const AppLayoutInner: React.FC = () => {
                         <GitBranch className="w-3 h-3" />
                         {gitStatus?.branch ?? t('statusBar.noBranch')}{gitStatus?.dirty ? '*' : ''}
                     </span>
+                    {indexHealth && (indexHealth.status === 'checking' || indexHealth.status === 'indexing') && (
+                        <span
+                            className="inline-flex max-w-[42vw] items-center gap-1 rounded-[calc(var(--panel-radius)*0.35)] border border-[color-mix(in_srgb,var(--accent-ai)_45%,transparent)] bg-[color-mix(in_srgb,var(--accent-ai)_10%,transparent)] px-1.5 py-0.5 font-semibold text-(--accent-ai)"
+                            title={formatIndexStatusTitle(indexHealth)}
+                        >
+                            <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+                            <span className="truncate">
+                                {formatIndexStatusLabel(indexHealth)}
+                            </span>
+                        </span>
+                    )}
                 </div>
                 <div className="flex items-center gap-4 opacity-70">
                     {autoApproveRunCommands && (
@@ -1469,30 +1480,6 @@ const AppLayoutInner: React.FC = () => {
                     {/* Saving Indicator */}
                     {isClosing && (
                         <span className="text-(--accent-secondary) animate-pulse font-semibold">{t('statusBar.saving')}</span>
-                    )}
-                    {indexHealth && (
-                        <span
-                            className={[
-                                'inline-flex max-w-[42vw] items-center gap-1 rounded-[calc(var(--panel-radius)*0.35)] border px-1.5 py-0.5 font-semibold',
-                                indexHealth.status === 'error'
-                                    ? 'border-(--state-danger)/30 bg-[color-mix(in_srgb,var(--state-danger)_10%,transparent)] text-(--state-danger)'
-                                    : indexHealth.status === 'stale' || indexHealth.status === 'partial'
-                                        ? 'border-(--accent-warning)/30 bg-[color-mix(in_srgb,var(--accent-warning)_10%,transparent)] text-(--accent-warning)'
-                                        : indexHealth.status === 'checking' || indexHealth.status === 'indexing'
-                                            ? 'border-(--accent-ai)/35 bg-[color-mix(in_srgb,var(--accent-ai)_12%,transparent)] text-(--accent-ai)'
-                                            : 'border-(--accent-mention)/20 bg-[color-mix(in_srgb,var(--accent-mention)_8%,transparent)] text-(--accent-mention)',
-                            ].join(' ')}
-                            title={formatIndexStatusTitle(indexHealth)}
-                        >
-                            {indexHealth.status === 'checking' || indexHealth.status === 'indexing' ? (
-                                <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
-                            ) : (
-                                <DatabaseZap className="h-3 w-3 shrink-0" />
-                            )}
-                            <span className="truncate">
-                                {formatIndexStatusLabel(indexHealth)}
-                            </span>
-                        </span>
                     )}
                     <span>{t('editor.encoding')}</span>
                     <span>{(() => {

@@ -2,9 +2,6 @@ use crate::indexer::types::ProjectIndex;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
-const SOFT_TARGET_BYTES: usize = 8 * 1024;
-const HARD_LIMIT_BYTES: usize = 12 * 1024;
-
 #[derive(Debug, Clone, Copy)]
 struct RenderConfig {
     max_depth: usize,
@@ -22,45 +19,16 @@ struct TreeNode {
 pub fn generate_project_index_min(index: &ProjectIndex) -> String {
     let root = &index.root;
 
-    // Render from richest to tightest view to stay around 4-8KB when possible.
-    let configs = [
+    render_with_config(
+        index,
+        root,
         RenderConfig {
-            max_depth: 5,
-            max_dirs_per_level: 24,
-            max_files_per_level: 36,
-            max_entry_points: 30,
+            max_depth: usize::MAX,
+            max_dirs_per_level: usize::MAX,
+            max_files_per_level: usize::MAX,
+            max_entry_points: usize::MAX,
         },
-        RenderConfig {
-            max_depth: 4,
-            max_dirs_per_level: 16,
-            max_files_per_level: 22,
-            max_entry_points: 24,
-        },
-        RenderConfig {
-            max_depth: 3,
-            max_dirs_per_level: 10,
-            max_files_per_level: 14,
-            max_entry_points: 16,
-        },
-        RenderConfig {
-            max_depth: 2,
-            max_dirs_per_level: 8,
-            max_files_per_level: 10,
-            max_entry_points: 12,
-        },
-    ];
-
-    let mut candidate = String::new();
-    for cfg in configs {
-        let rendered = render_with_config(index, root, cfg);
-        candidate = rendered;
-
-        if candidate.len() <= SOFT_TARGET_BYTES {
-            break;
-        }
-    }
-
-    truncate_to_limit(candidate, HARD_LIMIT_BYTES)
+    )
 }
 
 fn render_with_config(index: &ProjectIndex, root: &Path, cfg: RenderConfig) -> String {
@@ -87,6 +55,19 @@ fn render_with_config(index: &ProjectIndex, root: &Path, cfg: RenderConfig) -> S
     out.push_str(&tree);
     out.push_str("```\n\n");
 
+    out.push_str("## Complete File Listing\n\n");
+    let all_files = list_all_files(index, root);
+    if all_files.is_empty() {
+        out.push_str("- (no indexed source files)\n\n");
+    } else {
+        for path in all_files {
+            out.push_str("- ");
+            out.push_str(&path);
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+
     out.push_str("## Entry Points\n\n");
     if entry_points.is_empty() {
         out.push_str("- (none inferred)\n");
@@ -99,6 +80,17 @@ fn render_with_config(index: &ProjectIndex, root: &Path, cfg: RenderConfig) -> S
     }
 
     out
+}
+
+fn list_all_files(index: &ProjectIndex, root: &Path) -> Vec<String> {
+    let mut paths: Vec<String> = index
+        .files
+        .keys()
+        .filter_map(|path| path.strip_prefix(root).ok().map(Path::to_path_buf))
+        .filter_map(|rel| rel.to_str().map(|s| s.replace('\\', "/")))
+        .collect();
+    paths.sort_unstable();
+    paths
 }
 
 fn summarize_languages(index: &ProjectIndex) -> String {
@@ -301,24 +293,6 @@ fn is_entry_point_path(rel: &str) -> bool {
     keywords.iter().any(|kw| lower.contains(kw))
 }
 
-fn truncate_to_limit(mut text: String, byte_limit: usize) -> String {
-    if text.len() <= byte_limit {
-        return text;
-    }
-
-    let suffix = "\n\n[Truncated to 12KB hard cap]\n";
-    let keep_bytes = byte_limit.saturating_sub(suffix.len());
-
-    let mut cut_at = keep_bytes.min(text.len());
-    while cut_at > 0 && !text.is_char_boundary(cut_at) {
-        cut_at -= 1;
-    }
-
-    text.truncate(cut_at);
-    text.push_str(suffix);
-    text
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -348,12 +322,13 @@ mod tests {
         assert!(output.contains("# Project Index (Minimal):"));
         assert!(output.contains("## Identity + Stack"));
         assert!(output.contains("## Directory/File Tree"));
+        assert!(output.contains("## Complete File Listing"));
         assert!(output.contains("## Entry Points"));
         assert!(!output.contains("```typescript\nexport"));
     }
 
     #[test]
-    fn enforces_hard_cap() {
+    fn includes_every_indexed_file_in_minimal_listing() {
         let temp_dir = TempDir::new().unwrap();
 
         for i in 0..800 {
@@ -365,6 +340,9 @@ mod tests {
         let index = index_workspace(temp_dir.path()).unwrap();
         let output = generate_project_index_min(&index);
 
-        assert!(output.len() <= HARD_LIMIT_BYTES);
+        assert!(!output.contains("Truncated"));
+        for i in 0..800 {
+            assert!(output.contains(&format!("src/module_{}/sub/file_{}.ts", i, i)));
+        }
     }
 }

@@ -26,6 +26,42 @@ fn emit_index_status<R: Runtime>(app_handle: &tauri::AppHandle<R>, health: Index
     );
 }
 
+fn ensure_project_context_indexer(state: &AppState, workspace: &std::path::Path) {
+    {
+        let guard = state.indexer_manager.lock().unwrap();
+        if let Some(manager) = guard.as_ref() {
+            if manager.matches_workspace(workspace) {
+                return;
+            }
+        }
+    }
+
+    match crate::indexer::IndexerManager::new(workspace) {
+        Ok(manager) => {
+            let mut guard = state.indexer_manager.lock().unwrap();
+            if guard
+                .as_ref()
+                .map(|existing| existing.matches_workspace(workspace))
+                .unwrap_or(false)
+            {
+                return;
+            }
+            *guard = Some(manager);
+            eprintln!(
+                "[Indexer] Project context files initialized for: {}",
+                workspace.display()
+            );
+        }
+        Err(error) => {
+            eprintln!(
+                "[Indexer] Failed to initialize project context files for {}: {}",
+                workspace.display(),
+                error
+            );
+        }
+    }
+}
+
 pub fn ensure_post_ui_startup<R: Runtime>(app_handle: &tauri::AppHandle<R>) {
     let state = app_handle.state::<AppState>();
 
@@ -89,6 +125,8 @@ pub fn ensure_post_ui_startup<R: Runtime>(app_handle: &tauri::AppHandle<R>) {
                     );
                 }
             }
+
+            ensure_project_context_indexer(&state, &path);
         }
     });
 }

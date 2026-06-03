@@ -1,6 +1,8 @@
-use crate::indexer::types::ProjectIndex;
+use crate::indexer::types::{is_code_file, ProjectIndex};
+use ignore::WalkBuilder;
+use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub fn save_cache(index: &ProjectIndex) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cache_dir = index.root.join(".zblade/cache");
@@ -18,7 +20,7 @@ pub fn load_cache(root: &Path) -> Result<ProjectIndex, Box<dyn std::error::Error
     let json = fs::read_to_string(&cache_path)?;
     let mut index: ProjectIndex = serde_json::from_str(&json)?;
 
-    if !is_cache_valid(&index) {
+    if !is_cache_valid(&index, root) {
         return Err("Cache is stale".into());
     }
 
@@ -27,7 +29,7 @@ pub fn load_cache(root: &Path) -> Result<ProjectIndex, Box<dyn std::error::Error
     Ok(index)
 }
 
-fn is_cache_valid(index: &ProjectIndex) -> bool {
+fn is_cache_valid(index: &ProjectIndex, root: &Path) -> bool {
     for (path, metadata) in &index.files {
         if !path.exists() {
             return false;
@@ -46,7 +48,42 @@ fn is_cache_valid(index: &ProjectIndex) -> bool {
         }
     }
 
-    true
+    match collect_current_code_files(root) {
+        Ok(current_files) => current_files == index.files.keys().cloned().collect(),
+        Err(_) => false,
+    }
+}
+
+fn collect_current_code_files(
+    root: &Path,
+) -> Result<HashSet<PathBuf>, Box<dyn std::error::Error + Send + Sync>> {
+    let mut files = HashSet::new();
+    let walker = WalkBuilder::new(root)
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .filter_entry(|entry| {
+            if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                if let Some(name) = entry.file_name().to_str() {
+                    return !crate::indexer::types::SKIP_DIRS.contains(&name);
+                }
+            }
+            true
+        })
+        .build();
+
+    for entry in walker {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_type().map(|ft| ft.is_file()).unwrap_or(false)
+            && is_code_file(&path.to_path_buf())
+        {
+            files.insert(path.to_path_buf());
+        }
+    }
+
+    Ok(files)
 }
 
 #[cfg(test)]
@@ -98,6 +135,21 @@ mod tests {
         save_cache(&index).unwrap();
 
         fs::remove_file(&test_file).unwrap();
+
+        let result = load_cache(temp_dir.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cache_invalidation_on_new_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.rs");
+        fs::write(&test_file, "fn main() {}").unwrap();
+
+        let index = index_workspace(temp_dir.path()).unwrap();
+        save_cache(&index).unwrap();
+
+        fs::write(temp_dir.path().join("new.rs"), "fn new_file() {}").unwrap();
 
         let result = load_cache(temp_dir.path());
         assert!(result.is_err());

@@ -3,9 +3,10 @@
 //! Combines tree-sitter parsing and symbol indexing
 //! into a single coherent API for ZLP.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{mpsc, Arc, RwLock};
 
 use crate::buffer_snapshot::{BufferSnapshot, BufferSnapshotStore};
 use crate::gitignore_filter::GitignoreFilter;
@@ -20,12 +21,14 @@ use crate::tree_sitter::{
 use crate::worktree::WorktreeStore;
 use serde::{Deserialize, Serialize};
 
+thread_local! {
+    static INDEXING_PARSER: RefCell<Option<TreeSitterParser>> = RefCell::new(None);
+}
+
 /// Unified language service
 pub struct LanguageService {
     /// Workspace root path
     workspace_root: PathBuf,
-    /// Tree-sitter parser for AST analysis
-    parser: Mutex<TreeSitterParser>,
     /// Symbol index for persistent storage
     symbol_store: Arc<SymbolStore>,
     /// Shared in-memory worktree snapshot/index
@@ -636,11 +639,8 @@ impl LanguageService {
         workspace_root: PathBuf,
         symbol_store: Arc<SymbolStore>,
     ) -> Result<Self, LanguageError> {
-        let parser = TreeSitterParser::new().map_err(|e| LanguageError::Parse(e.to_string()))?;
-
         Ok(Self {
             workspace_root,
-            parser: Mutex::new(parser),
             symbol_store,
             worktree_store: RwLock::new(None),
             buffer_snapshots: BufferSnapshotStore::new(),
@@ -797,33 +797,97 @@ impl LanguageService {
             progress(&health);
         }
 
-        for file_path in queued_files {
-            health.current_file = Some(file_path.clone());
-            health.active_workers = 1;
-            health.message = format!(
-                "Indexing {}... {}/{} files",
-                file_path, files_indexed, total_queued
-            );
-            self.set_index_health(health.clone());
-            progress(&health);
-
-            match self.index_file(&file_path) {
-                Ok(_) => {
-                    files_indexed += 1;
-                }
-                Err(error) => {
-                    eprintln!("[LanguageService] Failed to index {}: {}", file_path, error);
-                }
+        if total_queued > 0 {
+            enum IndexWorkerEvent {
+                Started(String),
+                Finished(String, Result<usize, String>),
             }
-            health.queued_files = total_queued.saturating_sub(files_indexed);
-            health.active_workers = usize::from(health.queued_files > 0);
-            health.current_file = None;
-            health.message = format!(
-                "Building symbol index... {}/{} files",
-                files_indexed, total_queued
-            );
-            self.set_index_health(health.clone());
-            progress(&health);
+
+            let worker_count = indexing_worker_count(total_queued);
+            let (tx, rx) = mpsc::channel::<IndexWorkerEvent>();
+            let mut completed_files = 0usize;
+            let mut active_files = HashSet::new();
+
+            std::thread::scope(|scope| {
+                for worker_index in 0..worker_count {
+                    let tx = tx.clone();
+                    let worker_files = queued_files
+                        .iter()
+                        .skip(worker_index)
+                        .step_by(worker_count)
+                        .cloned()
+                        .collect::<Vec<_>>();
+
+                    scope.spawn(move || {
+                        for file_path in worker_files {
+                            let _ = tx.send(IndexWorkerEvent::Started(file_path.clone()));
+                            let result = self
+                                .index_file(&file_path)
+                                .map(|symbols| symbols.len())
+                                .map_err(|error| error.to_string());
+                            let _ = tx.send(IndexWorkerEvent::Finished(file_path, result));
+                        }
+                    });
+                }
+                drop(tx);
+
+                while completed_files < total_queued {
+                    let Ok(event) = rx.recv() else {
+                        break;
+                    };
+                    match event {
+                        IndexWorkerEvent::Started(file_path) => {
+                            active_files.insert(file_path.clone());
+                            health.current_file = Some(file_path.clone());
+                            health.active_workers = active_files.len();
+                            health.queued_files = total_queued.saturating_sub(completed_files);
+                            health.message = format!(
+                                "Indexing {}... {}/{} files ({} workers)",
+                                file_path,
+                                completed_files,
+                                total_queued,
+                                worker_count
+                            );
+                            self.set_index_health(health.clone());
+                            progress(&health);
+                        }
+                        IndexWorkerEvent::Finished(file_path, result) => {
+                            active_files.remove(&file_path);
+                            completed_files += 1;
+                            match result {
+                                Ok(_) => {
+                                    files_indexed += 1;
+                                }
+                                Err(error) => {
+                                    eprintln!(
+                                        "[LanguageService] Failed to index {}: {}",
+                                        file_path, error
+                                    );
+                                }
+                            }
+                            health.queued_files = total_queued.saturating_sub(completed_files);
+                            health.active_workers = active_files.len();
+                            health.current_file = active_files.iter().next().cloned();
+                            health.message = if let Some(current_file) = &health.current_file {
+                                format!(
+                                    "Indexing {}... {}/{} files ({} workers)",
+                                    current_file,
+                                    completed_files,
+                                    total_queued,
+                                    worker_count
+                                )
+                            } else {
+                                format!(
+                                    "Building symbol index... {}/{} files",
+                                    completed_files, total_queued
+                                )
+                            };
+                            self.set_index_health(health.clone());
+                            progress(&health);
+                        }
+                    }
+                }
+            });
         }
 
         let mut final_health = self.audit_index_health()?;
@@ -1022,12 +1086,7 @@ impl LanguageService {
                 Vec::new(),
             )
         } else {
-            let tree = {
-                let mut parser = self.parser.lock().unwrap();
-                parser
-                    .parse(&content, language)
-                    .map_err(|e| LanguageError::Parse(e.to_string()))?
-            };
+            let tree = parse_with_thread_local_parser(&content, language)?;
             let extracted_symbols = extract_symbols(&tree, &content, language, file_path);
             let relationships = extract_symbol_relationships(
                 &tree,
@@ -1050,15 +1109,9 @@ impl LanguageService {
 
         // Delete old symbols and insert new ones
         let semantic_anchors = extract_semantic_anchors(file_path, &content);
-        self.symbol_store.delete_file_symbols(file_path)?;
-        self.symbol_store.upsert_symbols(&symbols)?;
-        self.symbol_store
-            .replace_semantic_anchors_for_file(file_path, &semantic_anchors)?;
         self.resolve_relationship_targets(file_path, &symbols, &mut relationships)?;
         self.symbol_store
-            .replace_relationships_for_file(file_path, &relationships)?;
-        self.symbol_store
-            .mark_file_indexed(file_path, &hash, symbols.len())?;
+            .replace_file_index(file_path, &hash, &symbols, &semantic_anchors, &relationships)?;
 
         // Update cache
         {
@@ -1995,6 +2048,8 @@ impl LanguageService {
             .filter(|relationship| relationship.relationship_type == SymbolRelationshipType::Import)
             .map(|relationship| relationship.target_name.clone())
             .collect::<Vec<_>>();
+        let mut imported_symbol_cache = HashMap::new();
+        let mut contextual_cache = HashMap::new();
 
         for relationship in relationships.iter_mut() {
             if relationship.relationship_type == SymbolRelationshipType::Import {
@@ -2010,6 +2065,8 @@ impl LanguageService {
                 file_path,
                 file_symbols,
                 &imported_files,
+                &mut imported_symbol_cache,
+                &mut contextual_cache,
             )?;
         }
 
@@ -2022,6 +2079,8 @@ impl LanguageService {
         file_path: &str,
         file_symbols: &[Symbol],
         imported_files: &[String],
+        imported_symbol_cache: &mut HashMap<String, Vec<Symbol>>,
+        contextual_cache: &mut HashMap<String, Option<String>>,
     ) -> Result<Option<String>, LanguageError> {
         let mut same_file = Vec::new();
         let mut seen = HashSet::new();
@@ -2037,9 +2096,15 @@ impl LanguageService {
         let mut imported_matches = Vec::new();
         let mut imported_seen = HashSet::new();
         for imported_file in imported_files {
-            let imported_symbols = self.get_file_symbols(imported_file)?;
+            if !imported_symbol_cache.contains_key(imported_file) {
+                let imported_symbols = self.get_file_symbols(imported_file)?;
+                imported_symbol_cache.insert(imported_file.clone(), imported_symbols);
+            }
+            let Some(imported_symbols) = imported_symbol_cache.get(imported_file) else {
+                continue;
+            };
             self.collect_matching_symbols(
-                &imported_symbols,
+                imported_symbols,
                 reference_name,
                 &mut imported_matches,
                 &mut imported_seen,
@@ -2051,6 +2116,10 @@ impl LanguageService {
         }
         if imported_matches.len() > 1 {
             return Ok(None);
+        }
+
+        if let Some(cached) = contextual_cache.get(reference_name) {
+            return Ok(cached.clone());
         }
 
         let preferred_files = imported_files.to_vec();
@@ -2065,11 +2134,13 @@ impl LanguageService {
             .map(|result| result.symbol)
             .collect::<Vec<_>>();
 
-        if exact.len() == 1 {
-            Ok(Some(exact[0].id.clone()))
+        let resolved = if exact.len() == 1 {
+            Some(exact[0].id.clone())
         } else {
-            Ok(None)
-        }
+            None
+        };
+        contextual_cache.insert(reference_name.to_string(), resolved.clone());
+        Ok(resolved)
     }
 
     fn collect_matching_symbols(
@@ -2129,12 +2200,7 @@ impl LanguageService {
                 Vec::new(),
             )
         } else {
-            let tree = {
-                let mut parser = self.parser.lock().unwrap();
-                parser
-                    .parse(snapshot.content(), language)
-                    .map_err(|e| LanguageError::Parse(e.to_string()))?
-            };
+            let tree = parse_with_thread_local_parser(snapshot.content(), language)?;
             let extracted_symbols = extract_symbols(&tree, snapshot.content(), language, file_path);
             let relationships = extract_symbol_relationships(
                 &tree,
@@ -3354,6 +3420,32 @@ fn compute_hash(content: &str) -> String {
     let mut hasher = DefaultHasher::new();
     content.hash(&mut hasher);
     format!("{:x}", hasher.finish())
+}
+
+fn parse_with_thread_local_parser(
+    content: &str,
+    language: Language,
+) -> Result<tree_sitter::Tree, LanguageError> {
+    INDEXING_PARSER.with(|slot| {
+        let mut parser = slot.borrow_mut();
+        if parser.is_none() {
+            *parser = Some(
+                TreeSitterParser::new().map_err(|error| LanguageError::Parse(error.to_string()))?,
+            );
+        }
+        parser
+            .as_mut()
+            .expect("thread-local parser initialized")
+            .parse(content, language)
+            .map_err(|error| LanguageError::Parse(error.to_string()))
+    })
+}
+
+fn indexing_worker_count(total_queued: usize) -> usize {
+    let cpu_count = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(4);
+    total_queued.min(cpu_count).min(8).max(1)
 }
 
 fn extract_markdown_header_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
