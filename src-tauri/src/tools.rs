@@ -162,6 +162,7 @@ fn is_batch_read_only_tool(tool_name: &str) -> bool {
     match tool_name {
         "get_editor_state"
         | "symbol_search"
+        | "semantic_anchor_search"
         | "symbol_resolve"
         | "symbol_outline"
         | "read_file"
@@ -1147,6 +1148,7 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
         // Phase 1 IDE-specific tools
         "get_editor_state" => get_editor_state(editor_state),
         "symbol_search" => symbol_search_tool(workspace_root, &args, app_handle),
+        "semantic_anchor_search" => semantic_anchor_search_tool(workspace_root, &args, app_handle),
         "symbol_resolve" => symbol_resolve_tool(workspace_root, &args, app_handle),
         "symbol_graph" => symbol_graph_tool(workspace_root, &args, app_handle),
         "symbol_outline" => symbol_outline_tool(workspace_root, &args, app_handle),
@@ -2420,6 +2422,22 @@ fn symbol_inventory_entries(
         .collect()
 }
 
+fn semantic_anchor_result_to_json(
+    result: &crate::symbol_index::SemanticAnchorResult,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": result.anchor.id,
+        "file_path": result.anchor.file_path,
+        "kind": result.anchor.kind,
+        "value": result.anchor.value,
+        "line": result.anchor.line,
+        "character": result.anchor.character,
+        "preview": result.anchor.preview,
+        "confidence": result.anchor.confidence,
+        "score": result.score,
+    })
+}
+
 fn symbol_reference_to_json(reference: &crate::symbol_index::SymbolReference) -> serde_json::Value {
     serde_json::json!({
         "source_symbol": symbol_to_json(&reference.source_symbol),
@@ -2543,6 +2561,49 @@ fn symbol_search_tool<R: tauri::Runtime>(
             "source": "language_service",
             "index_health": service.index_health_snapshot(),
             "search_health": healing,
+            "truncated": false
+        }
+    });
+    ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
+}
+
+fn semantic_anchor_search_tool<R: tauri::Runtime>(
+    workspace_root: &Path,
+    args: &HashMap<String, serde_json::Value>,
+    app_handle: Option<&tauri::AppHandle<R>>,
+) -> ToolResult {
+    let Some(query) = get_str_arg(args, &["query"]) else {
+        return ToolResult::err("semantic_anchor_search requires 'query'");
+    };
+    let limit = parse_bounded_usize_arg(args, "limit", 20, 100);
+    let file_path = get_str_arg(args, &["path", "file", "file_path"]);
+    let file_filter = match file_path {
+        Some(path) => match symbol_path_arg(workspace_root, &path) {
+            Ok(path) => Some(path),
+            Err(err) => return ToolResult::err(err),
+        },
+        None => None,
+    };
+    let service = match language_service_from_app_handle(app_handle) {
+        Ok(service) => service,
+        Err(err) => return ToolResult::err(err),
+    };
+    let started = Instant::now();
+    let anchors = match service.search_semantic_anchors(&query, file_filter.as_deref(), limit) {
+        Ok(anchors) => anchors,
+        Err(err) => return ToolResult::err(err.to_string()),
+    };
+    let count = anchors.len();
+    let payload = serde_json::json!({
+        "query": query,
+        "path": file_filter,
+        "anchors": anchors.iter().map(semantic_anchor_result_to_json).collect::<Vec<_>>(),
+        "_meta": {
+            "tool": "semantic_anchor_search",
+            "count": count,
+            "timing_ms": started.elapsed().as_millis(),
+            "source": "language_service",
+            "index_health": service.index_health_snapshot(),
             "truncated": false
         }
     });

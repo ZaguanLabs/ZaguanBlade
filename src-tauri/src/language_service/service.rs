@@ -10,7 +10,9 @@ use std::sync::{Arc, Mutex, RwLock};
 use crate::buffer_snapshot::{BufferSnapshot, BufferSnapshotStore};
 use crate::gitignore_filter::GitignoreFilter;
 use crate::project_settings;
-use crate::symbol_index::{SearchQuery, SearchResult, SymbolReference, SymbolStore};
+use crate::symbol_index::{
+    SearchQuery, SearchResult, SemanticAnchor, SemanticAnchorResult, SymbolReference, SymbolStore,
+};
 use crate::tree_sitter::{
     extract_symbol_relationships, extract_symbols, Language, Position, Range, Symbol,
     SymbolRelationship, SymbolRelationshipType, SymbolType, TreeSitterParser,
@@ -109,6 +111,7 @@ pub struct SymbolSearchHealingReport {
     pub reindexed_files: Vec<String>,
     pub removed_files: Vec<String>,
     pub literal_matches: Vec<SymbolLiteralMatch>,
+    pub semantic_anchor_matches: Vec<SemanticAnchorResult>,
     pub diagnostics: Vec<String>,
     pub health_before: Option<IndexHealthSnapshot>,
     pub health_after: Option<IndexHealthSnapshot>,
@@ -977,7 +980,15 @@ impl LanguageService {
 
         // Check if reindexing is needed
         if !self.symbol_store.needs_reindex(file_path, &hash)? {
-            // Return cached symbols from database
+            if self
+                .symbol_store
+                .get_semantic_anchors_in_file(file_path, 1)?
+                .is_empty()
+            {
+                let anchors = extract_semantic_anchors(file_path, &content);
+                self.symbol_store
+                    .replace_semantic_anchors_for_file(file_path, &anchors)?;
+            }
             let symbols = self.get_file_symbols_raw(file_path)?;
             return Ok(self.filter_visible_symbols(file_path, symbols));
         }
@@ -1024,8 +1035,11 @@ impl LanguageService {
         );
 
         // Delete old symbols and insert new ones
+        let semantic_anchors = extract_semantic_anchors(file_path, &content);
         self.symbol_store.delete_file_symbols(file_path)?;
         self.symbol_store.upsert_symbols(&symbols)?;
+        self.symbol_store
+            .replace_semantic_anchors_for_file(file_path, &semantic_anchors)?;
         self.resolve_relationship_targets(file_path, &symbols, &mut relationships)?;
         self.symbol_store
             .replace_relationships_for_file(file_path, &relationships)?;
@@ -1243,6 +1257,7 @@ impl LanguageService {
             reindexed_files: Vec::new(),
             removed_files: Vec::new(),
             literal_matches: Vec::new(),
+            semantic_anchor_matches: Vec::new(),
             diagnostics: Vec::new(),
             health_before: None,
             health_after: None,
@@ -1313,14 +1328,20 @@ impl LanguageService {
             healing.health_after = Some(health_after);
         }
 
+        healing.semantic_anchor_matches = self.search_semantic_anchors(query, None, 12)?;
         healing.literal_matches = self.literal_symbol_search_fallback(query, 12)?;
-        if initial_results.is_empty() && healing.literal_matches.is_empty() {
-            healing
-                .diagnostics
-                .push("No indexed symbols or exact literal fallback matches found".to_string());
+        if initial_results.is_empty()
+            && healing.semantic_anchor_matches.is_empty()
+            && healing.literal_matches.is_empty()
+        {
+            healing.diagnostics.push(
+                "No indexed symbols, semantic anchors, or exact literal fallback matches found"
+                    .to_string(),
+            );
         } else if initial_results.is_empty() {
             healing.diagnostics.push(format!(
-                "Found {} exact literal fallback matches outside symbol names",
+                "Found {} semantic anchor matches and {} exact literal fallback matches outside symbol names",
+                healing.semantic_anchor_matches.len(),
                 healing.literal_matches.len()
             ));
         }
@@ -1332,6 +1353,20 @@ impl LanguageService {
     }
 
     /// Get symbol at position
+    pub fn search_semantic_anchors(
+        &self,
+        query: &str,
+        file_path: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<SemanticAnchorResult>, LanguageError> {
+        if let Some(path) = file_path {
+            self.ensure_file_fresh(path)?;
+        }
+        Ok(self
+            .symbol_store
+            .search_semantic_anchors(query, file_path, limit)?)
+    }
+
     pub fn get_symbol_at(
         &self,
         file_path: &str,
@@ -3087,6 +3122,193 @@ pub struct IndexStats {
 }
 
 /// Compute a simple hash of content for change detection
+fn extract_semantic_anchors(file_path: &str, content: &str) -> Vec<SemanticAnchor> {
+    let mut anchors = Vec::new();
+    let mut seen = HashSet::new();
+
+    for (line_index, line) in content.lines().enumerate() {
+        let preview = line.trim().chars().take(240).collect::<String>();
+        for (value, character) in extract_quoted_values(line)
+            .into_iter()
+            .chain(extract_css_tokens(line))
+            .chain(extract_unquoted_keys(line))
+        {
+            let value = value.trim().to_string();
+            if !is_semantic_anchor_value(&value) {
+                continue;
+            }
+            let kind = semantic_anchor_kind(&value, line);
+            let key = (
+                kind.clone(),
+                value.clone(),
+                line_index as u32,
+                character as u32,
+            );
+            if !seen.insert(key) {
+                continue;
+            }
+            anchors.push(SemanticAnchor {
+                id: format!(
+                    "{}::anchor:{}:{}:{}",
+                    file_path,
+                    line_index,
+                    character,
+                    compute_hash(&value)
+                ),
+                file_path: file_path.to_string(),
+                kind,
+                value: value.clone(),
+                line: line_index as u32,
+                character: character as u32,
+                preview: preview.clone(),
+                confidence: semantic_anchor_confidence(&value, line),
+            });
+            if anchors.len() >= 256 {
+                return anchors;
+            }
+        }
+    }
+
+    anchors
+}
+
+fn extract_quoted_values(line: &str) -> Vec<(String, usize)> {
+    let mut values = Vec::new();
+    let chars = line.char_indices().collect::<Vec<_>>();
+    let mut index = 0usize;
+    while index < chars.len() {
+        let (start_byte, quote) = chars[index];
+        if quote != '\'' && quote != '"' && quote != '`' {
+            index += 1;
+            continue;
+        }
+        let mut value = String::new();
+        let mut escaped = false;
+        let mut end_index = index + 1;
+        while end_index < chars.len() {
+            let (_, ch) = chars[end_index];
+            if escaped {
+                value.push(ch);
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == quote {
+                break;
+            } else {
+                value.push(ch);
+            }
+            end_index += 1;
+        }
+        if end_index < chars.len() && !value.is_empty() {
+            values.push((value, start_byte));
+        }
+        index = end_index.saturating_add(1);
+    }
+    values
+}
+
+fn extract_css_tokens(line: &str) -> Vec<(String, usize)> {
+    let mut values = Vec::new();
+    let bytes = line.as_bytes();
+    let mut index = 0usize;
+    while index + 2 < bytes.len() {
+        if bytes[index] == b'-' && bytes[index + 1] == b'-' {
+            let start = index;
+            index += 2;
+            while index < bytes.len()
+                && (bytes[index].is_ascii_alphanumeric()
+                    || bytes[index] == b'-'
+                    || bytes[index] == b'_')
+            {
+                index += 1;
+            }
+            if index > start + 3 {
+                values.push((line[start..index].to_string(), start));
+            }
+        } else {
+            index += 1;
+        }
+    }
+    values
+}
+
+fn extract_unquoted_keys(line: &str) -> Vec<(String, usize)> {
+    let Some(colon_index) = line.find(':') else {
+        return Vec::new();
+    };
+    let prefix = line[..colon_index].trim_end();
+    let token_start = prefix
+        .rfind(|ch: char| !ch.is_alphanumeric() && ch != '_' && ch != '-')
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
+    let value = prefix[token_start..].trim();
+    if value.len() >= 3 && value.chars().any(|ch| ch.is_alphabetic()) {
+        vec![(value.to_string(), token_start)]
+    } else {
+        Vec::new()
+    }
+}
+
+fn is_semantic_anchor_value(value: &str) -> bool {
+    if value.len() < 3 || value.len() > 160 || value.chars().any(|ch| ch.is_control()) {
+        return false;
+    }
+    if value.split_whitespace().count() > 6 {
+        return false;
+    }
+    value.chars().any(|ch| ch.is_alphabetic())
+        && (value.contains('/')
+            || value.contains('.')
+            || value.contains('-')
+            || value.contains('_')
+            || value.contains(':')
+            || value.contains("--")
+            || value.chars().any(|ch| ch.is_uppercase()))
+}
+
+fn semantic_anchor_kind(value: &str, line: &str) -> String {
+    if value.starts_with("--") {
+        "css_token".to_string()
+    } else if value.starts_with('/') && !value.contains(char::is_whitespace) {
+        "route".to_string()
+    } else if value.contains('.') && value.split('.').all(is_anchor_segment) {
+        "translation_key".to_string()
+    } else if value.contains(':') && !value.contains(char::is_whitespace) {
+        "protocol_tag".to_string()
+    } else if line.contains("command") || line.contains("Command") {
+        "command".to_string()
+    } else if line.contains("event") || line.contains("Event") {
+        "event_name".to_string()
+    } else if line.contains("config") || line.contains("Config") || line.contains('=') {
+        "config_key".to_string()
+    } else {
+        "semantic_literal".to_string()
+    }
+}
+
+fn is_anchor_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment
+            .chars()
+            .all(|ch| ch.is_alphanumeric() || ch == '_' || ch == '-')
+}
+
+fn semantic_anchor_confidence(value: &str, line: &str) -> f32 {
+    if value.starts_with("--") || value.starts_with('/') {
+        0.95
+    } else if line.contains("command")
+        || line.contains("Command")
+        || line.contains("event")
+        || line.contains("Event")
+    {
+        0.9
+    } else if value.contains('.') || value.contains(':') {
+        0.85
+    } else {
+        0.75
+    }
+}
+
 fn search_confidence(results: &[SearchResult]) -> String {
     let top_score = results.first().map(|result| result.score).unwrap_or(0.0);
     if results.is_empty() {
@@ -3528,6 +3750,66 @@ mod tests {
             .iter()
             .any(|fallback| fallback.file_path == "config.ts"
                 && fallback.preview.contains("BladeProtocolGateway")));
+    }
+
+    #[test]
+    fn semantic_anchors_are_indexed_and_searchable() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("anchors.ts"),
+            r#"
+            export const commandName = "BladeProtocolGateway";
+            export const route = "/api/blade/events";
+            const cssToken = "--accent-ai";
+            "#,
+        )
+        .unwrap();
+
+        service.index_file("anchors.ts").unwrap();
+        let anchors = service
+            .search_semantic_anchors("BladeProtocolGateway", None, 10)
+            .unwrap();
+
+        assert!(anchors
+            .iter()
+            .any(|result| result.anchor.file_path == "anchors.ts"
+                && result.anchor.value == "BladeProtocolGateway"));
+        assert!(service
+            .search_semantic_anchors("/api/blade/events", None, 10)
+            .unwrap()
+            .iter()
+            .any(|result| result.anchor.kind == "route"));
+        assert!(service
+            .search_semantic_anchors("--accent-ai", None, 10)
+            .unwrap()
+            .iter()
+            .any(|result| result.anchor.kind == "css_token"));
+    }
+
+    #[test]
+    fn self_healing_search_returns_semantic_anchor_matches() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("anchors.ts"),
+            "export const endpoint = \"BladeProtocolGateway\";",
+        )
+        .unwrap();
+        service.index_file("anchors.ts").unwrap();
+
+        let outcome = service
+            .search_symbols_filtered_self_healing("BladeProtocolGateway", None, None, 10)
+            .unwrap();
+
+        assert!(outcome.healing.triggered);
+        assert!(outcome.results.is_empty());
+        assert!(outcome
+            .healing
+            .semantic_anchor_matches
+            .iter()
+            .any(|result| result.anchor.file_path == "anchors.ts"
+                && result.anchor.value == "BladeProtocolGateway"));
     }
 
     #[test]

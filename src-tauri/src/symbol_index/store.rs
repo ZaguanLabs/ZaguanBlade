@@ -4,6 +4,7 @@
 //! indexing and retrieval.
 
 use rusqlite::{params, params_from_iter, types::Value, Connection};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -30,6 +31,24 @@ pub struct IndexedFileRecord {
     pub file_hash: String,
     pub indexed_at: i64,
     pub symbol_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SemanticAnchor {
+    pub id: String,
+    pub file_path: String,
+    pub kind: String,
+    pub value: String,
+    pub line: u32,
+    pub character: u32,
+    pub preview: String,
+    pub confidence: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SemanticAnchorResult {
+    pub anchor: SemanticAnchor,
+    pub score: f32,
 }
 
 impl SymbolStore {
@@ -127,6 +146,19 @@ impl SymbolStore {
                 line INTEGER NOT NULL,
                 PRIMARY KEY (source_symbol_id, target_name, relationship_type, line)
             );
+
+
+            CREATE TABLE IF NOT EXISTS semantic_anchors (
+                id TEXT PRIMARY KEY,
+                file_path TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                value TEXT NOT NULL,
+                line INTEGER NOT NULL,
+                character INTEGER NOT NULL,
+                preview TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                indexed_at INTEGER NOT NULL
+            );
             "#,
         )?;
 
@@ -164,6 +196,9 @@ impl SymbolStore {
             CREATE INDEX IF NOT EXISTS idx_symbol_relationships_file ON symbol_relationships(source_file_path);
             CREATE INDEX IF NOT EXISTS idx_symbol_relationships_target ON symbol_relationships(target_name);
             CREATE INDEX IF NOT EXISTS idx_symbol_relationships_target_symbol_id ON symbol_relationships(target_symbol_id);
+            CREATE INDEX IF NOT EXISTS idx_semantic_anchors_value ON semantic_anchors(value);
+            CREATE INDEX IF NOT EXISTS idx_semantic_anchors_file ON semantic_anchors(file_path);
+            CREATE INDEX IF NOT EXISTS idx_semantic_anchors_kind ON semantic_anchors(kind);
             "#,
         )?;
 
@@ -215,6 +250,137 @@ impl SymbolStore {
 
         tx.commit()?;
         Ok(symbols.len())
+    }
+
+    pub fn replace_semantic_anchors_for_file(
+        &self,
+        file_path: &str,
+        anchors: &[SemanticAnchor],
+    ) -> Result<usize, SymbolStoreError> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        tx.execute(
+            "DELETE FROM semantic_anchors WHERE file_path = ?1",
+            params![file_path],
+        )?;
+
+        for anchor in anchors {
+            tx.execute(
+                r#"
+                INSERT OR REPLACE INTO semantic_anchors
+                (id, file_path, kind, value, line, character, preview, confidence, indexed_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                "#,
+                params![
+                    &anchor.id,
+                    &anchor.file_path,
+                    &anchor.kind,
+                    &anchor.value,
+                    anchor.line,
+                    anchor.character,
+                    &anchor.preview,
+                    anchor.confidence,
+                    now,
+                ],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(anchors.len())
+    }
+
+    pub fn search_semantic_anchors(
+        &self,
+        query: &str,
+        file_path: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<SemanticAnchorResult>, SymbolStoreError> {
+        let trimmed = query.trim();
+        if trimmed.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let query_pattern = format!("%{}%", trimmed);
+        let conn = self.conn.lock().unwrap();
+        let (sql, values) = if let Some(file_path) = file_path {
+            (
+                r#"
+                SELECT id, file_path, kind, value, line, character, preview, confidence
+                FROM semantic_anchors
+                WHERE file_path = ?1 AND (value LIKE ?2 OR preview LIKE ?2)
+                ORDER BY CASE
+                    WHEN lower(value) = lower(?3) THEN 0
+                    WHEN lower(value) LIKE lower(?4) THEN 1
+                    ELSE 2
+                END, confidence DESC, file_path, line, character
+                LIMIT ?5
+                "#,
+                vec![
+                    Value::Text(file_path.to_string()),
+                    Value::Text(query_pattern.clone()),
+                    Value::Text(trimmed.to_string()),
+                    Value::Text(format!("{}%", trimmed)),
+                    Value::Integer(limit as i64),
+                ],
+            )
+        } else {
+            (
+                r#"
+                SELECT id, file_path, kind, value, line, character, preview, confidence
+                FROM semantic_anchors
+                WHERE value LIKE ?1 OR preview LIKE ?1
+                ORDER BY CASE
+                    WHEN lower(value) = lower(?2) THEN 0
+                    WHEN lower(value) LIKE lower(?3) THEN 1
+                    ELSE 2
+                END, confidence DESC, file_path, line, character
+                LIMIT ?4
+                "#,
+                vec![
+                    Value::Text(query_pattern.clone()),
+                    Value::Text(trimmed.to_string()),
+                    Value::Text(format!("{}%", trimmed)),
+                    Value::Integer(limit as i64),
+                ],
+            )
+        };
+        let mut stmt = conn.prepare(sql)?;
+        let anchors = stmt
+            .query_map(params_from_iter(values), |row| {
+                let anchor = row_to_semantic_anchor(row)?;
+                let score = semantic_anchor_score(&anchor, trimmed);
+                Ok(SemanticAnchorResult { anchor, score })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(anchors)
+    }
+
+    pub fn get_semantic_anchors_in_file(
+        &self,
+        file_path: &str,
+        limit: usize,
+    ) -> Result<Vec<SemanticAnchor>, SymbolStoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT id, file_path, kind, value, line, character, preview, confidence
+            FROM semantic_anchors
+            WHERE file_path = ?1
+            ORDER BY line, character, value
+            LIMIT ?2
+            "#,
+        )?;
+        let anchors = stmt
+            .query_map(params![file_path, limit as i64], |row| {
+                row_to_semantic_anchor(row)
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(anchors)
     }
 
     pub fn replace_relationships_for_file(
@@ -648,6 +814,10 @@ impl SymbolStore {
             "DELETE FROM symbol_relationships WHERE source_file_path = ?1",
             params![file_path],
         )?;
+        conn.execute(
+            "DELETE FROM semantic_anchors WHERE file_path = ?1",
+            params![file_path],
+        )?;
         let count = conn.execute(
             "DELETE FROM symbols WHERE file_path = ?1",
             params![file_path],
@@ -669,6 +839,7 @@ impl SymbolStore {
     pub fn clear(&self) -> Result<(), SymbolStoreError> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM symbol_relationships", [])?;
+        conn.execute("DELETE FROM semantic_anchors", [])?;
         conn.execute("DELETE FROM symbols", [])?;
         conn.execute("DELETE FROM indexed_files", [])?;
         Ok(())
@@ -822,6 +993,33 @@ impl SymbolStore {
 }
 
 /// Convert a database row to a Symbol
+fn row_to_semantic_anchor(row: &rusqlite::Row) -> rusqlite::Result<SemanticAnchor> {
+    Ok(SemanticAnchor {
+        id: row.get(0)?,
+        file_path: row.get(1)?,
+        kind: row.get(2)?,
+        value: row.get(3)?,
+        line: row.get::<_, i64>(4)? as u32,
+        character: row.get::<_, i64>(5)? as u32,
+        preview: row.get(6)?,
+        confidence: row.get::<_, f64>(7)? as f32,
+    })
+}
+
+fn semantic_anchor_score(anchor: &SemanticAnchor, query: &str) -> f32 {
+    let value = anchor.value.to_lowercase();
+    let query = query.to_lowercase();
+    if value == query {
+        1.0
+    } else if value.starts_with(&query) {
+        0.9 * anchor.confidence
+    } else if value.contains(&query) {
+        0.75 * anchor.confidence
+    } else {
+        0.45 * anchor.confidence
+    }
+}
+
 fn row_to_symbol(row: &rusqlite::Row) -> rusqlite::Result<Symbol> {
     use crate::tree_sitter::{Position, Range};
 

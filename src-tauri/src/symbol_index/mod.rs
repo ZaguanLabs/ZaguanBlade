@@ -12,4 +12,6 @@ pub mod search;
 pub mod store;
 
 pub use search::{SearchQuery, SearchResult};
-pub use store::{SymbolReference, SymbolStore, SymbolStoreError};
+pub use store::{
+    SemanticAnchor, SemanticAnchorResult, SymbolReference, SymbolStore, SymbolStoreError,
+};
