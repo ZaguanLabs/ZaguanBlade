@@ -1448,7 +1448,7 @@ const AppLayoutInner: React.FC = () => {
                     </span>
                     {indexHealth && (indexHealth.status === 'checking' || indexHealth.status === 'indexing') && (
                         <span
-                            className="inline-flex max-w-[42vw] items-center gap-1 rounded-[calc(var(--panel-radius)*0.35)] border border-[color-mix(in_srgb,var(--accent-ai)_45%,transparent)] bg-[color-mix(in_srgb,var(--accent-ai)_10%,transparent)] px-1.5 py-0.5 font-semibold text-(--accent-ai)"
+                            className="inline-flex max-w-[42vw] items-center gap-1 font-normal"
                             title={formatIndexStatusTitle(indexHealth)}
                         >
                             <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
