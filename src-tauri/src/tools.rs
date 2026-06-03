@@ -165,6 +165,7 @@ fn is_batch_read_only_tool(tool_name: &str) -> bool {
         | "semantic_anchor_search"
         | "symbol_resolve"
         | "symbol_references"
+        | "edit_impact"
         | "symbol_graph"
         | "symbol_outline"
         | "read_file"
@@ -508,10 +509,11 @@ mod tests {
     use super::{
         apply_multi_patch_to_string, apply_patch_to_string, apply_patch_to_string_with_line_hint,
         apply_semantic_patch_with_service, apply_semantic_patch_writes_with_service, execute_tool,
-        grep_search, parse_grep_timeout_ms, parse_relationship_types_arg,
-        stage_semantic_patch_writes, symbol_inventory_entries, symbol_inventory_summary,
-        symbol_reference_resolution_json, PatchHunk, SemanticPatchWrite, ToolResult,
-        GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS, GREP_TIMEOUT_MIN_MS,
+        grep_search, impact_confidence, impact_risk_level, parse_grep_timeout_ms,
+        parse_relationship_types_arg, related_test_files_for_paths, stage_semantic_patch_writes,
+        symbol_inventory_entries, symbol_inventory_summary, symbol_reference_resolution_json,
+        PatchHunk, SemanticPatchWrite, ToolResult, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS,
+        GREP_TIMEOUT_MIN_MS,
     };
     use crate::semantic_patch::{InsertPosition, PatchOperation, PatchTarget, SemanticPatch};
     use crate::symbol_index::SymbolStore;
@@ -555,6 +557,42 @@ mod tests {
             apply_patch_to_string_with_line_hint(content, "TARGET", "REPLACED", Some(4), Some(4))
                 .unwrap();
         assert_eq!(updated, "A\nTARGET\nB\nREPLACED\nC\n");
+    }
+
+    #[test]
+    fn edit_impact_risk_and_confidence_are_bounded_and_explainable() {
+        assert_eq!(impact_risk_level(9, 2, 1), "high");
+        assert_eq!(impact_risk_level(2, 5, 1), "medium");
+        assert_eq!(impact_risk_level(1, 1, 1), "low");
+        assert_eq!(impact_risk_level(1, 1, 0), "medium");
+
+        assert_eq!(impact_confidence(true, 1, 1), "high");
+        assert_eq!(impact_confidence(false, 1, 1), "medium");
+        assert_eq!(impact_confidence(true, 0, 0), "low");
+    }
+
+    #[test]
+    fn edit_impact_discovers_likely_tests_by_impacted_stem() {
+        let temp_dir = tempdir().unwrap();
+        fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+        fs::create_dir_all(temp_dir.path().join("tests")).unwrap();
+        fs::write(
+            temp_dir.path().join("src/service.ts"),
+            "export function service() {}",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("tests/service.test.ts"),
+            "test('service', () => {})",
+        )
+        .unwrap();
+
+        let tests =
+            related_test_files_for_paths(temp_dir.path(), &["src/service.ts".to_string()], 5);
+
+        assert!(tests
+            .iter()
+            .any(|test| test["path"] == "tests/service.test.ts"));
     }
 
     #[test]
@@ -1219,6 +1257,7 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
         "semantic_anchor_search" => semantic_anchor_search_tool(workspace_root, &args, app_handle),
         "symbol_resolve" => symbol_resolve_tool(workspace_root, &args, app_handle),
         "symbol_references" => symbol_references_tool(workspace_root, &args, app_handle),
+        "edit_impact" => edit_impact_tool(workspace_root, &args, app_handle),
         "symbol_graph" => symbol_graph_tool(workspace_root, &args, app_handle),
         "symbol_outline" => symbol_outline_tool(workspace_root, &args, app_handle),
         "read_file_range" => read_file_range(workspace_root, &args),
@@ -2595,6 +2634,104 @@ fn is_reference_expansion_symbol(symbol: &crate::tree_sitter::Symbol) -> bool {
     )
 }
 
+fn is_probable_test_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.contains("/test/")
+        || lower.contains("/tests/")
+        || lower.contains("/__tests__/")
+        || lower.starts_with("test/")
+        || lower.starts_with("tests/")
+        || lower.starts_with("__tests__/")
+        || lower.contains(".test.")
+        || lower.contains(".spec.")
+        || lower.ends_with("_test.rs")
+}
+
+fn is_impact_skip_path(path: &str) -> bool {
+    path.split('/').any(|part| {
+        matches!(
+            part,
+            ".git" | ".zblade" | "node_modules" | "target" | "dist" | "build" | ".next"
+        )
+    })
+}
+
+fn related_test_files_for_paths(
+    workspace_root: &Path,
+    paths: &[String],
+    limit: usize,
+) -> Vec<serde_json::Value> {
+    let mut tests = Vec::new();
+    let mut seen = HashSet::new();
+    let stems = paths
+        .iter()
+        .filter_map(|path| {
+            Path::new(path)
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(|stem| stem.to_ascii_lowercase())
+        })
+        .collect::<Vec<_>>();
+
+    for entry in WalkDir::new(workspace_root)
+        .follow_links(false)
+        .max_depth(8)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let rel = entry
+            .path()
+            .strip_prefix(workspace_root)
+            .unwrap_or(entry.path())
+            .to_string_lossy()
+            .replace('\\', "/");
+        if is_impact_skip_path(&rel) || !is_probable_test_path(&rel) || !seen.insert(rel.clone()) {
+            continue;
+        }
+        let lower = rel.to_ascii_lowercase();
+        let matched_stem = stems.iter().find(|stem| lower.contains(stem.as_str()));
+        if let Some(stem) = matched_stem {
+            tests.push(serde_json::json!({
+                "path": rel,
+                "reason": format!("Test path matches impacted source stem `{}`", stem),
+                "score": 82
+            }));
+            if tests.len() >= limit {
+                break;
+            }
+        }
+    }
+
+    tests
+}
+
+fn impact_risk_level(
+    impacted_file_count: usize,
+    reference_count: usize,
+    test_count: usize,
+) -> String {
+    if impacted_file_count >= 8 || reference_count >= 16 {
+        "high".to_string()
+    } else if impacted_file_count >= 3 || reference_count >= 4 || test_count == 0 {
+        "medium".to_string()
+    } else {
+        "low".to_string()
+    }
+}
+
+fn impact_confidence(index_fresh: bool, symbol_count: usize, impacted_file_count: usize) -> String {
+    if index_fresh && symbol_count > 0 && impacted_file_count > 0 {
+        "high".to_string()
+    } else if symbol_count > 0 || impacted_file_count > 0 {
+        "medium".to_string()
+    } else {
+        "low".to_string()
+    }
+}
+
 fn resolve_symbol_from_graph_args(
     workspace_root: &Path,
     service: &crate::language_service::LanguageService,
@@ -3010,6 +3147,222 @@ fn symbol_references_tool<R: tauri::Runtime>(
             "limit_per_relationship": limit,
             "max_symbols": max_symbols,
             "truncated_symbols": target_symbols.len() >= max_symbols,
+        }
+    });
+    ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
+}
+
+fn edit_impact_tool<R: tauri::Runtime>(
+    workspace_root: &Path,
+    args: &HashMap<String, serde_json::Value>,
+    app_handle: Option<&tauri::AppHandle<R>>,
+) -> ToolResult {
+    let service = match language_service_from_app_handle(app_handle) {
+        Ok(service) => service,
+        Err(err) => return ToolResult::err(err),
+    };
+    let started = Instant::now();
+    let limit = parse_bounded_usize_arg(args, "limit", 20, 100);
+    let max_symbols = get_bounded_usize_arg(args, &["max_symbols"], 24, 100);
+    let relationship_types = relationship_type_values();
+    let explicit_symbol = get_str_arg(args, &["symbol_id", "id"]).is_some()
+        || get_str_arg(args, &["name", "qualified_name"]).is_some();
+
+    let target_path = match get_str_arg(args, &["path", "file", "file_path"]) {
+        Some(path) => match symbol_path_arg(workspace_root, &path) {
+            Ok(path) => Some(path),
+            Err(err) => return ToolResult::err(err),
+        },
+        None => None,
+    };
+
+    let target_symbols = if explicit_symbol {
+        match resolve_symbol_from_graph_args(workspace_root, &service, args) {
+            Ok(Some(symbol)) => vec![symbol],
+            Ok(None) => return ToolResult::err("symbol not found".to_string()),
+            Err(err) => return ToolResult::err(err),
+        }
+    } else if let Some(path) = target_path.as_deref() {
+        match service.get_file_symbols(path) {
+            Ok(symbols) => symbols
+                .into_iter()
+                .filter(is_reference_expansion_symbol)
+                .take(max_symbols)
+                .collect::<Vec<_>>(),
+            Err(err) => return ToolResult::err(err.to_string()),
+        }
+    } else {
+        return ToolResult::err("edit_impact requires 'path' or a symbol selector".to_string());
+    };
+
+    if target_symbols.is_empty() {
+        return ToolResult::err("no impact-analysis symbols found".to_string());
+    }
+
+    let mut impacted = BTreeMap::<String, (u32, Vec<String>, Vec<serde_json::Value>)>::new();
+    let mut reference_count = 0usize;
+    let mut symbol_payloads = Vec::new();
+
+    for symbol in &target_symbols {
+        impacted.entry(symbol.file_path.clone()).or_insert_with(|| {
+            (
+                90,
+                vec!["Direct edit target".to_string()],
+                vec![serde_json::json!({
+                    "start_line": symbol.range.start.line.saturating_add(1),
+                    "end_line": symbol.range.end.line.saturating_add(1),
+                    "reason": format!("Target symbol `{}`", symbol.name),
+                })],
+            )
+        });
+
+        let mut incoming_count = 0usize;
+        let mut outgoing_count = 0usize;
+        let mut relationship_counts = BTreeMap::<String, usize>::new();
+
+        for relationship in &relationship_types {
+            let graph = match service.get_symbol_graph(symbol, *relationship, limit) {
+                Ok(graph) => graph,
+                Err(_) => continue,
+            };
+
+            for reference in graph.incoming {
+                reference_count += 1;
+                incoming_count += 1;
+                let relationship_name = reference.relationship_type.to_string();
+                *relationship_counts
+                    .entry(relationship_name.clone())
+                    .or_default() += 1;
+                let entry = impacted
+                    .entry(reference.source_symbol.file_path.clone())
+                    .or_insert_with(|| (0, Vec::new(), Vec::new()));
+                entry.0 = entry.0.max(if reference.target_symbol_id.is_some() {
+                    78
+                } else {
+                    62
+                });
+                let reason = format!(
+                    "Incoming {} reference to `{}`",
+                    relationship_name, symbol.name
+                );
+                if !entry.1.iter().any(|existing| existing == &reason) {
+                    entry.1.push(reason);
+                }
+                entry.2.push(serde_json::json!({
+                    "start_line": reference.line.saturating_add(1).saturating_sub(8).max(1),
+                    "end_line": reference.line.saturating_add(1).saturating_add(24),
+                    "reason": format!("{} reference", relationship_name),
+                }));
+            }
+
+            for reference in graph.outgoing {
+                reference_count += 1;
+                outgoing_count += 1;
+                let relationship_name = reference.relationship_type.to_string();
+                *relationship_counts
+                    .entry(relationship_name.clone())
+                    .or_default() += 1;
+                let related_path = reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.file_path.clone())
+                    .or_else(|| {
+                        (reference.relationship_type
+                            == crate::tree_sitter::SymbolRelationshipType::Import)
+                            .then(|| reference.target_name.clone())
+                    });
+                let Some(related_path) = related_path else {
+                    continue;
+                };
+                if related_path == symbol.file_path {
+                    continue;
+                }
+                let entry = impacted
+                    .entry(related_path.clone())
+                    .or_insert_with(|| (0, Vec::new(), Vec::new()));
+                entry.0 = entry.0.max(if reference.target_symbol_id.is_some() {
+                    70
+                } else {
+                    56
+                });
+                let reason = format!(
+                    "Outgoing {} dependency from `{}`",
+                    relationship_name, symbol.name
+                );
+                if !entry.1.iter().any(|existing| existing == &reason) {
+                    entry.1.push(reason);
+                }
+            }
+        }
+
+        symbol_payloads.push(serde_json::json!({
+            "symbol": symbol_to_json(symbol),
+            "incoming_count": incoming_count,
+            "outgoing_count": outgoing_count,
+            "relationship_counts": relationship_counts,
+        }));
+    }
+
+    let mut impacted_files = impacted
+        .into_iter()
+        .map(|(path, (score, reasons, mut ranges))| {
+            ranges.truncate(6);
+            serde_json::json!({
+                "path": path,
+                "score": score,
+                "reasons": reasons,
+                "suggested_ranges": ranges,
+            })
+        })
+        .collect::<Vec<_>>();
+    impacted_files.sort_by(|a, b| {
+        b["score"]
+            .as_u64()
+            .cmp(&a["score"].as_u64())
+            .then_with(|| a["path"].as_str().cmp(&b["path"].as_str()))
+    });
+    impacted_files.truncate(limit);
+
+    let impacted_paths = impacted_files
+        .iter()
+        .filter_map(|file| file["path"].as_str().map(ToString::to_string))
+        .collect::<Vec<_>>();
+    let likely_tests = related_test_files_for_paths(workspace_root, &impacted_paths, limit.min(12));
+    let health = service.index_health_snapshot();
+    let index_fresh = matches!(
+        health.status,
+        crate::language_service::IndexHealthStatus::Fresh
+    );
+    let risk = impact_risk_level(impacted_files.len(), reference_count, likely_tests.len());
+    let confidence = impact_confidence(index_fresh, target_symbols.len(), impacted_files.len());
+    let recommended_next_steps = vec![
+        "Read suggested_ranges for high-score impacted files before editing".to_string(),
+        "Run or inspect likely_tests after the change".to_string(),
+        "Use symbol_references on high-risk symbols if the impact surface is unclear".to_string(),
+    ];
+
+    let payload = serde_json::json!({
+        "target": {
+            "path": target_path,
+            "symbols": symbol_payloads,
+        },
+        "impact": {
+            "risk": risk,
+            "confidence": confidence,
+            "impacted_files": impacted_files,
+            "likely_tests": likely_tests,
+            "reference_count": reference_count,
+            "recommended_next_steps": recommended_next_steps,
+        },
+        "_meta": {
+            "tool": "edit_impact",
+            "source": "language_service",
+            "timing_ms": started.elapsed().as_millis(),
+            "index_health": health,
+            "limit": limit,
+            "max_symbols": max_symbols,
+            "relationship_types": relationship_types.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "truncated_files": impacted_paths.len() >= limit,
         }
     });
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())

@@ -142,6 +142,28 @@ pub fn get_tool_definitions() -> Vec<Value> {
         }),
         serde_json::json!({
             "type": "function",
+            "name": "edit_impact",
+            "function": {
+                "name": "edit_impact",
+                "description": "Analyze likely edit impact before changing a file or symbol, including impacted files, related tests, reference counts, risk, confidence, and suggested read ranges.",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "Target file path, or file path for resolving by name" },
+                        "symbol_id": { "type": "string", "description": "Optional stable symbol ID for single-symbol impact" },
+                        "qualified_name": { "type": "string", "description": "Optional exact qualified name within path" },
+                        "name": { "type": "string", "description": "Optional simple symbol name within path" },
+                        "limit": { "type": "integer", "description": "Optional max impacted files and references per relationship" },
+                        "max_symbols": { "type": "integer", "description": "For file-wide impact, maximum important symbols to analyze" }
+                    },
+                    "required": [],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
             "name": "symbol_graph",
             "function": {
                 "name": "symbol_graph",
