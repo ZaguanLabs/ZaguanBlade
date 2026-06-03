@@ -121,16 +121,19 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "symbol_references",
             "function": {
                 "name": "symbol_references",
-                "description": "Find semantic usages/references to one symbol using the local code-intelligence index",
+                "description": "Expand inbound and outbound relationships for one symbol or important symbols in a file, including resolved-symbol confidence and name-fallback metadata",
                 "strict": false,
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "symbol_id": { "type": "string", "description": "Stable symbol ID" },
-                        "path": { "type": "string", "description": "Optional file path when resolving by name" },
+                        "symbol_id": { "type": "string", "description": "Stable symbol ID for single-symbol expansion" },
+                        "path": { "type": "string", "description": "File path for resolving by name, or file-wide expansion when no name is provided" },
                         "qualified_name": { "type": "string", "description": "Optional exact qualified name" },
                         "name": { "type": "string", "description": "Optional simple symbol name" },
-                        "limit": { "type": "integer", "description": "Optional max references" }
+                        "relationship": { "type": "string", "description": "Optional single relationship type: call, import, export, extends, implements, contains" },
+                        "relationships": { "type": "array", "items": { "type": "string" }, "description": "Optional relationship type list" },
+                        "limit": { "type": "integer", "description": "Optional max references per relationship type" },
+                        "max_symbols": { "type": "integer", "description": "For file-wide expansion, maximum important symbols to expand" }
                     },
                     "required": [],
                     "additionalProperties": false

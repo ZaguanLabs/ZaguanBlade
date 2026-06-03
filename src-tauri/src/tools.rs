@@ -164,6 +164,8 @@ fn is_batch_read_only_tool(tool_name: &str) -> bool {
         | "symbol_search"
         | "semantic_anchor_search"
         | "symbol_resolve"
+        | "symbol_references"
+        | "symbol_graph"
         | "symbol_outline"
         | "read_file"
         | "read_file_range"
@@ -506,8 +508,9 @@ mod tests {
     use super::{
         apply_multi_patch_to_string, apply_patch_to_string, apply_patch_to_string_with_line_hint,
         apply_semantic_patch_with_service, apply_semantic_patch_writes_with_service, execute_tool,
-        grep_search, parse_grep_timeout_ms, stage_semantic_patch_writes, symbol_inventory_entries,
-        symbol_inventory_summary, PatchHunk, SemanticPatchWrite, ToolResult,
+        grep_search, parse_grep_timeout_ms, parse_relationship_types_arg,
+        stage_semantic_patch_writes, symbol_inventory_entries, symbol_inventory_summary,
+        symbol_reference_resolution_json, PatchHunk, SemanticPatchWrite, ToolResult,
         GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS, GREP_TIMEOUT_MIN_MS,
     };
     use crate::semantic_patch::{InsertPosition, PatchOperation, PatchTarget, SemanticPatch};
@@ -552,6 +555,71 @@ mod tests {
             apply_patch_to_string_with_line_hint(content, "TARGET", "REPLACED", Some(4), Some(4))
                 .unwrap();
         assert_eq!(updated, "A\nTARGET\nB\nREPLACED\nC\n");
+    }
+
+    #[test]
+    fn symbol_reference_resolution_marks_resolved_and_fallback_confidence() {
+        let source = test_symbol("caller", "caller", SymbolType::Function, 1, None);
+        let target = test_symbol("helper", "helper", SymbolType::Function, 3, None);
+        let resolved = crate::symbol_index::SymbolReference {
+            source_symbol: source.clone(),
+            relationship_type: crate::tree_sitter::SymbolRelationshipType::Call,
+            target_name: "helper".to_string(),
+            target_symbol_id: Some(target.id.clone()),
+            target_symbol: Some(target),
+            line: 2,
+        };
+        let fallback = crate::symbol_index::SymbolReference {
+            source_symbol: source,
+            relationship_type: crate::tree_sitter::SymbolRelationshipType::Call,
+            target_name: "helper".to_string(),
+            target_symbol_id: None,
+            target_symbol: None,
+            line: 2,
+        };
+
+        assert_eq!(
+            symbol_reference_resolution_json(&resolved)["strategy"],
+            "resolved_symbol_id"
+        );
+        assert_eq!(
+            symbol_reference_resolution_json(&resolved)["confidence"],
+            "high"
+        );
+        assert_eq!(
+            symbol_reference_resolution_json(&fallback)["strategy"],
+            "name_fallback"
+        );
+        assert_eq!(
+            symbol_reference_resolution_json(&fallback)["confidence"],
+            "low"
+        );
+    }
+
+    #[test]
+    fn parse_relationship_types_supports_single_and_multiple_filters() {
+        let mut single = HashMap::new();
+        single.insert(
+            "relationship".to_string(),
+            serde_json::Value::String("import".to_string()),
+        );
+        assert_eq!(
+            parse_relationship_types_arg(&single).unwrap(),
+            vec![crate::tree_sitter::SymbolRelationshipType::Import]
+        );
+
+        let mut multiple = HashMap::new();
+        multiple.insert(
+            "relationships".to_string(),
+            serde_json::json!(["call", "export"]),
+        );
+        assert_eq!(
+            parse_relationship_types_arg(&multiple).unwrap(),
+            vec![
+                crate::tree_sitter::SymbolRelationshipType::Call,
+                crate::tree_sitter::SymbolRelationshipType::Export,
+            ]
+        );
     }
 
     #[test]
@@ -1150,6 +1218,7 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
         "symbol_search" => symbol_search_tool(workspace_root, &args, app_handle),
         "semantic_anchor_search" => semantic_anchor_search_tool(workspace_root, &args, app_handle),
         "symbol_resolve" => symbol_resolve_tool(workspace_root, &args, app_handle),
+        "symbol_references" => symbol_references_tool(workspace_root, &args, app_handle),
         "symbol_graph" => symbol_graph_tool(workspace_root, &args, app_handle),
         "symbol_outline" => symbol_outline_tool(workspace_root, &args, app_handle),
         "read_file_range" => read_file_range(workspace_root, &args),
@@ -2438,6 +2507,33 @@ fn semantic_anchor_result_to_json(
     })
 }
 
+fn symbol_reference_resolution_json(
+    reference: &crate::symbol_index::SymbolReference,
+) -> serde_json::Value {
+    let strategy = if reference.target_symbol_id.is_some() {
+        "resolved_symbol_id"
+    } else if reference.target_symbol.is_some() {
+        "hydrated_target_symbol"
+    } else if reference.relationship_type == crate::tree_sitter::SymbolRelationshipType::Import {
+        "resolved_file_path"
+    } else {
+        "name_fallback"
+    };
+    let confidence = match strategy {
+        "resolved_symbol_id" | "hydrated_target_symbol" => "high",
+        "resolved_file_path" => "medium",
+        _ => "low",
+    };
+
+    serde_json::json!({
+        "strategy": strategy,
+        "confidence": confidence,
+        "resolved": reference.target_symbol_id.is_some()
+            || reference.target_symbol.is_some()
+            || reference.relationship_type == crate::tree_sitter::SymbolRelationshipType::Import,
+    })
+}
+
 fn symbol_reference_to_json(reference: &crate::symbol_index::SymbolReference) -> serde_json::Value {
     serde_json::json!({
         "source_symbol": symbol_to_json(&reference.source_symbol),
@@ -2446,7 +2542,57 @@ fn symbol_reference_to_json(reference: &crate::symbol_index::SymbolReference) ->
         "target_symbol_id": reference.target_symbol_id,
         "target_symbol": reference.target_symbol.as_ref().map(symbol_to_json),
         "line": reference.line,
+        "resolution": symbol_reference_resolution_json(reference),
     })
+}
+
+fn relationship_type_values() -> Vec<crate::tree_sitter::SymbolRelationshipType> {
+    vec![
+        crate::tree_sitter::SymbolRelationshipType::Call,
+        crate::tree_sitter::SymbolRelationshipType::Import,
+        crate::tree_sitter::SymbolRelationshipType::Export,
+        crate::tree_sitter::SymbolRelationshipType::Extends,
+        crate::tree_sitter::SymbolRelationshipType::Implements,
+    ]
+}
+
+fn parse_relationship_types_arg(
+    args: &HashMap<String, serde_json::Value>,
+) -> Result<Vec<crate::tree_sitter::SymbolRelationshipType>, String> {
+    if let Some(kind) = get_str_arg(args, &["relationship", "relationship_type", "kind"]) {
+        return Ok(vec![kind.parse()?]);
+    }
+
+    let values = get_string_array_arg(args, &["relationships", "relationship_types", "kinds"]);
+    let Some(values) = values else {
+        return Ok(relationship_type_values());
+    };
+
+    let mut parsed = Vec::new();
+    for value in values {
+        parsed.push(value.parse()?);
+    }
+    if parsed.is_empty() {
+        Ok(relationship_type_values())
+    } else {
+        Ok(parsed)
+    }
+}
+
+fn is_reference_expansion_symbol(symbol: &crate::tree_sitter::Symbol) -> bool {
+    matches!(
+        symbol.symbol_type,
+        crate::tree_sitter::SymbolType::Function
+            | crate::tree_sitter::SymbolType::Method
+            | crate::tree_sitter::SymbolType::Class
+            | crate::tree_sitter::SymbolType::Struct
+            | crate::tree_sitter::SymbolType::Interface
+            | crate::tree_sitter::SymbolType::Type
+            | crate::tree_sitter::SymbolType::Enum
+            | crate::tree_sitter::SymbolType::Trait
+            | crate::tree_sitter::SymbolType::Impl
+            | crate::tree_sitter::SymbolType::Module
+    )
 }
 
 fn resolve_symbol_from_graph_args(
@@ -2461,14 +2607,15 @@ fn resolve_symbol_from_graph_args(
     }
 
     let Some(file_path) = get_str_arg(args, &["path", "file", "file_path"]) else {
-        return Err("symbol_graph requires 'symbol_id' or 'path'".to_string());
+        return Err("symbol relationship tools require 'symbol_id' or 'path'".to_string());
     };
     let file_path = symbol_path_arg(workspace_root, &file_path)?;
     let qualified_name = get_str_arg(args, &["qualified_name"]);
     let name = get_str_arg(args, &["name"]);
     if qualified_name.is_none() && name.is_none() {
         return Err(
-            "symbol_graph requires 'name' or 'qualified_name' when resolving by path".to_string(),
+            "symbol relationship tools require 'name' or 'qualified_name' when resolving by path"
+                .to_string(),
         );
     }
 
@@ -2716,6 +2863,153 @@ fn symbol_outline_tool<R: tauri::Runtime>(
             "returned_symbols": total_symbols.min(max_symbols),
             "truncated": total_symbols > max_symbols,
             "include_outline": include_outline
+        }
+    });
+    ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
+}
+
+fn symbol_references_tool<R: tauri::Runtime>(
+    workspace_root: &Path,
+    args: &HashMap<String, serde_json::Value>,
+    app_handle: Option<&tauri::AppHandle<R>>,
+) -> ToolResult {
+    let service = match language_service_from_app_handle(app_handle) {
+        Ok(service) => service,
+        Err(err) => return ToolResult::err(err),
+    };
+    let started = Instant::now();
+    let limit = parse_bounded_usize_arg(args, "limit", 20, 100);
+    let max_symbols = get_bounded_usize_arg(args, &["max_symbols"], 24, 100);
+    let relationships = match parse_relationship_types_arg(args) {
+        Ok(values) => values,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    let target_symbols = if get_str_arg(args, &["symbol_id", "id"]).is_some()
+        || get_str_arg(args, &["name", "qualified_name"]).is_some()
+    {
+        match resolve_symbol_from_graph_args(workspace_root, &service, args) {
+            Ok(Some(symbol)) => vec![symbol],
+            Ok(None) => return ToolResult::err("symbol not found".to_string()),
+            Err(err) => return ToolResult::err(err),
+        }
+    } else {
+        let Some(file_path) = get_str_arg(args, &["path", "file", "file_path"]) else {
+            return ToolResult::err(
+                "symbol_references requires 'symbol_id', 'name' with 'path', or 'path'".to_string(),
+            );
+        };
+        let file_path = match symbol_path_arg(workspace_root, &file_path) {
+            Ok(path) => path,
+            Err(err) => return ToolResult::err(err),
+        };
+        let symbols = match service.get_file_symbols(&file_path) {
+            Ok(symbols) => symbols,
+            Err(err) => return ToolResult::err(err.to_string()),
+        };
+        symbols
+            .into_iter()
+            .filter(is_reference_expansion_symbol)
+            .take(max_symbols)
+            .collect::<Vec<_>>()
+    };
+
+    if target_symbols.is_empty() {
+        return ToolResult::err("no expandable symbols found".to_string());
+    }
+
+    let mut total_incoming = 0usize;
+    let mut total_outgoing = 0usize;
+    let mut relationship_totals = BTreeMap::<String, usize>::new();
+    let expansions = target_symbols
+        .iter()
+        .map(|symbol| {
+            let mut incoming = BTreeMap::<String, Vec<serde_json::Value>>::new();
+            let mut outgoing = BTreeMap::<String, Vec<serde_json::Value>>::new();
+            let mut seen_incoming = HashSet::<(String, String, String, u32)>::new();
+            let mut seen_outgoing = HashSet::<(String, String, String, u32)>::new();
+
+            for relationship in &relationships {
+                let graph = match service.get_symbol_graph(symbol, *relationship, limit) {
+                    Ok(graph) => graph,
+                    Err(err) => {
+                        return serde_json::json!({
+                            "symbol": symbol_to_json(symbol),
+                            "error": err.to_string(),
+                        })
+                    }
+                };
+
+                for reference in graph.incoming {
+                    let key = (
+                        reference.source_symbol.id.clone(),
+                        reference.target_name.clone(),
+                        reference.relationship_type.to_string(),
+                        reference.line,
+                    );
+                    if seen_incoming.insert(key) {
+                        let relationship_type = reference.relationship_type.to_string();
+                        incoming
+                            .entry(relationship_type.clone())
+                            .or_default()
+                            .push(symbol_reference_to_json(&reference));
+                        *relationship_totals.entry(relationship_type).or_default() += 1;
+                        total_incoming += 1;
+                    }
+                }
+
+                for reference in graph.outgoing {
+                    let key = (
+                        reference.source_symbol.id.clone(),
+                        reference.target_name.clone(),
+                        reference.relationship_type.to_string(),
+                        reference.line,
+                    );
+                    if seen_outgoing.insert(key) {
+                        let relationship_type = reference.relationship_type.to_string();
+                        outgoing
+                            .entry(relationship_type.clone())
+                            .or_default()
+                            .push(symbol_reference_to_json(&reference));
+                        *relationship_totals.entry(relationship_type).or_default() += 1;
+                        total_outgoing += 1;
+                    }
+                }
+            }
+
+            let incoming_count = incoming.values().map(Vec::len).sum::<usize>();
+            let outgoing_count = outgoing.values().map(Vec::len).sum::<usize>();
+            serde_json::json!({
+                "symbol": symbol_to_json(symbol),
+                "incoming": incoming,
+                "outgoing": outgoing,
+                "summary": {
+                    "incoming_count": incoming_count,
+                    "outgoing_count": outgoing_count,
+                    "relationship_count": incoming_count + outgoing_count,
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let payload = serde_json::json!({
+        "symbols": expansions,
+        "summary": {
+            "symbols_expanded": target_symbols.len(),
+            "incoming_count": total_incoming,
+            "outgoing_count": total_outgoing,
+            "relationship_count": total_incoming + total_outgoing,
+            "by_relationship_type": relationship_totals,
+        },
+        "_meta": {
+            "tool": "symbol_references",
+            "source": "language_service",
+            "timing_ms": started.elapsed().as_millis(),
+            "index_health": service.index_health_snapshot(),
+            "relationship_types": relationships.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "limit_per_relationship": limit,
+            "max_symbols": max_symbols,
+            "truncated_symbols": target_symbols.len() >= max_symbols,
         }
     });
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
