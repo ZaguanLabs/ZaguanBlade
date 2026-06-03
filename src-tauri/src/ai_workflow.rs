@@ -1006,23 +1006,32 @@ impl AiWorkflow {
             for task in pending_parallel_tasks {
                 handles.push(std::thread::spawn(move || {
                     let started_at = Instant::now();
+                    let call = task.call;
                     eprintln!(
                         "[AI TOOL LATENCY] start parallel tool={} call_id={}",
-                        task.call.function.name, task.call.id
+                        call.function.name, call.id
                     );
-                    let res = crate::tool_execution::execute_tool_with_default_timeout(
-                        &task.context,
-                        &task.call.function.name,
-                        &task.call.function.arguments,
-                    );
+                    let res = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        crate::tool_execution::execute_tool_with_default_timeout(
+                            &task.context,
+                            &call.function.name,
+                            &call.function.arguments,
+                        )
+                    })) {
+                        Ok(res) => res,
+                        Err(_) => tools::ToolResult::err(format!(
+                            "tool '{}' execution panicked before returning a result",
+                            call.function.name
+                        )),
+                    };
                     eprintln!(
                         "[AI TOOL LATENCY] finish parallel tool={} call_id={} duration_ms={} success={}",
-                        task.call.function.name,
-                        task.call.id,
+                        call.function.name,
+                        call.id,
                         started_at.elapsed().as_millis(),
                         res.success
                     );
-                    (task.call, res)
+                    (call, res)
                 }));
             }
             for handle in handles {

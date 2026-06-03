@@ -97,18 +97,24 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             };
         });
         const unsubscribeStateSnapshot = subscribeBladeNestedEventType('Editor', 'StateSnapshot', (payload) => {
-            const nextOpenFiles = payload.open_files ?? snapshotRef.current.openFiles;
+            const backendOwnsEditorState = isBackendAuthoritative();
+            const nextActiveFile = backendOwnsEditorState
+                ? payload.active_file ?? null
+                : snapshotRef.current.activeFile;
+            const nextOpenFiles = backendOwnsEditorState
+                ? payload.open_files ?? snapshotRef.current.openFiles
+                : snapshotRef.current.openFiles;
             snapshotRef.current = {
-                activeFile: payload.active_file ?? null,
+                activeFile: nextActiveFile,
                 openFiles: nextOpenFiles,
                 cursorLine: payload.cursor_line ?? null,
                 cursorColumn: payload.cursor_column ?? null,
                 selectionStartLine: payload.selection_start ?? null,
                 selectionEndLine: payload.selection_end ?? null,
             };
-            setEditorState(prev => ({
-                activeFile: payload.active_file ?? null,
-                openFiles: payload.open_files ?? prev.openFiles,
+            setEditorState(() => ({
+                activeFile: nextActiveFile,
+                openFiles: nextOpenFiles,
             }));
         });
 

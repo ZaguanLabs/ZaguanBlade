@@ -266,13 +266,17 @@ pub async fn handle_send_message<R: Runtime>(
     };
 
     let normalize_to_workspace = |path: String| -> String {
-        if std::path::Path::new(&path).is_absolute() {
-            path
+        let path = std::path::Path::new(&path);
+        let resolved = if path.is_absolute() {
+            path.to_path_buf()
         } else if let Some(root) = workspace_root.as_ref() {
-            root.join(path).to_string_lossy().to_string()
+            root.join(path)
         } else {
-            path
-        }
+            path.to_path_buf()
+        };
+        crate::worktree::normalize_path(&resolved)
+            .to_string_lossy()
+            .to_string()
     };
     let normalized_mentions = mentions
         .unwrap_or_default()
@@ -382,10 +386,6 @@ pub async fn handle_send_message<R: Runtime>(
         .into_iter()
         .map(|path| normalize_to_workspace(path))
         .collect();
-    }
-
-    if effective_active_file.is_none() {
-        effective_active_file = effective_open_files.first().cloned();
     }
 
     if let Some(active) = effective_active_file.clone() {

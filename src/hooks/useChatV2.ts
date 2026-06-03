@@ -3,7 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { BladeDispatcher } from '../services/blade';
 import { subscribeBladeEventType, waitForBladeEvent } from '../services/bladeEvents';
-import { EditorFacade } from '../services/editorFacade';
+import { EditorFacade, isBackendAuthoritative } from '../services/editorFacade';
 import { ensureProblemCaptureStarted, getActiveDiagnostics } from '../services/problemStore';
 import { useEditorActions } from '../contexts/EditorContext';
 import { MessageBuffer } from '../utils/eventBuffer';
@@ -702,12 +702,14 @@ export function useChatV2(options: UseChatV2Options = {}) {
         selection_start: number | null;
         selection_end: number | null;
     }, cachedSnapshot: ReturnType<typeof getEditorSnapshotRef.current>) => {
-        const activeFile = freshSnapshot.active_file ?? cachedSnapshot.activeFile ?? null;
-        const openFiles = Array.from(new Set([
-            ...(cachedSnapshot.openFiles || []),
-            ...(freshSnapshot.open_files || []),
-            ...(activeFile ? [activeFile] : []),
-        ].filter(Boolean)));
+        const backendOwnsEditorState = isBackendAuthoritative();
+        const activeFile = backendOwnsEditorState
+            ? freshSnapshot.active_file ?? null
+            : cachedSnapshot.activeFile ?? null;
+        const openFilesSource = backendOwnsEditorState
+            ? freshSnapshot.open_files || []
+            : cachedSnapshot.openFiles || [];
+        const openFiles = Array.from(new Set(openFilesSource.filter(Boolean)));
 
         return {
             activeFile,
@@ -725,6 +727,7 @@ export function useChatV2(options: UseChatV2Options = {}) {
         }
 
         try {
+            const cachedSnapshot = getEditorSnapshotRef.current();
             const snapshotPromise = waitForBladeEvent((envelope) => {
                 if (envelope.event.type !== 'Editor') {
                     return false;
@@ -744,7 +747,7 @@ export function useChatV2(options: UseChatV2Options = {}) {
                 selection_start: number | null;
                 selection_end: number | null;
             } }).payload;
-            return buildEditorContext(mergeEditorSnapshots(snapshot, getEditorSnapshotRef.current()));
+            return buildEditorContext(mergeEditorSnapshots(snapshot, cachedSnapshot));
         } catch {
             return buildEditorContext(getEditorSnapshotRef.current());
         }
