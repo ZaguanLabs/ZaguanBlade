@@ -2891,20 +2891,35 @@ fn symbol_search_tool<R: tauri::Runtime>(
         Err(err) => return ToolResult::err(err),
     };
     let started = Instant::now();
-    let outcome = match service.search_symbols_filtered_self_healing(
-        &query,
-        file_filter.as_deref(),
-        symbol_types,
-        limit,
-    ) {
-        Ok(outcome) => outcome,
+    let results = match service.search_symbols_filtered(&query, file_filter.as_deref(), symbol_types, limit) {
+        Ok(results) => results,
         Err(err) => return ToolResult::err(err.to_string()),
     };
-    let result_count = outcome.results.len();
-    let healing = outcome.healing;
+    let result_count = results.len();
+    let initial_top_score = results.first().map(|result| result.score);
+    let search_health = serde_json::json!({
+        "enabled": false,
+        "triggered": false,
+        "reason": null,
+        "confidence": symbol_search_confidence(result_count, initial_top_score),
+        "initial_result_count": result_count,
+        "initial_top_score": initial_top_score,
+        "reran_after_reindex": false,
+        "reindexed_files": [],
+        "removed_files": [],
+        "literal_matches": [],
+        "semantic_anchor_matches": [],
+        "diagnostics": if result_count == 0 {
+            vec!["No indexed symbols matched. Try fast_context or a targeted file/path search if the index is still warming.".to_string()]
+        } else {
+            Vec::new()
+        },
+        "health_before": null,
+        "health_after": null,
+    });
     let payload = serde_json::json!({
         "query": query,
-        "results": outcome.results.into_iter().map(|result| {
+        "results": results.into_iter().map(|result| {
             let mut value = symbol_to_json(&result.symbol);
             value["score"] = serde_json::json!(result.score);
             value
@@ -2915,11 +2930,25 @@ fn symbol_search_tool<R: tauri::Runtime>(
             "timing_ms": started.elapsed().as_millis(),
             "source": "language_service",
             "index_health": service.index_health_snapshot(),
-            "search_health": healing,
+            "search_health": search_health,
             "truncated": false
         }
     });
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
+}
+
+
+fn symbol_search_confidence(result_count: usize, top_score: Option<f32>) -> &'static str {
+    let top_score = top_score.unwrap_or(0.0);
+    if result_count == 0 {
+        "empty"
+    } else if top_score >= 0.85 {
+        "high"
+    } else if top_score >= 0.55 {
+        "medium"
+    } else {
+        "low"
+    }
 }
 
 fn semantic_anchor_search_tool<R: tauri::Runtime>(

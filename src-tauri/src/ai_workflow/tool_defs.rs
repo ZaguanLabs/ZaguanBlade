@@ -66,7 +66,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "symbol_search",
             "function": {
                 "name": "symbol_search",
-                "description": "Search indexed symbols by name or qualified name. Broad searches self-heal low-confidence or empty results with bounded freshness checks, targeted reindexing, exact literal fallback, and search_health metadata.",
+                "description": "Search indexed symbols by name or qualified name. Returns lightweight search_health metadata and index health. If results are empty or low confidence, use fast_context or a targeted file/path search rather than retrying broad symbol_search repeatedly.",
                 "strict": false,
                 "parameters": {
                     "type": "object",

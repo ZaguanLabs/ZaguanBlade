@@ -62,6 +62,7 @@ pub struct IndexHealthSnapshot {
     pub symbol_count: usize,
     pub last_full_scan_ms: Option<u64>,
     pub last_incremental_update_ms: Option<u64>,
+    pub current_file: Option<String>,
     pub message: String,
 }
 
@@ -79,6 +80,7 @@ impl Default for IndexHealthSnapshot {
             symbol_count: 0,
             last_full_scan_ms: None,
             last_incremental_update_ms: None,
+            current_file: None,
             message: "Code intelligence status unknown".to_string(),
         }
     }
@@ -729,6 +731,7 @@ impl LanguageService {
             symbol_count: self.symbol_store.count()?,
             last_full_scan_ms: Some(started.elapsed().as_millis() as u64),
             last_incremental_update_ms: None,
+            current_file: None,
             message,
         })
     }
@@ -795,6 +798,15 @@ impl LanguageService {
         }
 
         for file_path in queued_files {
+            health.current_file = Some(file_path.clone());
+            health.active_workers = 1;
+            health.message = format!(
+                "Indexing {}... {}/{} files",
+                file_path, files_indexed, total_queued
+            );
+            self.set_index_health(health.clone());
+            progress(&health);
+
             match self.index_file(&file_path) {
                 Ok(_) => {
                     files_indexed += 1;
@@ -805,6 +817,7 @@ impl LanguageService {
             }
             health.queued_files = total_queued.saturating_sub(files_indexed);
             health.active_workers = usize::from(health.queued_files > 0);
+            health.current_file = None;
             health.message = format!(
                 "Building symbol index... {}/{} files",
                 files_indexed, total_queued
@@ -817,6 +830,7 @@ impl LanguageService {
         final_health.last_full_scan_ms = Some(started.elapsed().as_millis() as u64);
         final_health.last_incremental_update_ms = Some(started.elapsed().as_millis() as u64);
         final_health.active_workers = 0;
+        final_health.current_file = None;
         final_health.queued_files = final_health.stale_files + final_health.missing_files;
         final_health.status = if final_health.queued_files == 0 && final_health.orphaned_files == 0
         {

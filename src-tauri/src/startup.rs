@@ -71,6 +71,7 @@ pub fn ensure_post_ui_startup<R: Runtime>(app_handle: &tauri::AppHandle<R>) {
                             let mut health = service.index_health_snapshot();
                             health.status = crate::language_service::IndexHealthStatus::Error;
                             health.active_workers = 0;
+                            health.current_file = None;
                             health.message = format!("Code intelligence refresh failed: {}", error);
                             service.set_index_health(health.clone());
                             emit_index_status(&app_handle, health);

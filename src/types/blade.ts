@@ -312,6 +312,7 @@ export type IndexHealthSnapshot = {
     symbol_count: number;
     last_full_scan_ms: number | null;
     last_incremental_update_ms: number | null;
+    current_file?: string | null;
     message: string;
 };
 

@@ -5,6 +5,7 @@
 
 use rusqlite::{params, params_from_iter, types::Value, Connection};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -695,6 +696,60 @@ impl SymbolStore {
             return Ok(Vec::new());
         }
 
+        let conn = self.conn.lock().unwrap();
+        let mut symbols = Vec::new();
+        let mut seen = HashSet::new();
+
+        append_symbol_query_results(
+            &conn,
+            r#"
+            SELECT id, name, qualified_name, symbol_type, file_path, start_line, start_char,
+                   end_line, end_char, byte_offset, byte_length, parent_id, docstring, signature, content_hash
+            FROM symbols
+            WHERE name = ?1 OR qualified_name = ?1
+            ORDER BY length(name), name
+            LIMIT ?2
+            "#,
+            vec![
+                Value::Text(trimmed.to_string()),
+                Value::Integer(limit as i64),
+            ],
+            &mut symbols,
+            &mut seen,
+            limit,
+        )?;
+        if !symbols.is_empty() {
+            return Ok(symbols);
+        }
+
+        let prefix_pattern = format!("{}%", trimmed);
+        append_symbol_query_results(
+            &conn,
+            r#"
+            SELECT id, name, qualified_name, symbol_type, file_path, start_line, start_char,
+                   end_line, end_char, byte_offset, byte_length, parent_id, docstring, signature, content_hash
+            FROM symbols
+            WHERE name LIKE ?1 OR qualified_name LIKE ?1
+            ORDER BY CASE
+                WHEN name LIKE ?2 THEN 0
+                WHEN qualified_name LIKE ?2 THEN 1
+                ELSE 2
+            END, length(name), name
+            LIMIT ?3
+            "#,
+            vec![
+                Value::Text(prefix_pattern.clone()),
+                Value::Text(prefix_pattern),
+                Value::Integer(limit as i64),
+            ],
+            &mut symbols,
+            &mut seen,
+            limit,
+        )?;
+        if symbols.len() >= limit {
+            return Ok(symbols);
+        }
+
         let mut search_patterns = Vec::new();
         search_patterns.push(format!("%{}%", trimmed));
         for term in symbol_search_terms(trimmed) {
@@ -729,9 +784,6 @@ impl SymbolStore {
             where_clause
         );
 
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(&sql)?;
-
         let mut values = Vec::with_capacity(search_patterns.len() * 2 + 5);
         for search_pattern in search_patterns {
             values.push(Value::Text(search_pattern.clone()));
@@ -743,10 +795,7 @@ impl SymbolStore {
         values.push(Value::Text(format!("{}%", trimmed)));
         values.push(Value::Integer(limit as i64));
 
-        let symbols = stmt
-            .query_map(params_from_iter(values), |row| row_to_symbol(row))?
-            .collect::<Result<Vec<_>, _>>()?;
-
+        append_symbol_query_results(&conn, &sql, values, &mut symbols, &mut seen, limit)?;
         Ok(symbols)
     }
 
@@ -1053,6 +1102,36 @@ fn row_to_symbol(row: &rusqlite::Row) -> rusqlite::Result<Symbol> {
     })
 }
 
+
+fn append_symbol_query_results(
+    conn: &Connection,
+    sql: &str,
+    values: Vec<Value>,
+    symbols: &mut Vec<Symbol>,
+    seen: &mut HashSet<String>,
+    limit: usize,
+) -> Result<(), SymbolStoreError> {
+    if symbols.len() >= limit {
+        return Ok(());
+    }
+
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt
+        .query_map(params_from_iter(values), |row| row_to_symbol(row))?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    for symbol in rows {
+        if seen.insert(symbol.id.clone()) {
+            symbols.push(symbol);
+            if symbols.len() >= limit {
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn ensure_column(
     conn: &Connection,
     table_name: &str,
@@ -1203,6 +1282,19 @@ mod tests {
 
         let results = store.search_by_name_like("auth", 10).unwrap();
         assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_search_by_name_like_returns_exact_camel_case_symbol() {
+        let store = SymbolStore::in_memory().unwrap();
+        let sym1 = create_test_symbol("GitCommitMessage", "git.ts");
+        let sym2 = create_test_symbol("GitCommitMessageEditor", "editor.ts");
+
+        store.upsert_symbols(&[sym1, sym2]).unwrap();
+
+        let results = store.search_by_name_like("GitCommitMessage", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "GitCommitMessage");
     }
 
     #[test]

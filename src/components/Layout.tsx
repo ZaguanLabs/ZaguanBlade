@@ -6,7 +6,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { EditorPanel, type EditorContentState } from './EditorPanel';
 import { TerminalPane, TerminalPaneHandle } from './TerminalPane';
 import { AppBar } from './AppBar';
-import { AlertTriangle, GitBranch, Settings, Clock } from 'lucide-react';
+import { AlertTriangle, GitBranch, Settings, Clock, Loader2, DatabaseZap } from 'lucide-react';
 import { useStartupBootstrap } from '../contexts/StartupBootstrapContext';
 import { EditorProvider, useEditorActions } from '../contexts/EditorContext';
 import { useChatPanelV3Flag } from '../contexts/ChatPanelFlagContext';
@@ -98,6 +98,42 @@ function findMatchingChangeRange(
         startLine,
         endLine: startLine + safeLineCount - 1,
     };
+}
+
+function formatIndexStatusLabel(indexHealth: IndexHealthSnapshot): string {
+    if (indexHealth.status === 'indexing') {
+        const progress = indexHealth.supported_files > 0
+            ? `${indexHealth.indexed_files}/${indexHealth.supported_files}`
+            : null;
+        const currentFile = indexHealth.current_file?.trim();
+        if (currentFile) {
+            return progress
+                ? `Indexing ${currentFile} (${progress})`
+                : `Indexing ${currentFile}`;
+        }
+        return progress ? `Indexing symbols (${progress})` : 'Indexing symbols';
+    }
+
+    if (indexHealth.status === 'checking') {
+        return 'Checking code index';
+    }
+
+    return indexHealth.message;
+}
+
+function formatIndexStatusTitle(indexHealth: IndexHealthSnapshot): string {
+    const parts = [
+        indexHealth.message,
+        `${indexHealth.indexed_files}/${indexHealth.supported_files} files indexed`,
+        `${indexHealth.symbol_count} symbols`,
+    ];
+    if (indexHealth.current_file) {
+        parts.push(`Current file: ${indexHealth.current_file}`);
+    }
+    if (indexHealth.queued_files > 0) {
+        parts.push(`${indexHealth.queued_files} queued`);
+    }
+    return parts.join(' • ');
 }
 
 function useNoopChat() {
@@ -1437,18 +1473,25 @@ const AppLayoutInner: React.FC = () => {
                     {indexHealth && (
                         <span
                             className={[
-                                'inline-flex items-center gap-1 rounded-[calc(var(--panel-radius)*0.35)] px-1.5 py-0.5 font-semibold',
+                                'inline-flex max-w-[42vw] items-center gap-1 rounded-[calc(var(--panel-radius)*0.35)] border px-1.5 py-0.5 font-semibold',
                                 indexHealth.status === 'error'
-                                    ? 'text-(--state-danger)'
+                                    ? 'border-(--state-danger)/30 bg-[color-mix(in_srgb,var(--state-danger)_10%,transparent)] text-(--state-danger)'
                                     : indexHealth.status === 'stale' || indexHealth.status === 'partial'
-                                        ? 'text-(--accent-warning)'
+                                        ? 'border-(--accent-warning)/30 bg-[color-mix(in_srgb,var(--accent-warning)_10%,transparent)] text-(--accent-warning)'
                                         : indexHealth.status === 'checking' || indexHealth.status === 'indexing'
-                                            ? 'text-(--accent-ai) animate-pulse'
-                                            : 'text-(--accent-mention)',
+                                            ? 'border-(--accent-ai)/35 bg-[color-mix(in_srgb,var(--accent-ai)_12%,transparent)] text-(--accent-ai)'
+                                            : 'border-(--accent-mention)/20 bg-[color-mix(in_srgb,var(--accent-mention)_8%,transparent)] text-(--accent-mention)',
                             ].join(' ')}
-                            title={`${indexHealth.indexed_files}/${indexHealth.supported_files} files indexed, ${indexHealth.symbol_count} symbols`}
+                            title={formatIndexStatusTitle(indexHealth)}
                         >
-                            {indexHealth.message}
+                            {indexHealth.status === 'checking' || indexHealth.status === 'indexing' ? (
+                                <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+                            ) : (
+                                <DatabaseZap className="h-3 w-3 shrink-0" />
+                            )}
+                            <span className="truncate">
+                                {formatIndexStatusLabel(indexHealth)}
+                            </span>
                         </span>
                     )}
                     <span>{t('editor.encoding')}</span>
