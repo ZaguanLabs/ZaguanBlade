@@ -2,7 +2,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ToolCall } from '../types/chat';
-import { Zap, CheckCircle2, XCircle, Loader2, Copy, Check, ChevronRight, ChevronDown, RotateCcw, StopCircle } from 'lucide-react';
+import { Zap, CheckCircle2, XCircle, Loader2, Copy, Check, ChevronRight, ChevronDown, RotateCcw, StopCircle, FileSearch, ShieldAlert, GitBranch } from 'lucide-react';
 
 const COMPLETE_FADE_DELAY_MS = 250;
 const COMPLETE_VISUAL_HOLD_MS = 1100;
@@ -15,6 +15,252 @@ interface ToolCallDisplayProps {
     onUndo?: () => void;
     onOpenFile?: (path: string) => void;
 }
+
+type JsonRecord = Record<string, unknown>;
+
+const asRecord = (value: unknown): JsonRecord | null => {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : null;
+};
+
+const asArray = (value: unknown): unknown[] => {
+    return Array.isArray(value) ? value : [];
+};
+
+const asString = (value: unknown): string => {
+    return typeof value === 'string' ? value : '';
+};
+
+const asNumber = (value: unknown): number | null => {
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+};
+
+const parseJsonRecord = (value?: string): JsonRecord | null => {
+    if (!value) {
+        return null;
+    }
+    try {
+        return asRecord(JSON.parse(value));
+    } catch {
+        return null;
+    }
+};
+
+const badgeClassForTone = (tone: string) => {
+    switch (tone.toLowerCase()) {
+        case 'high':
+            return 'border-(--state-danger)/30 bg-[color-mix(in_srgb,var(--state-danger)_12%,transparent)] text-(--state-danger)';
+        case 'medium':
+            return 'border-(--accent-warning)/30 bg-[color-mix(in_srgb,var(--accent-warning)_12%,transparent)] text-(--accent-warning)';
+        case 'low':
+            return 'border-(--accent-mention)/30 bg-[color-mix(in_srgb,var(--accent-mention)_12%,transparent)] text-(--accent-mention)';
+        default:
+            return 'border-(--border-subtle) bg-(--bg-surface)/55 text-(--fg-secondary)';
+    }
+};
+
+const CompactBadge: React.FC<{ label: string; tone?: string }> = ({ label, tone = '' }) => (
+    <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] ${badgeClassForTone(tone)}`}>
+        {label}
+    </span>
+);
+
+const PathButton: React.FC<{ path: string; onOpenFile?: (path: string) => void; children?: React.ReactNode }> = ({ path, onOpenFile, children }) => (
+    <button
+        type="button"
+        onClick={() => onOpenFile?.(path)}
+        disabled={!onOpenFile}
+        className={`min-w-0 truncate text-left font-mono text-[10px] ${onOpenFile ? 'text-(--accent-ai) hover:text-(--fg-primary)' : 'text-(--fg-secondary)'}`}
+        title={path}
+    >
+        {children || path}
+    </button>
+);
+
+const SuggestedRangeLabel: React.FC<{ ranges: unknown[] }> = ({ ranges }) => {
+    const first = asRecord(ranges[0]);
+    const start = asNumber(first?.start_line);
+    const end = asNumber(first?.end_line);
+    if (!start || !end) {
+        return null;
+    }
+    return <span className="text-[9px] text-(--fg-tertiary)">L{start}-{end}</span>;
+};
+
+const FastContextResultCard: React.FC<{
+    payload: JsonRecord;
+    statusText: string;
+    statusIcon: React.ReactNode;
+    isVisuallyComplete: boolean;
+    onOpenFile?: (path: string) => void;
+}> = ({ payload, statusText, statusIcon, isVisuallyComplete, onOpenFile }) => {
+    const primaryFiles = asArray(payload.primary_files).map(asRecord).filter(Boolean) as JsonRecord[];
+    const relatedFiles = asArray(payload.related_files).map(asRecord).filter(Boolean) as JsonRecord[];
+    const enrichedFiles = asArray(payload.enriched_files).map(asRecord).filter(Boolean) as JsonRecord[];
+    const health = asRecord(payload.index_health);
+    const summary = asString(payload.summary);
+    const confidence = asString(payload.confidence);
+    const recommendedNextStep = asString(payload.recommended_next_step);
+    const healthStatus = asString(health?.status);
+
+    return (
+        <div className={`rounded-[calc(var(--panel-radius)*0.55)] border border-(--accent-ai)/20 bg-[color-mix(in_srgb,var(--accent-ai)_7%,transparent)] p-2.5 text-[11px] transition-opacity duration-1000 ease-out ${isVisuallyComplete ? 'opacity-70' : 'opacity-100'}`}>
+            <div className="flex items-start gap-2">
+                <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-(--accent-ai)/25 bg-(--bg-surface)/55">
+                    <FileSearch className="h-3.5 w-3.5 text-(--accent-ai)" />
+                </div>
+                <div className="min-w-0 flex-1 space-y-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-semibold text-(--fg-primary)">Fast Context</span>
+                        <CompactBadge label={confidence || 'unknown'} tone={confidence} />
+                        {healthStatus && <CompactBadge label={`index ${healthStatus}`} tone={healthStatus === 'Fresh' ? 'low' : 'medium'} />}
+                        <span className="ml-auto inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-(--fg-tertiary)">
+                            {statusIcon}
+                            {statusText}
+                        </span>
+                    </div>
+                    {summary && <div className="text-[11px] leading-4 text-(--fg-secondary)">{summary}</div>}
+                    <div className="grid grid-cols-3 gap-1.5">
+                        <div className="rounded border border-(--border-subtle) bg-(--bg-surface)/45 px-2 py-1">
+                            <div className="text-[9px] uppercase tracking-[0.12em] text-(--fg-tertiary)">Primary</div>
+                            <div className="text-sm font-semibold text-(--fg-primary)">{primaryFiles.length}</div>
+                        </div>
+                        <div className="rounded border border-(--border-subtle) bg-(--bg-surface)/45 px-2 py-1">
+                            <div className="text-[9px] uppercase tracking-[0.12em] text-(--fg-tertiary)">Related</div>
+                            <div className="text-sm font-semibold text-(--fg-primary)">{relatedFiles.length}</div>
+                        </div>
+                        <div className="rounded border border-(--border-subtle) bg-(--bg-surface)/45 px-2 py-1">
+                            <div className="text-[9px] uppercase tracking-[0.12em] text-(--fg-tertiary)">Enriched</div>
+                            <div className="text-sm font-semibold text-(--fg-primary)">{enrichedFiles.length}</div>
+                        </div>
+                    </div>
+                    {primaryFiles.length > 0 && (
+                        <div className="space-y-1">
+                            {primaryFiles.slice(0, 4).map((file, index) => {
+                                const path = asString(file.path);
+                                const score = asNumber(file.score);
+                                const ranges = asArray(file.suggested_ranges);
+                                if (!path) {
+                                    return null;
+                                }
+                                return (
+                                    <div key={`${path}-${index}`} className="flex min-w-0 items-center gap-2 rounded border border-(--border-subtle) bg-(--bg-app)/35 px-2 py-1">
+                                        <PathButton path={path} onOpenFile={onOpenFile} />
+                                        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                                            {score !== null && <span className="text-[9px] text-(--fg-tertiary)">{score}</span>}
+                                            <SuggestedRangeLabel ranges={ranges} />
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                    {recommendedNextStep && (
+                        <div className="rounded border border-(--accent-planning)/20 bg-[color-mix(in_srgb,var(--accent-planning)_7%,transparent)] px-2 py-1.5 text-[10px] leading-4 text-(--fg-secondary)">
+                            {recommendedNextStep}
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const EditImpactResultCard: React.FC<{
+    payload: JsonRecord;
+    statusText: string;
+    statusIcon: React.ReactNode;
+    isVisuallyComplete: boolean;
+    onOpenFile?: (path: string) => void;
+}> = ({ payload, statusText, statusIcon, isVisuallyComplete, onOpenFile }) => {
+    const impact = asRecord(payload.impact) || {};
+    const impactedFiles = asArray(impact.impacted_files).map(asRecord).filter(Boolean) as JsonRecord[];
+    const likelyTests = asArray(impact.likely_tests).map(asRecord).filter(Boolean) as JsonRecord[];
+    const risk = asString(impact.risk);
+    const confidence = asString(impact.confidence);
+    const referenceCount = asNumber(impact.reference_count) ?? 0;
+    const nextSteps = asArray(impact.recommended_next_steps).map(asString).filter(Boolean);
+
+    return (
+        <div className={`rounded-[calc(var(--panel-radius)*0.55)] border border-(--accent-warning)/24 bg-[color-mix(in_srgb,var(--accent-warning)_7%,transparent)] p-2.5 text-[11px] transition-opacity duration-1000 ease-out ${isVisuallyComplete ? 'opacity-70' : 'opacity-100'}`}>
+            <div className="flex items-start gap-2">
+                <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-(--accent-warning)/25 bg-(--bg-surface)/55">
+                    <ShieldAlert className="h-3.5 w-3.5 text-(--accent-warning)" />
+                </div>
+                <div className="min-w-0 flex-1 space-y-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-semibold text-(--fg-primary)">Edit Impact</span>
+                        <CompactBadge label={`risk ${risk || 'unknown'}`} tone={risk} />
+                        <CompactBadge label={`confidence ${confidence || 'unknown'}`} tone={confidence} />
+                        <span className="ml-auto inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-(--fg-tertiary)">
+                            {statusIcon}
+                            {statusText}
+                        </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-1.5">
+                        <div className="rounded border border-(--border-subtle) bg-(--bg-surface)/45 px-2 py-1">
+                            <div className="text-[9px] uppercase tracking-[0.12em] text-(--fg-tertiary)">Files</div>
+                            <div className="text-sm font-semibold text-(--fg-primary)">{impactedFiles.length}</div>
+                        </div>
+                        <div className="rounded border border-(--border-subtle) bg-(--bg-surface)/45 px-2 py-1">
+                            <div className="text-[9px] uppercase tracking-[0.12em] text-(--fg-tertiary)">Tests</div>
+                            <div className="text-sm font-semibold text-(--fg-primary)">{likelyTests.length}</div>
+                        </div>
+                        <div className="rounded border border-(--border-subtle) bg-(--bg-surface)/45 px-2 py-1">
+                            <div className="text-[9px] uppercase tracking-[0.12em] text-(--fg-tertiary)">Refs</div>
+                            <div className="text-sm font-semibold text-(--fg-primary)">{referenceCount}</div>
+                        </div>
+                    </div>
+                    {impactedFiles.length > 0 && (
+                        <div className="space-y-1">
+                            {impactedFiles.slice(0, 4).map((file, index) => {
+                                const path = asString(file.path);
+                                const score = asNumber(file.score);
+                                const reasons = asArray(file.reasons).map(asString).filter(Boolean);
+                                const ranges = asArray(file.suggested_ranges);
+                                if (!path) {
+                                    return null;
+                                }
+                                return (
+                                    <div key={`${path}-${index}`} className="space-y-0.5 rounded border border-(--border-subtle) bg-(--bg-app)/35 px-2 py-1">
+                                        <div className="flex min-w-0 items-center gap-2">
+                                            <PathButton path={path} onOpenFile={onOpenFile} />
+                                            <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                                                {score !== null && <span className="text-[9px] text-(--fg-tertiary)">{score}</span>}
+                                                <SuggestedRangeLabel ranges={ranges} />
+                                            </div>
+                                        </div>
+                                        {reasons[0] && <div className="truncate text-[9px] text-(--fg-tertiary)">{reasons[0]}</div>}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                    {likelyTests.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                            {likelyTests.slice(0, 4).map((test, index) => {
+                                const path = asString(test.path);
+                                if (!path) {
+                                    return null;
+                                }
+                                return (
+                                    <span key={`${path}-${index}`} className="inline-flex max-w-full items-center gap-1 rounded-full border border-(--accent-mention)/20 bg-[color-mix(in_srgb,var(--accent-mention)_7%,transparent)] px-1.5 py-0.5">
+                                        <GitBranch className="h-2.5 w-2.5 shrink-0 text-(--accent-mention)" />
+                                        <PathButton path={path} onOpenFile={onOpenFile}>{path.split(/[/\\]/).slice(-2).join('/')}</PathButton>
+                                    </span>
+                                );
+                            })}
+                        </div>
+                    )}
+                    {nextSteps[0] && (
+                        <div className="rounded border border-(--accent-planning)/20 bg-[color-mix(in_srgb,var(--accent-planning)_7%,transparent)] px-2 py-1.5 text-[10px] leading-4 text-(--fg-secondary)">
+                            {nextSteps[0]}
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+};
 
 export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     toolCall,
@@ -133,6 +379,8 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
             'edit_file': { key: 'toolCall.tools.editFile', fallback: 'Editing File' },
             'read_file': { key: 'toolCall.tools.readFile', fallback: 'Reading File' },
             'write_file': { key: 'toolCall.tools.writeFile', fallback: 'Writing File' },
+            'fast_context': { key: 'toolCall.tools.fastContext', fallback: 'Planning Context' },
+            'edit_impact': { key: 'toolCall.tools.editImpact', fallback: 'Analyzing Edit Impact' },
             'symbol_search': { key: 'toolCall.tools.symbolSearch', fallback: 'Searching Symbols' },
             'symbol_resolve': { key: 'toolCall.tools.symbolResolve', fallback: 'Resolving Symbol' },
             'symbol_outline': { key: 'toolCall.tools.symbolOutline', fallback: 'Reading Symbol Outline' },
@@ -264,6 +512,31 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
         searchQuery ? { label: t('toolCall.details.query'), value: searchQuery } : null,
         result ? { label: status === 'error' ? t('toolCall.details.error') : t('toolCall.details.result'), value: result } : null,
     ].filter((item): item is { label: string; value: string } => !!item);
+    const jsonResult = parseJsonRecord(result);
+
+    if (toolCall.function.name === 'fast_context' && jsonResult) {
+        return (
+            <FastContextResultCard
+                payload={jsonResult}
+                statusText={getStatusText()}
+                statusIcon={getStatusIcon()}
+                isVisuallyComplete={isVisuallyComplete}
+                onOpenFile={onOpenFile}
+            />
+        );
+    }
+
+    if (toolCall.function.name === 'edit_impact' && jsonResult) {
+        return (
+            <EditImpactResultCard
+                payload={jsonResult}
+                statusText={getStatusText()}
+                statusIcon={getStatusIcon()}
+                isVisuallyComplete={isVisuallyComplete}
+                onOpenFile={onOpenFile}
+            />
+        );
+    }
 
     // Compact inline display for most tools, expanded for run_command
     if (!isRunCommand) {
