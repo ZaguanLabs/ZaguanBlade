@@ -502,6 +502,8 @@ export function useChatV2(options: UseChatV2Options = {}) {
     const accumulatedContentRef = useRef<{ id: string; content: string }>({ id: '', content: '' });
     const accumulatedReasoningRef = useRef<{ id: string; content: string }>({ id: '', content: '' });
     const dispatchInFlightRef = useRef(false);
+    const loadingRef = useRef(state.loading);
+    const messageQueueRef = useRef<QueuedRequest[]>(state.messageQueue);
     const blockedQueuedRequestRef = useRef<QueuedRequest | null>(null);
     const pendingUpdatesRef = useRef<Map<string, {
         content: string;
@@ -656,6 +658,14 @@ export function useChatV2(options: UseChatV2Options = {}) {
     useEffect(() => {
         selectedModelIdRef.current = state.selectedModelId;
     }, [state.selectedModelId]);
+
+    useEffect(() => {
+        loadingRef.current = state.loading;
+    }, [state.loading]);
+
+    useEffect(() => {
+        messageQueueRef.current = state.messageQueue;
+    }, [state.messageQueue]);
 
     useEffect(() => {
         chatModeRef.current = state.chatMode;
@@ -1849,12 +1859,24 @@ export function useChatV2(options: UseChatV2Options = {}) {
 
     const sendMessage = useCallback((text: string, attachments?: ImageAttachment[], mentions?: ComposerMention[], mode?: ChatMode) => {
         const requestMode = mode ?? chatModeRef.current;
+        const request = { text, attachments, mentions, mode: requestMode };
 
-        // Always enqueue the request. The queue drain effect will add the user
-        // message to the UI and dispatch to the backend when ready.
+        if (!loadingRef.current && !dispatchInFlightRef.current && messageQueueRef.current.length === 0) {
+            const userMessage: ChatMessage = {
+                id: crypto.randomUUID(),
+                role: 'User',
+                content: request.text,
+                images: request.attachments,
+                mentions: request.mentions,
+            };
+            updateMessages((messages) => [...messages, userMessage]);
+            void dispatchToBackend(request.text, request.attachments, request.mentions, request.mode);
+            return;
+        }
+
         blockedQueuedRequestRef.current = null;
-        dispatch({ type: 'queue/enqueue', request: { text, attachments, mentions, mode: requestMode } });
-    }, []);
+        dispatch({ type: 'queue/enqueue', request });
+    }, [dispatchToBackend, updateMessages]);
 
     const setChatMode = useCallback((mode: ChatMode) => {
         dispatch({ type: 'mode/set', mode });
