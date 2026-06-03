@@ -164,6 +164,27 @@ fn maybe_prefix_gemma4_think_token(model_id: &str, prompt: String) -> String {
     }
 }
 
+fn zblade_workflow_guidance() -> &'static str {
+    r#"ZBlade workflow guidance:
+- For broad, ambiguous, multi-file, or unfamiliar tasks, call `fast_context` before reading many files or editing. Use its `confidence`, `index_health`, `suggested_ranges`, `enriched_files`, and `related_files` to plan the next reads.
+- If `fast_context` returns low confidence or stale/degraded index health, do a second targeted `symbol_search`, `semantic_anchor_search`, or read the suggested ranges before editing.
+- Before larger edits, refactors, public API changes, or changes to files with likely callers, call `edit_impact` on the target file or symbol. Inspect impacted files and likely tests before applying patches.
+- Prefer reading only the suggested ranges first. Expand to full files only when the ranges are insufficient.
+- After editing, use the likely tests and impacted files from `edit_impact` to choose focused validation."#
+}
+
+fn apply_zblade_workflow_guidance(prompt: Option<String>) -> String {
+    let guidance = zblade_workflow_guidance();
+    match prompt
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        Some(prompt) if prompt.contains("ZBlade workflow guidance:") => prompt,
+        Some(prompt) => format!("{}\n\n{}", prompt, guidance),
+        None => guidance.to_string(),
+    }
+}
+
 fn load_local_system_prompt(
     model_id: &str,
     workspace_root: &str,
@@ -187,13 +208,10 @@ fn load_local_system_prompt(
         })
         .filter(|prompt| !prompt.trim().is_empty());
 
-    if let Some(prompt) = rendered {
-        Some(maybe_prefix_gemma4_think_token(model_id, prompt))
-    } else if is_gemma4_model(model_id) {
-        Some(GEMMA4_THINK_TOKEN.to_string())
-    } else {
-        None
-    }
+    Some(maybe_prefix_gemma4_think_token(
+        model_id,
+        apply_zblade_workflow_guidance(rendered),
+    ))
 }
 
 fn gemma4_temperature(model_id: &str) -> Option<f32> {
@@ -3350,6 +3368,42 @@ mod tests {
             .get("content")
             .and_then(|value| value.as_str())
             .is_some_and(|content| content.contains("Nagomi"))));
+    }
+
+    #[test]
+    fn zblade_workflow_guidance_is_added_to_empty_prompt() {
+        let prompt = apply_zblade_workflow_guidance(None);
+
+        assert!(prompt.contains("fast_context"));
+        assert!(prompt.contains("edit_impact"));
+        assert!(prompt.contains("suggested_ranges"));
+    }
+
+    #[test]
+    fn zblade_workflow_guidance_preserves_existing_prompt_once() {
+        let prompt = apply_zblade_workflow_guidance(Some("Base prompt".to_string()));
+        let second = apply_zblade_workflow_guidance(Some(prompt.clone()));
+
+        assert!(prompt.starts_with("Base prompt"));
+        assert_eq!(second.matches("ZBlade workflow guidance:").count(), 1);
+    }
+
+    #[test]
+    fn local_system_prompt_falls_back_to_zblade_workflow_guidance() {
+        let prompt = load_local_system_prompt(
+            "test-model-without-local-prompt",
+            "/workspace/project",
+            "src/main.rs",
+            "linux",
+            "zsh",
+            "2026-06-03",
+            "10:00:00 +0200",
+        )
+        .expect("fallback prompt");
+
+        assert!(prompt.contains("fast_context"));
+        assert!(prompt.contains("edit_impact"));
+        assert!(!prompt.trim_start().starts_with(GEMMA4_THINK_TOKEN));
     }
 
     #[test]

@@ -161,6 +161,7 @@ fn render_with_line_numbers(content: &str) -> String {
 fn is_batch_read_only_tool(tool_name: &str) -> bool {
     match tool_name {
         "get_editor_state"
+        | "fast_context"
         | "symbol_search"
         | "semantic_anchor_search"
         | "symbol_resolve"
@@ -509,11 +510,11 @@ mod tests {
     use super::{
         apply_multi_patch_to_string, apply_patch_to_string, apply_patch_to_string_with_line_hint,
         apply_semantic_patch_with_service, apply_semantic_patch_writes_with_service, execute_tool,
-        grep_search, impact_confidence, impact_risk_level, parse_grep_timeout_ms,
-        parse_relationship_types_arg, related_test_files_for_paths, stage_semantic_patch_writes,
-        symbol_inventory_entries, symbol_inventory_summary, symbol_reference_resolution_json,
-        PatchHunk, SemanticPatchWrite, ToolResult, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS,
-        GREP_TIMEOUT_MIN_MS,
+        fast_context_tool, grep_search, impact_confidence, impact_risk_level,
+        is_batch_read_only_tool, parse_grep_timeout_ms, parse_relationship_types_arg,
+        related_test_files_for_paths, stage_semantic_patch_writes, symbol_inventory_entries,
+        symbol_inventory_summary, symbol_reference_resolution_json, PatchHunk, SemanticPatchWrite,
+        ToolResult, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS, GREP_TIMEOUT_MIN_MS,
     };
     use crate::semantic_patch::{InsertPosition, PatchOperation, PatchTarget, SemanticPatch};
     use crate::symbol_index::SymbolStore;
@@ -557,6 +558,36 @@ mod tests {
             apply_patch_to_string_with_line_hint(content, "TARGET", "REPLACED", Some(4), Some(4))
                 .unwrap();
         assert_eq!(updated, "A\nTARGET\nB\nREPLACED\nC\n");
+    }
+
+    #[test]
+    fn fast_context_is_batch_read_only() {
+        assert!(is_batch_read_only_tool("fast_context"));
+    }
+
+    #[test]
+    fn fast_context_tool_returns_context_pack_payload() {
+        let temp_dir = tempdir().unwrap();
+        fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+        fs::write(
+            temp_dir.path().join("src/service.ts"),
+            "export function buildContextPack() { return true; }",
+        )
+        .unwrap();
+        let mut args = HashMap::new();
+        args.insert("query".to_string(), serde_json::json!("build context pack"));
+        args.insert("include_memory".to_string(), serde_json::json!(false));
+        args.insert(
+            "include_project_index_min".to_string(),
+            serde_json::json!(false),
+        );
+
+        let result = fast_context_tool(temp_dir.path(), &args, None);
+        let payload: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+
+        assert!(result.success);
+        assert_eq!(payload["queries_used"][0], "build context pack");
+        assert!(payload.get("confidence").is_some());
     }
 
     #[test]
@@ -1253,6 +1284,7 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
 
         // Phase 1 IDE-specific tools
         "get_editor_state" => get_editor_state(editor_state),
+        "fast_context" => fast_context_tool(workspace_root, &args, editor_state),
         "symbol_search" => symbol_search_tool(workspace_root, &args, app_handle),
         "semantic_anchor_search" => semantic_anchor_search_tool(workspace_root, &args, app_handle),
         "symbol_resolve" => symbol_resolve_tool(workspace_root, &args, app_handle),
@@ -1974,6 +2006,45 @@ fn slice_by_char_window(
     let end = offset + window.chars().count();
     let has_more = end < total_chars;
     (window, end, total_chars, has_more)
+}
+
+fn fast_context_tool(
+    workspace_root: &Path,
+    args: &HashMap<String, serde_json::Value>,
+    editor_state: Option<&EditorState>,
+) -> ToolResult {
+    let Some(query) = get_str_arg(args, &["query", "task", "request"]) else {
+        return ToolResult::err("fast_context requires 'query'");
+    };
+    let active_file = get_str_arg(args, &["active_file", "activePath"])
+        .or_else(|| editor_state.and_then(|state| state.active_file.clone()));
+    let open_files = get_string_array_arg(args, &["open_files", "openFiles"])
+        .or_else(|| editor_state.map(|state| state.open_files.clone()))
+        .unwrap_or_default();
+    let request = crate::context_pack::ContextPackRequest {
+        id: get_str_arg(args, &["id"]).unwrap_or_else(|| "tool-fast-context".to_string()),
+        query,
+        queries: get_string_array_arg(args, &["queries"]).unwrap_or_default(),
+        intent: get_str_arg(args, &["intent"]),
+        max_results: args
+            .get("max_results")
+            .or_else(|| args.get("limit"))
+            .and_then(|value| value.as_u64())
+            .map(|value| value as usize),
+        include_tests: args.get("include_tests").and_then(|value| value.as_bool()),
+        include_docs: args.get("include_docs").and_then(|value| value.as_bool()),
+        include_memory: args.get("include_memory").and_then(|value| value.as_bool()),
+        include_project_index_min: args
+            .get("include_project_index_min")
+            .and_then(|value| value.as_bool()),
+    };
+    let payload = crate::context_pack::build_context_pack(
+        workspace_root,
+        active_file.as_deref(),
+        &open_files,
+        &request,
+    );
+    ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
 }
 
 fn get_editor_state(editor_state: Option<&EditorState>) -> ToolResult {

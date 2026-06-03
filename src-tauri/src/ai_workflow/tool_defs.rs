@@ -39,6 +39,30 @@ pub fn get_tool_definitions() -> Vec<Value> {
         }),
         serde_json::json!({
             "type": "function",
+            "name": "fast_context",
+            "function": {
+                "name": "fast_context",
+                "description": "Plan broad or uncertain code tasks before reading many files. Returns ranked primary files, enriched symbol and semantic-anchor metadata, related files, index health, confidence, suggested read ranges, and next steps.",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "User task or investigation query" },
+                        "queries": { "type": "array", "items": { "type": "string" }, "description": "Optional additional search queries" },
+                        "intent": { "type": "string", "description": "Optional task intent such as bug_fix, feature, refactor, or docs" },
+                        "max_results": { "type": "integer", "description": "Optional max primary files" },
+                        "include_tests": { "type": "boolean", "description": "Whether to include likely tests" },
+                        "include_docs": { "type": "boolean", "description": "Whether to include related docs" },
+                        "include_memory": { "type": "boolean", "description": "Whether to include local project memories" },
+                        "include_project_index_min": { "type": "boolean", "description": "Whether to include project_index_min when available" }
+                    },
+                    "required": ["query"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
             "name": "symbol_search",
             "function": {
                 "name": "symbol_search",
