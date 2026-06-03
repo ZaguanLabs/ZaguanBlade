@@ -2518,19 +2518,20 @@ fn symbol_search_tool<R: tauri::Runtime>(
         Err(err) => return ToolResult::err(err),
     };
     let started = Instant::now();
-    let results = match service.search_symbols_filtered(
+    let outcome = match service.search_symbols_filtered_self_healing(
         &query,
         file_filter.as_deref(),
         symbol_types,
         limit,
     ) {
-        Ok(results) => results,
+        Ok(outcome) => outcome,
         Err(err) => return ToolResult::err(err.to_string()),
     };
-    let result_count = results.len();
+    let result_count = outcome.results.len();
+    let healing = outcome.healing;
     let payload = serde_json::json!({
         "query": query,
-        "results": results.into_iter().map(|result| {
+        "results": outcome.results.into_iter().map(|result| {
             let mut value = symbol_to_json(&result.symbol);
             value["score"] = serde_json::json!(result.score);
             value
@@ -2541,6 +2542,7 @@ fn symbol_search_tool<R: tauri::Runtime>(
             "timing_ms": started.elapsed().as_millis(),
             "source": "language_service",
             "index_health": service.index_health_snapshot(),
+            "search_health": healing,
             "truncated": false
         }
     });

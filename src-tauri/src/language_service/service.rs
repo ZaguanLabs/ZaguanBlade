@@ -90,6 +90,36 @@ pub struct IndexReconciliationReport {
     pub duration_ms: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolLiteralMatch {
+    pub file_path: String,
+    pub line: u32,
+    pub preview: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolSearchHealingReport {
+    pub enabled: bool,
+    pub triggered: bool,
+    pub reason: Option<String>,
+    pub confidence: String,
+    pub initial_result_count: usize,
+    pub initial_top_score: Option<f32>,
+    pub reran_after_reindex: bool,
+    pub reindexed_files: Vec<String>,
+    pub removed_files: Vec<String>,
+    pub literal_matches: Vec<SymbolLiteralMatch>,
+    pub diagnostics: Vec<String>,
+    pub health_before: Option<IndexHealthSnapshot>,
+    pub health_after: Option<IndexHealthSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolSearchOutcome {
+    pub results: Vec<SearchResult>,
+    pub healing: SymbolSearchHealingReport,
+}
+
 /// Cached file data
 #[derive(Clone)]
 struct CachedFile {
@@ -1191,6 +1221,116 @@ impl LanguageService {
         Ok(results)
     }
 
+    pub fn search_symbols_filtered_self_healing(
+        &self,
+        query: &str,
+        file_path: Option<&str>,
+        symbol_types: Option<Vec<SymbolType>>,
+        limit: usize,
+    ) -> Result<SymbolSearchOutcome, LanguageError> {
+        let initial_results =
+            self.search_symbols_filtered(query, file_path, symbol_types.clone(), limit)?;
+        let initial_results = self.filter_visible_search_results(initial_results);
+        let initial_top_score = initial_results.first().map(|result| result.score);
+        let mut healing = SymbolSearchHealingReport {
+            enabled: file_path.is_none() && !query.trim().is_empty(),
+            triggered: false,
+            reason: None,
+            confidence: search_confidence(&initial_results),
+            initial_result_count: initial_results.len(),
+            initial_top_score,
+            reran_after_reindex: false,
+            reindexed_files: Vec::new(),
+            removed_files: Vec::new(),
+            literal_matches: Vec::new(),
+            diagnostics: Vec::new(),
+            health_before: None,
+            health_after: None,
+        };
+
+        if !healing.enabled {
+            return Ok(SymbolSearchOutcome {
+                results: initial_results,
+                healing,
+            });
+        }
+
+        let should_heal = initial_results.is_empty() || initial_top_score.unwrap_or(0.0) < 0.55;
+        if !should_heal {
+            return Ok(SymbolSearchOutcome {
+                results: initial_results,
+                healing,
+            });
+        }
+
+        healing.triggered = true;
+        healing.reason = Some(if initial_results.is_empty() {
+            "empty_results".to_string()
+        } else {
+            "low_confidence_results".to_string()
+        });
+
+        let health_before = self.audit_index_health()?;
+        self.set_index_health(health_before.clone());
+        healing.health_before = Some(health_before.clone());
+        if health_before.status != IndexHealthStatus::Fresh {
+            healing.diagnostics.push(format!(
+                "Symbol index health is {:?}: {} stale, {} missing, {} orphaned",
+                health_before.status,
+                health_before.stale_files,
+                health_before.missing_files,
+                health_before.orphaned_files
+            ));
+        }
+
+        let repair_candidates = self.literal_repair_candidates(query, 16)?;
+        for repair_path in repair_candidates {
+            match self.index_file(&repair_path) {
+                Ok(_) => healing.reindexed_files.push(repair_path),
+                Err(error) => healing
+                    .diagnostics
+                    .push(format!("Failed to reindex {}: {}", repair_path, error)),
+            }
+        }
+
+        if !healing.reindexed_files.is_empty() {
+            healing.reran_after_reindex = true;
+            let rerun_results = self.search_symbols_filtered(query, None, symbol_types, limit)?;
+            let rerun_results = self.filter_visible_search_results(rerun_results);
+            healing.confidence = search_confidence(&rerun_results);
+            let health_after = self.audit_index_health()?;
+            self.set_index_health(health_after.clone());
+            healing.health_after = Some(health_after);
+            if !rerun_results.is_empty() {
+                return Ok(SymbolSearchOutcome {
+                    results: rerun_results,
+                    healing,
+                });
+            }
+        } else {
+            let health_after = self.audit_index_health()?;
+            self.set_index_health(health_after.clone());
+            healing.health_after = Some(health_after);
+        }
+
+        healing.literal_matches = self.literal_symbol_search_fallback(query, 12)?;
+        if initial_results.is_empty() && healing.literal_matches.is_empty() {
+            healing
+                .diagnostics
+                .push("No indexed symbols or exact literal fallback matches found".to_string());
+        } else if initial_results.is_empty() {
+            healing.diagnostics.push(format!(
+                "Found {} exact literal fallback matches outside symbol names",
+                healing.literal_matches.len()
+            ));
+        }
+
+        Ok(SymbolSearchOutcome {
+            results: initial_results,
+            healing,
+        })
+    }
+
     /// Get symbol at position
     pub fn get_symbol_at(
         &self,
@@ -1598,6 +1738,82 @@ impl LanguageService {
         }
 
         Ok(())
+    }
+
+    fn literal_repair_candidates(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, LanguageError> {
+        let query = query.trim().to_lowercase();
+        if query.len() < 2 || limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let indexed_files = self.symbol_store.list_all_indexed_files()?;
+        let indexed_map = indexed_files
+            .iter()
+            .map(|record| (record.file_path.clone(), record.clone()))
+            .collect::<HashMap<_, _>>();
+        let mut candidates = Vec::new();
+
+        for file_path in self.supported_language_files(".") {
+            if candidates.len() >= limit {
+                break;
+            }
+            let resolved = self.resolve_path(&file_path);
+            let Ok(content) = std::fs::read_to_string(&resolved) else {
+                continue;
+            };
+            if !content.to_lowercase().contains(&query) {
+                continue;
+            }
+
+            let needs_reindex = match indexed_map.get(&file_path) {
+                Some(record) => compute_hash(&content) != record.file_hash,
+                None => true,
+            };
+            if needs_reindex {
+                candidates.push(file_path);
+            }
+        }
+
+        Ok(candidates)
+    }
+
+    fn literal_symbol_search_fallback(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SymbolLiteralMatch>, LanguageError> {
+        let query = query.trim().to_lowercase();
+        if query.len() < 2 || limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut matches = Vec::new();
+        for file_path in self.supported_language_files(".") {
+            if matches.len() >= limit {
+                break;
+            }
+            let Ok(content) = std::fs::read_to_string(self.resolve_path(&file_path)) else {
+                continue;
+            };
+            for (line_index, line) in content.lines().enumerate() {
+                if line.to_lowercase().contains(&query) {
+                    matches.push(SymbolLiteralMatch {
+                        file_path: file_path.clone(),
+                        line: line_index as u32,
+                        preview: line.trim().chars().take(240).collect(),
+                    });
+                    if matches.len() >= limit {
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok(matches)
     }
 
     fn reference_matches_symbol(
@@ -2871,6 +3087,19 @@ pub struct IndexStats {
 }
 
 /// Compute a simple hash of content for change detection
+fn search_confidence(results: &[SearchResult]) -> String {
+    let top_score = results.first().map(|result| result.score).unwrap_or(0.0);
+    if results.is_empty() {
+        "empty".to_string()
+    } else if top_score >= 0.9 {
+        "high".to_string()
+    } else if top_score >= 0.55 {
+        "medium".to_string()
+    } else {
+        "low".to_string()
+    }
+}
+
 fn compute_hash(content: &str) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -3246,6 +3475,59 @@ mod tests {
         assert_eq!(health.missing_files, 1);
         assert_eq!(health.stale_files, 1);
         assert_eq!(health.queued_files, 2);
+    }
+
+    #[test]
+    fn self_healing_search_reindexes_literal_matching_stale_file() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("search.ts"),
+            "export function oldSymbol() {}",
+        )
+        .unwrap();
+        service.index_file("search.ts").unwrap();
+        fs::write(
+            temp_dir.path().join("search.ts"),
+            "export function GitCommitMessage() {}",
+        )
+        .unwrap();
+
+        let outcome = service
+            .search_symbols_filtered_self_healing("GitCommitMessage", None, None, 10)
+            .unwrap();
+
+        assert!(outcome.healing.triggered);
+        assert!(outcome.healing.reran_after_reindex);
+        assert_eq!(outcome.healing.reindexed_files, vec!["search.ts"]);
+        assert!(outcome
+            .results
+            .iter()
+            .any(|result| result.symbol.name == "GitCommitMessage"));
+    }
+
+    #[test]
+    fn self_healing_search_returns_literal_fallback_matches() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("config.ts"),
+            "export const endpoint = \"BladeProtocolGateway\";",
+        )
+        .unwrap();
+
+        let outcome = service
+            .search_symbols_filtered_self_healing("BladeProtocolGateway", None, None, 10)
+            .unwrap();
+
+        assert!(outcome.healing.triggered);
+        assert!(outcome.results.is_empty());
+        assert!(outcome
+            .healing
+            .literal_matches
+            .iter()
+            .any(|fallback| fallback.file_path == "config.ts"
+                && fallback.preview.contains("BladeProtocolGateway")));
     }
 
     #[test]

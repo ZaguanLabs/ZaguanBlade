@@ -42,7 +42,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "symbol_search",
             "function": {
                 "name": "symbol_search",
-                "description": "Search indexed symbols by name or qualified name and return compact structural matches",
+                "description": "Search indexed symbols by name or qualified name. Broad searches self-heal low-confidence or empty results with bounded freshness checks, targeted reindexing, exact literal fallback, and search_health metadata.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
