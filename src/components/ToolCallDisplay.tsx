@@ -479,31 +479,13 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
 
     // For search tools, extract the search query
     const searchQuery = (parsedArgs.pattern as string || parsedArgs.query as string || parsedArgs.regex as string || parsedArgs.Query as string || '');
-    const filenameOnlyTools = new Set([
-        'read_file',
-        'read_file_range',
-        'write_file',
-        'apply_patch',
-        'edit_file',
-        'create_file',
-        'delete_file',
-        'list_files',
-        'get_workspace_structure',
-        'view_file',
-        'view_file_outline',
-        'write_to_file',
-        'replace_file_content',
-        'multi_replace_file_content'
-    ]);
     const getLastPathSegments = (value: string, count: number) => {
         const parts = value.split(/[/\\]/).filter(Boolean);
         return parts.slice(-count).join('/');
     };
     const baseDisplayPathText = toolCall.function.name === 'list_directory'
         ? getLastPathSegments(pathText, 2) || pathText
-        : filenameOnlyTools.has(toolCall.function.name)
-            ? pathText.split(/[/\\]/).pop() || pathText
-            : pathText;
+        : pathText;
     const displayPathText = toolCall.function.name === 'read_file_range' && baseDisplayPathText
         ? `${baseDisplayPathText}${rangeSuffix}`
         : baseDisplayPathText;
