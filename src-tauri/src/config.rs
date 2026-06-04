@@ -353,6 +353,12 @@ fn resolve_prompt_path_for_model(
 
 pub fn read_prompt_for_model(model_name: &str) -> Result<Option<String>, String> {
     let Some(path) = resolve_prompt_path_for_model(&global_prompts_dir(), model_name)? else {
+        eprintln!(
+            "[CONFIG] No local AI prompt found for model '{}' in {}. Tried stems: {}",
+            model_name,
+            global_prompts_dir().display(),
+            prompt_model_name_candidates(model_name).join(", ")
+        );
         return Ok(None);
     };
     if !path.exists() {
