@@ -4051,10 +4051,6 @@ fn prepare_tool_write_tracking<R: tauri::Runtime>(
         });
     }
 
-    if !abs_path.exists() {
-        return None;
-    }
-
     let history_service = match state.history_service() {
         Ok(service) => service,
         Err(error) => {
@@ -4067,7 +4063,13 @@ fn prepare_tool_write_tracking<R: tauri::Runtime>(
         }
     };
 
-    match history_service.create_snapshot(abs_path, Some(change_id.to_string())) {
+    let snapshot = if abs_path.exists() {
+        history_service.create_snapshot(abs_path, Some(change_id.to_string()))
+    } else {
+        history_service.create_missing_file_snapshot(abs_path, Some(change_id.to_string()))
+    };
+
+    match snapshot {
         Ok(entry) => {
             use tauri::Emitter;
             let snapshot_id = entry.id.clone();

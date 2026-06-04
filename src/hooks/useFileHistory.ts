@@ -7,6 +7,7 @@ export interface HistoryEntry {
     file_path: string;
     timestamp: number;
     snapshot_path: string;
+    file_existed?: boolean;
 }
 
 export function useFileHistory(filePath: string | null) {

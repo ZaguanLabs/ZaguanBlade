@@ -5,6 +5,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+fn default_file_existed() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryEntry {
     pub id: String,
@@ -12,6 +16,8 @@ pub struct HistoryEntry {
     pub file_path: PathBuf,
     pub timestamp: u64,
     pub snapshot_path: PathBuf,
+    #[serde(default = "default_file_existed")]
+    pub file_existed: bool,
 }
 
 pub struct HistoryService {
@@ -60,6 +66,26 @@ impl HistoryService {
         file_path: &Path,
         group_id: Option<String>,
     ) -> Result<HistoryEntry, String> {
+        let content = fs::read(file_path).map_err(|e| e.to_string())?;
+        self.create_snapshot_from_bytes(file_path, group_id, &content, true)
+    }
+
+    pub fn create_missing_file_snapshot(
+        &self,
+        file_path: &Path,
+        group_id: Option<String>,
+    ) -> Result<HistoryEntry, String> {
+        let content: &[u8] = b"";
+        self.create_snapshot_from_bytes(file_path, group_id, content, false)
+    }
+
+    fn create_snapshot_from_bytes(
+        &self,
+        file_path: &Path,
+        group_id: Option<String>,
+        content: &[u8],
+        file_existed: bool,
+    ) -> Result<HistoryEntry, String> {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -69,8 +95,7 @@ impl HistoryService {
         let snapshot_filename = format!("{}_{}", timestamp, id);
         let snapshot_path = self.history_root.join(&snapshot_filename);
 
-        // Copy the current file content to the snapshot path
-        fs::copy(file_path, &snapshot_path).map_err(|e| e.to_string())?;
+        fs::write(&snapshot_path, content).map_err(|e| e.to_string())?;
 
         let entry = HistoryEntry {
             id,
@@ -78,6 +103,7 @@ impl HistoryService {
             file_path: file_path.to_path_buf(),
             timestamp,
             snapshot_path,
+            file_existed,
         };
 
         {
@@ -106,7 +132,11 @@ impl HistoryService {
         };
 
         if let Some(entry) = entry {
-            fs::copy(&entry.snapshot_path, &entry.file_path).map_err(|e| e.to_string())?;
+            if entry.file_existed {
+                fs::copy(&entry.snapshot_path, &entry.file_path).map_err(|e| e.to_string())?;
+            } else if entry.file_path.exists() {
+                fs::remove_file(&entry.file_path).map_err(|e| e.to_string())?;
+            }
             Ok(())
         } else {
             Err("Snapshot not found".to_string())
@@ -180,10 +210,16 @@ impl HistoryService {
 
         let mut reverted_files = Vec::new();
 
-        // Revert files
         for (path, entry) in earliest_by_file {
-            match fs::copy(&entry.snapshot_path, &path) {
-                Ok(_) => reverted_files.push(path.to_string_lossy().into_owned()),
+            let result = if entry.file_existed {
+                fs::copy(&entry.snapshot_path, &path).map(|_| ())
+            } else if path.exists() {
+                fs::remove_file(&path)
+            } else {
+                Ok(())
+            };
+            match result {
+                Ok(()) => reverted_files.push(path.to_string_lossy().into_owned()),
                 Err(e) => eprintln!("Failed to revert {}: {}", path.display(), e),
             }
         }
@@ -194,5 +230,30 @@ impl HistoryService {
     pub fn get_history(&self, file_path: &Path) -> Vec<HistoryEntry> {
         let index = self.index.lock().unwrap();
         index.get(file_path).cloned().unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HistoryService;
+    use tempfile::tempdir;
+
+    #[test]
+    fn missing_file_snapshot_reverts_by_deleting_created_file() {
+        let app_data_dir = tempdir().expect("app data dir");
+        let workspace = tempdir().expect("workspace");
+        let file_path = workspace.path().join("new-file.txt");
+        let history = HistoryService::new(app_data_dir.path());
+
+        let entry = history
+            .create_missing_file_snapshot(&file_path, Some("change-1".to_string()))
+            .expect("create missing file snapshot");
+        std::fs::write(&file_path, "created\n").expect("write created file");
+
+        history
+            .revert_to(&entry.id)
+            .expect("revert missing file snapshot");
+
+        assert!(!file_path.exists());
     }
 }

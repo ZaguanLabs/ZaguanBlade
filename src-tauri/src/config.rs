@@ -167,12 +167,30 @@ fn prompt_model_name_candidates(model_name: &str) -> Vec<String> {
         if name.is_empty() {
             continue;
         }
-        push_prompt_candidate(&mut candidates, name);
+        push_prompt_candidate_variants(&mut candidates, name);
         if let Some((base, _tag)) = name.split_once(':') {
-            push_prompt_candidate(&mut candidates, base);
+            push_prompt_candidate_variants(&mut candidates, base);
         }
     }
     candidates
+}
+
+fn push_prompt_candidate_variants(candidates: &mut Vec<String>, name: &str) {
+    push_prompt_candidate(candidates, name);
+    let slash_normalized = name.replace(['/', '\\'], ".");
+    push_prompt_candidate(candidates, &slash_normalized);
+    let filename_normalized = normalize_prompt_filename_stem(name);
+    push_prompt_candidate(candidates, &filename_normalized);
+}
+
+fn normalize_prompt_filename_stem(name: &str) -> String {
+    name.trim()
+        .chars()
+        .map(|ch| match ch {
+            '/' | '\\' | ':' => '.',
+            _ => ch,
+        })
+        .collect()
 }
 
 fn push_prompt_candidate(candidates: &mut Vec<String>, name: &str) {
@@ -186,6 +204,79 @@ fn push_prompt_candidate(candidates: &mut Vec<String>, name: &str) {
             candidates.push(candidate);
         }
     }
+}
+
+fn prompt_model_family_keys(model_name: &str) -> Vec<String> {
+    let trimmed = model_name.trim();
+    let stripped = trimmed
+        .strip_prefix("ollama/")
+        .or_else(|| trimmed.strip_prefix("openai-compat/"))
+        .unwrap_or(trimmed);
+
+    let mut keys = Vec::new();
+    for name in [trimmed, stripped] {
+        if name.is_empty() {
+            continue;
+        }
+        push_prompt_family_key(&mut keys, name);
+        push_prompt_family_key(&mut keys, &normalize_prompt_filename_stem(name));
+    }
+    keys
+}
+
+fn push_prompt_family_key(keys: &mut Vec<String>, name: &str) {
+    let Some(key) = prompt_family_key(name) else {
+        return;
+    };
+    if !keys.iter().any(|existing| existing == &key) {
+        keys.push(key);
+    }
+}
+
+fn prompt_family_key(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let stripped = trimmed
+        .strip_prefix("ollama/")
+        .or_else(|| trimmed.strip_prefix("openai-compat/"))
+        .unwrap_or(trimmed);
+    let repo_leaf = stripped.rsplit('/').next().unwrap_or(stripped);
+    let base = repo_leaf
+        .split_once(':')
+        .map(|(base, _)| base)
+        .unwrap_or(repo_leaf)
+        .trim_matches('.');
+    let family = strip_prompt_family_suffix(base);
+    if family.is_empty() {
+        None
+    } else {
+        Some(family.to_ascii_lowercase())
+    }
+}
+
+fn strip_prompt_family_suffix(base: &str) -> &str {
+    let mut current = base.trim_end_matches(['.', '-', '_']);
+    while let Some((prefix, suffix)) = current.rsplit_once(['.', '-', '_']) {
+        if !is_prompt_family_suffix(suffix) {
+            break;
+        }
+        current = prefix.trim_end_matches(['.', '-', '_']);
+        if current.is_empty() {
+            return base;
+        }
+    }
+    current
+}
+
+fn is_prompt_family_suffix(segment: &str) -> bool {
+    let lower = segment.to_ascii_lowercase();
+    if matches!(lower.as_str(), "cloud") {
+        return true;
+    }
+    let number = lower.strip_suffix('b').unwrap_or(&lower);
+    !number.is_empty() && number.chars().all(|ch| ch.is_ascii_digit())
 }
 
 fn resolve_prompt_path_for_model(
@@ -219,6 +310,41 @@ fn resolve_prompt_path_for_model(
             .any(|candidate| candidate == &file_name.to_ascii_lowercase())
         {
             return Ok(Some(entry.path()));
+        }
+    }
+
+    let family_keys = prompt_model_family_keys(model_name);
+    if family_keys.is_empty() {
+        return Ok(None);
+    }
+
+    let Ok(entries) = fs::read_dir(prompts_dir) else {
+        return Ok(None);
+    };
+    let mut entries = entries
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let file_name = entry.file_name();
+            let file_name = file_name.to_str()?.to_string();
+            Some((file_name, entry.path()))
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|(file_name, _)| file_name.to_ascii_lowercase());
+
+    for (file_name, path) in entries {
+        let lower_file_name = file_name.to_ascii_lowercase();
+        if !lower_file_name.ends_with(".md") {
+            continue;
+        }
+        let stem = &file_name[..file_name.len() - 3];
+        let Some(file_family_key) = prompt_family_key(stem) else {
+            continue;
+        };
+        if family_keys
+            .iter()
+            .any(|family_key| family_key == &file_family_key)
+        {
+            return Ok(Some(path));
         }
     }
 
@@ -373,6 +499,58 @@ mod tests {
         fs::write(&prompt_path, "Base Laguna prompt").expect("write prompt");
 
         let resolved = resolve_prompt_path_for_model(dir.path(), "ollama/laguna-xs.2:Q4_K_M")
+            .expect("resolve prompt")
+            .expect("prompt should resolve");
+
+        assert_eq!(resolved, prompt_path);
+    }
+
+    #[test]
+    fn prompt_candidates_include_filename_safe_huggingface_names() {
+        let candidates = prompt_model_name_candidates("hf.co/unsloth/gemma-4-12b-it-GGUF:Q4_K_M");
+
+        assert!(candidates.contains(&"hf.co.unsloth.gemma-4-12b-it-GGUF.Q4_K_M".to_string()));
+        assert!(candidates.contains(&"hf.co.unsloth.gemma-4-12b-it-gguf.q4_k_m".to_string()));
+    }
+
+    #[test]
+    fn resolve_prompt_path_matches_filename_safe_huggingface_name() {
+        let dir = tempdir().expect("tempdir");
+        let prompt_path = dir
+            .path()
+            .join("hf.co.unsloth.gemma-4-12b-it-GGUF.Q4_K_M.md");
+        fs::write(&prompt_path, "Gemma prompt").expect("write prompt");
+
+        let resolved =
+            resolve_prompt_path_for_model(dir.path(), "hf.co/unsloth/gemma-4-12b-it-GGUF:Q4_K_M")
+                .expect("resolve prompt")
+                .expect("prompt should resolve");
+
+        assert_eq!(resolved, prompt_path);
+    }
+
+    #[test]
+    fn resolve_prompt_path_falls_back_to_model_family_sibling() {
+        let dir = tempdir().expect("tempdir");
+        let prompt_path = dir.path().join("gemma4:26b.md");
+        fs::write(&prompt_path, "Gemma family prompt").expect("write prompt");
+
+        fs::write(dir.path().join("other-model.md"), "Other prompt").expect("write other prompt");
+
+        let resolved = resolve_prompt_path_for_model(dir.path(), "ollama/gemma4:12b")
+            .expect("resolve prompt")
+            .expect("prompt should resolve");
+
+        assert_eq!(resolved, prompt_path);
+    }
+
+    #[test]
+    fn resolve_prompt_path_falls_back_across_decimal_family_weights() {
+        let dir = tempdir().expect("tempdir");
+        let prompt_path = dir.path().join("qwen3.6.md");
+        fs::write(&prompt_path, "Qwen family prompt").expect("write prompt");
+
+        let resolved = resolve_prompt_path_for_model(dir.path(), "ollama/qwen3.7:14b")
             .expect("resolve prompt")
             .expect("prompt should resolve");
 

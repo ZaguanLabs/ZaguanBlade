@@ -563,11 +563,18 @@ impl AiWorkflow {
                             use tauri::Manager;
                             let state = app.state::<crate::app_state::AppState>();
                             let history_service = state.history_service().ok();
-                            if full_path.exists() {
-                                match history_service.as_ref().map(|service| {
-                                    service.create_snapshot(&full_path, Some(call.id.clone()))
-                                }) {
-                                    Some(Ok(entry)) => {
+                            if let Some(history_service) = history_service.as_ref() {
+                                let snapshot = if full_path.exists() {
+                                    history_service
+                                        .create_snapshot(&full_path, Some(call.id.clone()))
+                                } else {
+                                    history_service.create_missing_file_snapshot(
+                                        &full_path,
+                                        Some(call.id.clone()),
+                                    )
+                                };
+                                match snapshot {
+                                    Ok(entry) => {
                                         println!("[HISTORY] Snapshot created for {}", change.path);
                                         snapshot_id = Some(entry.id.clone());
                                         let _ = app.emit(
@@ -575,19 +582,18 @@ impl AiWorkflow {
                                             crate::events::HistoryEntryAddedPayload { entry },
                                         );
                                     }
-                                    Some(Err(e)) => {
+                                    Err(e) => {
                                         eprintln!(
                                             "[HISTORY] Failed to create snapshot for {}: {}",
                                             change.path, e
                                         );
                                     }
-                                    None => {
-                                        eprintln!(
-                                            "[HISTORY] Failed to initialize history service for {}",
-                                            change.path
-                                        );
-                                    }
                                 }
+                            } else {
+                                eprintln!(
+                                    "[HISTORY] Failed to initialize history service for {}",
+                                    change.path
+                                );
                             }
                         }
 
