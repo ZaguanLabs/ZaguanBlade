@@ -406,8 +406,9 @@ const ActivityGroupDisplay: React.FC<{
     onUndoTool?: (toolCallId: string) => void;
     onStopCommand?: (callId: string) => void;
     onOpenFile?: (path: string) => void;
+    workspaceRoot?: string | null;
     registerActivityTarget?: (targetKey: string, element: HTMLDivElement | null) => void;
-}> = ({ items, pendingActions, pendingApprovalRequest, onApproveCommand, onSkipCommand, onApproveApprovalRequest, onDenyApprovalRequest, onApproveSingleCommand, onSkipSingleCommand, onUndoTool, onStopCommand, onOpenFile, registerActivityTarget }) => {
+}> = ({ items, pendingActions, pendingApprovalRequest, onApproveCommand, onSkipCommand, onApproveApprovalRequest, onDenyApprovalRequest, onApproveSingleCommand, onSkipSingleCommand, onUndoTool, onStopCommand, onOpenFile, workspaceRoot, registerActivityTarget }) => {
     return (
         <div className="mb-2 space-y-1.5">
             {items.map((item) => {
@@ -465,6 +466,7 @@ const ActivityGroupDisplay: React.FC<{
                                         : undefined
                                 }
                                 onOpenFile={onOpenFile}
+                                workspaceRoot={workspaceRoot}
                             />
                         </div>
                     );
@@ -500,6 +502,7 @@ interface ChatMessageProps {
     onUndoTool?: (toolCallId: string) => void;
     onStopCommand?: (callId: string) => void;
     onOpenFile?: (path: string) => void;
+    workspaceRoot?: string | null;
     onEditMessage?: () => void;
     registerActivityTarget?: (targetKey: string, element: HTMLDivElement | null) => void;
     showInlineWorkLog?: boolean;
@@ -522,6 +525,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     onUndoTool,
     onStopCommand,
     onOpenFile,
+    workspaceRoot,
     onEditMessage,
     registerActivityTarget,
     showInlineWorkLog = true,
@@ -885,6 +889,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                             onUndoTool={onUndoTool}
                                             onStopCommand={onStopCommand}
                                             onOpenFile={onOpenFile}
+                                            workspaceRoot={workspaceRoot}
                                             registerActivityTarget={registerActivityTarget}
                                         />
                                     );
@@ -1048,6 +1053,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                                                     : undefined
                                                             }
                                                             onOpenFile={onOpenFile}
+                                                            workspaceRoot={workspaceRoot}
                                                         />
                                                     </div>
                                                 );
@@ -1108,6 +1114,7 @@ export const ChatMessage = React.memo(ChatMessageComponent, (prevProps, nextProp
     if (prevProps.isActive !== nextProps.isActive) return false;
     if (prevProps.showInlineWorkLog !== nextProps.showInlineWorkLog) return false;
     if (prevProps.workDetailsVisible !== nextProps.workDetailsVisible) return false;
+    if (prevProps.workspaceRoot !== nextProps.workspaceRoot) return false;
     
     // Message content comparison - the most important check
     const prevMsg = prevProps.message;

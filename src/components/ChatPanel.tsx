@@ -109,6 +109,7 @@ interface ChatPanelProps {
     onNewConversation: () => void;
     onUndoTool: (toolCallId: string) => void;
     onOpenFile: (path: string) => void;
+    workspaceRoot?: string | null;
     uncommittedChanges: UncommittedChange[];
     onAcceptAllChanges: () => void;
     onRejectAllChanges: () => void;
@@ -242,6 +243,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     onNewConversation,
     onUndoTool,
     onOpenFile,
+    workspaceRoot,
     uncommittedChanges,
     onAcceptAllChanges,
     onRejectAllChanges,
@@ -954,6 +956,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                                     onUndoTool={onUndoTool}
                                     onStopCommand={handleStopCommand}
                                     onOpenFile={onOpenFile}
+                                    workspaceRoot={workspaceRoot}
                                     onEditMessage={row.message.id === lastUserMessageId ? handleEditLastUserMessage : undefined}
                                     registerActivityTarget={registerActivityTarget}
                                 />
@@ -981,6 +984,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                                     onUndoTool={onUndoTool}
                                     onStopCommand={handleStopCommand}
                                     onOpenFile={onOpenFile}
+                                    workspaceRoot={workspaceRoot}
                                     onEditMessage={row.message.id === lastUserMessageId ? handleEditLastUserMessage : undefined}
                                     registerActivityTarget={registerActivityTarget}
                                 />

@@ -1379,6 +1379,7 @@ const AppLayoutInner: React.FC = () => {
                                     onNewConversation={chat.newConversation}
                                     onUndoTool={chat.undoTool}
                                     onOpenFile={handleOpenChatFile}
+                                    workspaceRoot={workspacePath}
                                     uncommittedChanges={uncommittedChanges}
                                     onAcceptAllChanges={acceptAllChanges}
                                     onRejectAllChanges={rejectAllChanges}
@@ -1412,6 +1413,7 @@ const AppLayoutInner: React.FC = () => {
                                     onNewConversation={chat.newConversation}
                                     onUndoTool={chat.undoTool}
                                     onOpenFile={handleOpenChatFile}
+                                    workspaceRoot={workspacePath}
                                     uncommittedChanges={uncommittedChanges}
                                     onAcceptAllChanges={acceptAllChanges}
                                     onRejectAllChanges={rejectAllChanges}

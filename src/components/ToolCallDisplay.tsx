@@ -14,6 +14,7 @@ interface ToolCallDisplayProps {
     onStopCommand?: () => void;
     onUndo?: () => void;
     onOpenFile?: (path: string) => void;
+    workspaceRoot?: string | null;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -43,6 +44,29 @@ const parseJsonRecord = (value?: string): JsonRecord | null => {
     } catch {
         return null;
     }
+};
+
+const toWorkspaceRelativePath = (path: string, workspaceRoot?: string | null): string => {
+    if (!path || !workspaceRoot) {
+        return path;
+    }
+
+    const normalizedPath = path.replace(/\\/g, '/');
+    const normalizedRoot = workspaceRoot.replace(/\\/g, '/').replace(/\/+$/, '');
+    if (!normalizedRoot) {
+        return path;
+    }
+
+    if (normalizedPath === normalizedRoot) {
+        return '';
+    }
+
+    const rootWithSlash = `${normalizedRoot}/`;
+    if (normalizedPath.startsWith(rootWithSlash)) {
+        return normalizedPath.slice(rootWithSlash.length);
+    }
+
+    return path;
 };
 
 const badgeClassForTone = (tone: string) => {
@@ -268,7 +292,8 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     result,
     onStopCommand,
     onUndo,
-    onOpenFile
+    onOpenFile,
+    workspaceRoot
 }) => {
     const { t } = useTranslation();
     const [copied, setCopied] = useState(false);
@@ -483,14 +508,15 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
         const parts = value.split(/[/\\]/).filter(Boolean);
         return parts.slice(-count).join('/');
     };
+    const relativePathText = toWorkspaceRelativePath(pathText, workspaceRoot);
     const baseDisplayPathText = toolCall.function.name === 'list_directory'
-        ? getLastPathSegments(pathText, 2) || pathText
-        : pathText;
+        ? getLastPathSegments(relativePathText, 2) || relativePathText
+        : relativePathText;
     const displayPathText = toolCall.function.name === 'read_file_range' && baseDisplayPathText
         ? `${baseDisplayPathText}${rangeSuffix}`
         : baseDisplayPathText;
     const detailItems = [
-        pathText ? { label: t('toolCall.details.path'), value: pathText } : null,
+        relativePathText ? { label: t('toolCall.details.path'), value: relativePathText } : null,
         searchQuery ? { label: t('toolCall.details.query'), value: searchQuery } : null,
         result ? { label: status === 'error' ? t('toolCall.details.error') : t('toolCall.details.result'), value: result } : null,
     ].filter((item): item is { label: string; value: string } => !!item);

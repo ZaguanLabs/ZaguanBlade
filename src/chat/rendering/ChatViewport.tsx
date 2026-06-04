@@ -38,6 +38,7 @@ interface ChatViewportProps {
     onUndoTool?: (toolCallId: string) => void;
     onStopCommand?: (toolCallId: string) => void;
     onOpenFile?: (path: string) => void;
+    workspaceRoot?: string | null;
     onEditLastUserMessage?: () => Promise<QueuedRequest | null>;
 }
 
@@ -58,6 +59,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
     onUndoTool,
     onStopCommand,
     onOpenFile,
+    workspaceRoot,
     onEditLastUserMessage,
 }) => {
     const { t } = useTranslation();
@@ -189,6 +191,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                                 onUndoTool={onUndoTool}
                                 onStopCommand={onStopCommand}
                                 onOpenFile={onOpenFile}
+                                workspaceRoot={workspaceRoot}
                                 onEditMessage={row.message.id === lastUserMessageId ? onEditLastUserMessage : undefined}
                                 showInlineWorkLog={false}
                                 workDetailsVisible={true}
