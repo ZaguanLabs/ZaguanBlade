@@ -182,42 +182,66 @@ export const GitPanel: React.FC<GitPanelProps> = ({
         return code.includes('D') || code.includes('R');
     };
 
+    const getPathParts = (path: string) => {
+        const normalizedPath = path.replace(/\\/g, '/');
+        const segments = normalizedPath.split('/').filter(Boolean);
+        const fileName = segments.pop() || normalizedPath;
+        return {
+            fileName,
+            directory: segments.join('/'),
+        };
+    };
+
     // File row component for compact display
-    const FileRow = ({ file, isStaged }: { file: GitFileStatus; isStaged: boolean }) => (
-        <div className="group flex items-center gap-1 py-0.5 px-1 rounded-[calc(var(--panel-radius)*0.4)] hover:bg-(--bg-surface-hover) text-[11px]">
-            <span className={`font-mono w-5 shrink-0 ${getStatusColor(file)}`}>
-                {file.statusCode}
-            </span>
-            <span
-                className={`truncate flex-1 cursor-pointer ${file.untracked ? 'text-(--accent-mention)/80' : 'text-(--fg-primary)'} ${shouldStrikeFileName(file) ? 'line-through decoration-(--state-danger) text-(--fg-tertiary)' : ''}`}
-                onClick={() => toggleDiff(file)}
-                title={file.path}
-            >
-                {file.displayPath || file.path.split('/').pop() || file.path}
-            </span>
-            <div className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 transition-opacity">
-                {isStaged ? (
-                    <button
-                        className="p-0.5 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface) text-(--fg-tertiary) hover:text-(--fg-primary)"
-                        onClick={() => runAction(`unstage-${file.path}`, () => onUnstageFile(file.path))}
-                        disabled={busyAction === `unstage-${file.path}`}
-                        title={t('git.unstage')}
-                    >
-                        <Minus className="w-3 h-3" />
-                    </button>
-                ) : (
-                    <button
-                        className="p-0.5 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface) text-(--fg-tertiary) hover:text-(--fg-primary)"
-                        onClick={() => runAction(`stage-${file.path}`, () => onStageFile(file.path))}
-                        disabled={busyAction === `stage-${file.path}`}
-                        title={t('git.stage')}
-                    >
-                        <Plus className="w-3 h-3" />
-                    </button>
-                )}
+    const FileRow = ({ file, isStaged }: { file: GitFileStatus; isStaged: boolean }) => {
+        const { fileName, directory } = getPathParts(file.path);
+        const isStruck = shouldStrikeFileName(file);
+        const fullDisplayPath = file.displayPath || file.path;
+
+        return (
+            <div className="group flex items-center gap-1 py-0.5 px-1 rounded-[calc(var(--panel-radius)*0.4)] hover:bg-(--bg-surface-hover) text-[11px]">
+                <span className={`font-mono w-5 shrink-0 ${getStatusColor(file)}`}>
+                    {file.statusCode}
+                </span>
+                <button
+                    type="button"
+                    className="flex min-w-0 flex-1 cursor-pointer items-baseline gap-1.5 text-left"
+                    onClick={() => toggleDiff(file)}
+                    title={fullDisplayPath}
+                >
+                    <span className={`min-w-0 truncate ${file.untracked ? 'text-(--accent-mention)/80' : 'text-(--fg-primary)'} ${isStruck ? 'line-through decoration-(--state-danger) text-(--fg-tertiary)' : ''}`}>
+                        {fileName}
+                    </span>
+                    {directory && (
+                        <span className="min-w-0 flex-1 truncate font-light text-(--fg-tertiary)">
+                            {directory}
+                        </span>
+                    )}
+                </button>
+                <div className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 transition-opacity">
+                    {isStaged ? (
+                        <button
+                            className="p-0.5 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface) text-(--fg-tertiary) hover:text-(--fg-primary)"
+                            onClick={() => runAction(`unstage-${file.path}`, () => onUnstageFile(file.path))}
+                            disabled={busyAction === `unstage-${file.path}`}
+                            title={t('git.unstage')}
+                        >
+                            <Minus className="w-3 h-3" />
+                        </button>
+                    ) : (
+                        <button
+                            className="p-0.5 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface) text-(--fg-tertiary) hover:text-(--fg-primary)"
+                            onClick={() => runAction(`stage-${file.path}`, () => onStageFile(file.path))}
+                            disabled={busyAction === `stage-${file.path}`}
+                            title={t('git.stage')}
+                        >
+                            <Plus className="w-3 h-3" />
+                        </button>
+                    )}
+                </div>
             </div>
-        </div>
-    );
+        );
+    };
 
     return (
         <div className="h-full bg-(--bg-panel) border-r border-(--border-subtle) flex flex-col text-(--fg-secondary)">
