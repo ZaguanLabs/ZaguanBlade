@@ -429,7 +429,7 @@ impl WsConnectionManager {
         message: String,
         images: Option<Vec<crate::protocol::ChatImage>>,
         workspace: Option<WorkspaceInfo>,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         let client_lock = self.client.lock().await;
         let client = client_lock.as_ref().ok_or("Not connected")?;
         client
@@ -453,7 +453,7 @@ impl WsConnectionManager {
         parallel_tool_calls: Option<bool>,
         tag: Option<String>,
         tags: Option<Vec<String>>,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         let client_lock = self.client.lock().await;
         let client = client_lock.as_ref().ok_or("Not connected")?;
         client
@@ -504,10 +504,14 @@ impl WsConnectionManager {
             .await
     }
 
-    pub async fn send_stop_generation(&self, session_id: String) -> Result<(), String> {
+    pub async fn send_cancel_request(
+        &self,
+        request_id: Option<String>,
+        session_id: Option<String>,
+    ) -> Result<(), String> {
         let client_lock = self.client.lock().await;
         let client = client_lock.as_ref().ok_or("Not connected")?;
-        client.send_stop_generation(session_id).await
+        client.send_cancel_request(request_id, session_id).await
     }
 
     /// Send conversation context

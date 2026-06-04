@@ -220,38 +220,53 @@ pub fn stop_generation(state: State<'_, AppState>, app_handle: tauri::AppHandle)
     let stopped = mgr.begin_stop();
     drop(mgr);
 
-    if let Some((ws_client, session_id_hint)) = stop_signal_target {
+    if let Some((ws_client, request_id_hint, session_id_hint)) = stop_signal_target {
         let app_for_stop = app_handle.clone();
         tauri::async_runtime::spawn(async move {
-            let session_id = if session_id_hint.is_some() {
-                session_id_hint
-            } else {
-                let deadline = std::time::Instant::now() + std::time::Duration::from_millis(750);
-                let mut resolved = None;
-                while std::time::Instant::now() < deadline {
-                    if let Some(session_id) = ws_client.get_session_id().await {
-                        resolved = Some(session_id);
-                        break;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-                }
-                resolved
-            };
+            let cancel_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let mut request_id = request_id_hint;
+            let mut session_id = session_id_hint;
+            let mut sent_cancel = false;
+            let mut last_error: Option<String> = None;
 
-            if let Some(session_id) = session_id {
-                if let Err(error) = ws_client.send_stop_generation_and_close(session_id).await {
-                    eprintln!(
-                        "[STOP] Failed to send stop_generation to zcoderd: {}",
-                        error
-                    );
-                    ws_client.close().await;
+            while std::time::Instant::now() < cancel_deadline {
+                if request_id.is_none() {
+                    request_id = ws_client.get_active_request_id().await;
                 }
+                if session_id.is_none() {
+                    session_id = ws_client.get_session_id().await;
+                }
+
+                if request_id.is_some() || session_id.is_some() {
+                    match ws_client
+                        .send_cancel_request(request_id.clone(), session_id.clone())
+                        .await
+                    {
+                        Ok(()) => {
+                            sent_cancel = true;
+                            break;
+                        }
+                        Err(error) => {
+                            last_error = Some(error);
+                        }
+                    }
+                }
+
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+
+            if sent_cancel {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             } else {
                 eprintln!(
-                    "[STOP] No session ID available for remote stop; closing WebSocket connection"
+                    "[STOP] Failed to send cancel_request to zcoderd: {}",
+                    last_error.unwrap_or_else(|| {
+                        "no request or session ID available for remote cancel".to_string()
+                    })
                 );
-                ws_client.close().await;
             }
+
+            ws_client.close().await;
 
             let state = app_for_stop.state::<AppState>();
             let mut mgr = state.chat_manager.lock().unwrap();
@@ -347,4 +362,3 @@ pub fn get_chat_status(state: State<'_, AppState>) -> bool {
 pub async fn is_local_model_active(state: State<'_, AppState>) -> Result<bool, String> {
     Ok(state.is_local_model_active().await)
 }
-

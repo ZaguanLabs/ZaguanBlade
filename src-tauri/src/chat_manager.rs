@@ -417,6 +417,7 @@ pub struct ChatManager {
     stop_requested: bool,
     pub last_finish_reason: Option<String>,
     composite_tools_enabled: bool,
+    active_request_id: Option<String>,
     ws_conversation_messages: Arc<Mutex<Vec<serde_json::Value>>>,
 }
 
@@ -461,6 +462,7 @@ impl ChatManager {
             stop_requested: false,
             last_finish_reason: None,
             composite_tools_enabled: true,
+            active_request_id: None,
             ws_conversation_messages: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -741,6 +743,7 @@ impl ChatManager {
         self.stop_requested = false;
         self.last_finish_reason = None;
         self.composite_tools_enabled = composite_tools_enabled;
+        self.active_request_id = None;
 
         let selected = resolve_model_selection(models, selected_model);
         self.update_stream_profile(selected.provider, &selected.model_id_for_request);
@@ -880,6 +883,8 @@ impl ChatManager {
         self.ws_client = Some(ws_client.clone());
         let session_id = self.session_id.clone();
         let model_id = model_id.to_string();
+        let chat_request_id = BladeWsClient::new_chat_request_id();
+        self.active_request_id = Some(chat_request_id.clone());
 
         // eprintln!("[CHAT MGR] Starting stream with session_id: {:?}", session_id);
 
@@ -926,7 +931,8 @@ impl ChatManager {
 
                                 // Send chat message with storage mode (RFC-002)
                                 if let Err(e) = ws_client
-                                    .send_message_with_storage_mode(
+                                    .send_message_with_storage_mode_and_id(
+                                        chat_request_id.clone(),
                                         session_id.clone(),
                                         model_id.clone(),
                                         user_message.clone(),
@@ -1092,6 +1098,16 @@ impl ChatManager {
                                 let _ = tx.send(ChatEvent::Done { finish_reason });
                                 // Don't break - keep connection alive for tool results
                                 // The connection will close when the user sends a new message
+                            }
+                            crate::blade_ws_client::BladeWsEvent::RequestCancelled {
+                                request_id: _,
+                                session_id: _,
+                                reason: _,
+                            } => {
+                                let _ = tx.send(ChatEvent::Done {
+                                    finish_reason: "stop".to_string(),
+                                });
+                                break;
                             }
                             crate::blade_ws_client::BladeWsEvent::Error {
                                 error_type,
@@ -3240,8 +3256,14 @@ impl ChatManager {
         self.stop_requested
     }
 
-    pub fn stop_signal_target(&self) -> Option<(Arc<BladeWsClient>, Option<String>)> {
-        Some((self.ws_client.as_ref()?.clone(), self.session_id.clone()))
+    pub fn stop_signal_target(
+        &self,
+    ) -> Option<(Arc<BladeWsClient>, Option<String>, Option<String>)> {
+        Some((
+            self.ws_client.as_ref()?.clone(),
+            self.active_request_id.clone(),
+            self.session_id.clone(),
+        ))
     }
 
     /// Check if a stream can be stopped

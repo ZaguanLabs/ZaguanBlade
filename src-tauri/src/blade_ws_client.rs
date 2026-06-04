@@ -33,6 +33,7 @@ pub struct BladeWsClient {
 struct WsConnection {
     tx: mpsc::UnboundedSender<WsMessage>,
     session_id: Option<String>,
+    active_request_id: Option<String>,
 }
 
 enum WsMessage {
@@ -112,6 +113,11 @@ pub enum BladeWsEvent {
     ChatDone {
         finish_reason: String,
         recoverable: Option<bool>,
+    },
+    RequestCancelled {
+        request_id: String,
+        session_id: Option<String>,
+        reason: Option<String>,
     },
     Progress {
         message: String,
@@ -311,9 +317,11 @@ struct ApprovalResponsePayload {
 }
 
 #[derive(Debug, Serialize)]
-struct StopGenerationPayload {
-    session_id: String,
-    api_key: String,
+struct CancelRequestPayload {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
     reason: String,
 }
 
@@ -441,6 +449,7 @@ impl BladeWsClient {
             *conn = Some(WsConnection {
                 tx: msg_tx.clone(),
                 session_id: None,
+                active_request_id: None,
             });
         }
 
@@ -635,12 +644,16 @@ impl BladeWsClient {
         message: String,
         images: Option<Vec<crate::protocol::ChatImage>>,
         workspace: Option<WorkspaceInfo>,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         self.send_message_with_storage_mode(
             session_id, model_id, message, images, workspace, None, None, None, None, None, None,
             None, None,
         )
         .await
+    }
+
+    pub fn new_chat_request_id() -> String {
+        format!("chat-{}", uuid::Uuid::new_v4())
     }
 
     /// Send a chat message with explicit storage mode (RFC-002)
@@ -659,9 +672,47 @@ impl BladeWsClient {
         parallel_tool_calls: Option<bool>,
         tag: Option<String>,
         tags: Option<Vec<String>>,
+    ) -> Result<String, String> {
+        let request_id = Self::new_chat_request_id();
+        self.send_message_with_storage_mode_and_id(
+            request_id.clone(),
+            session_id,
+            model_id,
+            message,
+            images,
+            workspace,
+            storage_mode,
+            mode,
+            local_conversation_state,
+            tools,
+            tool_choice,
+            parallel_tool_calls,
+            tag,
+            tags,
+        )
+        .await?;
+        Ok(request_id)
+    }
+
+    pub async fn send_message_with_storage_mode_and_id(
+        &self,
+        request_id: String,
+        session_id: Option<String>,
+        model_id: String,
+        message: String,
+        images: Option<Vec<crate::protocol::ChatImage>>,
+        workspace: Option<WorkspaceInfo>,
+        storage_mode: Option<String>,
+        mode: Option<String>,
+        local_conversation_state: Option<LocalConversationState>,
+        tools: Option<Vec<Value>>,
+        tool_choice: Option<Value>,
+        parallel_tool_calls: Option<bool>,
+        tag: Option<String>,
+        tags: Option<Vec<String>>,
     ) -> Result<(), String> {
-        let conn = self.connection.lock().await;
-        let conn = conn.as_ref().ok_or("Not connected")?;
+        let mut conn = self.connection.lock().await;
+        let conn = conn.as_mut().ok_or("Not connected")?;
 
         let planning_mode = mode
             .as_deref()
@@ -686,7 +737,7 @@ impl BladeWsClient {
         };
 
         let msg = WsBaseMessage {
-            id: format!("chat-{}", chrono::Utc::now().timestamp_millis()),
+            id: request_id.clone(),
             msg_type: "chat_request".to_string(),
             timestamp: chrono::Utc::now().timestamp_millis(),
             payload: Some(serde_json::to_value(payload).unwrap()),
@@ -698,6 +749,7 @@ impl BladeWsClient {
         conn.tx
             .send(WsMessage::Send(json))
             .map_err(|e| format!("Failed to send message: {}", e))?;
+        conn.active_request_id = Some(request_id);
 
         Ok(())
     }
@@ -777,19 +829,23 @@ impl BladeWsClient {
         Ok(())
     }
 
-    pub async fn send_stop_generation(&self, session_id: String) -> Result<(), String> {
+    pub async fn send_cancel_request(
+        &self,
+        request_id: Option<String>,
+        session_id: Option<String>,
+    ) -> Result<(), String> {
         let conn = self.connection.lock().await;
         let conn = conn.as_ref().ok_or("Not connected")?;
 
-        let payload = StopGenerationPayload {
+        let payload = CancelRequestPayload {
+            request_id,
             session_id,
-            api_key: self.api_key.clone(),
-            reason: "user_requested_stop".to_string(),
+            reason: "user_stop".to_string(),
         };
 
         let msg = WsBaseMessage {
-            id: format!("stop-generation-{}", chrono::Utc::now().timestamp_millis()),
-            msg_type: "stop_generation".to_string(),
+            id: format!("cancel-{}", uuid::Uuid::new_v4()),
+            msg_type: "cancel_request".to_string(),
             timestamp: chrono::Utc::now().timestamp_millis(),
             payload: Some(serde_json::to_value(payload).unwrap()),
         };
@@ -799,37 +855,7 @@ impl BladeWsClient {
 
         conn.tx
             .send(WsMessage::Send(json))
-            .map_err(|e| format!("Failed to send stop generation request: {}", e))?;
-
-        Ok(())
-    }
-
-    pub async fn send_stop_generation_and_close(&self, session_id: String) -> Result<(), String> {
-        let conn = self.connection.lock().await;
-        let conn = conn.as_ref().ok_or("Not connected")?;
-
-        let payload = StopGenerationPayload {
-            session_id,
-            api_key: self.api_key.clone(),
-            reason: "user_requested_stop".to_string(),
-        };
-
-        let msg = WsBaseMessage {
-            id: format!("stop-generation-{}", chrono::Utc::now().timestamp_millis()),
-            msg_type: "stop_generation".to_string(),
-            timestamp: chrono::Utc::now().timestamp_millis(),
-            payload: Some(serde_json::to_value(payload).unwrap()),
-        };
-
-        let json =
-            serde_json::to_string(&msg).map_err(|e| format!("JSON serialization error: {}", e))?;
-
-        conn.tx
-            .send(WsMessage::Send(json))
-            .map_err(|e| format!("Failed to send stop generation request: {}", e))?;
-        conn.tx
-            .send(WsMessage::Close)
-            .map_err(|e| format!("Failed to close stopped generation connection: {}", e))?;
+            .map_err(|e| format!("Failed to send cancel request: {}", e))?;
 
         Ok(())
     }
@@ -1000,6 +1026,11 @@ impl BladeWsClient {
     pub async fn get_session_id(&self) -> Option<String> {
         let conn = self.connection.lock().await;
         conn.as_ref().and_then(|c| c.session_id.clone())
+    }
+
+    pub async fn get_active_request_id(&self) -> Option<String> {
+        let conn = self.connection.lock().await;
+        conn.as_ref().and_then(|c| c.active_request_id.clone())
     }
 
     /// Close the WebSocket connection
@@ -1279,6 +1310,30 @@ impl BladeWsClient {
                 let _ = tx.send(BladeWsEvent::ChatDone {
                     finish_reason,
                     recoverable,
+                });
+            }
+            "request_cancelled" => {
+                let request_id = msg
+                    .payload
+                    .get("request_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&correlation_id)
+                    .to_string();
+                let session_id = msg
+                    .payload
+                    .get("session_id")
+                    .and_then(|v| v.as_str())
+                    .map(|v| v.to_string());
+                let reason = msg
+                    .payload
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .map(|v| v.to_string());
+
+                let _ = tx.send(BladeWsEvent::RequestCancelled {
+                    request_id,
+                    session_id,
+                    reason,
                 });
             }
             "error" => {
@@ -1670,6 +1725,50 @@ mod tests {
             }
             other => panic!("unexpected event: {:?}", other),
         }
+    }
+
+    #[test]
+    fn parses_request_cancelled_acknowledgement() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let message = r#"{
+            "type": "request_cancelled",
+            "id": "chat-123",
+            "payload": {
+                "request_id": "chat-123",
+                "session_id": "sess-456",
+                "reason": "user_stop"
+            }
+        }"#;
+
+        BladeWsClient::parse_message(message, &tx).unwrap();
+
+        match rx.try_recv().unwrap() {
+            BladeWsEvent::RequestCancelled {
+                request_id,
+                session_id,
+                reason,
+            } => {
+                assert_eq!(request_id, "chat-123");
+                assert_eq!(session_id.as_deref(), Some("sess-456"));
+                assert_eq!(reason.as_deref(), Some("user_stop"));
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn cancel_request_payload_includes_request_and_session_ids() {
+        let payload = CancelRequestPayload {
+            request_id: Some("chat-123".to_string()),
+            session_id: Some("sess-456".to_string()),
+            reason: "user_stop".to_string(),
+        };
+
+        let value = serde_json::to_value(payload).unwrap();
+
+        assert_eq!(value["request_id"], "chat-123");
+        assert_eq!(value["session_id"], "sess-456");
+        assert_eq!(value["reason"], "user_stop");
     }
 
     #[test]
