@@ -545,7 +545,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
                 effects: setDiffState.of(null)
             });
         }
-    }, [unifiedDiff]);
+    }, [content, unifiedDiff]);
 
 
     // Handle line highlighting when highlightLines prop changes

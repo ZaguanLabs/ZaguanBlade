@@ -1353,9 +1353,9 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
         // Legacy tools (kept for compatibility)
         "read_file" => read_file_with_app(workspace_root, &args, app_handle),
         "write_file" | "write_file_validated" | "create_file" | "write_to_file" => {
-            write_file(workspace_root, &args)
+            write_file(workspace_root, &args, app_handle)
         }
-        "edit_file" => edit_file(workspace_root, &args),
+        "edit_file" => edit_file(workspace_root, &args, app_handle),
         "grep_search" | "rg" => grep_search(workspace_root, &args, grep_timeout_enforced),
         "codebase_search" => codebase_search(workspace_root, &args),
         "list_directory" | "list_dir" => list_directory(workspace_root, &args),
@@ -2189,7 +2189,11 @@ fn read_file_range(workspace_root: &Path, args: &HashMap<String, serde_json::Val
     ))
 }
 
-fn write_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {
+fn write_file<R: tauri::Runtime>(
+    workspace_root: &Path,
+    args: &HashMap<String, serde_json::Value>,
+    app_handle: Option<&tauri::AppHandle<R>>,
+) -> ToolResult {
     let Some(path) = get_str_arg(
         args,
         &[
@@ -2214,6 +2218,10 @@ fn write_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) 
         Ok(p) => p,
         Err(e) => return ToolResult::err(e),
     };
+    let original_content = fs::read_to_string(&abs).unwrap_or_default();
+    let change_id = get_str_arg(args, &["id", "change_id", "tool_call_id"])
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let tracking = prepare_tool_write_tracking(app_handle, &change_id, &abs, &original_content);
 
     if let Some(parent) = abs.parent() {
         if let Err(e) = fs::create_dir_all(parent) {
@@ -2222,16 +2230,24 @@ fn write_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) 
     }
 
     match fs::write(&abs, content.as_bytes()) {
-        Ok(()) => ToolResult::ok(format!(
-            "wrote {} bytes to {}",
-            content.len(),
-            abs.display()
-        )),
+        Ok(()) => {
+            track_tool_write(app_handle, &abs, tracking);
+            sync_after_tool_write(app_handle, &change_id, &abs, &path);
+            ToolResult::ok(format!(
+                "wrote {} bytes to {}",
+                content.len(),
+                abs.display()
+            ))
+        }
         Err(e) => ToolResult::err(format!("write failed: {}", e)),
     }
 }
 
-fn edit_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {
+fn edit_file<R: tauri::Runtime>(
+    workspace_root: &Path,
+    args: &HashMap<String, serde_json::Value>,
+    app_handle: Option<&tauri::AppHandle<R>>,
+) -> ToolResult {
     let Some(path) = get_str_arg(
         args,
         &[
@@ -2266,9 +2282,16 @@ fn edit_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -
         Ok(updated) => updated,
         Err(e) => return ToolResult::err(e),
     };
+    let change_id = get_str_arg(args, &["id", "change_id", "tool_call_id"])
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let tracking = prepare_tool_write_tracking(app_handle, &change_id, &abs, &content);
 
     match fs::write(&abs, updated.as_bytes()) {
-        Ok(()) => ToolResult::ok(format!("Edited {}", path)),
+        Ok(()) => {
+            track_tool_write(app_handle, &abs, tracking);
+            sync_after_tool_write(app_handle, &change_id, &abs, &path);
+            ToolResult::ok(format!("Edited {}", path))
+        }
         Err(e) => ToolResult::err(format!("write failed: {}", e)),
     }
 }
