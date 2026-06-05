@@ -633,14 +633,23 @@ const SENTINEL_ECHO_PREFIX_PATTERNS: [&str; 8] = [
     " echo '",
     " printf '",
 ];
+const RUN_COMMAND_WRAPPER_PREFIXES: [&str; 4] = [
+    "printf '\\n",
+    "( printf '\\n",
+    "printf '\\\\n",
+    "( printf '\\\\n",
+];
 
 fn has_recent_sentinel_echo_prefix(input: &str) -> bool {
-    SENTINEL_ECHO_PREFIX_PATTERNS.iter().any(|pattern| {
-        input
-            .rfind(pattern)
-            .map(|idx| input[idx..].chars().count() <= 128)
-            .unwrap_or(false)
-    })
+    SENTINEL_ECHO_PREFIX_PATTERNS
+        .iter()
+        .chain(RUN_COMMAND_WRAPPER_PREFIXES.iter())
+        .any(|pattern| {
+            input
+                .rfind(pattern)
+                .map(|idx| input[idx..].chars().count() <= 128)
+                .unwrap_or(false)
+        })
 }
 
 fn has_recent_sentinel_echo_prefix_fragment(input: &str) -> bool {
@@ -658,29 +667,32 @@ fn has_recent_sentinel_echo_prefix_fragment(input: &str) -> bool {
         return false;
     }
 
-    SENTINEL_ECHO_PREFIX_PATTERNS.iter().any(|pattern| {
-        let pattern = pattern.trim_start();
-        let recent_len = recent_trimmed.chars().count();
-        let pattern_len = pattern.chars().count();
+    SENTINEL_ECHO_PREFIX_PATTERNS
+        .iter()
+        .chain(RUN_COMMAND_WRAPPER_PREFIXES.iter())
+        .any(|pattern| {
+            let pattern = pattern.trim_start();
+            let recent_len = recent_trimmed.chars().count();
+            let pattern_len = pattern.chars().count();
 
-        if recent_len < MIN_SENTINEL_ECHO_FRAGMENT_LEN
-            || pattern_len < MIN_SENTINEL_ECHO_FRAGMENT_LEN
-        {
-            return false;
-        }
+            if recent_len < MIN_SENTINEL_ECHO_FRAGMENT_LEN
+                || pattern_len < MIN_SENTINEL_ECHO_FRAGMENT_LEN
+            {
+                return false;
+            }
 
-        (MIN_SENTINEL_ECHO_FRAGMENT_LEN..=pattern_len.min(recent_len)).any(|suffix_len| {
-            let suffix: String = recent_trimmed
-                .chars()
-                .rev()
-                .take(suffix_len)
-                .collect::<Vec<char>>()
-                .into_iter()
-                .rev()
-                .collect();
-            !suffix.trim().is_empty() && pattern.starts_with(&suffix)
+            (MIN_SENTINEL_ECHO_FRAGMENT_LEN..=pattern_len.min(recent_len)).any(|suffix_len| {
+                let suffix: String = recent_trimmed
+                    .chars()
+                    .rev()
+                    .take(suffix_len)
+                    .collect::<Vec<char>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                !suffix.trim().is_empty() && pattern.starts_with(&suffix)
+            })
         })
-    })
 }
 
 fn ensure_zsh_zdotdir() -> Option<String> {
@@ -846,6 +858,10 @@ mod tests {
     fn detects_partial_wrapper_echo_prefix() {
         assert!(has_recent_sentinel_echo_prefix_fragment("( echo '"));
         assert!(has_recent_sentinel_echo_prefix_fragment("prompt % ( ec"));
+        assert!(has_recent_sentinel_echo_prefix_fragment("printf '\\n"));
+        assert!(has_recent_sentinel_echo_prefix_fragment(
+            "prompt % printf '\\n"
+        ));
     }
 
     #[test]
@@ -861,6 +877,14 @@ mod tests {
     #[test]
     fn strips_wrapper_echo_fragment_without_sentinel_text() {
         let result = strip_blade_sentinels("( echo '");
+        assert_eq!(result.cleaned, "");
+        assert!(result.started.is_empty());
+        assert!(result.exited.is_empty());
+    }
+
+    #[test]
+    fn strips_printf_newline_wrapper_echo_fragment_without_sentinel_text() {
+        let result = strip_blade_sentinels("printf '\\n");
         assert_eq!(result.cleaned, "");
         assert!(result.started.is_empty());
         assert!(result.exited.is_empty());

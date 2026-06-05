@@ -215,6 +215,12 @@ export function useCommandExecution() {
                 displayCommand,
             });
             if (command) {
+                if (displayCommand) {
+                    await emit('terminal-display-command', {
+                        id: terminalId,
+                        command: displayCommand,
+                    });
+                }
                 await BladeDispatcher.terminal({
                     type: 'Input',
                     payload: { id: terminalId, data: `${command}\n` },
@@ -242,6 +248,7 @@ export function useCommandExecution() {
                 interactive: true,
                 focus: true,
                 transient: terminalId !== BLADE_TERMINAL_ID,
+                displayCommand,
             });
         }
 
@@ -250,6 +257,12 @@ export function useCommandExecution() {
         }
 
         if (command) {
+            if (displayCommand) {
+                await emit('terminal-display-command', {
+                    id: terminalId,
+                    command: displayCommand,
+                });
+            }
             await BladeDispatcher.terminal({
                 type: 'Input',
                 payload: { id: terminalId, data: `${command}\n` },

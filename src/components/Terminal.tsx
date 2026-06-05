@@ -144,6 +144,7 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
     const initialCommandRef = useRef(command);
     const initialDisplayCommandRef = useRef(displayCommand);
     const initialInteractiveRef = useRef(interactive);
+    const lastDisplayedCommandRef = useRef<string | null>(null);
     const { showMenu } = useContextMenu();
 
     // Context menu handler
@@ -418,6 +419,25 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
                 xtermRef.current.write(`\r\n\x1b[33mProcess exited with code ${code}\x1b[0m\r\n`);
             }
         });
+        const writeDisplayCommand = (commandText: string) => {
+            const normalizedCommand = commandText.trim().replace(/\r?\n/g, ' ');
+            if (!normalizedCommand || lastDisplayedCommandRef.current === normalizedCommand) {
+                return;
+            }
+
+            lastDisplayedCommandRef.current = normalizedCommand;
+            term.write(`\x1b[2K\r$ ${normalizedCommand}\r\n`);
+        };
+        let unlistenDisplayCommand: (() => void) | undefined;
+        listen<{ id: string; command: string }>('terminal-display-command', (event) => {
+            if (event.payload.id !== id) {
+                return;
+            }
+
+            writeDisplayCommand(event.payload.command);
+        }).then((unlisten) => {
+            unlistenDisplayCommand = unlisten;
+        }).catch(console.error);
 
         // 2. Setup backend PTY
         const initBackend = async () => {
@@ -439,8 +459,8 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
                     }
                 });
 
-                if (!initialInteractiveRef.current && initialDisplayCommandRef.current) {
-                    term.write(`$ ${initialDisplayCommandRef.current}\r\n`);
+                if (initialDisplayCommandRef.current) {
+                    writeDisplayCommand(initialDisplayCommandRef.current);
                 }
 
                 emit('terminal-ready', { id }).catch(console.error);
@@ -484,6 +504,9 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
             unsubscribeOutput();
             unsubscribeSpawned();
             unsubscribeExit();
+            if (unlistenDisplayCommand) {
+                unlistenDisplayCommand();
+            }
 
             BladeDispatcher.terminal({
                 type: "Kill",
