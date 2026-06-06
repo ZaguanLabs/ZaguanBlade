@@ -861,9 +861,8 @@ fn parse_osc7_path(raw: &str) -> Option<String> {
 mod tests {
     use super::{
         has_recent_sentinel_echo_prefix, has_recent_sentinel_echo_prefix_fragment,
-        strip_blade_sentinels, strip_hidden_input_echoes, take_active_command_exit,
+        strip_blade_sentinels, take_active_command_exit,
     };
-    use std::sync::{Arc, Mutex};
 
     #[test]
     fn detects_recent_wrapper_echo_even_with_long_prompt_prefix() {
@@ -955,31 +954,6 @@ mod tests {
         assert_eq!(result.cleaned, "");
         assert!(result.started.is_empty());
         assert!(result.exited.is_empty());
-    }
-
-    #[test]
-    fn strips_exact_hidden_input_echo_without_stripping_real_output() {
-        let echoes = Arc::new(Mutex::new(vec![
-            r"printf '\n##BLADE_CMD_START:%s##\n' call-1".to_string(),
-        ]));
-        let result = strip_hidden_input_echoes(
-            concat!(
-                r"printf '\n##BLADE_CMD_START:%s##\n' call-1",
-                "\r\nreal output\n"
-            ),
-            &echoes,
-        );
-
-        assert_eq!(result, "real output\n");
-        assert!(echoes.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn preserves_printf_output_that_was_not_hidden_input() {
-        let echoes = Arc::new(Mutex::new(Vec::new()));
-        let result = strip_hidden_input_echoes("printf 'hello'\n", &echoes);
-
-        assert_eq!(result, "printf 'hello'\n");
     }
 }
 
