@@ -272,6 +272,8 @@ pub enum TerminalIntent {
     Input {
         id: String,
         data: String,
+        #[serde(default)]
+        hidden: bool,
     },
     Resize {
         id: String,

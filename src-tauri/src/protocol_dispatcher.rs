@@ -880,13 +880,12 @@ pub async fn dispatch(
                     }
                 })
             }
-            blade_protocol::TerminalIntent::Input { id, data } => {
-                crate::terminal::write_to_terminal(id, data, terminal_manager.clone()).map_err(
-                    |e| blade_protocol::BladeError::Internal {
+            blade_protocol::TerminalIntent::Input { id, data, hidden } => {
+                crate::terminal::write_to_terminal(id, data, hidden, terminal_manager.clone())
+                    .map_err(|e| blade_protocol::BladeError::Internal {
                         trace_id: intent_id.to_string(),
                         message: e,
-                    },
-                )
+                    })
             }
             blade_protocol::TerminalIntent::Resize { id, rows, cols } => {
                 crate::terminal::resize_terminal(id, rows, cols, terminal_manager.clone()).map_err(

@@ -204,6 +204,7 @@ export function useCommandExecution() {
         displayCommand?: string,
     ) => {
         const existing = terminalsRef.current.get(terminalId);
+        let openedTerminalWithDisplayCommand = false;
         if (existing?.ready) {
             await emit('open-terminal', {
                 id: terminalId,
@@ -223,7 +224,7 @@ export function useCommandExecution() {
                 }
                 await BladeDispatcher.terminal({
                     type: 'Input',
-                    payload: { id: terminalId, data: `${command}\n` },
+                    payload: { id: terminalId, data: `${command}\n`, hidden: true },
                 });
             }
             return;
@@ -250,6 +251,7 @@ export function useCommandExecution() {
                 transient: terminalId !== BLADE_TERMINAL_ID,
                 displayCommand,
             });
+            openedTerminalWithDisplayCommand = true;
         }
 
         if (waitForReady) {
@@ -257,7 +259,7 @@ export function useCommandExecution() {
         }
 
         if (command) {
-            if (displayCommand) {
+            if (displayCommand && !openedTerminalWithDisplayCommand) {
                 await emit('terminal-display-command', {
                     id: terminalId,
                     command: displayCommand,
@@ -265,7 +267,7 @@ export function useCommandExecution() {
             }
             await BladeDispatcher.terminal({
                 type: 'Input',
-                payload: { id: terminalId, data: `${command}\n` },
+                payload: { id: terminalId, data: `${command}\n`, hidden: true },
             });
         }
     }, [updateTerminal, waitForTerminalReady]);

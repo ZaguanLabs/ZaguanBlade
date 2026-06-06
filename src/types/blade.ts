@@ -120,7 +120,7 @@ export type TerminalOwner =
 
 export type TerminalIntent =
     | { type: "Spawn"; payload: { id: string; command?: string; cwd?: string; owner?: TerminalOwner; interactive?: boolean } }
-    | { type: "Input"; payload: { id: string; data: string } }
+    | { type: "Input"; payload: { id: string; data: string; hidden?: boolean } }
     | { type: "Resize"; payload: { id: string; rows: number; cols: number } }
     | { type: "Kill"; payload: { id: string } };
 

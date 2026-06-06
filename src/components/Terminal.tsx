@@ -43,8 +43,7 @@ function sanitizeTerminalOutput(data: string): string {
                 || trimmed.includes('__blade_ec')
                 || trimmed.includes('__blade_pid')
                 || trimmed.includes('unset __blade_ec __blade_pid')
-                || trimmed.includes('[run_command] detached pid=')
-                || /(?:^|\s)(?:[%#$][ ]*)?(?:\(?\s*)?(?:echo|printf)\s+'/.test(trimmed);
+                || trimmed.includes('[run_command] detached pid=');
 
             if (!isBladeWrapperLine) {
                 parts.push(line);
@@ -144,7 +143,6 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
     const initialCommandRef = useRef(command);
     const initialDisplayCommandRef = useRef(displayCommand);
     const initialInteractiveRef = useRef(interactive);
-    const lastDisplayedCommandRef = useRef<string | null>(null);
     const { showMenu } = useContextMenu();
 
     // Context menu handler
@@ -421,11 +419,10 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
         });
         const writeDisplayCommand = (commandText: string) => {
             const normalizedCommand = commandText.trim().replace(/\r?\n/g, ' ');
-            if (!normalizedCommand || lastDisplayedCommandRef.current === normalizedCommand) {
+            if (!normalizedCommand) {
                 return;
             }
 
-            lastDisplayedCommandRef.current = normalizedCommand;
             term.write(`\x1b[2K\r$ ${normalizedCommand}\r\n`);
         };
         let unlistenDisplayCommand: (() => void) | undefined;

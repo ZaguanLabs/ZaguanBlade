@@ -52,12 +52,19 @@ pub struct PtyState {
     pub child: Box<dyn portable_pty::Child + Send + Sync>,
     pub seq: Arc<Mutex<u64>>, // v1.1: sequence number for TerminalOutput events
     pub owner: crate::blade_protocol::TerminalOwner, // v1.1: ownership tracking
+    pub hidden_input_echoes: Arc<Mutex<Vec<String>>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingTerminalWrite {
+    data: String,
+    hidden: bool,
 }
 
 pub struct TerminalManager {
     // Map of Terminal ID -> PtyState
     pub ptys: Arc<Mutex<HashMap<String, PtyState>>>,
-    pub pending_writes: Arc<Mutex<HashMap<String, Vec<String>>>>,
+    pub pending_writes: Arc<Mutex<HashMap<String, Vec<PendingTerminalWrite>>>>,
 }
 
 impl TerminalManager {
@@ -134,8 +141,8 @@ fn take_terminal_state(
 
 fn take_pending_writes(
     terminal_id: &str,
-    pending_writes: &Arc<Mutex<HashMap<String, Vec<String>>>>,
-) -> Vec<String> {
+    pending_writes: &Arc<Mutex<HashMap<String, Vec<PendingTerminalWrite>>>>,
+) -> Vec<PendingTerminalWrite> {
     pending_writes
         .lock()
         .unwrap()
@@ -146,10 +153,59 @@ fn take_pending_writes(
 fn queue_pending_write(
     terminal_id: String,
     data: String,
-    pending_writes: &Arc<Mutex<HashMap<String, Vec<String>>>>,
+    hidden: bool,
+    pending_writes: &Arc<Mutex<HashMap<String, Vec<PendingTerminalWrite>>>>,
 ) {
     let mut pending = pending_writes.lock().unwrap();
-    pending.entry(terminal_id).or_default().push(data);
+    pending
+        .entry(terminal_id)
+        .or_default()
+        .push(PendingTerminalWrite { data, hidden });
+}
+
+fn normalize_hidden_input_echo(data: &str) -> Option<String> {
+    let normalized = data.trim_end_matches(['\r', '\n']).to_string();
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn remember_hidden_input_echo(hidden_input_echoes: &Arc<Mutex<Vec<String>>>, data: &str) {
+    if let Some(echo) = normalize_hidden_input_echo(data) {
+        hidden_input_echoes.lock().unwrap().push(echo);
+    }
+}
+
+fn strip_hidden_input_echoes(input: &str, hidden_input_echoes: &Arc<Mutex<Vec<String>>>) -> String {
+    let mut cleaned = String::new();
+
+    for segment in input.split_inclusive('\n') {
+        let plain = strip_ansi_escapes(segment);
+        let mut echoes = hidden_input_echoes.lock().unwrap();
+        if let Some(index) = echoes.iter().position(|echo| plain.contains(echo)) {
+            echoes.remove(index);
+        } else {
+            cleaned.push_str(segment);
+        }
+    }
+
+    if !input.ends_with('\n') {
+        let consumed = input.split_inclusive('\n').map(str::len).sum::<usize>();
+        if consumed < input.len() {
+            let segment = &input[consumed..];
+            let plain = strip_ansi_escapes(segment);
+            let mut echoes = hidden_input_echoes.lock().unwrap();
+            if let Some(index) = echoes.iter().position(|echo| plain.contains(echo)) {
+                echoes.remove(index);
+            } else {
+                cleaned.push_str(segment);
+            }
+        }
+    }
+
+    cleaned
 }
 
 fn terminate_pty_state(mut pty: PtyState) {
@@ -339,10 +395,14 @@ pub fn create_terminal<R: Runtime>(
 
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let mut writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+    let hidden_input_echoes = Arc::new(Mutex::new(Vec::new()));
 
     for pending_data in take_pending_writes(&id, &state.pending_writes) {
+        if pending_data.hidden {
+            remember_hidden_input_echo(&hidden_input_echoes, &pending_data.data);
+        }
         writer
-            .write_all(pending_data.as_bytes())
+            .write_all(pending_data.data.as_bytes())
             .map_err(|e| e.to_string())?;
     }
     writer.flush().map_err(|e| e.to_string())?;
@@ -360,6 +420,7 @@ pub fn create_terminal<R: Runtime>(
                 child,
                 seq: seq_counter.clone(),
                 owner: owner.clone(),
+                hidden_input_echoes: hidden_input_echoes.clone(),
             },
         );
     }
@@ -395,7 +456,12 @@ pub fn create_terminal<R: Runtime>(
                              seq: &Arc<Mutex<u64>>,
                              active_cmd: &mut Option<String>,
                              cmd_output_buffer: &mut String| {
-            let sentinel_result = strip_blade_sentinels(processable);
+            let processable = strip_hidden_input_echoes(processable, &hidden_input_echoes);
+            if processable.is_empty() {
+                return;
+            }
+
+            let sentinel_result = strip_blade_sentinels(&processable);
 
             // Order matters! Within a single chunk the start sentinel appears
             // before the command output which appears before the exit sentinel.
@@ -795,8 +861,9 @@ fn parse_osc7_path(raw: &str) -> Option<String> {
 mod tests {
     use super::{
         has_recent_sentinel_echo_prefix, has_recent_sentinel_echo_prefix_fragment,
-        strip_blade_sentinels, take_active_command_exit,
+        strip_blade_sentinels, strip_hidden_input_echoes, take_active_command_exit,
     };
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn detects_recent_wrapper_echo_even_with_long_prompt_prefix() {
@@ -888,6 +955,31 @@ mod tests {
         assert_eq!(result.cleaned, "");
         assert!(result.started.is_empty());
         assert!(result.exited.is_empty());
+    }
+
+    #[test]
+    fn strips_exact_hidden_input_echo_without_stripping_real_output() {
+        let echoes = Arc::new(Mutex::new(vec![
+            r"printf '\n##BLADE_CMD_START:%s##\n' call-1".to_string(),
+        ]));
+        let result = strip_hidden_input_echoes(
+            concat!(
+                r"printf '\n##BLADE_CMD_START:%s##\n' call-1",
+                "\r\nreal output\n"
+            ),
+            &echoes,
+        );
+
+        assert_eq!(result, "real output\n");
+        assert!(echoes.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn preserves_printf_output_that_was_not_hidden_input() {
+        let echoes = Arc::new(Mutex::new(Vec::new()));
+        let result = strip_hidden_input_echoes("printf 'hello'\n", &echoes);
+
+        assert_eq!(result, "printf 'hello'\n");
     }
 }
 
@@ -1004,14 +1096,18 @@ pub fn execute_command_in_terminal<R: Runtime>(
 pub fn write_to_terminal(
     id: String,
     data: String,
+    hidden: bool,
     state: tauri::State<'_, TerminalManager>,
 ) -> Result<(), String> {
     let mut ptys = state.ptys.lock().map_err(|e| e.to_string())?;
     let Some(pty) = ptys.get_mut(&id) else {
         drop(ptys);
-        queue_pending_write(id, data, &state.pending_writes);
+        queue_pending_write(id, data, hidden, &state.pending_writes);
         return Ok(());
     };
+    if hidden {
+        remember_hidden_input_echo(&pty.hidden_input_echoes, &data);
+    }
     pty.writer
         .write_all(data.as_bytes())
         .map_err(|e| e.to_string())?;
