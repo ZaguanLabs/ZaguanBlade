@@ -724,6 +724,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                             onClick={() => handleCopyCommand(commandText)}
                             className="group/copy shrink-0 rounded p-1 text-(--fg-tertiary) transition-colors hover:text-(--fg-primary)"
                             title={t('toolCall.copyCommand')}
+                            aria-label={t('toolCall.copyCommand')}
                         >
                             {copied ? (
                                 <Check className="w-3.5 h-3.5 text-(--accent-mention)" />

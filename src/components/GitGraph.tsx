@@ -246,6 +246,7 @@ const CommitTooltip: React.FC<CommitTooltipProps> = ({ entry, remoteUrl, onCopy,
                     className="font-mono text-(--accent-ai) hover:underline cursor-pointer flex items-center gap-1"
                     onClick={(e) => { e.stopPropagation(); onCopy(entry.hash); }}
                     title={t('gitGraph.copyFullCommitHash')}
+                    aria-label={t('gitGraph.copyFullCommitHash')}
                 >
                     {entry.shortHash}
                     {copied ? (
