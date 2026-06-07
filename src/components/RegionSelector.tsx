@@ -145,7 +145,7 @@ export const RegionSelector: React.FC<RegionSelectorProps> = ({
                         onClick={onCancel}
                         className="p-1 text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover) rounded-[calc(var(--panel-radius)*0.35)] transition"
                     >
-                        <X className="w-4 h-4" />
+                        <X aria-hidden="true" className="w-4 h-4" />
                     </button>
                 </div>
                 <div className="flex-1 flex items-center justify-center bg-(--bg-app) overflow-hidden min-h-0">
@@ -190,7 +190,7 @@ export const RegionSelector: React.FC<RegionSelectorProps> = ({
                         disabled={!selection || selection.width < 5 || selection.height < 5}
                         className="px-3 py-1.5 text-xs font-medium bg-(--accent-ai) text-(--fg-bright) rounded-[calc(var(--panel-radius)*0.35)] transition disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
                     >
-                        <Check className="w-3.5 h-3.5" />
+                        <Check aria-hidden="true" className="w-3.5 h-3.5" />
                         {t('common.capture')}
                     </button>
                 </div>

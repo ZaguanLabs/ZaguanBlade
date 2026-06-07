@@ -116,9 +116,10 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
                     <span className="truncate max-w-[180px]">{symbolName}</span>
                 </div>
                 <IconButton
+                    aria-label={t('common.close')}
                     onClick={onClose}
                 >
-                    <X className="w-4 h-4" />
+                    <X aria-hidden="true" className="w-4 h-4" />
                 </IconButton>
             </div>
 

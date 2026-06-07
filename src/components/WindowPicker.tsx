@@ -57,7 +57,7 @@ export const WindowPicker: React.FC<WindowPickerProps> = ({
                         aria-label={t('common.close')}
                         onClick={onCancel}
                     >
-                        <X className="w-4 h-4" />
+                        <X aria-hidden="true" className="w-4 h-4" />
                     </IconButton>
                 </div>
                 <ScrollArea className="max-h-[360px] p-2">
