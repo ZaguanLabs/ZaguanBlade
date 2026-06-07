@@ -1,5 +1,9 @@
 # Zaguán Blade
 
+> **Notice - temporary UI/UX instability**
+>
+> The main tree may be unstable while the desktop UI/UX migration is in progress. The work is being done in small, reversible phases, but visual layout, shell behavior, and interaction details may change until the UI/UX task is completed.
+
 **The AI-Native Code Editor Built on Rust.**
 
 Zaguán Blade is a high-performance AI code editor that takes a fundamentally different approach from VSCode forks. While others bolt AI onto existing editors, we built from the ground up with AI as the foundation—and Rust as the engine.
