@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useId, useRef, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X, Check } from 'lucide-react';
 
@@ -25,6 +25,8 @@ export const RegionSelector: React.FC<RegionSelectorProps> = ({
 }) => {
     const { t } = useTranslation();
     const wrapperRef = useRef<HTMLDivElement>(null);
+    const titleId = useId();
+    const subtitleId = useId();
     const [dragStart, setDragStart] = useState<Point | null>(null);
     const [dragEnd, setDragEnd] = useState<Point | null>(null);
     const [isDragging, setIsDragging] = useState(false);
@@ -125,13 +127,21 @@ export const RegionSelector: React.FC<RegionSelectorProps> = ({
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-(--bg-app)/80">
-            <div className="relative w-full h-full max-w-6xl max-h-[90vh] mx-6 bg-(--bg-surface) border border-(--border-focus) rounded-(--panel-radius) shadow-(--shadow-xl) overflow-hidden flex flex-col">
+            <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={titleId}
+                aria-describedby={subtitleId}
+                className="relative w-full h-full max-w-6xl max-h-[90vh] mx-6 bg-(--bg-surface) border border-(--border-focus) rounded-(--panel-radius) shadow-(--shadow-xl) overflow-hidden flex flex-col"
+            >
                 <div className="flex items-center justify-between px-4 py-3 border-b border-(--border-subtle) shrink-0">
                     <div>
-                        <div className="text-sm font-semibold text-(--fg-primary)">{t('screenshot.regionPickerTitle')}</div>
-                        <div className="text-xs text-(--fg-tertiary)">{t('screenshot.dragToSelectArea')}</div>
+                        <div id={titleId} className="text-sm font-semibold text-(--fg-primary)">{t('screenshot.regionPickerTitle')}</div>
+                        <div id={subtitleId} className="text-xs text-(--fg-tertiary)">{t('screenshot.dragToSelectArea')}</div>
                     </div>
                     <button
+                        type="button"
+                        aria-label="Close"
                         onClick={onCancel}
                         className="p-1 text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover) rounded-[calc(var(--panel-radius)*0.35)] transition"
                     >
@@ -168,12 +178,14 @@ export const RegionSelector: React.FC<RegionSelectorProps> = ({
                 </div>
                 <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-(--border-subtle) shrink-0">
                     <button
+                        type="button"
                         onClick={onCancel}
                         className="px-3 py-1.5 text-xs font-medium text-(--fg-secondary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover) rounded-[calc(var(--panel-radius)*0.35)] transition"
                     >
                         {t('common.cancel')}
                     </button>
                     <button
+                        type="button"
                         onClick={handleConfirm}
                         disabled={!selection || selection.width < 5 || selection.height < 5}
                         className="px-3 py-1.5 text-xs font-medium bg-(--accent-ai) text-(--fg-bright) rounded-[calc(var(--panel-radius)*0.35)] transition disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"

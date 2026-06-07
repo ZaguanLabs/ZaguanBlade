@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X, Monitor } from 'lucide-react';
 import type { WindowInfo } from '../types/screenshot';
@@ -29,21 +29,32 @@ export const WindowPicker: React.FC<WindowPickerProps> = ({
     const { t } = useTranslation();
     const resolvedTitle = title ?? t('screenshot.windowPickerTitle');
     const resolvedSubtitle = subtitle ?? t('screenshot.windowPickerSubtitle');
+    const titleId = useId();
+    const subtitleId = useId();
     if (!isOpen) return null;
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
             <div
+                aria-hidden="true"
                 className="absolute inset-0 bg-(--bg-app)/75"
                 onClick={onCancel}
             />
-            <Surface variant="modal" className="relative w-full max-w-xl mx-4">
+            <Surface
+                variant="modal"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={titleId}
+                aria-describedby={subtitleId}
+                className="relative w-full max-w-xl mx-4"
+            >
                 <div className="flex items-center justify-between px-4 py-3 border-b border-(--border-subtle)">
                     <div>
-                        <div className="text-sm font-semibold text-(--fg-primary)">{resolvedTitle}</div>
-                        <div className="text-xs text-(--fg-tertiary)">{resolvedSubtitle}</div>
+                        <div id={titleId} className="text-sm font-semibold text-(--fg-primary)">{resolvedTitle}</div>
+                        <div id={subtitleId} className="text-xs text-(--fg-tertiary)">{resolvedSubtitle}</div>
                     </div>
                     <IconButton
+                        aria-label="Close"
                         onClick={onCancel}
                     >
                         <X className="w-4 h-4" />
