@@ -338,6 +338,12 @@ export const AppBar: React.FC<AppBarProps> = ({
                                         onTabClick?.(tab.id);
                                         return;
                                     }
+                                    if (e.key === 'Delete') {
+                                        e.preventDefault();
+                                        focusActiveTabAfterKeyboardRef.current = true;
+                                        onTabClose?.(tab.id);
+                                        return;
+                                    }
                                     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
                                         e.preventDefault();
                                         const direction = e.key === 'ArrowLeft' ? -1 : 1;
