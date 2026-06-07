@@ -306,6 +306,7 @@ export const AppBar: React.FC<AppBarProps> = ({
             {hasTabs ? (
                 <div
                     ref={scrollRef}
+                    role="tablist"
                     className="flex items-end overflow-x-auto tabs-scrollbar min-w-0"
                     style={tabStripMaxWidth ? { width: tabStripMaxWidth, maxWidth: tabStripMaxWidth } : { flex: 1 }}
                 >
@@ -326,7 +327,34 @@ export const AppBar: React.FC<AppBarProps> = ({
                                 onDragLeave={handleDragLeave}
                                 onDrop={(e) => handleDrop(e, index)}
                                 onClick={() => onTabClick?.(tab.id)}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter' || e.key === ' ') {
+                                        e.preventDefault();
+                                        onTabClick?.(tab.id);
+                                        return;
+                                    }
+                                    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                                        e.preventDefault();
+                                        const direction = e.key === 'ArrowLeft' ? -1 : 1;
+                                        const nextIndex = (index + direction + tabs.length) % tabs.length;
+                                        onTabClick?.(tabs[nextIndex]?.id);
+                                        return;
+                                    }
+                                    if (e.key === 'Home') {
+                                        e.preventDefault();
+                                        onTabClick?.(tabs[0]?.id);
+                                        return;
+                                    }
+                                    if (e.key === 'End') {
+                                        e.preventDefault();
+                                        onTabClick?.(tabs[tabs.length - 1]?.id);
+                                    }
+                                }}
                                 onContextMenu={(e) => handleTabContextMenu(e, tab, index)}
+                                role="tab"
+                                tabIndex={0}
+                                aria-selected={isActive}
+                                title={tab.title}
                                 className={`
                                     group flex items-center gap-1.5 px-3 h-[33px] cursor-pointer
                                     transition-colors relative whitespace-nowrap shrink-0 text-xs
@@ -373,6 +401,8 @@ export const AppBar: React.FC<AppBarProps> = ({
                                     />
                                 )}
                                 <button
+                                    type="button"
+                                    aria-label={`Close ${tab.title}`}
                                     onClick={(e) => {
                                         e.stopPropagation();
                                         onTabClose?.(tab.id);
