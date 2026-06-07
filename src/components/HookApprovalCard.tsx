@@ -36,9 +36,9 @@ export const HookApprovalCard: React.FC<HookApprovalCardProps> = ({
             <div className="flex items-center gap-2 border-b border-(--border-subtle)/70 bg-(--bg-app)/40 px-2.5 py-2">
                 <div className="flex h-6 w-6 items-center justify-center rounded-[calc(var(--panel-radius)*0.55)] border border-(--border-subtle) bg-(--bg-app)/70">
                     {isWaiting ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin text-(--accent-ai)" />
+                        <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin text-(--accent-ai)" />
                     ) : (
-                        <ShieldAlert className="h-3.5 w-3.5 text-(--accent-warning)" />
+                        <ShieldAlert aria-hidden="true" className="h-3.5 w-3.5 text-(--accent-warning)" />
                     )}
                 </div>
                 <div className="min-w-0">
@@ -58,7 +58,7 @@ export const HookApprovalCard: React.FC<HookApprovalCardProps> = ({
             <div className="space-y-2.5 px-2.5 py-2.5">
                 <div className="overflow-hidden rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-app)/70 shadow-(--shadow-sm)">
                     <div className="flex items-center gap-1.5 border-b border-(--border-subtle)/80 bg-(--bg-surface)/50 px-2.5 py-1.5">
-                        <Braces className="h-3 w-3 text-(--fg-tertiary)" />
+                        <Braces aria-hidden="true" className="h-3 w-3 text-(--fg-tertiary)" />
                         <span className="truncate text-[10px] font-mono text-(--fg-tertiary)">
                             {request.toolName}
                         </span>
@@ -90,9 +90,9 @@ export const HookApprovalCard: React.FC<HookApprovalCardProps> = ({
                         className="flex flex-1 items-center justify-center gap-1.5 rounded-[calc(var(--panel-radius)*0.55)] border border-(--border-subtle) bg-(--bg-app)/70 px-2.5 py-1.5 text-[11px] font-medium text-(--fg-secondary) transition-colors hover:bg-(--bg-surface-hover) hover:text-(--fg-primary) disabled:cursor-wait disabled:opacity-60"
                     >
                         {pendingIntent === 'deny' ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
+                            <Loader2 aria-hidden="true" className="h-3 w-3 animate-spin" />
                         ) : (
-                            <X className="h-3 w-3" />
+                            <X aria-hidden="true" className="h-3 w-3" />
                         )}
                         {pendingIntent === 'deny' ? t('approval.skipping') : t('approval.deny')}
                     </button>
@@ -115,9 +115,9 @@ export const HookApprovalCard: React.FC<HookApprovalCardProps> = ({
                         }}
                     >
                         {pendingIntent === 'approve' ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
+                            <Loader2 aria-hidden="true" className="h-3 w-3 animate-spin" />
                         ) : (
-                            <Check className="h-3 w-3" />
+                            <Check aria-hidden="true" className="h-3 w-3" />
                         )}
                         {pendingIntent === 'approve' ? t('approval.waiting') : t('approval.approve')}
                     </button>

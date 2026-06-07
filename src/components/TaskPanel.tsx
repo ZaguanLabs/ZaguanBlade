@@ -12,11 +12,11 @@ interface TaskPanelProps {
 const StatusIcon: React.FC<{ status: TodoItem['status'] }> = ({ status }) => {
     switch (status) {
         case 'completed':
-            return <Check className="w-3 h-3 text-(--accent-mention)" />;
+            return <Check aria-hidden="true" className="w-3 h-3 text-(--accent-mention)" />;
         case 'in_progress':
-            return <Loader2 className="w-3 h-3 text-(--accent-ai) animate-spin" />;
+            return <Loader2 aria-hidden="true" className="w-3 h-3 text-(--accent-ai) animate-spin" />;
         case 'pending':
-            return <Circle className="w-3 h-3 text-(--fg-tertiary)" />;
+            return <Circle aria-hidden="true" className="w-3 h-3 text-(--fg-tertiary)" />;
     }
 };
 
@@ -88,12 +88,19 @@ const TaskPanelComponent: React.FC<TaskPanelProps> = ({ todos, isCollapsed, onTo
                 }`}
                 style={{ overflow: isCollapsed ? 'hidden' : 'auto' }}
             >
-                <div className="px-2.5 pb-2 space-y-0.5">
+                <div role="list" className="px-2.5 pb-2 space-y-0.5">
                     {todos.map((todo, index) => {
                         const text = todo.status === 'in_progress' ? todo.activeForm : todo.content;
+                        const statusLabel = todo.status === 'completed'
+                            ? t('taskPanel.statusCompleted')
+                            : todo.status === 'in_progress'
+                            ? t('taskPanel.statusInProgress')
+                            : t('taskPanel.statusPending');
                         return (
                             <div
                                 key={index}
+                                role="listitem"
+                                aria-label={t('taskPanel.taskRowLabel', { index: index + 1, status: statusLabel, text })}
                                 className={`flex items-center gap-1.5 border-l-2 px-1.5 py-1 text-[10px] leading-snug transition-colors ${
                                     todo.status === 'completed'
                                         ? 'border-(--border-subtle) text-(--fg-tertiary) line-through'

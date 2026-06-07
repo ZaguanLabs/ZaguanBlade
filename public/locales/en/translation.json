@@ -932,6 +932,10 @@
   "taskPanel": {
     "allTasksCompleted": "All tasks completed",
     "completedSummary": "{{completed}}/{{total}} completed",
+    "statusCompleted": "Completed",
+    "statusInProgress": "In progress",
+    "statusPending": "Pending",
+    "taskRowLabel": "{{index}}. {{status}}: {{text}}",
     "itemsCount_one": "{{count}} item",
     "itemsCount_other": "{{count}} items"
   },

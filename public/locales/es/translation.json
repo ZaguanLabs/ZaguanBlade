@@ -928,6 +928,10 @@
   "taskPanel": {
     "allTasksCompleted": "Todas las tareas completadas",
     "completedSummary": "{{completed}}/{{total}} completadas",
+    "statusCompleted": "Completada",
+    "statusInProgress": "En curso",
+    "statusPending": "Pendiente",
+    "taskRowLabel": "{{index}}. {{status}}: {{text}}",
     "itemsCount_one": "{{count}} elemento",
     "itemsCount_other": "{{count}} elementos"
   },
