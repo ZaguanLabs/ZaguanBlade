@@ -434,6 +434,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                     <button
                         type="button"
                         onClick={onClose}
+                        aria-label={t('common.close')}
                         className="rounded-[calc(var(--panel-radius)*0.35)] p-1.5 text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover) transition-colors"
                     >
                         <X className="w-5 h-5" />

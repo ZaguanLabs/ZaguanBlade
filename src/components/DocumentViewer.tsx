@@ -116,6 +116,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
           <button
             type="button"
             onClick={handleClose}
+            aria-label={t('common.close')}
             className="p-1.5 rounded-[calc(var(--panel-radius)*0.4)] hover:bg-(--bg-surface-hover) text-(--fg-tertiary) hover:text-(--fg-primary) transition-colors"
           >
             <X className="w-4 h-4" />

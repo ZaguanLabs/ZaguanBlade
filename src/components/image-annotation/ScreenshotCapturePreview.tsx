@@ -22,6 +22,7 @@ export const ScreenshotCapturePreview: React.FC<{
                     <button
                         type="button"
                         onClick={onCancel}
+                        aria-label={t('common.close')}
                         className="rounded-[calc(var(--panel-radius)*0.35)] p-1 text-(--fg-tertiary) transition hover:bg-(--bg-surface-hover) hover:text-(--fg-primary)"
                     >
                         <X className="h-4 w-4" />

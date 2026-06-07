@@ -112,7 +112,7 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
                                     onChange={e => setPathInput(e.target.value)}
                                     onKeyDown={e => e.key === 'Enter' && openSpecificPath()}
                                 />
-                                <button type="button" onClick={openSpecificPath} className="p-1.5 bg-(--bg-surface) hover:bg-(--bg-surface-hover) rounded-[calc(var(--panel-radius)*0.25)] text-(--fg-primary)">
+                                <button type="button" onClick={openSpecificPath} aria-label={t('common.open')} className="p-1.5 bg-(--bg-surface) hover:bg-(--bg-surface-hover) rounded-[calc(var(--panel-radius)*0.25)] text-(--fg-primary)">
                                     <ChevronRight className="w-3 h-3" />
                                 </button>
                             </div>

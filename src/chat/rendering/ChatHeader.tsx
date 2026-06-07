@@ -1,5 +1,4 @@
 import React from 'react';
-import { Plus } from 'lucide-react';
 import { ChatTabBar } from '../../components/ChatTabBar';
 
 interface ChatHeaderProps {
@@ -15,8 +14,5 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({ activeTab, onTabChange, 
             onTabChange={onTabChange}
             onNewConversation={onNewConversation}
         />
-        <button type="button" className="sr-only" onClick={onNewConversation}>
-            <Plus className="h-3 w-3" />
-        </button>
     </div>
 );
