@@ -95,6 +95,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
         <div className="flex items-center gap-2">
           {canImplementPlan && (
             <button
+              type="button"
               onClick={() => onImplementPlan?.(trimmedContent)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-[calc(var(--panel-radius)*0.45)] bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)] text-(--accent-mention) hover:bg-[color-mix(in_srgb,var(--accent-mention)_18%,transparent)] border border-(--accent-mention)/25 transition-colors"
             >
@@ -103,6 +104,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
           )}
           {isEphemeral && (
             <button
+              type="button"
               onClick={handleSave}
               disabled={isSaving}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-[calc(var(--panel-radius)*0.45)] bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)] text-(--accent-mention) hover:bg-[color-mix(in_srgb,var(--accent-mention)_18%,transparent)] border border-(--accent-mention)/20 transition-colors disabled:opacity-50"
@@ -112,6 +114,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
             </button>
           )}
           <button
+            type="button"
             onClick={handleClose}
             className="p-1.5 rounded-[calc(var(--panel-radius)*0.4)] hover:bg-(--bg-surface-hover) text-(--fg-tertiary) hover:text-(--fg-primary) transition-colors"
           >

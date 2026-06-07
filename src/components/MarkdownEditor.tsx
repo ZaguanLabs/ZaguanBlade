@@ -98,6 +98,7 @@ export const MarkdownEditor = forwardRef<CodeEditorHandle, MarkdownEditorProps>(
 
                 <div className="flex items-center gap-1 rounded-[calc(var(--panel-radius)*0.45)] p-0.5" style={{ backgroundColor: 'color-mix(in srgb, var(--markdown-inline-code-bg) 80%, transparent)' }}>
                     <button
+                        type="button"
                         onClick={switchMode}
                         className={`flex items-center gap-2 px-3 py-1 rounded-[calc(var(--panel-radius)*0.35)] text-xs font-medium transition-all ${mode === 'edit'
                                 ? 'shadow-(--shadow-sm) border text-(--markdown-heading) border-(--markdown-border) bg-(--markdown-inline-code-bg)'

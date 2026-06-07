@@ -99,6 +99,7 @@ export class ErrorBoundary extends Component<Props, State> {
 
                             <div className="flex flex-wrap gap-2">
                                 <button
+                                    type="button"
                                     onClick={this.handleReset}
                                     className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-[calc(var(--panel-radius)*0.45)] bg-(--accent-ai) text-(--fg-bright) hover:opacity-90 transition-opacity"
                                 >
@@ -106,6 +107,7 @@ export class ErrorBoundary extends Component<Props, State> {
                                     Reload UI
                                 </button>
                                 <button
+                                    type="button"
                                     onClick={this.handleHardReset}
                                     className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-[calc(var(--panel-radius)*0.45)] bg-(--bg-surface) text-(--fg-primary) border border-(--border-subtle) hover:bg-(--bg-surface-hover) transition-colors"
                                 >
@@ -113,6 +115,7 @@ export class ErrorBoundary extends Component<Props, State> {
                                     Clear Cache & Reload
                                 </button>
                                 <button
+                                    type="button"
                                     onClick={this.handleFullReload}
                                     className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-[calc(var(--panel-radius)*0.45)] bg-(--bg-surface) text-(--fg-primary) border border-(--border-subtle) hover:bg-(--bg-surface-hover) transition-colors"
                                 >
@@ -128,6 +131,7 @@ export class ErrorBoundary extends Component<Props, State> {
                                 <div className="mt-2 p-2 bg-(--bg-app) rounded-[calc(var(--panel-radius)*0.4)] border border-(--border-subtle) overflow-auto max-h-48">
                                     <div className="flex justify-end mb-1">
                                         <button
+                                            type="button"
                                             onClick={this.handleCopyError}
                                             className="flex items-center gap-1 px-2 py-0.5 text-[10px] text-(--fg-tertiary) hover:text-(--fg-secondary) transition-colors"
                                         >
