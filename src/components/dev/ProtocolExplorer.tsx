@@ -61,7 +61,7 @@ export const ProtocolExplorer: React.FC = () => {
                 title={t('protocolExplorer.open')}
                 aria-label={t('protocolExplorer.open')}
             >
-                <Activity className="w-4 h-4 text-(--accent-mention) group-hover:text-(--accent-ai)" />
+                <Activity className="w-4 h-4 text-(--accent-mention) group-hover:text-(--accent-ai)" aria-hidden="true" />
             </button>
         );
     }
@@ -71,7 +71,7 @@ export const ProtocolExplorer: React.FC = () => {
             {/* Header */}
             <div className="flex items-center justify-between px-3 py-2 border-b border-(--border-subtle) bg-(--bg-surface)/50">
                 <div className="flex items-center gap-2 text-(--fg-secondary) font-semibold uppercase tracking-wider">
-                    <Activity className="w-3 h-3 text-(--accent-mention)" />
+                    <Activity className="w-3 h-3 text-(--accent-mention)" aria-hidden="true" />
                     {t('protocolExplorer.title')}
                 </div>
                 <div className="flex items-center gap-1">
@@ -82,7 +82,7 @@ export const ProtocolExplorer: React.FC = () => {
                         title={isPaused ? t('protocolExplorer.resume') : t('protocolExplorer.pause')}
                         aria-label={isPaused ? t('protocolExplorer.resume') : t('protocolExplorer.pause')}
                     >
-                        {isPaused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}
+                        {isPaused ? <Play className="w-3 h-3" aria-hidden="true" /> : <Pause className="w-3 h-3" aria-hidden="true" />}
                     </button>
                     <button
                         type="button"
@@ -91,7 +91,7 @@ export const ProtocolExplorer: React.FC = () => {
                         title={t('protocolExplorer.clearLogs')}
                         aria-label={t('protocolExplorer.clearLogs')}
                     >
-                        <Trash2 className="w-3 h-3" />
+                        <Trash2 className="w-3 h-3" aria-hidden="true" />
                     </button>
                     <div className="w-px h-3 bg-(--border-subtle) mx-1" />
                     <button
@@ -100,7 +100,7 @@ export const ProtocolExplorer: React.FC = () => {
                         aria-label={t('common.close')}
                         className="p-1 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface-hover) text-(--fg-tertiary) hover:text-(--fg-primary)"
                     >
-                        <X className="w-3 h-3" />
+                        <X className="w-3 h-3" aria-hidden="true" />
                     </button>
                 </div>
             </div>
@@ -116,13 +116,13 @@ export const ProtocolExplorer: React.FC = () => {
                     <div key={log.id} className="relative group border border-(--border-subtle) rounded-[calc(var(--panel-radius)*0.35)] bg-(--bg-surface)/20 p-2 hover:bg-(--bg-surface)/40 transition-colors">
                         {/* Meta Line */}
                         <div className="flex items-center gap-2 text-(--fg-tertiary) mb-1">
-                            <Clock className="w-3 h-3" />
+                            <Clock className="w-3 h-3" aria-hidden="true" />
                             <span>{new Date(log.receivedAt).toLocaleTimeString().split(' ')[0]}.{String(new Date(log.receivedAt).getMilliseconds()).padStart(3, '0')}</span>
                             <span className="text-(--fg-tertiary)">|</span>
                             <span className="font-mono text-(--fg-tertiary)" title={t('protocolExplorer.eventId', { id: log.id })}>{log.id.slice(0, 8)}...</span>
                             {log.causality_id && (
                                 <>
-                                    <ArrowRight className="w-3 h-3 text-(--fg-tertiary)" />
+                                    <ArrowRight className="w-3 h-3 text-(--fg-tertiary)" aria-hidden="true" />
                                     <span className="bg-(--bg-surface-hover)/50 px-1 rounded-[calc(var(--panel-radius)*0.25)] text-(--fg-tertiary)" title={t('protocolExplorer.causedByIntent', { id: log.causality_id })}>{log.causality_id.slice(0, 8)}...</span>
                                 </>
                             )}

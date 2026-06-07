@@ -63,7 +63,7 @@ export const FileChangeBar: React.FC<FileChangeBarProps> = ({
         title={t('diff.acceptChangesTitle')}
         aria-label={t('diff.acceptChangesTitle')}
       >
-        <Check className="w-3.5 h-3.5" />
+        <Check className="w-3.5 h-3.5" aria-hidden="true" />
         {t('diff.accept')}
       </button>
 
@@ -77,7 +77,7 @@ export const FileChangeBar: React.FC<FileChangeBarProps> = ({
         title={t('diff.rejectChangesTitle')}
         aria-label={t('diff.rejectChangesTitle')}
       >
-        <X className="w-3.5 h-3.5" />
+        <X className="w-3.5 h-3.5" aria-hidden="true" />
         {t('diff.reject')}
       </button>
     </div>

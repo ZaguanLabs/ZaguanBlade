@@ -52,7 +52,7 @@ export const GlobalChangeActions: React.FC<GlobalChangeActionsProps> = ({
               title={t('diff.acceptAll')}
               aria-label={t('diff.acceptAll')}
             >
-              <Check className="w-3 h-3" />
+              <Check className="w-3 h-3" aria-hidden="true" />
               {t('diff.acceptAll')}
             </button>
             <button
@@ -63,7 +63,7 @@ export const GlobalChangeActions: React.FC<GlobalChangeActionsProps> = ({
               title={t('diff.rejectAll')}
               aria-label={t('diff.rejectAll')}
             >
-              <X className="w-3 h-3" />
+              <X className="w-3 h-3" aria-hidden="true" />
               {t('diff.rejectAll')}
             </button>
           </div>
