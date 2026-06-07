@@ -348,6 +348,13 @@ export const AppBar: React.FC<AppBarProps> = ({
                         const { icon, color } = getFileIcon(tab.title, isActive);
                         const isDragging = draggedIndex === index;
                         const isDropTarget = dropTargetIndex === index;
+                        const statusLabel = tab.hasVirtualChanges
+                            ? (tab.hasUnreadAiEdit ? t('tabs.aiPendingReviewUnread') : t('tabs.aiPendingReview'))
+                            : tab.isAiEdited
+                                ? (tab.hasUnreadAiEdit ? t('tabs.aiEditedUnread') : t('tabs.aiEdited'))
+                                : tab.isDirty
+                                    ? t('editor.unsavedChanges')
+                                    : null;
 
                         return (
                             <div
@@ -396,6 +403,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                                 role="tab"
                                 tabIndex={isActive ? 0 : -1}
                                 aria-selected={isActive}
+                                aria-label={statusLabel ? `${tab.title}, ${statusLabel}` : tab.title}
                                 title={tab.title}
                                 className={`
                                     group flex items-center gap-1.5 px-3 h-[33px] cursor-pointer
