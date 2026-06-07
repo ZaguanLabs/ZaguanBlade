@@ -31,6 +31,7 @@ export const WorkLogTimelineRow: React.FC<WorkLogTimelineRowProps> = React.memo(
                     type="button"
                     className="flex w-full items-center justify-between gap-3 text-left"
                     onClick={() => setIsExpanded((value) => !value)}
+                    aria-expanded={isExpanded}
                 >
                     <span className="flex min-w-0 items-center gap-2">
                         <Terminal className="h-3.5 w-3.5 shrink-0 text-(--fg-tertiary)" />
@@ -77,6 +78,7 @@ export const WorkLogTimelineRow: React.FC<WorkLogTimelineRowProps> = React.memo(
                         className="rounded-[calc(var(--panel-radius)*0.35)] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-(--fg-tertiary) transition-colors hover:text-(--fg-secondary) disabled:cursor-default disabled:opacity-60"
                         onClick={onToggleDetails}
                         disabled={detailsLockedOpen}
+                        aria-pressed={showDetails || detailsLockedOpen}
                     >
                         {detailsLockedOpen ? 'Details visible' : showDetails ? 'Hide details' : 'Show details'}
                     </button>

@@ -371,6 +371,7 @@ export const GitGraph: React.FC<GitGraphProps> = ({ expanded, onToggle }) => {
                 type="button"
                 className="w-full flex items-center gap-1.5 px-3 py-2 hover:bg-(--bg-surface-hover) transition-colors border-t border-(--border-subtle) shrink-0"
                 onClick={onToggle}
+                aria-expanded={expanded}
             >
                 <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-(--fg-secondary) font-semibold">
                     {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}

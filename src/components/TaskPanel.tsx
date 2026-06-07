@@ -61,6 +61,7 @@ const TaskPanelComponent: React.FC<TaskPanelProps> = ({ todos, isCollapsed, onTo
             <button
                 type="button"
                 onClick={onToggleCollapse}
+                aria-expanded={!isCollapsed}
                 className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-(--bg-surface-hover) transition-colors text-left"
             >
                 <div className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-[calc(var(--panel-radius)*0.35)] border ${allDoneState ? 'border-(--accent-mention)/20 bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)]' : 'border-(--accent-ai)/20 bg-[color-mix(in_srgb,var(--accent-ai)_10%,transparent)]'}`}>

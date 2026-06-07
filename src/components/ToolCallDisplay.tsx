@@ -605,6 +605,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                                     <button
                                         type="button"
                                         onClick={() => setIsExpanded(!isExpanded)}
+                                        aria-expanded={isExpanded}
                                         className="rounded p-0.5 text-(--fg-tertiary) transition-colors hover:text-(--fg-primary)"
                                         title={isExpanded ? t('toolCall.hideDetails') : t('toolCall.showDetails')}
                                     >
