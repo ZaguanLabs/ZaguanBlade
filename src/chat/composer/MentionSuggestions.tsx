@@ -16,16 +16,22 @@ export const MentionSuggestions: React.FC<{
     }
 
     return (
-        <div className="absolute bottom-full left-0 right-0 z-80 mb-1.5 overflow-hidden rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-surface) shadow-(--shadow-lg)">
+        <div
+            role="listbox"
+            className="absolute bottom-full left-0 right-0 z-80 mb-1.5 overflow-hidden rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-surface) shadow-(--shadow-lg)"
+        >
             {suggestions.map((suggestion, index) => {
+                const isSelected = index === selectedIndex;
                 if (suggestion.kind === 'command') {
                     const Icon = suggestion.name === 'web' ? Globe : BookOpen;
                     return (
                         <button
                             key={suggestion.key}
                             type="button"
+                            role="option"
+                            aria-selected={isSelected}
                             onClick={() => onSelect(suggestion)}
-                            className={`flex w-full items-center gap-2 px-2 py-1.5 text-left ${index === selectedIndex ? 'bg-(--accent-ai)/15 text-(--fg-primary)' : 'text-(--fg-secondary) hover:bg-(--bg-surface-hover)'}`}
+                            className={`flex w-full items-center gap-2 px-2 py-1.5 text-left ${isSelected ? 'bg-(--accent-ai)/15 text-(--fg-primary)' : 'text-(--fg-secondary) hover:bg-(--bg-surface-hover)'}`}
                         >
                             <Icon className="h-3.5 w-3.5 shrink-0 text-(--accent-ai)" />
                             <span className="min-w-0 flex-1 truncate text-[11px]">@{suggestion.name}</span>
@@ -39,8 +45,10 @@ export const MentionSuggestions: React.FC<{
                     <button
                         key={suggestion.key}
                         type="button"
+                        role="option"
+                        aria-selected={isSelected}
                         onClick={() => onSelect(suggestion)}
-                        className={`flex w-full items-center gap-2 px-2 py-1.5 text-left ${index === selectedIndex ? 'bg-(--accent-ai)/15 text-(--fg-primary)' : 'text-(--fg-secondary) hover:bg-(--bg-surface-hover)'}`}
+                        className={`flex w-full items-center gap-2 px-2 py-1.5 text-left ${isSelected ? 'bg-(--accent-ai)/15 text-(--fg-primary)' : 'text-(--fg-secondary) hover:bg-(--bg-surface-hover)'}`}
                     >
                         <Icon className="h-3.5 w-3.5 shrink-0 text-(--accent-ai)" />
                         <span className="min-w-0 flex-1 truncate text-[11px]">@{suggestion.entry.path}</span>
