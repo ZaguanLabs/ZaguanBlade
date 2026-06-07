@@ -15,6 +15,7 @@ interface TerminalTab {
     command?: string;
     displayCommand?: string;
     interactive?: boolean;
+    externalProcess?: boolean;
     transient?: boolean;
 }
 
@@ -97,6 +98,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(({
             command?: string;
             displayCommand?: string;
             interactive?: boolean;
+            externalProcess?: boolean;
             focus?: boolean;
             transient?: boolean;
         }>('open-terminal', (event) => {
@@ -115,6 +117,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(({
                     command: event.payload.command,
                     displayCommand: event.payload.displayCommand,
                     interactive,
+                    externalProcess: event.payload.externalProcess,
                     transient: event.payload.transient,
                 };
 
@@ -206,7 +209,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(({
                         }}
                     >
                         <Suspense fallback={<div className="h-full w-full bg-(--term-bg)" />}>
-                            <Terminal id={term.id} cwd={term.cwd} command={term.command} displayCommand={term.displayCommand} interactive={term.interactive} />
+                            <Terminal id={term.id} cwd={term.cwd} command={term.command} displayCommand={term.displayCommand} interactive={term.interactive} externalProcess={term.externalProcess} />
                         </Suspense>
                     </div>
                 ))}
@@ -220,7 +223,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(({
                 <div className="p-2 text-xs font-semibold text-(--fg-tertiary) uppercase tracking-wider flex items-center justify-between">
                     <span>{t('terminal.terminals')}</span>
                     <button type="button" onClick={addTerminal} aria-label={t('terminal.newTerminal')} className="hover:text-(--fg-primary) transition-colors">
-                        <Plus className="w-4 h-4" />
+                        <Plus className="w-4 h-4" aria-hidden="true" />
                     </button>
                 </div>
 
@@ -242,16 +245,17 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(({
                                 onClick={() => setActiveId(term.id)}
                                 className="flex min-w-0 flex-1 items-center gap-2 truncate text-left"
                             >
-                                <TerminalIcon className="w-3.5 h-3.5 opacity-70" />
+                                <TerminalIcon className="w-3.5 h-3.5 opacity-70" aria-hidden="true" />
                                 <span className="truncate">{term.title}</span>
                             </button>
                             {terminals.length > 1 && (
                                 <button
                                     type="button"
                                     onClick={(e) => closeTerminal(e, term.id)}
+                                    aria-label={t('terminal.closeTerminal', { title: term.title })}
                                     className="opacity-0 group-hover:opacity-100 rounded-[calc(var(--panel-radius)*0.35)] p-0.5 transition-colors hover:bg-(--bg-surface-hover)"
                                 >
-                                    <X className="w-3 h-3" />
+                                    <X className="w-3 h-3" aria-hidden="true" />
                                 </button>
                             )}
                         </div>

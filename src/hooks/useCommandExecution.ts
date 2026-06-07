@@ -51,6 +51,7 @@ type BladeCmdExitedPayload = {
 
 const DETACHED_MARKER = '[run_command] detached pid=';
 const TERMINAL_READY_TIMEOUT_MS = 15000;
+const COMMAND_TERMINAL_ID = 'ai-cmd-runner';
 
 const buildCommandTerminalId = (callId: string) => `ai-cmd-${callId}`;
 
@@ -65,35 +66,10 @@ export function buildRunCommandTerminalSpawnCommand(
     blocking = true,
     waitMsBeforeAsync?: number,
 ) {
-    const escapedCallId = escapeShellArgValue(callId);
-    const startSentinel = `printf '\\n##BLADE_CMD_START:%s##\\n' ${escapedCallId}`;
-    const exitSentinel = `printf '\\n##BLADE_CMD_EXIT:%s:%s##\\n' ${escapedCallId} "$__blade_ec"`;
-
-    if (blocking) {
-        return [
-            startSentinel,
-            `( ${commandToRun} )`,
-            '__blade_ec=$?',
-            exitSentinel,
-            'unset __blade_ec',
-        ].join('; ');
-    }
-
-    const waitMs = typeof waitMsBeforeAsync === 'number'
-        ? Math.max(0, waitMsBeforeAsync)
-        : 1000;
-    const waitSeconds = (waitMs / 1000).toString();
-
-    return [
-        startSentinel,
-        `( ${commandToRun} ) & __blade_pid=$!`,
-        waitMs > 0 ? `sleep ${waitSeconds}` : null,
-        `if kill -0 "$__blade_pid" 2>/dev/null; then disown "$__blade_pid" 2>/dev/null || true; echo '${DETACHED_MARKER}'"$__blade_pid"; __blade_ec=0; ${exitSentinel}; unset __blade_ec __blade_pid; return 0 2>/dev/null || true; fi`,
-        'wait "$__blade_pid"',
-        '__blade_ec=$?',
-        exitSentinel,
-        'unset __blade_ec __blade_pid',
-    ].filter(Boolean).join('; ');
+    void callId;
+    void blocking;
+    void waitMsBeforeAsync;
+    return commandToRun;
 }
 
 export function useCommandExecution() {
@@ -202,6 +178,7 @@ export function useCommandExecution() {
         interactive = true,
         waitForReady = true,
         displayCommand?: string,
+        externalProcess = false,
     ) => {
         const existing = terminalsRef.current.get(terminalId);
         let openedTerminalWithDisplayCommand = false;
@@ -214,14 +191,15 @@ export function useCommandExecution() {
                 focus: true,
                 transient: terminalId !== BLADE_TERMINAL_ID,
                 displayCommand,
+                externalProcess,
             });
+            if (displayCommand) {
+                await emit('terminal-display-command', {
+                    id: terminalId,
+                    command: displayCommand,
+                });
+            }
             if (command) {
-                if (displayCommand) {
-                    await emit('terminal-display-command', {
-                        id: terminalId,
-                        command: displayCommand,
-                    });
-                }
                 await BladeDispatcher.terminal({
                     type: 'Input',
                     payload: { id: terminalId, data: `${command}\n`, hidden: true },
@@ -250,6 +228,7 @@ export function useCommandExecution() {
                 focus: true,
                 transient: terminalId !== BLADE_TERMINAL_ID,
                 displayCommand,
+                externalProcess,
             });
             openedTerminalWithDisplayCommand = true;
         }
@@ -273,9 +252,12 @@ export function useCommandExecution() {
     }, [updateTerminal, waitForTerminalReady]);
 
     const createCommandTerminal = useCallback((callId: string, cwd?: string): ManagedTerminal => {
+        const id = terminalsRef.current.has(COMMAND_TERMINAL_ID)
+            ? buildCommandTerminalId(callId)
+            : COMMAND_TERMINAL_ID;
         const terminal: ManagedTerminal = {
-            id: buildCommandTerminalId(callId),
-            title: `Blade ${extraTerminalCounterRef.current}`,
+            id,
+            title: id === COMMAND_TERMINAL_ID ? 'Blade' : `Blade ${extraTerminalCounterRef.current}`,
             cwd,
             ready: false,
             opening: false,
@@ -283,29 +265,17 @@ export function useCommandExecution() {
             backgroundLocked: false,
             primary: false,
         };
-        extraTerminalCounterRef.current += 1;
+        if (id !== COMMAND_TERMINAL_ID) {
+            extraTerminalCounterRef.current += 1;
+        }
         terminalsRef.current.set(terminal.id, terminal);
         return terminal;
     }, []);
 
     const reserveTerminalForCommand = useCallback((callId: string, cwd?: string) => {
-        // Try to reuse the primary terminal first
-        let terminal = terminalsRef.current.get(BLADE_TERMINAL_ID);
-        
-        // If the primary doesn't exist, is busy, or is locked in background
-        if (!terminal || terminal.activeCallId || terminal.backgroundLocked) {
-            // Find another idle terminal
-            const idleTerminal = Array.from(terminalsRef.current.values()).find(t => 
-                !t.primary && !t.activeCallId && !t.backgroundLocked && t.id.startsWith('ai-cmd-')
-            );
-            
-            if (idleTerminal) {
-                terminal = idleTerminal;
-            } else {
-                // If all are busy, create a new one
-                terminal = createCommandTerminal(callId, cwd);
-            }
-        }
+        const terminal = Array.from(terminalsRef.current.values()).find(t =>
+            !t.primary && !t.activeCallId && !t.backgroundLocked && t.id.startsWith('ai-cmd-')
+        ) ?? createCommandTerminal(callId, cwd);
 
         updateTerminal(terminal.id, current => {
             const base = current ?? terminal!;
@@ -338,16 +308,6 @@ export function useCommandExecution() {
         return buffered;
     }, []);
 
-    const buildTerminalSpawnCommand = useCallback((pending: PendingCommand) => {
-        const commandToRun = buildCommandForExecution(pending);
-        return buildRunCommandTerminalSpawnCommand(
-            pending.callId,
-            commandToRun,
-            pending.blocking,
-            pending.waitMsBeforeAsync,
-        );
-    }, [buildCommandForExecution]);
-
     const releaseTerminalReservation = useCallback((pending: PendingCommand, backgroundLocked: boolean) => {
         updateTerminal(pending.terminalId, terminal => {
             if (!terminal) {
@@ -379,6 +339,16 @@ export function useCommandExecution() {
                 };
             }
 
+            if (terminal.id.startsWith('ai-cmd-')) {
+                return {
+                    ...terminal,
+                    ready: true,
+                    opening: false,
+                    activeCallId: null,
+                    backgroundLocked: false,
+                };
+            }
+
             return undefined;
         });
     }, [updateTerminal]);
@@ -404,7 +374,12 @@ export function useCommandExecution() {
     }, [handleCommandComplete]);
 
     const sendCommandToBlade = useCallback(async (pending: PendingCommand) => {
-        const command = buildTerminalSpawnCommand(pending);
+        const command = buildRunCommandTerminalSpawnCommand(
+            pending.callId,
+            buildCommandForExecution(pending),
+            pending.blocking,
+            pending.waitMsBeforeAsync,
+        );
 
         try {
             commandOutputBuffersRef.current.delete(pending.callId);
@@ -414,11 +389,24 @@ export function useCommandExecution() {
                 pending.terminalId,
                 pending.terminalTitle,
                 pending.cwd,
-                command,
+                undefined,
                 true,
                 true,
                 pending.command,
+                true,
             );
+
+            await invoke('execute_terminal_command', {
+                callId: pending.callId,
+                terminalId: pending.terminalId,
+                command,
+                program: pending.program,
+                args: pending.args || [],
+                shell: pending.shell,
+                cwd: pending.cwd,
+                blocking: pending.blocking,
+                waitMsBeforeAsync: pending.waitMsBeforeAsync,
+            });
         } catch (err) {
             activeTerminalCommandRef.current.delete(pending.terminalId);
             invalidateTerminal(pending.terminalId);
@@ -437,7 +425,7 @@ export function useCommandExecution() {
             pendingCommandsRef.current.delete(pending.callId);
             await handleCommandComplete(pending.callId, `Failed to execute command in Blade terminal: ${String(err)}`, 1);
         }
-    }, [buildTerminalSpawnCommand, createCommandTerminal, handleCommandComplete, invalidateTerminal, openManagedTerminal, releaseTerminalReservation]);
+    }, [buildCommandForExecution, createCommandTerminal, handleCommandComplete, invalidateTerminal, openManagedTerminal, releaseTerminalReservation]);
 
     const stopCommandExecution = useCallback(async (callId: string) => {
         const pending = pendingCommandsRef.current.get(callId);

@@ -1,6 +1,6 @@
 use crate::blade_event_scheduler;
 use crate::events::{event_names, TerminalCwdChangedPayload};
-use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
+use portable_pty::{ChildKiller, CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use serde::Serialize;
 use std::{
     collections::HashMap,
@@ -10,6 +10,7 @@ use std::{
         Arc, Mutex,
     },
     thread,
+    time::{Duration, Instant},
 };
 use tauri::{Emitter, Runtime};
 
@@ -65,6 +66,7 @@ pub struct TerminalManager {
     // Map of Terminal ID -> PtyState
     pub ptys: Arc<Mutex<HashMap<String, PtyState>>>,
     pub pending_writes: Arc<Mutex<HashMap<String, Vec<PendingTerminalWrite>>>>,
+    pub external_killers: Arc<Mutex<HashMap<String, Box<dyn ChildKiller + Send + Sync>>>>,
 }
 
 impl TerminalManager {
@@ -72,6 +74,7 @@ impl TerminalManager {
         Self {
             ptys: Arc::new(Mutex::new(HashMap::new())),
             pending_writes: Arc::new(Mutex::new(HashMap::new())),
+            external_killers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -218,6 +221,44 @@ fn workspace_default_cwd(state: &tauri::State<'_, crate::AppState>) -> Option<St
     ws.workspace
         .as_ref()
         .map(|p| p.to_string_lossy().to_string())
+}
+
+fn shell_command_builder(command: &str) -> CommandBuilder {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string());
+    let shell_name = std::path::Path::new(&shell)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("sh");
+
+    let mut cmd = CommandBuilder::new(&shell);
+    if shell_name == "bash" || shell_name == "zsh" {
+        cmd.arg("-l");
+    }
+    cmd.arg("-c");
+    cmd.arg(command);
+    cmd
+}
+
+fn run_command_builder(
+    command: &str,
+    program: Option<String>,
+    args: Vec<String>,
+    shell: Option<bool>,
+) -> Result<CommandBuilder, String> {
+    let use_shell = shell.unwrap_or(program.is_none());
+    if use_shell {
+        return Ok(shell_command_builder(command));
+    }
+
+    let Some(program) = program else {
+        return Err("non-shell command requires a program".to_string());
+    };
+
+    let mut cmd = CommandBuilder::new(&program);
+    for arg in &args {
+        cmd.arg(arg);
+    }
+    Ok(cmd)
 }
 
 fn strip_ansi_escapes(input: &str) -> String {
@@ -1114,6 +1155,14 @@ pub fn kill_terminal(id: String, state: tauri::State<'_, TerminalManager>) -> Re
         .lock()
         .map_err(|e| e.to_string())?
         .remove(&id);
+    if let Some(mut killer) = state
+        .external_killers
+        .lock()
+        .map_err(|e| e.to_string())?
+        .remove(&id)
+    {
+        return killer.kill().map_err(|e| e.to_string());
+    }
     let mut ptys = state.ptys.lock().map_err(|e| e.to_string())?;
     let pty = ptys
         .get_mut(&id)
@@ -1201,6 +1250,183 @@ pub async fn execute_native_command(
     })
     .await
     .map_err(|e| format!("execute native command task failed: {}", e))?
+}
+
+#[tauri::command]
+pub async fn execute_terminal_command(
+    call_id: String,
+    terminal_id: String,
+    command: String,
+    program: Option<String>,
+    args: Vec<String>,
+    shell: Option<bool>,
+    cwd: Option<String>,
+    blocking: bool,
+    wait_ms_before_async: Option<u64>,
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, crate::AppState>,
+    terminal_manager: tauri::State<'_, TerminalManager>,
+) -> Result<(), String> {
+    let working_dir = cwd.or_else(|| workspace_default_cwd(&state));
+    let executing_commands = state.executing_commands.clone();
+    let external_killers = terminal_manager.external_killers.clone();
+
+    tokio::task::spawn_blocking(move || {
+        let pty_system = NativePtySystem::default();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| e.to_string())?;
+
+        let mut cmd = run_command_builder(&command, program, args, shell)?;
+        if let Some(path) = working_dir {
+            cmd.cwd(path);
+        }
+        configure_terminal_environment(&mut cmd);
+
+        let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+        let child_killer = child.clone_killer();
+        let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+        drop(pair.slave);
+
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        {
+            let mut executing = executing_commands.lock().map_err(|e| e.to_string())?;
+            executing.insert(call_id.clone(), cancel_flag.clone());
+        }
+        {
+            let mut killers = external_killers.lock().map_err(|e| e.to_string())?;
+            killers.insert(terminal_id.clone(), child_killer);
+        }
+
+        thread::spawn(move || {
+            let output_buffer = Arc::new(Mutex::new(String::new()));
+            let reader_output = output_buffer.clone();
+            let reader_app = app_handle.clone();
+            let reader_terminal_id = terminal_id.clone();
+            let reader_handle = thread::spawn(move || {
+                let mut buffer = [0u8; 4096];
+                loop {
+                    match reader.read(&mut buffer) {
+                        Ok(n) if n > 0 => {
+                            let output = String::from_utf8_lossy(&buffer[..n]).to_string();
+                            if let Ok(mut collected) = reader_output.lock() {
+                                collected.push_str(&output);
+                            }
+                            emit_terminal_output(&reader_app, &reader_terminal_id, output);
+                        }
+                        Ok(_) => break,
+                        Err(_) => break,
+                    }
+                }
+            });
+
+            let deadline = if blocking {
+                None
+            } else {
+                let wait_ms = wait_ms_before_async.unwrap_or(1000);
+                Some(Instant::now() + Duration::from_millis(wait_ms))
+            };
+            let mut detached = false;
+
+            let exit_code = loop {
+                if cancel_flag.load(Ordering::Relaxed) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break 130;
+                }
+
+                match child.try_wait() {
+                    Ok(Some(status)) => break status.exit_code() as i32,
+                    Ok(None) => {}
+                    Err(_) => break 1,
+                }
+
+                if let Some(deadline) = deadline {
+                    if Instant::now() >= deadline {
+                        detached = true;
+                        break 0;
+                    }
+                }
+
+                thread::sleep(Duration::from_millis(50));
+            };
+
+            if detached {
+                let pid = child
+                    .process_id()
+                    .map(|pid| pid.to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+                let mut output = output_buffer
+                    .lock()
+                    .map(|buffer| buffer.clone())
+                    .unwrap_or_default();
+                if !output.ends_with('\n') && !output.is_empty() {
+                    output.push('\n');
+                }
+                output.push_str(&format!("[run_command] detached pid={pid}\n"));
+
+                let _ = app_handle.emit(
+                    "blade-cmd-exited",
+                    BladeCmdExited {
+                        terminal_id: terminal_id.clone(),
+                        call_id: call_id.clone(),
+                        exit_code: 0,
+                        output,
+                    },
+                );
+
+                if let Ok(mut executing) = executing_commands.lock() {
+                    executing.remove(&call_id);
+                }
+
+                let real_exit_code = match child.wait() {
+                    Ok(status) => status.exit_code() as i32,
+                    Err(_) => 1,
+                };
+                let _ = reader_handle.join();
+                if let Ok(mut killers) = external_killers.lock() {
+                    killers.remove(&terminal_id);
+                }
+                emit_terminal_exit(&app_handle, terminal_id.clone(), real_exit_code);
+                blade_event_scheduler::queue_refresh_explorer(&app_handle);
+                return;
+            }
+
+            let _ = reader_handle.join();
+            let output = output_buffer
+                .lock()
+                .map(|buffer| buffer.clone())
+                .unwrap_or_default();
+
+            let _ = app_handle.emit(
+                "blade-cmd-exited",
+                BladeCmdExited {
+                    terminal_id: terminal_id.clone(),
+                    call_id: call_id.clone(),
+                    exit_code,
+                    output,
+                },
+            );
+            emit_terminal_exit(&app_handle, terminal_id.clone(), exit_code);
+            blade_event_scheduler::queue_refresh_explorer(&app_handle);
+
+            if let Ok(mut killers) = external_killers.lock() {
+                killers.remove(&terminal_id);
+            }
+            if let Ok(mut executing) = executing_commands.lock() {
+                executing.remove(&call_id);
+            }
+        });
+
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("execute terminal command task failed: {}", e))?
 }
 
 #[tauri::command]

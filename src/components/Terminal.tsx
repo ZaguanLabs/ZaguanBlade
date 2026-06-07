@@ -126,9 +126,10 @@ interface TerminalProps {
     command?: string;
     displayCommand?: string;
     interactive?: boolean;
+    externalProcess?: boolean;
 }
 
-export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, command, displayCommand, interactive = true }) => {
+export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, command, displayCommand, interactive = true, externalProcess = false }) => {
     recordDebugPerf(`Terminal.render.${id}`);
     const { t } = useTranslation();
     const { themeId } = useTheme();
@@ -143,6 +144,7 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
     const initialCommandRef = useRef(command);
     const initialDisplayCommandRef = useRef(displayCommand);
     const initialInteractiveRef = useRef(interactive);
+    const initialExternalProcessRef = useRef(externalProcess);
     const { showMenu } = useContextMenu();
 
     // Context menu handler
@@ -439,6 +441,15 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
         // 2. Setup backend PTY
         const initBackend = async () => {
             try {
+                if (initialExternalProcessRef.current) {
+                    if (initialDisplayCommandRef.current) {
+                        writeDisplayCommand(initialDisplayCommandRef.current);
+                    }
+
+                    emit('terminal-ready', { id }).catch(console.error);
+                    return;
+                }
+
                 // Use provided cwd or fall back to workspace root
                 let terminalCwd = initialCwdRef.current;
                 if (!terminalCwd) {

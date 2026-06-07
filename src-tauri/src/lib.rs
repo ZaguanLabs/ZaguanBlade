@@ -213,6 +213,7 @@ pub fn run() {
             commands::tools::approve_tool_decision,
             commands::tools::send_approval_response,
             commands::tools::approve_single_command,
+            crate::terminal::execute_terminal_command,
             crate::terminal::execute_native_command,
             crate::terminal::cancel_command_execution,
             // History
