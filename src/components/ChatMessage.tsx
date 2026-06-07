@@ -153,19 +153,19 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
                 style={headerStyle}
             >
                 <div className="flex items-center gap-2 flex-1 min-w-0">
-                    <Brain className={`h-3 w-3 shrink-0 ${isStreaming ? 'animate-pulse text-(--accent-ai)' : 'text-(--fg-tertiary)'}`} />
+                    <Brain aria-hidden="true" className={`h-3 w-3 shrink-0 ${isStreaming ? 'animate-pulse text-(--accent-ai)' : 'text-(--fg-tertiary)'}`} />
                     <span className={`shrink-0 font-mono text-[9px] uppercase tracking-[0.16em] ${isStreaming ? 'text-(--accent-ai)' : 'text-(--fg-tertiary)'
                         }`}>
                         {t('chatMessage.reasoning')}
                     </span>
                 </div>
                 {isStreaming && (
-                    <Loader2 className="mr-1 h-2.5 w-2.5 shrink-0 animate-spin text-(--accent-ai)" />
+                    <Loader2 aria-hidden="true" className="mr-1 h-2.5 w-2.5 shrink-0 animate-spin text-(--accent-ai)" />
                 )}
                 {isExpanded ? (
-                    <ChevronDown className="h-3 w-3 shrink-0 text-(--fg-secondary)" />
+                    <ChevronDown aria-hidden="true" className="h-3 w-3 shrink-0 text-(--fg-secondary)" />
                 ) : (
-                    <ChevronRight className="h-3 w-3 shrink-0 text-(--fg-secondary)" />
+                    <ChevronRight aria-hidden="true" className="h-3 w-3 shrink-0 text-(--fg-secondary)" />
                 )}
             </button>
 
@@ -793,8 +793,8 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                     {isUser ? t('chatMessage.you') : (isAssistant ? t('chatMessage.assistant') : message.role)}
                                 </span>
                                 {isActive && isAssistant && (
-                                    <span className="inline-flex items-center gap-1 rounded-[calc(var(--panel-radius)*0.35)] border px-1.5 py-0.5 text-[9px] font-medium text-(--accent-ai)" style={assistantLiveStyle}>
-                                        <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                                    <span role="status" aria-live="polite" className="inline-flex items-center gap-1 rounded-[calc(var(--panel-radius)*0.35)] border px-1.5 py-0.5 text-[9px] font-medium text-(--accent-ai)" style={assistantLiveStyle}>
+                                        <Loader2 aria-hidden="true" className="h-2.5 w-2.5 animate-spin" />
                                         {t('chatMessage.live')}
                                     </span>
                                 )}
