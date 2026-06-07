@@ -107,6 +107,7 @@ export const MarkdownEditor = forwardRef<CodeEditorHandle, MarkdownEditorProps>(
                         style={mode === 'view' ? { backgroundColor: 'color-mix(in srgb, var(--accent-ai) 18%, transparent)' } : undefined}
                         title={t('editor.toggleEditView')}
                         aria-label={t('editor.toggleEditView')}
+                        aria-pressed={mode === 'view'}
                     >
                         {mode === 'edit' ? (
                             <>
