@@ -1009,6 +1009,70 @@ const AppLayoutInner: React.FC = () => {
     };
 
     const editorViewportBottomInset = !disableTerminalSurface && terminalHeight > 0 ? terminalHeight : 0;
+    const desktopShellV1 = readDebugFlag('desktopShellV1');
+    const shellGap = desktopShellV1 ? '0px' : 'var(--panel-gap)';
+    const activityBarStyle: React.CSSProperties = desktopShellV1 ? {
+        width: '46px',
+        backgroundColor: 'var(--surface-toolbar)',
+        borderRadius: '0',
+        borderRight: '1px solid var(--separator-default)',
+        boxShadow: 'var(--shadow-persistent)',
+    } : {
+        width: '46px',
+        backgroundColor: 'var(--bg-panel)',
+        borderRadius: 'var(--panel-radius)',
+        border: '1px solid var(--border-default)',
+        boxShadow: 'var(--panel-shadow)',
+    };
+    const sidebarStyle: React.CSSProperties = desktopShellV1 ? {
+        left: disableActivityBar ? '0px' : '46px',
+        borderRadius: '0',
+        borderRight: '1px solid var(--separator-default)',
+        boxShadow: 'var(--shadow-persistent)',
+        zIndex: 200,
+        transform: isSidebarOpen ? 'translateX(0)' : 'translateX(-100%)',
+    } : {
+        left: disableActivityBar ? 'var(--panel-gap)' : 'calc(46px + 2 * var(--panel-gap))',
+        borderRadius: 'var(--panel-radius)',
+        border: '1px solid var(--border-default)',
+        boxShadow: isSidebarOpen ? 'var(--panel-shadow)' : 'none',
+        zIndex: 200,
+        transform: isSidebarOpen ? 'translateX(0)' : 'translateX(-100%)',
+    };
+    const editorChromeStyle: React.CSSProperties | undefined = disableEditorChrome ? undefined : desktopShellV1 ? {
+        backgroundColor: 'var(--surface-editor)',
+        borderRadius: '0',
+        borderRight: '1px solid var(--separator-default)',
+        boxShadow: 'var(--shadow-persistent)',
+    } : {
+        backgroundColor: 'var(--bg-editor)',
+        borderRadius: 'var(--panel-radius)',
+        border: '1px solid var(--border-default)',
+        boxShadow: 'var(--panel-shadow)',
+    };
+    const terminalDrawerStyle: React.CSSProperties = {
+        height: terminalHeight,
+        backgroundColor: 'var(--term-bg)',
+        borderRadius: disableEditorChrome || desktopShellV1 ? '0' : `0 0 var(--panel-radius) var(--panel-radius)`,
+        boxShadow: disableEditorChrome || desktopShellV1 ? 'none' : '0 -10px 28px rgba(0,0,0,0.45)',
+        transform: terminalHeight > 0 ? 'translateY(0)' : 'translateY(100%)',
+        transition: isTerminalDragging ? 'none' : 'transform var(--transition-base)',
+    };
+    const chatChromeStyle: React.CSSProperties = disableChatChrome ? {
+        width: chatPanelWidth,
+    } : desktopShellV1 ? {
+        width: chatPanelWidth,
+        backgroundColor: 'var(--surface-pane)',
+        borderRadius: '0',
+        borderLeft: '1px solid var(--separator-default)',
+        boxShadow: 'var(--shadow-persistent)',
+    } : {
+        width: chatPanelWidth,
+        backgroundColor: 'var(--bg-panel)',
+        borderRadius: 'var(--panel-radius)',
+        border: '1px solid var(--border-default)',
+        boxShadow: 'var(--panel-shadow)',
+    };
 
     return (
         <div className="h-screen w-screen bg-(--bg-app) overflow-hidden flex flex-col relative font-sans text-(--fg-primary)">
@@ -1070,19 +1134,13 @@ const AppLayoutInner: React.FC = () => {
 
             <div
                 className="flex-1 flex overflow-hidden relative"
-                style={{ padding: 'var(--panel-gap)', gap: 'var(--panel-gap)' }}
+                style={{ padding: shellGap, gap: shellGap }}
             >
                 {/* Activity Bar (Vertical) — floating pill */}
                 {!disableActivityBar && (
                     <div
                         className="flex flex-col items-center py-4 gap-6 z-50 shrink-0 relative"
-                        style={{
-                            width: '46px',
-                            backgroundColor: 'var(--bg-panel)',
-                            borderRadius: 'var(--panel-radius)',
-                            border: '1px solid var(--border-default)',
-                            boxShadow: 'var(--panel-shadow)',
-                        }}
+                        style={activityBarStyle}
                     >
                     <button
                         type="button"
@@ -1172,14 +1230,7 @@ const AppLayoutInner: React.FC = () => {
                                 ? 'opacity-100 visible'
                                 : 'opacity-0 invisible pointer-events-none'}
                         `}
-                        style={{
-                            left: disableActivityBar ? 'var(--panel-gap)' : 'calc(46px + 2 * var(--panel-gap))',
-                            borderRadius: 'var(--panel-radius)',
-                            border: '1px solid var(--border-default)',
-                            boxShadow: isSidebarOpen ? 'var(--panel-shadow)' : 'none',
-                            zIndex: 200,
-                            transform: isSidebarOpen ? 'translateX(0)' : 'translateX(-100%)',
-                        }}
+                        style={sidebarStyle}
                     >
                     {activeSidebar === 'explorer' && (
                         <Suspense fallback={<div className="h-full flex items-center justify-center text-(--fg-tertiary)">{t('sidebar.loadingExplorer', 'Loading explorer...')}</div>}>
@@ -1216,18 +1267,13 @@ const AppLayoutInner: React.FC = () => {
                 )}
 
                 {/* Content Area */}
-                <div className="flex-1 flex min-w-0 overflow-hidden" style={{ gap: 'var(--panel-gap)' }}>
+                <div className="flex-1 flex min-w-0 overflow-hidden" style={{ gap: shellGap }}>
 
                     {/* Editor & Terminal — floating card */}
                     <div
                         ref={editorColumnRef}
                         className="flex-1 flex flex-col min-w-0 relative overflow-hidden"
-                        style={disableEditorChrome ? undefined : {
-                            backgroundColor: 'var(--bg-editor)',
-                            borderRadius: 'var(--panel-radius)',
-                            border: '1px solid var(--border-default)',
-                            boxShadow: 'var(--panel-shadow)',
-                        }}
+                        style={editorChromeStyle}
                     >
 
                         <div
@@ -1299,14 +1345,7 @@ const AppLayoutInner: React.FC = () => {
                         {!disableTerminalSurface && (
                             <div
                                 className="absolute bottom-0 left-0 right-0 z-20 flex flex-col overflow-hidden"
-                                style={{
-                                    height: terminalHeight,
-                                    backgroundColor: 'var(--term-bg)',
-                                    borderRadius: disableEditorChrome ? '0' : `0 0 var(--panel-radius) var(--panel-radius)`,
-                                    boxShadow: disableEditorChrome ? 'none' : '0 -10px 28px rgba(0,0,0,0.45)',
-                                    transform: terminalHeight > 0 ? 'translateY(0)' : 'translateY(100%)',
-                                    transition: isTerminalDragging ? 'none' : 'transform var(--transition-base)',
-                                }}
+                                style={terminalDrawerStyle}
                             >
                                 {/* Drag handle strip */}
                                 <div
@@ -1352,15 +1391,7 @@ const AppLayoutInner: React.FC = () => {
                     {/* AI Chat — floating card */}
                     {!disableChatSurface && (
                         <div
-                            style={disableChatChrome ? {
-                                width: chatPanelWidth,
-                            } : {
-                                width: chatPanelWidth,
-                                backgroundColor: 'var(--bg-panel)',
-                                borderRadius: 'var(--panel-radius)',
-                                border: '1px solid var(--border-default)',
-                                boxShadow: 'var(--panel-shadow)',
-                            }}
+                            style={chatChromeStyle}
                             className="min-w-[280px] max-w-[800px] flex flex-col z-30 overflow-hidden"
                         >
                             <Suspense fallback={<div className="flex-1 bg-(--bg-panel) h-full w-full" />}>
