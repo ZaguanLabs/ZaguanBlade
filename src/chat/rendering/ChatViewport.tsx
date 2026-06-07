@@ -9,6 +9,7 @@ import { FloatingJumpToBottomButton } from './FloatingJumpToBottomButton';
 import { useChatTimelineRows } from './useChatTimelineRows';
 import { shouldDetachChatAutoScrollOnWheel } from '../../utils/chatScroll';
 import { useSmoothWheelScroll } from '../../hooks/useSmoothWheelScroll';
+import { readDebugFlag } from '../../utils/debugFlags';
 import zbladeAppIcon from '../../assets/zblade-app-icon.png';
 
 const FOLLOW_BOTTOM_THRESHOLD_PX = 48;
@@ -63,6 +64,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
     onEditLastUserMessage,
 }) => {
     const { t } = useTranslation();
+    const compactEmptyStatesV1 = readDebugFlag('compactEmptyStatesV1');
     const scrollRef = useRef<HTMLDivElement>(null);
     const bottomRef = useRef<HTMLDivElement>(null);
     const [scrollMode, setScrollMode] = useState<'following' | 'detached'>('following');
@@ -155,18 +157,35 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
             <div ref={scrollRef} onScroll={handleScroll} onWheel={handleSmoothWheel} className="h-full overflow-y-auto overscroll-contain [overflow-anchor:none] scrollbar-thin scrollbar-thumb-(--bg-surface-hover) scrollbar-track-transparent">
                 <div className="mx-auto flex w-full max-w-none flex-col gap-0.5 px-0.5 py-4 md:px-1">
                     {messages.length === 0 && (
-                        <div className="mx-4 mt-10 rounded-(--panel-radius) border border-(--border-subtle) bg-(--bg-surface)/70 px-6 py-8 text-center shadow-(--panel-shadow)">
-                            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-[calc(var(--panel-radius)*0.9)] border border-[color-mix(in_srgb,var(--accent-ai)_24%,transparent)] bg-[color-mix(in_srgb,var(--accent-ai)_10%,transparent)] shadow-(--shadow-lg)">
-                                <img src={zbladeAppIcon} alt="" className="h-9 w-9 object-contain" draggable={false} />
+                        compactEmptyStatesV1 ? (
+                            <div className="mx-3 mt-3 border-b border-(--separator-subtle) px-1 pb-4 text-left">
+                                <div className="flex items-center gap-3">
+                                    <img src={zbladeAppIcon} alt="" className="h-8 w-8 object-contain" draggable={false} />
+                                    <div className="min-w-0">
+                                        <h2 className="text-sm font-semibold text-(--fg-primary)">{t('app.name')}</h2>
+                                        <p className="mt-1 truncate text-[11px] text-(--fg-tertiary)">
+                                            {workspaceRoot || t('chat.emptyState.intro')}
+                                        </p>
+                                    </div>
+                                </div>
+                                <p className="mt-3 max-w-md text-xs leading-5 text-(--fg-secondary)">
+                                    {t('chat.emptyState.tip')}
+                                </p>
                             </div>
-                            <h2 className="text-sm font-semibold uppercase tracking-[0.24em] text-(--fg-secondary)">{t('app.name')}</h2>
-                            <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-(--fg-tertiary)">
-                                {t('chat.emptyState.intro')}
-                            </p>
-                            <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-(--fg-secondary)">
-                                {t('chat.emptyState.tip')}
-                            </p>
-                        </div>
+                        ) : (
+                            <div className="mx-4 mt-10 rounded-(--panel-radius) border border-(--border-subtle) bg-(--bg-surface)/70 px-6 py-8 text-center shadow-(--panel-shadow)">
+                                <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-[calc(var(--panel-radius)*0.9)] border border-[color-mix(in_srgb,var(--accent-ai)_24%,transparent)] bg-[color-mix(in_srgb,var(--accent-ai)_10%,transparent)] shadow-(--shadow-lg)">
+                                    <img src={zbladeAppIcon} alt="" className="h-9 w-9 object-contain" draggable={false} />
+                                </div>
+                                <h2 className="text-sm font-semibold uppercase tracking-[0.24em] text-(--fg-secondary)">{t('app.name')}</h2>
+                                <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-(--fg-tertiary)">
+                                    {t('chat.emptyState.intro')}
+                                </p>
+                                <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-(--fg-secondary)">
+                                    {t('chat.emptyState.tip')}
+                                </p>
+                            </div>
+                        )
                     )}
 
                     {rows.map((row) => {
