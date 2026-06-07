@@ -20,6 +20,7 @@ import { Breadcrumb } from './editor/Breadcrumb';
 import { useUncommittedChanges } from '../hooks/useUncommittedChanges';
 import { formatBladeError, formatUnknownBackendError } from '../utils/backendErrors';
 import { recordDebugPerf } from '../utils/debugPerf';
+import { readDebugFlag } from '../utils/debugFlags';
 import {
     createEditorContentSnapshot,
     getEditorContentStatePropagation,
@@ -44,11 +45,13 @@ export type EditorContentState = EditorContentSnapshot;
 
 const WelcomePage: React.FC<{
     hasRemoteApiKey?: boolean | null;
+    workspaceRoot?: string | null;
     onOpenSettings?: () => void;
-}> = ({ hasRemoteApiKey = null, onOpenSettings }) => {
+}> = ({ hasRemoteApiKey = null, workspaceRoot = null, onOpenSettings }) => {
     const { t } = useTranslation();
     const [hasApiKey, setHasApiKey] = useState<boolean>(false);
     const [isLoading, setIsLoading] = useState(hasRemoteApiKey === null);
+    const compactEmptyStatesV1 = readDebugFlag('compactEmptyStatesV1');
 
     const openSettingsSection = (section?: 'account' | 'localai') => {
         if (onOpenSettings) {
@@ -90,6 +93,69 @@ const WelcomePage: React.FC<{
             unlistenPromise.then(unlisten => unlisten());
         };
     }, [hasRemoteApiKey]);
+
+    if (compactEmptyStatesV1) {
+        return (
+            <div className="h-full bg-(--bg-editor) p-6 text-left text-(--fg-primary) animate-in fade-in duration-(--transition-base)">
+                <div className="max-w-2xl">
+                    <div className="flex items-center gap-3 border-b border-(--separator-subtle) pb-4">
+                        <img
+                            src={zbladeLogoUrl}
+                            alt={t('app.name')}
+                            className="h-10 w-10 object-contain"
+                            draggable={false}
+                        />
+                        <div className="min-w-0">
+                            <h1 className="text-base font-semibold text-(--fg-primary)">
+                                {t('editor.landing.title')}
+                            </h1>
+                            <p className="mt-1 truncate font-mono text-[11px] text-(--fg-tertiary)">
+                                {workspaceRoot || t('editor.landing.subtitle')}
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="mt-5 max-w-sm space-y-2">
+                        {!isLoading && (
+                            <>
+                                <button
+                                    type="button"
+                                    onClick={() => openSettingsSection('localai')}
+                                    className="flex w-full items-center justify-center gap-2 rounded-(--radius-control) bg-(--accent-mention) px-3 py-2 text-sm font-medium text-(--fg-bright) transition-opacity hover:opacity-90"
+                                >
+                                    <Server className="h-4 w-4" />
+                                    {t('editor.landing.useLocalAi')}
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={() => openSettingsSection('account')}
+                                    className="flex w-full items-center justify-center gap-2 rounded-(--radius-control) border border-(--separator-subtle) bg-(--bg-surface) px-3 py-2 text-sm font-medium text-(--fg-primary) transition-colors hover:border-(--focus-ring) hover:bg-(--bg-surface-hover)"
+                                >
+                                    <Cloud className="h-4 w-4" />
+                                    {t('editor.landing.useCloudModels')}
+                                </button>
+
+                                <a
+                                    href={hasApiKey ? "https://zaguanai.com/dashboard" : "https://zaguanai.com/pricing"}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="flex w-full items-center justify-center gap-2 rounded-(--radius-control) px-3 py-1.5 text-sm font-medium text-(--fg-secondary) transition-colors hover:text-(--fg-primary)"
+                                >
+                                    {t('editor.landing.manageSubscription')}
+                                    <ArrowRight className="h-4 w-4 opacity-70" />
+                                </a>
+                            </>
+                        )}
+                    </div>
+
+                    <p className="mt-5 max-w-md text-xs leading-5 text-(--fg-tertiary)">
+                        {t('editor.landing.noApiKey')} {t('editor.landing.localPrivacy')}
+                    </p>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="h-full flex flex-col items-center justify-center bg-(--bg-editor) text-center p-8 animate-in fade-in duration-(--transition-slow)">
@@ -677,7 +743,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     const activeEditorContent = immediateTabContent ?? content;
 
     if (!activeFile) {
-        return <WelcomePage hasRemoteApiKey={hasRemoteApiKey} onOpenSettings={onOpenSettings} />;
+        return <WelcomePage hasRemoteApiKey={hasRemoteApiKey} workspaceRoot={workspaceRoot} onOpenSettings={onOpenSettings} />;
     }
 
     return (
