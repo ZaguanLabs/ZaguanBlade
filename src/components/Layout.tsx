@@ -1084,11 +1084,13 @@ const AppLayoutInner: React.FC = () => {
                             boxShadow: 'var(--panel-shadow)',
                         }}
                     >
-                    <div
+                    <button
+                        type="button"
                         onClick={() => toggleSidebar('explorer')}
                         title={t('activityBar.explorer')}
                         aria-label={t('activityBar.explorer')}
-                        className={`relative p-2 rounded-[calc(var(--panel-radius)*0.45)] cursor-pointer transition-all duration-(--transition-fast) ${isSidebarOpen && activeSidebar === 'explorer'
+                        aria-pressed={isSidebarOpen && activeSidebar === 'explorer'}
+                        className={`relative appearance-none border-0 p-2 rounded-[calc(var(--panel-radius)*0.45)] cursor-pointer transition-all duration-(--transition-fast) ${isSidebarOpen && activeSidebar === 'explorer'
                             ? 'text-(--fg-primary) bg-(--bg-surface)'
                             : 'text-(--fg-nav) hover:text-(--fg-primary) hover:bg-(--bg-surface)'}
                         `}
@@ -1099,12 +1101,14 @@ const AppLayoutInner: React.FC = () => {
                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
                         </svg>
-                    </div>
-                    <div
+                    </button>
+                    <button
+                        type="button"
                         onClick={() => toggleSidebar('git')}
                         title={t('activityBar.git')}
                         aria-label={t('activityBar.git')}
-                        className={`relative p-2 rounded-[calc(var(--panel-radius)*0.45)] cursor-pointer transition-all duration-(--transition-fast) ${isSidebarOpen && activeSidebar === 'git'
+                        aria-pressed={isSidebarOpen && activeSidebar === 'git'}
+                        className={`relative appearance-none border-0 p-2 rounded-[calc(var(--panel-radius)*0.45)] cursor-pointer transition-all duration-(--transition-fast) ${isSidebarOpen && activeSidebar === 'git'
                             ? 'text-(--fg-primary) bg-(--bg-surface)'
                             : 'text-(--fg-nav) hover:text-(--fg-primary) hover:bg-(--bg-surface)'}
                         `}
@@ -1118,12 +1122,14 @@ const AppLayoutInner: React.FC = () => {
                                 {Math.min(gitChangedCount, 99)}
                             </span>
                         )}
-                    </div>
-                    <div
+                    </button>
+                    <button
+                        type="button"
                         onClick={() => toggleSidebar('history')}
                         title={t('activityBar.fileHistory')}
                         aria-label={t('activityBar.fileHistory')}
-                        className={`relative p-2 rounded-[calc(var(--panel-radius)*0.45)] cursor-pointer transition-all duration-(--transition-fast) ${isSidebarOpen && activeSidebar === 'history'
+                        aria-pressed={isSidebarOpen && activeSidebar === 'history'}
+                        className={`relative appearance-none border-0 p-2 rounded-[calc(var(--panel-radius)*0.45)] cursor-pointer transition-all duration-(--transition-fast) ${isSidebarOpen && activeSidebar === 'history'
                             ? 'text-(--fg-primary) bg-(--bg-surface)'
                             : 'text-(--fg-nav) hover:text-(--fg-primary) hover:bg-(--bg-surface)'}
                         `}
@@ -1132,24 +1138,27 @@ const AppLayoutInner: React.FC = () => {
                             <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-(--accent-ai) rounded-r" />
                         )}
                         <Clock className="w-5 h-5" />
-                    </div>
-                    <div
+                    </button>
+                    <button
+                        type="button"
+                        disabled
                         title={t('activityBar.searchComingSoon')}
                         aria-label={t('activityBar.search')}
-                        className="hidden relative p-2 rounded-[calc(var(--panel-radius)*0.45)] text-(--fg-nav) opacity-40 cursor-not-allowed transition-all duration-(--transition-fast)"
+                        className="hidden relative appearance-none border-0 bg-transparent p-2 rounded-[calc(var(--panel-radius)*0.45)] text-(--fg-nav) opacity-40 cursor-not-allowed transition-all duration-(--transition-fast)"
                     >
                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                         </svg>
-                    </div>
-                    <div
+                    </button>
+                    <button
+                        type="button"
                         onClick={() => setIsSettingsOpen(true)}
                         title={t('activityBar.settings')}
                         aria-label={t('activityBar.settings')}
-                        className="relative mt-auto p-2 rounded-[calc(var(--panel-radius)*0.45)] text-(--fg-nav) hover:text-(--fg-primary) hover:bg-(--bg-surface) transition-all duration-(--transition-fast) cursor-pointer"
+                        className="relative mt-auto appearance-none border-0 bg-transparent p-2 rounded-[calc(var(--panel-radius)*0.45)] text-(--fg-nav) hover:text-(--fg-primary) hover:bg-(--bg-surface) transition-all duration-(--transition-fast) cursor-pointer"
                     >
                         <Settings className="w-5 h-5" />
-                    </div>
+                    </button>
                     </div>
                 )}
 
