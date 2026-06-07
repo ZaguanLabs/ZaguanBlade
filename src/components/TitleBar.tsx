@@ -232,6 +232,7 @@ export const TitleBar: React.FC = () => {
                         onClick={handleMinimize}
                         className="window-control-btn h-7 w-7 rounded-[calc(var(--panel-radius)*0.45)] flex items-center justify-center text-(--fg-tertiary) hover:bg-(--bg-surface) hover:text-(--fg-secondary) active:scale-95 transition-all duration-(--transition-fast)"
                         title={t('windowControls.minimize')}
+                        aria-label={t('windowControls.minimize')}
                     >
                         <Minus className="w-3.5 h-3.5" strokeWidth={1.8} />
                     </button>
@@ -242,6 +243,7 @@ export const TitleBar: React.FC = () => {
                         onClick={handleMaximizeRestore}
                         className="window-control-btn h-7 w-7 rounded-[calc(var(--panel-radius)*0.45)] flex items-center justify-center text-(--fg-tertiary) hover:bg-(--bg-surface) hover:text-(--fg-secondary) active:scale-95 transition-all duration-(--transition-fast)"
                         title={isMaximized ? t('windowControls.restore') : t('windowControls.maximize')}
+                        aria-label={isMaximized ? t('windowControls.restore') : t('windowControls.maximize')}
                     >
                         {isMaximized ? (
                             <Maximize2 className="w-3 h-3" strokeWidth={1.8} />
@@ -256,6 +258,7 @@ export const TitleBar: React.FC = () => {
                         onClick={handleClose}
                         className="window-control-btn h-7 w-7 rounded-[calc(var(--panel-radius)*0.45)] flex items-center justify-center text-(--fg-tertiary) hover:bg-(--state-danger) hover:text-(--fg-bright) active:scale-95 transition-all duration-(--transition-fast)"
                         title={t('windowControls.close')}
+                        aria-label={t('windowControls.close')}
                     >
                         <X className="w-3.5 h-3.5" strokeWidth={1.8} />
                     </button>

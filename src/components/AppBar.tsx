@@ -469,6 +469,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                         onClick={handleMinimize}
                         className="h-7 w-7 rounded-(--radius-control) flex items-center justify-center text-(--fg-tertiary) hover:bg-(--surface-overlay) hover:text-(--fg-secondary) active:scale-95 transition-all duration-150"
                         title={t('windowControls.minimize')}
+                        aria-label={t('windowControls.minimize')}
                     >
                         <Minus className="w-3.5 h-3.5" strokeWidth={1.8} />
                     </button>
@@ -477,6 +478,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                         onClick={handleMaximizeRestore}
                         className="h-7 w-7 rounded-(--radius-control) flex items-center justify-center text-(--fg-tertiary) hover:bg-(--surface-overlay) hover:text-(--fg-secondary) active:scale-95 transition-all duration-150"
                         title={isMaximized ? t('windowControls.restore') : t('windowControls.maximize')}
+                        aria-label={isMaximized ? t('windowControls.restore') : t('windowControls.maximize')}
                     >
                         {isMaximized ? (
                             <Maximize2 className="w-3 h-3" strokeWidth={1.8} />
@@ -489,6 +491,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                         onClick={handleClose}
                         className="h-7 w-7 rounded-(--radius-control) flex items-center justify-center text-(--fg-tertiary) hover:bg-(--state-danger) hover:text-(--fg-bright) active:scale-95 transition-all duration-150"
                         title={t('windowControls.close')}
+                        aria-label={t('windowControls.close')}
                     >
                         <X className="w-3.5 h-3.5" strokeWidth={1.8} />
                     </button>
