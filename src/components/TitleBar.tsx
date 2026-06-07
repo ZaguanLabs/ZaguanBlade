@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useId, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Minus, Square, X, Maximize2, ChevronDown } from 'lucide-react';
@@ -19,6 +19,7 @@ export const TitleBar: React.FC = () => {
     const [isMaximized, setIsMaximized] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [fileMenuOpen, setFileMenuOpen] = useState(false);
+    const fileMenuId = useId();
     const fileMenuRef = useRef<HTMLDivElement>(null);
     const appWindow = getCurrentWindow();
 
@@ -135,21 +136,29 @@ export const TitleBar: React.FC = () => {
                         <button
                             type="button"
                             onClick={handleFileMenuClick}
+                            aria-haspopup="menu"
+                            aria-expanded={fileMenuOpen}
+                            aria-controls={fileMenuOpen ? fileMenuId : undefined}
                             className={`flex items-center gap-1 px-3 h-9 text-[11px] font-medium transition-colors ${fileMenuOpen
                                     ? 'bg-(--bg-surface) text-(--fg-primary)'
                                     : 'text-(--fg-tertiary) hover:bg-(--bg-surface) hover:text-(--fg-secondary)'
                                 }`}
                         >
                             {t('app.menu.file')}
-                            <ChevronDown className={`w-3 h-3 transition-transform ${fileMenuOpen ? 'rotate-180' : ''}`} />
+                            <ChevronDown className={`w-3 h-3 transition-transform ${fileMenuOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
                         </button>
 
                         {/* File Menu Dropdown */}
                         {fileMenuOpen && (
-                            <div className="absolute top-full left-0 mt-0.5 min-w-[180px] py-1.5 bg-(--bg-surface) border border-(--border-focus) rounded-[calc(var(--panel-radius)*0.75)] shadow-(--shadow-xl) z-100"
+                            <div
+                                id={fileMenuId}
+                                role="menu"
+                                aria-label={t('app.menu.file')}
+                                className="absolute top-full left-0 mt-0.5 min-w-[180px] py-1.5 bg-(--bg-surface) border border-(--border-focus) rounded-[calc(var(--panel-radius)*0.75)] shadow-(--shadow-xl) z-100"
                             >
                                 <button
                                     type="button"
+                                    role="menuitem"
                                     onClick={() => {
                                         setFileMenuOpen(false);
                                         window.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, bubbles: true }));
@@ -161,15 +170,17 @@ export const TitleBar: React.FC = () => {
                                 </button>
                                 <button
                                     type="button"
+                                    role="menuitem"
                                     onClick={() => { setFileMenuOpen(false); }}
                                     className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-primary) hover:bg-(--bg-surface-hover) transition-colors"
                                 >
                                     <span>{t('titleBar.openFolder')}</span>
                                     <span className="text-[10px] text-(--fg-tertiary) font-mono">Ctrl+O</span>
                                 </button>
-                                <div className="my-1.5 mx-2 h-px bg-(--border-subtle)" />
+                                <div role="separator" className="my-1.5 mx-2 h-px bg-(--border-subtle)" />
                                 <button
                                     type="button"
+                                    role="menuitem"
                                     onClick={() => { setFileMenuOpen(false); }}
                                     className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-primary) hover:bg-(--bg-surface-hover) transition-colors"
                                 >
@@ -178,15 +189,17 @@ export const TitleBar: React.FC = () => {
                                 </button>
                                 <button
                                     type="button"
+                                    role="menuitem"
                                     onClick={() => { setFileMenuOpen(false); }}
                                     className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-primary) hover:bg-(--bg-surface-hover) transition-colors"
                                 >
                                     <span>{t('common.saveAs')}</span>
                                     <span className="text-[10px] text-(--fg-tertiary) font-mono">Ctrl+Shift+S</span>
                                 </button>
-                                <div className="my-1.5 mx-2 h-px bg-(--border-subtle)" />
+                                <div role="separator" className="my-1.5 mx-2 h-px bg-(--border-subtle)" />
                                 <button
                                     type="button"
+                                    role="menuitem"
                                     onClick={() => { setFileMenuOpen(false); appWindow.close(); }}
                                     className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-primary) hover:bg-(--bg-surface-hover) transition-colors"
                                 >
@@ -234,7 +247,7 @@ export const TitleBar: React.FC = () => {
                         title={t('windowControls.minimize')}
                         aria-label={t('windowControls.minimize')}
                     >
-                        <Minus className="w-3.5 h-3.5" strokeWidth={1.8} />
+                        <Minus className="w-3.5 h-3.5" strokeWidth={1.8} aria-hidden="true" />
                     </button>
 
                     {/* Maximize/Restore */}
@@ -246,9 +259,9 @@ export const TitleBar: React.FC = () => {
                         aria-label={isMaximized ? t('windowControls.restore') : t('windowControls.maximize')}
                     >
                         {isMaximized ? (
-                            <Maximize2 className="w-3 h-3" strokeWidth={1.8} />
+                            <Maximize2 className="w-3 h-3" strokeWidth={1.8} aria-hidden="true" />
                         ) : (
-                            <Square className="w-3 h-3" strokeWidth={1.8} />
+                            <Square className="w-3 h-3" strokeWidth={1.8} aria-hidden="true" />
                         )}
                     </button>
 
@@ -260,7 +273,7 @@ export const TitleBar: React.FC = () => {
                         title={t('windowControls.close')}
                         aria-label={t('windowControls.close')}
                     >
-                        <X className="w-3.5 h-3.5" strokeWidth={1.8} />
+                        <X className="w-3.5 h-3.5" strokeWidth={1.8} aria-hidden="true" />
                     </button>
                 </div>
             )}

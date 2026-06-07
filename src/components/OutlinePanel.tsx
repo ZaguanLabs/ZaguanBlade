@@ -18,29 +18,29 @@ const SymbolIcon: React.FC<{ kind: string }> = ({ kind }) => {
 
     // Functions/Methods
     if (k.includes('function') || k.includes('method') || k === 'constructor')
-        return <FunctionSquare className="w-3.5 h-3.5 text-(--accent-planning)" />;
+        return <FunctionSquare className="w-3.5 h-3.5 text-(--accent-planning)" aria-hidden="true" />;
 
     // Classes/Structs/Interfaces
     if (k.includes('class') || k.includes('struct') || k.includes('interface') || k === 'impl' || k === 'trait')
-        return <Layout className="w-3.5 h-3.5 text-(--accent-warning)" />;
+        return <Layout className="w-3.5 h-3.5 text-(--accent-warning)" aria-hidden="true" />;
 
     // Variables/Constants
     if (k.includes('const') || k.includes('let') || k.includes('var') || k === 'field')
-        return <Variable className="w-3.5 h-3.5 text-(--accent-ai)" />;
+        return <Variable className="w-3.5 h-3.5 text-(--accent-ai)" aria-hidden="true" />;
 
     // Properties
     if (k.includes('property') || k === 'key')
-        return <Tag className="w-3.5 h-3.5 text-(--accent-planning)" />;
+        return <Tag className="w-3.5 h-3.5 text-(--accent-planning)" aria-hidden="true" />;
 
     // Modules
     if (k.includes('module') || k === 'mod')
-        return <Box className="w-3.5 h-3.5 text-(--accent-warning)" />;
+        return <Box className="w-3.5 h-3.5 text-(--accent-warning)" aria-hidden="true" />;
 
     // Misc Blocks
     if (k === 'object' || k === 'call_expression')
-        return <Braces className="w-3.5 h-3.5 text-(--fg-tertiary)" />;
+        return <Braces className="w-3.5 h-3.5 text-(--fg-tertiary)" aria-hidden="true" />;
 
-    return <FileText className="w-3.5 h-3.5 text-(--fg-tertiary)" />;
+    return <FileText className="w-3.5 h-3.5 text-(--fg-tertiary)" aria-hidden="true" />;
 };
 
 const OutlineItem: React.FC<{
@@ -73,9 +73,10 @@ const OutlineItem: React.FC<{
                         type="button"
                         className={`transition-transform hover:text-(--fg-primary) p-0.5 rounded-[calc(var(--panel-radius)*0.25)] ${expanded ? 'rotate-90' : ''}`}
                         onClick={toggleExpand}
-                        aria-label={expanded ? 'Collapse symbol' : 'Expand symbol'}
+                        aria-expanded={expanded}
+                        aria-label={expanded ? `Collapse ${node.name}` : `Expand ${node.name}`}
                     >
-                        <ChevronRight className="w-3 h-3 text-(--fg-tertiary)" />
+                        <ChevronRight className="w-3 h-3 text-(--fg-tertiary)" aria-hidden="true" />
                     </button>
                 ) : (
                     <span className="w-4" />

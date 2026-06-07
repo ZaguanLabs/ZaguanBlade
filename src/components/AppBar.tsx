@@ -271,7 +271,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                             }`}
                         >
                             {t('app.menu.file')}
-                            <ChevronDown className={`w-3 h-3 transition-transform ${fileMenuOpen ? 'rotate-180' : ''}`} />
+                            <ChevronDown className={`w-3 h-3 transition-transform ${fileMenuOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
                         </button>
 
                         {fileMenuOpen && (
@@ -423,9 +423,9 @@ export const AppBar: React.FC<AppBarProps> = ({
                                 }}
                             >
                                 {tab.isEphemeral ? (
-                                    <FileText className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-(--accent-warning)' : 'text-(--fg-tertiary)'}`} />
+                                    <FileText className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-(--accent-warning)' : 'text-(--fg-tertiary)'}`} aria-hidden="true" />
                                 ) : (
-                                    <span className={color}>{icon}</span>
+                                    <span className={color} aria-hidden="true">{icon}</span>
                                 )}
                                 <span className={isActive ? 'font-medium' : ''}>
                                     {tab.title}
@@ -435,6 +435,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                                         className={`w-1.5 h-1.5 rounded-full shrink-0 ${tab.hasUnreadAiEdit ? 'animate-pulse' : ''}`}
                                         style={{ backgroundColor: 'var(--accent-ai)' }}
                                         title={tab.hasUnreadAiEdit ? t('tabs.aiEditedUnread') : t('tabs.aiEdited')}
+                                        aria-hidden="true"
                                     />
                                 )}
                                 {tab.hasVirtualChanges && (
@@ -442,12 +443,14 @@ export const AppBar: React.FC<AppBarProps> = ({
                                         className="w-1.5 h-1.5 rounded-full shrink-0 animate-pulse"
                                         style={{ backgroundColor: 'var(--accent-warning)' }}
                                         title={tab.hasUnreadAiEdit ? t('tabs.aiPendingReviewUnread') : t('tabs.aiPendingReview')}
+                                        aria-hidden="true"
                                     />
                                 )}
                                 {tab.isDirty && !tab.hasVirtualChanges && (
                                     <span
                                         className="w-1.5 h-1.5 rounded-full shrink-0 group-hover:hidden"
                                         style={{ backgroundColor: 'var(--fg-secondary)' }}
+                                        aria-hidden="true"
                                     />
                                 )}
                                 <button
@@ -459,7 +462,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                                     }}
                                     className={`${isActive ? 'opacity-60' : 'opacity-0'} group-hover:opacity-60 hover:opacity-100! hover:bg-(--surface-overlay) rounded-(--radius-control) p-0.5 transition-all ml-0.5`}
                                 >
-                                    <X className="w-3 h-3" />
+                                    <X className="w-3 h-3" aria-hidden="true" />
                                 </button>
                             </div>
                         );
@@ -501,7 +504,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                         title={t('windowControls.minimize')}
                         aria-label={t('windowControls.minimize')}
                     >
-                        <Minus className="w-3.5 h-3.5" strokeWidth={1.8} />
+                        <Minus className="w-3.5 h-3.5" strokeWidth={1.8} aria-hidden="true" />
                     </button>
                     <button
                         type="button"
@@ -511,9 +514,9 @@ export const AppBar: React.FC<AppBarProps> = ({
                         aria-label={isMaximized ? t('windowControls.restore') : t('windowControls.maximize')}
                     >
                         {isMaximized ? (
-                            <Maximize2 className="w-3 h-3" strokeWidth={1.8} />
+                            <Maximize2 className="w-3 h-3" strokeWidth={1.8} aria-hidden="true" />
                         ) : (
-                            <Square className="w-3 h-3" strokeWidth={1.8} />
+                            <Square className="w-3 h-3" strokeWidth={1.8} aria-hidden="true" />
                         )}
                     </button>
                     <button
@@ -523,7 +526,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                         title={t('windowControls.close')}
                         aria-label={t('windowControls.close')}
                     >
-                        <X className="w-3.5 h-3.5" strokeWidth={1.8} />
+                        <X className="w-3.5 h-3.5" strokeWidth={1.8} aria-hidden="true" />
                     </button>
                 </div>
             )}
