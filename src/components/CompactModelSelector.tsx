@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { ModelInfo } from '../types/chat';
 import { ChevronDown, Check, Box, Cpu, Sparkles, BrainCircuit } from 'lucide-react';
 import { ThemedDropdownEmptyState, ThemedDropdownScrollArea, ThemedDropdownSectionLabel, ThemedDropdownSurface } from './ui/ThemedDropdown';
+import { centerElementInScrollContainer, findModelElement } from '../utils/dropdownScroll';
 
 interface CompactModelSelectorProps {
     models: ModelInfo[];
@@ -45,23 +46,13 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
         };
     }, [isOpen]);
 
-    // Scroll to selected model when dropdown opens
     useEffect(() => {
         if (isOpen && dropdownRef.current && selectedId) {
             requestAnimationFrame(() => {
                 const container = dropdownRef.current;
-                const selectedButton = container?.querySelector<HTMLElement>(`[data-model-id="${selectedId}"]`);
+                const selectedButton = container ? findModelElement(container, selectedId) : null;
                 if (container && selectedButton) {
-                    const itemTop = selectedButton.offsetTop;
-                    const itemBottom = itemTop + selectedButton.offsetHeight;
-                    const viewportTop = container.scrollTop;
-                    const viewportBottom = viewportTop + container.clientHeight;
-
-                    if (itemTop < viewportTop) {
-                        container.scrollTop = itemTop;
-                    } else if (itemBottom > viewportBottom) {
-                        container.scrollTop = itemBottom - container.clientHeight;
-                    }
+                    centerElementInScrollContainer(container, selectedButton);
                 }
             });
         }
@@ -69,10 +60,10 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
 
     const getModelIcon = (id: string) => {
         const lower = id.toLowerCase();
-        if (lower.includes('gpt')) return <Sparkles className="w-3 h-3 text-(--accent-ai)" />;
-        if (lower.includes('claude')) return <BrainCircuit className="w-3 h-3 text-(--accent-planning)" />;
-        if (lower.includes('gemini')) return <Cpu className="w-3 h-3 text-(--accent-mention)" />;
-        return <Box className="w-3 h-3 text-(--fg-tertiary)" />;
+        if (lower.includes('gpt')) return <Sparkles className="w-3 h-3 text-(--accent-ai)" aria-hidden="true" />;
+        if (lower.includes('claude')) return <BrainCircuit className="w-3 h-3 text-(--accent-planning)" aria-hidden="true" />;
+        if (lower.includes('gemini')) return <Cpu className="w-3 h-3 text-(--accent-mention)" aria-hidden="true" />;
+        return <Box className="w-3 h-3 text-(--fg-tertiary)" aria-hidden="true" />;
     };
 
     const renderModelItem = (model: ModelInfo) => {
@@ -105,7 +96,7 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
                     </div>
                 </div>
                 <div className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center ${isSelected ? 'text-(--accent-ai)' : 'text-transparent group-hover:text-(--fg-tertiary)'}`}>
-                    <Check className="h-3 w-3" />
+                    <Check className="h-3 w-3" aria-hidden="true" />
                 </div>
             </button>
         );
@@ -117,6 +108,7 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
                 type="button"
                 onClick={() => !disabled && setIsOpen(!isOpen)}
                 disabled={disabled}
+                aria-expanded={isOpen}
                 className={`
                     w-full flex items-center justify-between gap-1.5 rounded-[calc(var(--panel-radius)*0.35)] border border-(--border-subtle) bg-(--bg-app) px-2 py-1
                     transition-colors duration-150
@@ -125,13 +117,13 @@ const CompactModelSelectorComponent: React.FC<CompactModelSelectorProps> = ({ mo
             >
                 <div className="flex items-center gap-1 overflow-hidden">
                     <div className="flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-[calc(var(--panel-radius)*0.25)] border border-(--border-subtle) bg-(--bg-surface)">
-                        {selectedModel ? getModelIcon(selectedModel.id) : <Box className="w-3 h-3" />}
+                        {selectedModel ? getModelIcon(selectedModel.id) : <Box className="w-3 h-3" aria-hidden="true" />}
                     </div>
                     <span className="truncate text-[10px] font-medium text-(--fg-secondary)">
                         {selectedModel?.name || t('chat.modelSelection')}
                     </span>
                 </div>
-                <ChevronDown className={`h-2.5 w-2.5 text-(--fg-tertiary) transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
+                <ChevronDown className={`h-2.5 w-2.5 text-(--fg-tertiary) transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
             </button>
 
             {isOpen && (

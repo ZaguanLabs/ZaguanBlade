@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { ModelInfo } from '../types/chat';
 import { ChevronDown, Check, Box, Cpu, Sparkles, BrainCircuit } from 'lucide-react';
 import { ThemedDropdownEmptyState, ThemedDropdownScrollArea, ThemedDropdownSurface, themedDropdownItemClassName } from './ui/ThemedDropdown';
+import { centerElementInScrollContainer, findModelElement } from '../utils/dropdownScroll';
 
 interface ModelSelectorProps {
     models: ModelInfo[];
@@ -16,6 +17,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ models, selectedId
     const { t } = useTranslation();
     const [isOpen, setIsOpen] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
+    const dropdownRef = useRef<HTMLDivElement>(null);
     const selectedModel = models.find(m => m.id === selectedId) || null;
 
     useEffect(() => {
@@ -33,12 +35,24 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ models, selectedId
         };
     }, [isOpen]);
 
+    useEffect(() => {
+        if (isOpen && dropdownRef.current && selectedId) {
+            requestAnimationFrame(() => {
+                const container = dropdownRef.current;
+                const selectedButton = container ? findModelElement(container, selectedId) : null;
+                if (container && selectedButton) {
+                    centerElementInScrollContainer(container, selectedButton);
+                }
+            });
+        }
+    }, [isOpen, selectedId]);
+
     const getModelIcon = (id: string) => {
         const lower = id.toLowerCase();
-        if (lower.includes('gpt')) return <Sparkles className="w-3.5 h-3.5 text-(--accent-mention)" />;
-        if (lower.includes('claude')) return <BrainCircuit className="w-3.5 h-3.5 text-(--accent-warning)" />;
-        if (lower.includes('gemini')) return <Cpu className="w-3.5 h-3.5 text-(--accent-planning)" />;
-        return <Box className="w-3.5 h-3.5 text-(--fg-tertiary)" />;
+        if (lower.includes('gpt')) return <Sparkles className="w-3.5 h-3.5 text-(--accent-mention)" aria-hidden="true" />;
+        if (lower.includes('claude')) return <BrainCircuit className="w-3.5 h-3.5 text-(--accent-warning)" aria-hidden="true" />;
+        if (lower.includes('gemini')) return <Cpu className="w-3.5 h-3.5 text-(--accent-planning)" aria-hidden="true" />;
+        return <Box className="w-3.5 h-3.5 text-(--fg-tertiary)" aria-hidden="true" />;
     };
 
     const renderModelItem = (model: ModelInfo) => {
@@ -48,6 +62,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ models, selectedId
             <button
                 key={model.id}
                 type="button"
+                data-model-id={model.id}
                 onClick={() => {
                     onSelect(model.id);
                     setIsOpen(false);
@@ -77,7 +92,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ models, selectedId
                             ? 'border-(--accent-ai) bg-[color-mix(in_srgb,var(--accent-ai)_16%,transparent)] text-(--accent-ai)'
                             : 'border-(--border-default) bg-(--bg-app) text-(--fg-tertiary)'
                     }`}>
-                        <Check className={`h-3.5 w-3.5 transition-opacity duration-150 ${isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-45'}`} />
+                        <Check className={`h-3.5 w-3.5 transition-opacity duration-150 ${isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-45'}`} aria-hidden="true" />
                     </div>
                 </div>
             </button>
@@ -90,6 +105,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ models, selectedId
                 type="button"
                 onClick={() => !disabled && setIsOpen(!isOpen)}
                 disabled={disabled}
+                aria-expanded={isOpen}
                 className={`
                     w-full flex items-center justify-between px-3 py-1.5 
                     bg-(--bg-surface) hover:bg-(--bg-surface-hover)
@@ -101,7 +117,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ models, selectedId
             >
                 <div className="flex items-center gap-2 overflow-hidden">
                     <div className="shrink-0 p-0.5 rounded-[calc(var(--panel-radius)*0.25)] bg-(--bg-app)/50 border border-(--border-subtle)">
-                        {selectedModel ? getModelIcon(selectedModel.id) : <Box className="w-3 h-3" />}
+                        {selectedModel ? getModelIcon(selectedModel.id) : <Box className="w-3 h-3" aria-hidden="true" />}
                     </div>
                     <div className="flex flex-col items-start min-w-0">
                         <span className="text-[11px] font-medium text-(--fg-secondary) truncate w-full text-left">
@@ -109,7 +125,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ models, selectedId
                         </span>
                     </div>
                 </div>
-                <ChevronDown className={`w-3 h-3 text-(--fg-tertiary) transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
+                <ChevronDown className={`w-3 h-3 text-(--fg-tertiary) transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
             </button>
 
             {isOpen && (
@@ -125,7 +141,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ models, selectedId
                             {t('chat.modelPicker.empty')}
                         </ThemedDropdownEmptyState>
                     )}
-                    <ThemedDropdownScrollArea className="max-h-[300px]">
+                    <ThemedDropdownScrollArea ref={dropdownRef} className="max-h-[300px]">
                         {models.map(renderModelItem)}
                     </ThemedDropdownScrollArea>
                 </ThemedDropdownSurface>
