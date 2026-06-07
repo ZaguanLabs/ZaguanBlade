@@ -1,9 +1,9 @@
+use crate::protocol::ToolCall;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use crate::protocol::ToolCall;
 
 lazy_static::lazy_static! {
     static ref POLLING_TASK: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
@@ -137,12 +137,27 @@ async fn handle_message(app_handle: &AppHandle, client: &Client, token: &str, ms
     let status = state.remote_control.get_status().await;
     if status.telegram_chat_id.is_none() {
         state.remote_control.set_chat_id(chat_id.clone()).await;
-        let _ = send_message(client, token, &chat_id, "Connected to Zaguán Blade! Send me commands to execute.").await;
+        let _ = send_message(
+            client,
+            token,
+            &chat_id,
+            "Connected to Zaguán Blade! Send me commands to execute.",
+        )
+        .await;
         // Broadcast an event so frontend updates to "Connected"
-        let _ = app_handle.emit("remote_control_status", state.remote_control.get_status().await);
+        let _ = app_handle.emit(
+            "remote_control_status",
+            state.remote_control.get_status().await,
+        );
     } else if let Some(paired_id) = status.telegram_chat_id {
         if paired_id != chat_id {
-            let _ = send_message(client, token, &chat_id, "This bot is already paired with another user.").await;
+            let _ = send_message(
+                client,
+                token,
+                &chat_id,
+                "This bot is already paired with another user.",
+            )
+            .await;
             return;
         }
     }
@@ -156,7 +171,7 @@ async fn handle_message(app_handle: &AppHandle, client: &Client, token: &str, ms
         // Initialize active Telegram interaction
         let mut int_guard = ACTIVE_INTERACTION.lock().await;
         let msg_id = init_telegram_interaction(&chat_id, token, client).await;
-        
+
         *int_guard = Some(ActiveInteraction {
             chat_id: chat_id.clone(),
             message_id: msg_id,
@@ -175,13 +190,13 @@ async fn handle_message(app_handle: &AppHandle, client: &Client, token: &str, ms
 async fn init_telegram_interaction(chat_id: &str, token: &str, client: &Client) -> Option<i64> {
     let initial_text = "🤖 <b>Zaguán Blade is working...</b>";
     let url = format!("https://api.telegram.org/bot{}/sendMessage", token);
-    
+
     let req = SendMessageReq {
         chat_id: chat_id.to_string(),
         text: initial_text,
         parse_mode: Some("HTML".to_string()),
     };
-    
+
     if let Ok(resp) = client.post(&url).json(&req).send().await {
         if let Ok(send_resp) = resp.json::<SendMessageResult>().await {
             if send_resp.ok {
@@ -194,15 +209,15 @@ async fn init_telegram_interaction(chat_id: &str, token: &str, client: &Client) 
 
 fn escape_html(s: &str) -> String {
     s.replace("&", "&amp;")
-     .replace("<", "&lt;")
-     .replace(">", "&gt;")
-     .replace("\"", "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
 }
 
 fn format_tool_call(tc: &ToolCall) -> String {
     let name = &tc.function.name;
     let args_str = &tc.function.arguments;
-    
+
     let detail = if let Ok(val) = serde_json::from_str::<serde_json::Value>(args_str) {
         if let Some(cmd) = val.get("CommandLine").and_then(|v| v.as_str()) {
             format!("CommandLine: <code>{}</code>", escape_html(cmd))
@@ -216,26 +231,32 @@ fn format_tool_call(tc: &ToolCall) -> String {
     } else {
         escape_html(&args_str.chars().take(60).collect::<String>())
     };
-    
+
     let status_icon = match tc.status.as_deref() {
         Some("executing") | Some("running") => "⏳",
         Some("success") | Some("completed") | Some("done") => "✅",
         Some("failed") | Some("error") => "❌",
         _ => "🔧",
     };
-    
+
     let status_text = tc.status.as_deref().unwrap_or("queued");
-    
-    format!("{} <code>{}</code> ({}) - {}", status_icon, name, status_text, detail)
+
+    format!(
+        "{} <code>{}</code> ({}) - {}",
+        status_icon, name, status_text, detail
+    )
 }
 
 fn render_html(interaction: &ActiveInteraction) -> String {
     let mut parts = Vec::new();
-    
+
     if !interaction.reasoning_text.is_empty() {
-        parts.push(format!("🧠 <b>Thinking:</b>\n<i>{}</i>", escape_html(&interaction.reasoning_text)));
+        parts.push(format!(
+            "🧠 <b>Thinking:</b>\n<i>{}</i>",
+            escape_html(&interaction.reasoning_text)
+        ));
     }
-    
+
     if !interaction.tool_status.is_empty() {
         let mut tools_list = String::new();
         for tool in &interaction.tool_status {
@@ -243,13 +264,16 @@ fn render_html(interaction: &ActiveInteraction) -> String {
         }
         parts.push(format!("🔧 <b>Tools:</b>\n{}", tools_list));
     }
-    
+
     if !interaction.accumulated_text.is_empty() {
-        parts.push(format!("💬 <b>Response:</b>\n{}", escape_html(&interaction.accumulated_text)));
+        parts.push(format!(
+            "💬 <b>Response:</b>\n{}",
+            escape_html(&interaction.accumulated_text)
+        ));
     } else if parts.is_empty() {
         parts.push("🤖 <b>Zaguán Blade is working...</b>".to_string());
     }
-    
+
     parts.join("\n\n")
 }
 
@@ -258,19 +282,19 @@ async fn flush_interaction(client: &Client, token: &str, int: &mut ActiveInterac
         Some(id) => id,
         None => return,
     };
-    
+
     let now = std::time::Instant::now();
     // Throttle: edit at most once every 1200ms unless forced
     if !force && now.duration_since(int.last_update_time) < std::time::Duration::from_millis(1200) {
         int.needs_flush = true;
         return;
     }
-    
+
     int.last_update_time = now;
     int.needs_flush = false;
-    
+
     let html = render_html(int);
-    
+
     let url = format!("https://api.telegram.org/bot{}/editMessageText", token);
     let req = EditMessageTextReq {
         chat_id: int.chat_id.clone(),
@@ -278,7 +302,7 @@ async fn flush_interaction(client: &Client, token: &str, int: &mut ActiveInterac
         text: &html,
         parse_mode: Some("HTML".to_string()),
     };
-    
+
     let _ = client.post(&url).json(&req).send().await;
 }
 
@@ -288,8 +312,10 @@ pub async fn update_telegram_text<R: tauri::Runtime>(app_handle: &AppHandle<R>, 
         let config = state.config.lock().unwrap();
         config.telegram_bot_token.clone()
     };
-    if token.is_empty() { return; }
-    
+    if token.is_empty() {
+        return;
+    }
+
     let mut int_guard = ACTIVE_INTERACTION.lock().await;
     if let Some(int) = int_guard.as_mut() {
         int.accumulated_text.push_str(chunk);
@@ -304,8 +330,10 @@ pub async fn update_telegram_reasoning<R: tauri::Runtime>(app_handle: &AppHandle
         let config = state.config.lock().unwrap();
         config.telegram_bot_token.clone()
     };
-    if token.is_empty() { return; }
-    
+    if token.is_empty() {
+        return;
+    }
+
     let mut int_guard = ACTIVE_INTERACTION.lock().await;
     if let Some(int) = int_guard.as_mut() {
         int.reasoning_text.push_str(chunk);
@@ -314,14 +342,19 @@ pub async fn update_telegram_reasoning<R: tauri::Runtime>(app_handle: &AppHandle
     }
 }
 
-pub async fn update_telegram_tools<R: tauri::Runtime>(app_handle: &AppHandle<R>, tool_calls: &[ToolCall]) {
+pub async fn update_telegram_tools<R: tauri::Runtime>(
+    app_handle: &AppHandle<R>,
+    tool_calls: &[ToolCall],
+) {
     let state = app_handle.state::<crate::app_state::AppState>();
     let token = {
         let config = state.config.lock().unwrap();
         config.telegram_bot_token.clone()
     };
-    if token.is_empty() { return; }
-    
+    if token.is_empty() {
+        return;
+    }
+
     let mut int_guard = ACTIVE_INTERACTION.lock().await;
     if let Some(int) = int_guard.as_mut() {
         int.tool_status = tool_calls.iter().map(|tc| format_tool_call(tc)).collect();
@@ -331,14 +364,19 @@ pub async fn update_telegram_tools<R: tauri::Runtime>(app_handle: &AppHandle<R>,
     }
 }
 
-pub async fn complete_telegram_interaction<R: tauri::Runtime>(app_handle: &AppHandle<R>, _msg_id: &str) -> bool {
+pub async fn complete_telegram_interaction<R: tauri::Runtime>(
+    app_handle: &AppHandle<R>,
+    _msg_id: &str,
+) -> bool {
     let state = app_handle.state::<crate::app_state::AppState>();
     let token = {
         let config = state.config.lock().unwrap();
         config.telegram_bot_token.clone()
     };
-    if token.is_empty() { return false; }
-    
+    if token.is_empty() {
+        return false;
+    }
+
     let mut int_guard = ACTIVE_INTERACTION.lock().await;
     if let Some(mut int) = int_guard.take() {
         let client = Client::new();
@@ -349,35 +387,47 @@ pub async fn complete_telegram_interaction<R: tauri::Runtime>(app_handle: &AppHa
     }
 }
 
-async fn send_message(client: &Client, token: &str, chat_id: &str, text: &str) -> Result<(), reqwest::Error> {
+async fn send_message(
+    client: &Client,
+    token: &str,
+    chat_id: &str,
+    text: &str,
+) -> Result<(), reqwest::Error> {
     let url = format!("https://api.telegram.org/bot{}/sendMessage", token);
-    let req = SendMessageReq { chat_id: chat_id.to_string(), text, parse_mode: None };
+    let req = SendMessageReq {
+        chat_id: chat_id.to_string(),
+        text,
+        parse_mode: None,
+    };
     client.post(&url).json(&req).send().await?;
     Ok(())
 }
 
-pub async fn send_to_telegram<R: tauri::Runtime>(app_handle: &AppHandle<R>, text: &str) -> Result<(), String> {
+pub async fn send_to_telegram<R: tauri::Runtime>(
+    app_handle: &AppHandle<R>,
+    text: &str,
+) -> Result<(), String> {
     let state = app_handle.state::<crate::app_state::AppState>();
-    
+
     if !state.remote_control.is_configured().await {
         return Ok(());
     }
-    
+
     let status = state.remote_control.get_status().await;
     let chat_id = match status.telegram_chat_id {
         Some(id) => id,
         None => return Ok(()),
     };
-    
+
     let token = {
         let config = state.config.lock().unwrap();
         config.telegram_bot_token.clone()
     };
-    
+
     if token.is_empty() {
         return Ok(());
     }
-    
+
     let client = Client::new();
     let max_len = 4000;
     let chars: Vec<char> = text.chars().collect();
@@ -385,6 +435,6 @@ pub async fn send_to_telegram<R: tauri::Runtime>(app_handle: &AppHandle<R>, text
         let chunk_str: String = chunk.iter().collect();
         let _ = send_message(&client, &token, &chat_id, &chunk_str).await;
     }
-    
+
     Ok(())
 }

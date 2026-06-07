@@ -885,10 +885,7 @@ impl LanguageService {
                             health.queued_files = total_queued.saturating_sub(completed_files);
                             health.message = format!(
                                 "Indexing {}... {}/{} files ({} workers)",
-                                file_path,
-                                completed_files,
-                                total_queued,
-                                worker_count
+                                file_path, completed_files, total_queued, worker_count
                             );
                             self.set_index_health(health.clone());
                             progress(&health);
@@ -913,10 +910,7 @@ impl LanguageService {
                             health.message = if let Some(current_file) = &health.current_file {
                                 format!(
                                     "Indexing {}... {}/{} files ({} workers)",
-                                    current_file,
-                                    completed_files,
-                                    total_queued,
-                                    worker_count
+                                    current_file, completed_files, total_queued, worker_count
                                 )
                             } else {
                                 format!(

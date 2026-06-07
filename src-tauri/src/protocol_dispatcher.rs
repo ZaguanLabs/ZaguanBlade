@@ -929,7 +929,9 @@ pub async fn dispatch(
                                 &window,
                                 Some(intent_id.to_string()),
                                 blade_protocol::BladeEvent::History(
-                                    blade_protocol::HistoryEvent::ConversationList { conversations: summaries },
+                                    blade_protocol::HistoryEvent::ConversationList {
+                                        conversations: summaries,
+                                    },
                                 ),
                             );
 
@@ -960,7 +962,9 @@ pub async fn dispatch(
                                 &window,
                                 Some(intent_id.to_string()),
                                 blade_protocol::BladeEvent::History(
-                                    blade_protocol::HistoryEvent::ConversationList { conversations },
+                                    blade_protocol::HistoryEvent::ConversationList {
+                                        conversations,
+                                    },
                                 ),
                             );
 
@@ -989,7 +993,9 @@ pub async fn dispatch(
 
                 let is_local = state.is_local_model_active().await;
                 if is_local {
-                    match state.with_conversation_store(|store| store.load_conversation(&session_id)) {
+                    match state
+                        .with_conversation_store(|store| store.load_conversation(&session_id))
+                    {
                         Ok(stored) => {
                             let messages = stored
                                 .messages
@@ -1044,15 +1050,17 @@ pub async fn dispatch(
                                         _ => crate::protocol::ChatRole::User,
                                     };
 
-                                    let mut chat_msg =
-                                        crate::protocol::ChatMessage::new(role, msg.content.clone());
+                                    let mut chat_msg = crate::protocol::ChatMessage::new(
+                                        role,
+                                        msg.content.clone(),
+                                    );
 
                                     if let Some(ref tc_val) = msg.tool_calls {
-                                        if let Ok(tool_calls) =
-                                            serde_json::from_value::<Vec<crate::protocol::ToolCall>>(
-                                                tc_val.clone(),
-                                            )
-                                        {
+                                        if let Ok(tool_calls) = serde_json::from_value::<
+                                            Vec<crate::protocol::ToolCall>,
+                                        >(
+                                            tc_val.clone()
+                                        ) {
                                             chat_msg.tool_calls = Some(tool_calls);
                                         }
                                     }
@@ -1078,7 +1086,9 @@ pub async fn dispatch(
                                 &window,
                                 Some(intent_id.to_string()),
                                 blade_protocol::BladeEvent::History(
-                                    blade_protocol::HistoryEvent::ConversationLoaded(full_conversation),
+                                    blade_protocol::HistoryEvent::ConversationLoaded(
+                                        full_conversation,
+                                    ),
                                 ),
                             );
                             Ok(())
@@ -1118,15 +1128,17 @@ pub async fn dispatch(
                                         _ => crate::protocol::ChatRole::User,
                                     };
 
-                                    let mut chat_msg =
-                                        crate::protocol::ChatMessage::new(role, msg.content.clone());
+                                    let mut chat_msg = crate::protocol::ChatMessage::new(
+                                        role,
+                                        msg.content.clone(),
+                                    );
 
                                     if let Some(ref tc_val) = msg.tool_calls {
-                                        if let Ok(tool_calls) =
-                                            serde_json::from_value::<Vec<crate::protocol::ToolCall>>(
-                                                tc_val.clone(),
-                                            )
-                                        {
+                                        if let Ok(tool_calls) = serde_json::from_value::<
+                                            Vec<crate::protocol::ToolCall>,
+                                        >(
+                                            tc_val.clone()
+                                        ) {
                                             chat_msg.tool_calls = Some(tool_calls);
                                         }
                                     }
@@ -1152,7 +1164,9 @@ pub async fn dispatch(
                                 &window,
                                 Some(intent_id.to_string()),
                                 blade_protocol::BladeEvent::History(
-                                    blade_protocol::HistoryEvent::ConversationLoaded(full_conversation),
+                                    blade_protocol::HistoryEvent::ConversationLoaded(
+                                        full_conversation,
+                                    ),
                                 ),
                             );
                             Ok(())
@@ -1175,7 +1189,8 @@ pub async fn dispatch(
                 if is_local {
                     return Err(blade_protocol::BladeError::Internal {
                         trace_id: intent_id.to_string(),
-                        message: "ZLP messages are not supported when a local model is active".to_string(),
+                        message: "ZLP messages are not supported when a local model is active"
+                            .to_string(),
                     });
                 }
                 let window_clone = window.clone();

@@ -450,7 +450,10 @@ impl SymbolStore {
             "DELETE FROM semantic_anchors WHERE file_path = ?1",
             params![file_path],
         )?;
-        tx.execute("DELETE FROM symbols WHERE file_path = ?1", params![file_path])?;
+        tx.execute(
+            "DELETE FROM symbols WHERE file_path = ?1",
+            params![file_path],
+        )?;
 
         for symbol in symbols {
             tx.execute(
@@ -1056,9 +1059,7 @@ impl SymbolStore {
         )?;
 
         let records = stmt
-            .query_map([], |row| {
-                indexed_file_record_from_row(row)
-            })?
+            .query_map([], |row| indexed_file_record_from_row(row))?
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(records)
@@ -1153,9 +1154,9 @@ impl SymbolStore {
             .ok();
 
         match result {
-            Some((Some(stored_size), Some(stored_modified_at))) => {
-                Ok(Some(stored_size != file_size as i64 || stored_modified_at != modified_at))
-            }
+            Some((Some(stored_size), Some(stored_modified_at))) => Ok(Some(
+                stored_size != file_size as i64 || stored_modified_at != modified_at,
+            )),
             Some(_) => Ok(None),
             None => Ok(Some(true)),
         }
@@ -1268,7 +1269,6 @@ fn row_to_symbol(row: &rusqlite::Row) -> rusqlite::Result<Symbol> {
         content_hash: row.get(14)?,
     })
 }
-
 
 fn append_symbol_query_results(
     conn: &Connection,

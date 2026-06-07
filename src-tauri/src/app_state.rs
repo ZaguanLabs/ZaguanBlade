@@ -357,7 +357,8 @@ impl AppState {
                     let provider_id = crate::providers::ProviderId::from_provider_str(provider);
                     return matches!(
                         provider_id,
-                        crate::providers::ProviderId::Ollama | crate::providers::ProviderId::OpenAiCompat
+                        crate::providers::ProviderId::Ollama
+                            | crate::providers::ProviderId::OpenAiCompat
                     );
                 }
             }
@@ -365,4 +366,3 @@ impl AppState {
         false
     }
 }
-

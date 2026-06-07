@@ -74,10 +74,12 @@ impl RemoteControlService {
         let mut state = self.state.write().await;
         // Keep existing chat_id if we were already connected
         let existing_chat_id = match &*state {
-            RemoteControlState::Connected { telegram_chat_id, .. } => telegram_chat_id.clone(),
+            RemoteControlState::Connected {
+                telegram_chat_id, ..
+            } => telegram_chat_id.clone(),
             _ => None,
         };
-        
+
         *state = RemoteControlState::Connected {
             bot_username,
             telegram_chat_id: existing_chat_id,
@@ -88,7 +90,12 @@ impl RemoteControlService {
     /// Set paired chat id
     pub async fn set_chat_id(&self, chat_id: String) {
         let mut state = self.state.write().await;
-        if let RemoteControlState::Connected { telegram_chat_id, connected_at, .. } = &mut *state {
+        if let RemoteControlState::Connected {
+            telegram_chat_id,
+            connected_at,
+            ..
+        } = &mut *state
+        {
             *telegram_chat_id = Some(chat_id);
             *connected_at = chrono::Utc::now().timestamp();
         }
@@ -102,6 +109,9 @@ impl RemoteControlService {
 
     /// Check if currently configured
     pub async fn is_configured(&self) -> bool {
-        matches!(&*self.state.read().await, RemoteControlState::Connected { .. })
+        matches!(
+            &*self.state.read().await,
+            RemoteControlState::Connected { .. }
+        )
     }
 }

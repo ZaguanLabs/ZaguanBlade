@@ -49,10 +49,10 @@ pub mod screenshot;
 pub mod semantic_patch;
 pub mod startup;
 pub mod symbol_index;
+pub mod telegram_service;
 pub mod terminal;
 pub mod tool_execution;
 pub mod tools;
-pub mod telegram_service;
 pub mod tree_sitter;
 pub mod uncommitted_changes;
 pub mod utils;
@@ -120,17 +120,32 @@ pub fn run() {
                 let state = handle.state::<AppState>();
                 let config_path = crate::config::default_api_config_path();
                 let config = crate::config::load_api_config(&config_path);
-                
+
                 if !config.telegram_bot_token.is_empty() {
                     // Start polling
                     let trimmed_token = config.telegram_bot_token.trim().to_string();
                     let client = reqwest::Client::new();
-                    if let Ok(res) = client.get(&format!("https://api.telegram.org/bot{}/getMe", trimmed_token)).send().await {
+                    if let Ok(res) = client
+                        .get(&format!(
+                            "https://api.telegram.org/bot{}/getMe",
+                            trimmed_token
+                        ))
+                        .send()
+                        .await
+                    {
                         if let Ok(get_me) = res.json::<serde_json::Value>().await {
                             if get_me["ok"].as_bool() == Some(true) {
                                 if let Some(bot_username) = get_me["result"]["username"].as_str() {
-                                    state.remote_control.set_configured(bot_username.to_string()).await;
-                                    crate::telegram_service::start_polling(handle.clone(), trimmed_token, bot_username.to_string()).await;
+                                    state
+                                        .remote_control
+                                        .set_configured(bot_username.to_string())
+                                        .await;
+                                    crate::telegram_service::start_polling(
+                                        handle.clone(),
+                                        trimmed_token,
+                                        bot_username.to_string(),
+                                    )
+                                    .await;
                                 }
                             }
                         }

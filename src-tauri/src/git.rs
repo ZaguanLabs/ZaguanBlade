@@ -979,12 +979,11 @@ mod tests {
                     .and_then(|role| role.as_str()),
                 Some("user")
             );
-            assert!(
-                messages.iter().all(|message| message
-                    .get("role")
-                    .and_then(|role| role.as_str())
-                    != Some("system"))
-            );
+            assert!(messages
+                .iter()
+                .all(
+                    |message| message.get("role").and_then(|role| role.as_str()) != Some("system")
+                ));
         }
     }
 }
