@@ -163,6 +163,8 @@ export const ScreenshotAnnotationModal: React.FC<{
     const { t } = useTranslation();
     const titleId = useId();
     const descriptionId = useId();
+    const colorInputId = useId();
+    const sizeInputId = useId();
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const canvasWrapRef = useRef<HTMLDivElement>(null);
     const imageRef = useRef<HTMLImageElement | null>(null);
@@ -773,15 +775,18 @@ export const ScreenshotAnnotationModal: React.FC<{
                             />
                         ))}
                         <input
+                            id={colorInputId}
                             type="color"
+                            aria-label={t('screenshot.editor.useColor', { color })}
                             value={color}
                             onChange={(event) => applyColor(event.target.value)}
                             className="h-7 w-8 rounded-[calc(var(--panel-radius)*0.35)] border border-(--border-subtle) bg-(--bg-app) p-0.5"
                         />
                     </div>
-                    <label className="flex items-center gap-2 text-[11px] text-(--fg-tertiary)">
+                    <label htmlFor={sizeInputId} className="flex items-center gap-2 text-[11px] text-(--fg-tertiary)">
                         {t('screenshot.editor.size')}
                         <input
+                            id={sizeInputId}
                             type="range"
                             min={2}
                             max={14}
