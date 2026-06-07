@@ -226,6 +226,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                             onClick={() => runAction(`unstage-${file.path}`, () => onUnstageFile(file.path))}
                             disabled={busyAction === `unstage-${file.path}`}
                             title={t('git.unstage')}
+                            aria-label={t('git.unstage')}
                         >
                             <Minus className="w-3 h-3" />
                         </button>
@@ -236,6 +237,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                             onClick={() => runAction(`stage-${file.path}`, () => onStageFile(file.path))}
                             disabled={busyAction === `stage-${file.path}`}
                             title={t('git.stage')}
+                            aria-label={t('git.stage')}
                         >
                             <Plus className="w-3 h-3" />
                         </button>
@@ -255,6 +257,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                     onClick={() => runAction('refresh', async () => onRefresh())}
                     className="hover:text-(--fg-primary) transition-colors"
                     title={t('fileTree.refresh')}
+                    aria-label={t('fileTree.refresh')}
                 >
                     <RefreshCw className={`w-3 h-3 ${busyAction === 'refresh' ? 'animate-spin' : ''}`} />
                 </button>

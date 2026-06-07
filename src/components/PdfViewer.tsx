@@ -167,6 +167,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
                         disabled={currentPage <= 1}
                         className="p-1.5 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface-hover) disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                         title={t('pdf.previousPage')}
+                        aria-label={t('pdf.previousPage')}
                     >
                         <ChevronLeft className="w-4 h-4 text-(--fg-secondary)" />
                     </button>
@@ -179,6 +180,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
                         disabled={currentPage >= numPages}
                         className="p-1.5 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface-hover) disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                         title={t('pdf.nextPage')}
+                        aria-label={t('pdf.nextPage')}
                     >
                         <ChevronRight className="w-4 h-4 text-(--fg-secondary)" />
                     </button>
@@ -190,6 +192,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
                         onClick={zoomOut}
                         className="p-1.5 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface-hover) transition-colors"
                         title={t('pdf.zoomOut')}
+                        aria-label={t('pdf.zoomOut')}
                     >
                         <ZoomOut className="w-4 h-4 text-(--fg-secondary)" />
                     </button>
@@ -201,6 +204,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
                         onClick={zoomIn}
                         className="p-1.5 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface-hover) transition-colors"
                         title={t('pdf.zoomIn')}
+                        aria-label={t('pdf.zoomIn')}
                     >
                         <ZoomIn className="w-4 h-4 text-(--fg-secondary)" />
                     </button>
@@ -209,6 +213,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
                         onClick={fitToWidth}
                         className="p-1.5 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface-hover) transition-colors"
                         title={t('pdf.fitToWidth')}
+                        aria-label={t('pdf.fitToWidth')}
                     >
                         <Maximize2 className="w-4 h-4 text-(--fg-secondary)" />
                     </button>
