@@ -1008,6 +1008,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                     {showScrollToBottom && activeTab === 'chat' && (
                         <div className="pointer-events-none sticky bottom-0 z-10 flex justify-center px-4 pb-4">
                             <button
+                                type="button"
                                 onClick={scrollToBottom}
                                 className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-(--border-subtle) bg-(--bg-surface)/95 px-4 py-2 text-xs font-medium text-(--fg-secondary) shadow-(--shadow-lg) transition-colors hover:text-(--fg-primary)"
                             >

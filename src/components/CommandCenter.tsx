@@ -837,6 +837,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                         const Icon = suggestion.icon;
                                         return (
                                             <button
+                                                type="button"
                                                 key={suggestion.key}
                                                 onClick={() => insertSuggestion(suggestion)}
                                                 title={suggestion.tooltip}
@@ -858,6 +859,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
 
                                     return (
                                         <button
+                                            type="button"
                                             key={suggestion.key}
                                             onClick={() => insertSuggestion(suggestion)}
                                             className={`w-full flex items-center gap-2 px-2 py-1.5 text-left transition-colors ${isActiveSuggestion
@@ -902,6 +904,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                 disabled={disabled}
                             />
                             <button
+                                type="button"
                                 onClick={() => {
                                     const showStop = loading && !text.trim();
                                     if (showStop && onStop) {
