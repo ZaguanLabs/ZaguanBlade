@@ -228,8 +228,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(({
                     {terminals.map((term) => (
                         <div
                             key={term.id}
-                            onClick={() => setActiveId(term.id)}
-                            className="group flex items-center justify-between px-3 py-2 cursor-pointer text-sm border-l-2 transition-colors"
+                            className="group flex items-center justify-between px-3 py-2 text-sm border-l-2 transition-colors"
                             style={{
                                 borderLeftColor: activeId === term.id ? 'var(--accent-ai)' : 'transparent',
                                 backgroundColor: activeId === term.id
@@ -238,10 +237,14 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(({
                                 color: activeId === term.id ? 'var(--fg-primary)' : 'var(--fg-secondary)',
                             }}
                         >
-                            <div className="flex items-center gap-2 truncate">
+                            <button
+                                type="button"
+                                onClick={() => setActiveId(term.id)}
+                                className="flex min-w-0 flex-1 items-center gap-2 truncate text-left"
+                            >
                                 <TerminalIcon className="w-3.5 h-3.5 opacity-70" />
                                 <span className="truncate">{term.title}</span>
-                            </div>
+                            </button>
                             {terminals.length > 1 && (
                                 <button
                                     type="button"
