@@ -12,9 +12,15 @@ export const ChatTabBar: React.FC<ChatTabBarProps> = ({ activeTab, onTabChange, 
     const { t } = useTranslation();
     return (
         <div className="flex h-12 shrink-0 items-center justify-between border-b border-(--border-subtle) bg-(--bg-panel) px-3 select-none">
-            <div className="flex items-center gap-1 rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-surface)/55 p-1 shadow-(--shadow-sm)">
+            <div
+                role="tablist"
+                aria-label={t('chat.tabs.chat')}
+                className="flex items-center gap-1 rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-surface)/55 p-1 shadow-(--shadow-sm)"
+            >
                 <button
                     type="button"
+                    role="tab"
+                    aria-selected={activeTab === 'chat'}
                     onClick={() => onTabChange('chat')}
                     className={`
                         rounded-[calc(var(--panel-radius)*0.55)] px-3 py-1.5 text-[11px] font-semibold transition-colors
@@ -28,6 +34,8 @@ export const ChatTabBar: React.FC<ChatTabBarProps> = ({ activeTab, onTabChange, 
                 </button>
                 <button
                     type="button"
+                    role="tab"
+                    aria-selected={activeTab === 'history'}
                     onClick={() => onTabChange('history')}
                     className={`
                         rounded-[calc(var(--panel-radius)*0.55)] px-3 py-1.5 text-[11px] font-semibold transition-colors
@@ -43,6 +51,7 @@ export const ChatTabBar: React.FC<ChatTabBarProps> = ({ activeTab, onTabChange, 
             <button
                 type="button"
                 onClick={onNewConversation}
+                aria-label={t('chat.newConversation')}
                 className="inline-flex h-9 w-9 items-center justify-center rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-surface)/70 text-(--fg-secondary) transition-colors hover:border-[color-mix(in_srgb,var(--accent-ai)_32%,transparent)] hover:text-(--fg-primary)"
                 title={t('chat.newConversation')}
             >
