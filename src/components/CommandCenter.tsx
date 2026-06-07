@@ -797,7 +797,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
 
                     <ImageAttachmentBar attachments={attachments} onRemove={handleRemoveAttachment} />
                     {attachmentError && (
-                        <div className="px-2 pb-1 pt-1 text-[10px] text-(--state-danger)">
+                        <div role="alert" className="px-2 pb-1 pt-1 text-[10px] text-(--state-danger)">
                             {attachmentError}
                         </div>
                     )}
