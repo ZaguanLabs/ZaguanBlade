@@ -481,24 +481,23 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                 <div className="text-xs">
                                     {/* Staged Changes */}
                                     <div className="border-b border-(--border-subtle)">
-                                        <button
-                                            type="button"
-                                            className="w-full flex items-center justify-between px-3 py-2 hover:bg-(--bg-surface-hover) transition-colors"
-                                            onClick={() => setStagedExpanded(!stagedExpanded)}
-                                        >
-                                            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-(--fg-secondary) font-semibold">
+                                        <div className="w-full flex items-center justify-between gap-2 px-3 py-2 hover:bg-(--bg-surface-hover) transition-colors">
+                                            <button
+                                                type="button"
+                                                className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[10px] uppercase tracking-wider text-(--fg-secondary) font-semibold"
+                                                onClick={() => setStagedExpanded(!stagedExpanded)}
+                                            >
                                                 {stagedExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                                                 {t('git.stagedSection')}
                                                 <span className="text-(--accent-mention) font-normal normal-case">
                                                     ({stagedFiles.length})
                                                 </span>
-                                            </div>
+                                            </button>
                                             {stagedFiles.length > 0 && (
                                                 <button
                                                     type="button"
                                                     className="text-[10px] px-2 py-0.5 rounded-[calc(var(--panel-radius)*0.45)] text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--bg-surface)"
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
+                                                    onClick={() => {
                                                         runAction('unstage-all', () => onUnstageAll());
                                                     }}
                                                     disabled={busyAction === 'unstage-all'}
@@ -506,7 +505,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                                     {t('git.unstageAll')}
                                                 </button>
                                             )}
-                                        </button>
+                                        </div>
                                         {stagedExpanded && stagedFiles.length > 0 && (
                                             <div className="px-2 pb-2">
                                                 {stagedFiles.map(file => (
@@ -529,24 +528,23 @@ export const GitPanel: React.FC<GitPanelProps> = ({
 
                                     {/* Unstaged/Untracked Changes */}
                                     <div>
-                                        <button
-                                            type="button"
-                                            className="w-full flex items-center justify-between px-3 py-2 hover:bg-(--bg-surface-hover) transition-colors"
-                                            onClick={() => setUnstagedExpanded(!unstagedExpanded)}
-                                        >
-                                            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-(--fg-secondary) font-semibold">
+                                        <div className="w-full flex items-center justify-between gap-2 px-3 py-2 hover:bg-(--bg-surface-hover) transition-colors">
+                                            <button
+                                                type="button"
+                                                className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[10px] uppercase tracking-wider text-(--fg-secondary) font-semibold"
+                                                onClick={() => setUnstagedExpanded(!unstagedExpanded)}
+                                            >
                                                 {unstagedExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                                                 {t('git.changes')}
                                                 <span className="text-(--accent-warning) font-normal normal-case">
                                                     ({unstagedFiles.length})
                                                 </span>
-                                            </div>
+                                            </button>
                                             {unstagedFiles.length > 0 && (
                                                 <button
                                                     type="button"
                                                     className="text-[10px] px-2 py-0.5 rounded-[calc(var(--panel-radius)*0.45)] text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--bg-surface)"
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
+                                                    onClick={() => {
                                                         runAction('stage-all', () => onStageAll());
                                                     }}
                                                     disabled={busyAction === 'stage-all'}
@@ -554,7 +552,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                                     {t('git.stageAll')}
                                                 </button>
                                             )}
-                                        </button>
+                                        </div>
                                         {unstagedExpanded && unstagedFiles.length > 0 && (
                                             <div className="px-2 pb-2">
                                                 {unstagedFiles.map(file => (
