@@ -64,10 +64,19 @@ export const AppBar: React.FC<AppBarProps> = ({
                 setFileMenuOpen(false);
             }
         };
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                setFileMenuOpen(false);
+            }
+        };
         if (fileMenuOpen) {
             document.addEventListener('mousedown', handleClickOutside);
+            document.addEventListener('keydown', handleKeyDown);
         }
-        return () => document.removeEventListener('mousedown', handleClickOutside);
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+            document.removeEventListener('keydown', handleKeyDown);
+        };
     }, [fileMenuOpen]);
 
     const handleFileMenuClick = useCallback((e: React.MouseEvent) => {
