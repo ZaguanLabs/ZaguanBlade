@@ -21,10 +21,22 @@ const iconButtonToneClassName: Record<IconButtonTone, string> = {
     danger: 'text-(--fg-tertiary) hover:text-(--state-danger) hover:bg-[color-mix(in_srgb,var(--state-danger)_10%,transparent)]',
 };
 
-export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(({ size = 'sm', tone = 'neutral', className, type = 'button', ...props }, ref) => (
+export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(({
+    size = 'sm',
+    tone = 'neutral',
+    className,
+    type = 'button',
+    title,
+    'aria-label': ariaLabel,
+    'aria-labelledby': ariaLabelledBy,
+    ...props
+}, ref) => (
     <button
         ref={ref}
         type={type}
+        title={title}
+        aria-label={ariaLabel ?? (!ariaLabelledBy && typeof title === 'string' ? title : undefined)}
+        aria-labelledby={ariaLabelledBy}
         className={cn(iconButtonSizeClassName[size], iconButtonToneClassName[tone], 'transition-colors', className)}
         {...props}
     />
