@@ -55,6 +55,7 @@ export const ProtocolExplorer: React.FC = () => {
     if (!isOpen) {
         return (
             <button
+                type="button"
                 onClick={() => setIsOpen(true)}
                 className="fixed bottom-4 right-4 z-50 p-2 bg-(--bg-surface) border border-(--border-subtle) rounded-full shadow-(--shadow-lg) hover:bg-(--bg-surface-hover) transition-all text-xs text-(--fg-tertiary) flex items-center gap-2 group"
                 title={t('protocolExplorer.open')}
@@ -74,6 +75,7 @@ export const ProtocolExplorer: React.FC = () => {
                 </div>
                 <div className="flex items-center gap-1">
                     <button
+                        type="button"
                         onClick={() => setIsPaused(!isPaused)}
                         className={`p-1 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface-hover) ${isPaused ? 'text-(--accent-warning)' : 'text-(--fg-tertiary)'}`}
                         title={isPaused ? t('protocolExplorer.resume') : t('protocolExplorer.pause')}
@@ -81,6 +83,7 @@ export const ProtocolExplorer: React.FC = () => {
                         {isPaused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}
                     </button>
                     <button
+                        type="button"
                         onClick={() => setLogs([])}
                         className="p-1 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface-hover) text-(--fg-tertiary) hover:text-(--state-danger)"
                         title={t('protocolExplorer.clearLogs')}
@@ -89,6 +92,7 @@ export const ProtocolExplorer: React.FC = () => {
                     </button>
                     <div className="w-px h-3 bg-(--border-subtle) mx-1" />
                     <button
+                        type="button"
                         onClick={() => setIsOpen(false)}
                         className="p-1 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface-hover) text-(--fg-tertiary) hover:text-(--fg-primary)"
                     >

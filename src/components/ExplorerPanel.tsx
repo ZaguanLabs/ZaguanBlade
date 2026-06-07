@@ -95,7 +95,7 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
             <div className="flex-1 flex flex-col min-h-0">
                 <div className="h-9 px-4 flex items-center bg-(--bg-panel) border-b border-(--border-subtle) text-[10px] uppercase tracking-wider font-semibold select-none justify-between text-(--fg-tertiary) shrink-0">
                     <span>{t('fileTree.title')}</span>
-                    <button onClick={() => { loadRoot(); setRefreshKey(prev => prev + 1); }} className="hover:text-(--fg-primary)" title={t('fileTree.refresh')}>
+                    <button type="button" onClick={() => { loadRoot(); setRefreshKey(prev => prev + 1); }} className="hover:text-(--fg-primary)" title={t('fileTree.refresh')}>
                         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
                     </button>
                 </div>
@@ -112,7 +112,7 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
                                     onChange={e => setPathInput(e.target.value)}
                                     onKeyDown={e => e.key === 'Enter' && openSpecificPath()}
                                 />
-                                <button onClick={openSpecificPath} className="p-1.5 bg-(--bg-surface) hover:bg-(--bg-surface-hover) rounded-[calc(var(--panel-radius)*0.25)] text-(--fg-primary)">
+                                <button type="button" onClick={openSpecificPath} className="p-1.5 bg-(--bg-surface) hover:bg-(--bg-surface-hover) rounded-[calc(var(--panel-radius)*0.25)] text-(--fg-primary)">
                                     <ChevronRight className="w-3 h-3" />
                                 </button>
                             </div>
