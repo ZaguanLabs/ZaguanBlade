@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus } from 'lucide-react';
 
@@ -10,6 +10,38 @@ interface ChatTabBarProps {
 
 export const ChatTabBar: React.FC<ChatTabBarProps> = ({ activeTab, onTabChange, onNewConversation }) => {
     const { t } = useTranslation();
+    const chatTabRef = useRef<HTMLButtonElement>(null);
+    const historyTabRef = useRef<HTMLButtonElement>(null);
+    const focusActiveTabAfterKeyboardRef = useRef(false);
+
+    useEffect(() => {
+        if (!focusActiveTabAfterKeyboardRef.current) {
+            return;
+        }
+
+        const nextTab = activeTab === 'chat' ? chatTabRef.current : historyTabRef.current;
+        nextTab?.focus();
+        focusActiveTabAfterKeyboardRef.current = false;
+    }, [activeTab]);
+
+    const selectTabFromKeyboard = (tab: 'chat' | 'history') => {
+        focusActiveTabAfterKeyboardRef.current = true;
+        onTabChange(tab);
+    };
+
+    const handleTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+        if (event.key === 'ArrowLeft' || event.key === 'ArrowUp' || event.key === 'Home') {
+            event.preventDefault();
+            selectTabFromKeyboard('chat');
+            return;
+        }
+        if (event.key === 'ArrowRight' || event.key === 'ArrowDown' || event.key === 'End') {
+            event.preventDefault();
+            selectTabFromKeyboard('history');
+            return;
+        }
+    };
+
     return (
         <div className="flex h-12 shrink-0 items-center justify-between border-b border-(--border-subtle) bg-(--bg-panel) px-3 select-none">
             <div
@@ -18,10 +50,13 @@ export const ChatTabBar: React.FC<ChatTabBarProps> = ({ activeTab, onTabChange, 
                 className="flex items-center gap-1 rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-surface)/55 p-1 shadow-(--shadow-sm)"
             >
                 <button
+                    ref={chatTabRef}
                     type="button"
                     role="tab"
                     aria-selected={activeTab === 'chat'}
+                    tabIndex={activeTab === 'chat' ? 0 : -1}
                     onClick={() => onTabChange('chat')}
+                    onKeyDown={handleTabKeyDown}
                     className={`
                         rounded-[calc(var(--panel-radius)*0.55)] px-3 py-1.5 text-[11px] font-semibold transition-colors
                         ${activeTab === 'chat'
@@ -33,10 +68,13 @@ export const ChatTabBar: React.FC<ChatTabBarProps> = ({ activeTab, onTabChange, 
                     {t('chat.tabs.chat')}
                 </button>
                 <button
+                    ref={historyTabRef}
                     type="button"
                     role="tab"
                     aria-selected={activeTab === 'history'}
+                    tabIndex={activeTab === 'history' ? 0 : -1}
                     onClick={() => onTabChange('history')}
+                    onKeyDown={handleTabKeyDown}
                     className={`
                         rounded-[calc(var(--panel-radius)*0.55)] px-3 py-1.5 text-[11px] font-semibold transition-colors
                         ${activeTab === 'history'
