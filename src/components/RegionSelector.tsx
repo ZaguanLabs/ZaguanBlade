@@ -141,7 +141,7 @@ export const RegionSelector: React.FC<RegionSelectorProps> = ({
                     </div>
                     <button
                         type="button"
-                        aria-label="Close"
+                        aria-label={t('common.close')}
                         onClick={onCancel}
                         className="p-1 text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover) rounded-[calc(var(--panel-radius)*0.35)] transition"
                     >

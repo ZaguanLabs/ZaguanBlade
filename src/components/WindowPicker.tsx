@@ -54,7 +54,7 @@ export const WindowPicker: React.FC<WindowPickerProps> = ({
                         <div id={subtitleId} className="text-xs text-(--fg-tertiary)">{resolvedSubtitle}</div>
                     </div>
                     <IconButton
-                        aria-label="Close"
+                        aria-label={t('common.close')}
                         onClick={onCancel}
                     >
                         <X className="w-4 h-4" />
