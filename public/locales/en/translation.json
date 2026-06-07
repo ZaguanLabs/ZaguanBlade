@@ -244,6 +244,7 @@
     "sendToChat": "Send to Chat"
   },
   "tabs": {
+    "openFiles": "Open files",
     "closeTab": "Close Tab",
     "closeOtherTabs": "Close Other Tabs",
     "closeTabsToRight": "Close Tabs to Right",

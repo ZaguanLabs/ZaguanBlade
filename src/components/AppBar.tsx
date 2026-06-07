@@ -318,6 +318,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                 <div
                     ref={scrollRef}
                     role="tablist"
+                    aria-label={t('tabs.openFiles')}
                     className="flex items-end overflow-x-auto tabs-scrollbar min-w-0"
                     style={tabStripMaxWidth ? { width: tabStripMaxWidth, maxWidth: tabStripMaxWidth } : { flex: 1 }}
                 >
