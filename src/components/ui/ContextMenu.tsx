@@ -91,6 +91,7 @@ const ContextMenuPortal: React.FC = () => {
     const menuRef = useRef<HTMLDivElement>(null);
     const [adjustedPosition, setAdjustedPosition] = useState(state.position);
     const [activeIndex, setActiveIndex] = useState(-1);
+    const activeDescendantId = activeIndex >= 0 ? `context-menu-item-${activeIndex}` : undefined;
 
     // Adjust position to stay within viewport
     useEffect(() => {
@@ -111,6 +112,10 @@ const ContextMenuPortal: React.FC = () => {
             setAdjustedPosition({ x: Math.max(8, x), y: Math.max(8, y) });
         }
     }, [state.position, state.items]);
+
+    useEffect(() => {
+        menuRef.current?.focus();
+    }, []);
 
     // Close on click outside
     useEffect(() => {
@@ -179,6 +184,9 @@ const ContextMenuPortal: React.FC = () => {
         <div
             ref={menuRef}
             role="menu"
+            tabIndex={-1}
+            aria-label="Context menu"
+            aria-activedescendant={activeDescendantId}
             className="fixed z-9999 min-w-[180px] max-w-[280px] py-1.5 bg-(--surface-overlay) border border-(--focus-ring) rounded-(--radius-popover) shadow-(--shadow-popover) animate-in fade-in zoom-in-95 duration-(--transition-fast) overflow-hidden"
             style={{
                 left: adjustedPosition.x,
@@ -203,6 +211,7 @@ const ContextMenuPortal: React.FC = () => {
                     <button
                         type="button"
                         role="menuitem"
+                        id={!item.disabled ? `context-menu-item-${enabledIndex}` : undefined}
                         key={item.id}
                         onClick={() => handleItemClick(item)}
                         disabled={item.disabled}
