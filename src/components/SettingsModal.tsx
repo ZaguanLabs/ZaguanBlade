@@ -963,6 +963,8 @@ interface StorageSettingsProps {
 
 const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange }) => {
     const { t } = useTranslation();
+    const cacheSizeInputId = useId();
+
     return (
         <div className="space-y-6">
             <div>
@@ -1093,10 +1095,11 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
 
                 {settings.cache.enabled && (
                     <div className="mt-3">
-                        <label className="text-xs text-(--fg-secondary) mb-1 block">
+                        <label htmlFor={cacheSizeInputId} className="text-xs text-(--fg-secondary) mb-1 block">
                             {t('settings.storage.maxCacheSize', { size: settings.cache.maxSizeMb })}
                         </label>
                         <input
+                            id={cacheSizeInputId}
                             type="range"
                             min="10"
                             max="500"
@@ -1125,6 +1128,9 @@ interface ContextSettingsProps {
 
 const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, allowGitIgnoredFiles, onAllowGitIgnoredFilesChange }) => {
     const { t } = useTranslation();
+    const maxTokensInputId = useId();
+    const compressionModelLabelId = useId();
+
     return (
         <div className="space-y-6">
             <div>
@@ -1136,10 +1142,11 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, a
 
             {/* Max Tokens */}
             <div>
-                <label className="text-sm font-medium text-(--fg-primary) mb-2 block">
+                <label htmlFor={maxTokensInputId} className="text-sm font-medium text-(--fg-primary) mb-2 block">
                     {t('settings.context.maxContextTokens', { count: settings.maxTokens })}
                 </label>
                 <input
+                    id={maxTokensInputId}
                     type="range"
                     min="2000"
                     max="32000"
@@ -1174,8 +1181,8 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, a
 
                 {settings.compression.enabled && (
                     <div className="mt-4 space-y-2">
-                        <label className="text-xs text-(--fg-secondary) block">{t('settings.context.compressionModel')}</label>
-                        <div className="flex gap-3">
+                        <div id={compressionModelLabelId} className="text-xs text-(--fg-secondary)">{t('settings.context.compressionModel')}</div>
+                        <div role="group" aria-labelledby={compressionModelLabelId} className="flex gap-3">
                             <button
                                 type="button"
                                 onClick={() => onChange({ compression: { ...settings.compression, model: 'remote' } })}
@@ -1428,6 +1435,7 @@ const RemoteSettings: React.FC = () => {
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [tokenInput, setTokenInput] = useState('');
+    const botTokenInputId = useId();
 
     // Load initial status
     useEffect(() => {
@@ -1517,9 +1525,10 @@ const RemoteSettings: React.FC = () => {
                         </div>
 
                         <div className="flex flex-col gap-2">
-                            <label className="text-xs font-medium text-(--fg-secondary)">Bot Token</label>
+                            <label htmlFor={botTokenInputId} className="text-xs font-medium text-(--fg-secondary)">Bot Token</label>
                             <div className="flex gap-3">
                                 <input
+                                    id={botTokenInputId}
                                     type="password"
                                     value={tokenInput}
                                     onChange={(e) => setTokenInput(e.target.value)}
@@ -1644,6 +1653,7 @@ interface AccountSettingsProps {
 const AccountSettings: React.FC<AccountSettingsProps> = ({ settings, onChange }) => {
     const { t } = useTranslation();
     const [showKey, setShowKey] = useState(false);
+    const apiKeyInputId = useId();
 
     return (
         <div className="space-y-6">
@@ -1685,12 +1695,13 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ settings, onChange })
             </div>
 
             <div className="space-y-2">
-                <label className="text-sm font-medium text-(--fg-primary) block">
+                <label htmlFor={apiKeyInputId} className="text-sm font-medium text-(--fg-primary) block">
                     {t('settings.apiKey')}
                 </label>
                 <div className="flex gap-2">
                     <div className="relative flex-1">
                         <input
+                            id={apiKeyInputId}
                             type={showKey ? 'text' : 'password'}
                             value={settings.apiKey}
                             onChange={(e) => onChange({ apiKey: e.target.value })}
