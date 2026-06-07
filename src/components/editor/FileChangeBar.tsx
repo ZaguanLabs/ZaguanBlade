@@ -61,6 +61,7 @@ export const FileChangeBar: React.FC<FileChangeBarProps> = ({
         className="flex items-center gap-1 text-[11px] font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         style={{ color: 'var(--accent-mention)' }}
         title={t('diff.acceptChangesTitle')}
+        aria-label={t('diff.acceptChangesTitle')}
       >
         <Check className="w-3.5 h-3.5" />
         {t('diff.accept')}
@@ -74,6 +75,7 @@ export const FileChangeBar: React.FC<FileChangeBarProps> = ({
         className="flex items-center gap-1 text-[11px] font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         style={{ color: 'var(--state-danger)' }}
         title={t('diff.rejectChangesTitle')}
+        aria-label={t('diff.rejectChangesTitle')}
       >
         <X className="w-3.5 h-3.5" />
         {t('diff.reject')}

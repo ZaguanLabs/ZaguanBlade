@@ -50,6 +50,7 @@ export const GlobalChangeActions: React.FC<GlobalChangeActionsProps> = ({
               disabled={disabled}
               className="flex items-center gap-1 px-1 py-0.5 text-(--accent-mention) transition-colors disabled:cursor-not-allowed disabled:opacity-50 hover:text-(--fg-primary)"
               title={t('diff.acceptAll')}
+              aria-label={t('diff.acceptAll')}
             >
               <Check className="w-3 h-3" />
               {t('diff.acceptAll')}
@@ -60,6 +61,7 @@ export const GlobalChangeActions: React.FC<GlobalChangeActionsProps> = ({
               disabled={disabled}
               className="flex items-center gap-1 px-1 py-0.5 text-(--state-danger) transition-colors disabled:cursor-not-allowed disabled:opacity-50 hover:text-(--fg-primary)"
               title={t('diff.rejectAll')}
+              aria-label={t('diff.rejectAll')}
             >
               <X className="w-3 h-3" />
               {t('diff.rejectAll')}
