@@ -120,6 +120,7 @@
     "imageNotSupported": "Los modelos GLM no admiten imágenes adjuntas. Selecciona otro modelo.",
     "referencedPaths": "Rutas referenciadas",
     "assistantResponding": "El asistente está respondiendo",
+    "mentionSuggestions": "Sugerencias de mención",
     "pendingResponse": {
       "working": "Trabajando...",
       "thinking": "Pensando...",

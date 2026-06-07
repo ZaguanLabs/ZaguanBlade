@@ -1,5 +1,6 @@
 import React from 'react';
 import { BookOpen, FileText, Folder, Globe } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import type { WorkspacePathMatch } from './usePathSuggestions';
 
 export type ComposerSuggestion =
@@ -11,6 +12,8 @@ export const MentionSuggestions: React.FC<{
     selectedIndex: number;
     onSelect: (suggestion: ComposerSuggestion) => void;
 }> = ({ suggestions, selectedIndex, onSelect }) => {
+    const { t } = useTranslation();
+
     if (suggestions.length === 0) {
         return null;
     }
@@ -18,6 +21,7 @@ export const MentionSuggestions: React.FC<{
     return (
         <div
             role="listbox"
+            aria-label={t('chat.mentionSuggestions')}
             className="absolute bottom-full left-0 right-0 z-80 mb-1.5 overflow-hidden rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-surface) shadow-(--shadow-lg)"
         >
             {suggestions.map((suggestion, index) => {
