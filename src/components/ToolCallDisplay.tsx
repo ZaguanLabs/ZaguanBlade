@@ -355,15 +355,15 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
         const style = { color: getStatusTone() };
         switch (status) {
             case 'executing':
-                return <Loader2 className="w-3.5 h-3.5 animate-spin" style={style} />;
+                return <Loader2 aria-hidden="true" className="w-3.5 h-3.5 animate-spin" style={style} />;
             case 'complete':
-                return <CheckCircle2 className="w-3.5 h-3.5" style={style} />;
+                return <CheckCircle2 aria-hidden="true" className="w-3.5 h-3.5" style={style} />;
             case 'error':
-                return <XCircle className="w-3.5 h-3.5" style={style} />;
+                return <XCircle aria-hidden="true" className="w-3.5 h-3.5" style={style} />;
             case 'skipped':
-                return <XCircle className="w-3.5 h-3.5" style={style} />;
+                return <XCircle aria-hidden="true" className="w-3.5 h-3.5" style={style} />;
             default:
-                return <Zap className="w-3.5 h-3.5" style={style} />;
+                return <Zap aria-hidden="true" className="w-3.5 h-3.5" style={style} />;
         }
     };
 

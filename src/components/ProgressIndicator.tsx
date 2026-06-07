@@ -61,22 +61,22 @@ export const ProgressIndicator: React.FC<ProgressIndicatorProps> = ({ progress }
         const color = getStageTone();
 
         if (stage.includes('search') || stage.includes('query')) {
-            return <Search className="w-4 h-4" style={{ color }} />;
+            return <Search aria-hidden="true" className="w-4 h-4" style={{ color }} />;
         }
         if (stage.includes('extract') || stage.includes('fetch')) {
-            return <FileText className="w-4 h-4" style={{ color }} />;
+            return <FileText aria-hidden="true" className="w-4 h-4" style={{ color }} />;
         }
         if (stage.includes('grad') || stage.includes('analyz')) {
-            return <Scale className="w-4 h-4" style={{ color }} />;
+            return <Scale aria-hidden="true" className="w-4 h-4" style={{ color }} />;
         }
         if (stage.includes('synth') || stage.includes('generat')) {
-            return <Sparkles className="w-4 h-4" style={{ color }} />;
+            return <Sparkles aria-hidden="true" className="w-4 h-4" style={{ color }} />;
         }
         if (stage.includes('done') || stage.includes('complete')) {
-            return <CheckCircle2 className="w-4 h-4" style={{ color }} />;
+            return <CheckCircle2 aria-hidden="true" className="w-4 h-4" style={{ color }} />;
         }
 
-        return <Loader2 className="w-4 h-4 animate-spin" style={{ color }} />;
+        return <Loader2 aria-hidden="true" className="w-4 h-4 animate-spin" style={{ color }} />;
     };
 
     const stageTone = getStageTone();
