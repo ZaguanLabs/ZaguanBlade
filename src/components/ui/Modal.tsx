@@ -74,13 +74,13 @@ export const InputModal: React.FC<InputModalProps> = ({
             />
 
             {/* Modal */}
-            <div className="relative bg-(--bg-surface) border border-(--border-focus) rounded-(--panel-radius) shadow-(--shadow-xl) w-full max-w-md mx-4 animate-in fade-in zoom-in-95 duration-(--transition-base) overflow-hidden">
+            <div className="relative bg-(--surface-overlay) border border-(--focus-ring) rounded-(--radius-dialog) shadow-(--shadow-dialog) w-full max-w-md mx-4 animate-in fade-in zoom-in-95 duration-(--transition-base) overflow-hidden">
                 {/* Header */}
-                <div className="flex items-center justify-between px-4 py-3 border-b border-(--border-subtle)">
+                <div className="flex items-center justify-between px-4 py-3 border-b border-(--separator-subtle)">
                     <h2 className="text-sm font-semibold text-(--fg-primary)">{title}</h2>
                     <button
                         onClick={onCancel}
-                        className="p-1 text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover) rounded-[calc(var(--panel-radius)*0.5)] transition-all duration-(--transition-fast)"
+                        className="p-1 text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--row-hover) rounded-(--radius-control) transition-all duration-(--transition-fast)"
                     >
                         <X className="w-4 h-4" />
                     </button>
@@ -94,22 +94,22 @@ export const InputModal: React.FC<InputModalProps> = ({
                         value={value}
                         onChange={(e) => setValue(e.target.value)}
                         placeholder={placeholder}
-                        className="w-full px-3 py-2 bg-(--bg-app) border border-(--border-subtle) rounded-[calc(var(--panel-radius)*0.65)] text-sm text-(--fg-primary) placeholder-(--fg-tertiary) focus:outline-none focus:border-(--accent-ai) focus:ring-1 focus:ring-(--accent-ai) transition-all duration-(--transition-fast)"
+                        className="w-full px-3 py-2 bg-(--surface-app) border border-(--separator-subtle) rounded-(--radius-control) text-sm text-(--fg-primary) placeholder-(--fg-tertiary) focus:outline-none focus:border-(--focus-ring) focus:ring-1 focus:ring-(--focus-ring) transition-all duration-(--transition-fast)"
                     />
                 </div>
 
                 {/* Footer */}
-                <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-(--border-subtle)">
+                <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-(--separator-subtle)">
                     <button
                         onClick={onCancel}
-                        className="px-3 py-1.5 text-xs font-medium text-(--fg-secondary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover) rounded-[calc(var(--panel-radius)*0.55)] transition-all duration-(--transition-fast)"
+                        className="px-3 py-1.5 text-xs font-medium text-(--fg-secondary) hover:text-(--fg-primary) hover:bg-(--row-hover) rounded-(--radius-control) transition-all duration-(--transition-fast)"
                     >
                         Cancel
                     </button>
                     <button
                         onClick={() => value.trim() && onConfirm(value.trim())}
                         disabled={!value.trim()}
-                        className={`px-3 py-1.5 text-xs font-medium rounded-[calc(var(--panel-radius)*0.55)] transition-all duration-(--transition-fast) disabled:opacity-50 disabled:cursor-not-allowed ${confirmButtonClasses}`}
+                        className={`px-3 py-1.5 text-xs font-medium rounded-(--radius-control) transition-all duration-(--transition-fast) disabled:opacity-50 disabled:cursor-not-allowed ${confirmButtonClasses}`}
                     >
                         {confirmLabel}
                     </button>
@@ -177,13 +177,13 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
             />
 
             {/* Modal */}
-            <div className="relative bg-(--bg-surface) border border-(--border-focus) rounded-(--panel-radius) shadow-(--shadow-xl) w-full max-w-md mx-4 animate-in fade-in zoom-in-95 duration-(--transition-base) overflow-hidden">
+            <div className="relative bg-(--surface-overlay) border border-(--focus-ring) rounded-(--radius-dialog) shadow-(--shadow-dialog) w-full max-w-md mx-4 animate-in fade-in zoom-in-95 duration-(--transition-base) overflow-hidden">
                 {/* Header */}
-                <div className="flex items-center justify-between px-4 py-3 border-b border-(--border-subtle)">
+                <div className="flex items-center justify-between px-4 py-3 border-b border-(--separator-subtle)">
                     <h2 className="text-sm font-semibold text-(--fg-primary)">{title}</h2>
                     <button
                         onClick={onCancel}
-                        className="p-1 text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover) rounded-[calc(var(--panel-radius)*0.5)] transition-all duration-(--transition-fast)"
+                        className="p-1 text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--row-hover) rounded-(--radius-control) transition-all duration-(--transition-fast)"
                     >
                         <X className="w-4 h-4" />
                     </button>
@@ -197,16 +197,16 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
                 </div>
 
                 {/* Footer */}
-                <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-(--border-subtle)">
+                <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-(--separator-subtle)">
                     <button
                         onClick={onCancel}
-                        className="px-3 py-1.5 text-xs font-medium text-(--fg-secondary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover) rounded-[calc(var(--panel-radius)*0.55)] transition-all duration-(--transition-fast)"
+                        className="px-3 py-1.5 text-xs font-medium text-(--fg-secondary) hover:text-(--fg-primary) hover:bg-(--row-hover) rounded-(--radius-control) transition-all duration-(--transition-fast)"
                     >
                         Cancel
                     </button>
                     <button
                         onClick={onConfirm}
-                        className={`px-3 py-1.5 text-xs font-medium rounded-[calc(var(--panel-radius)*0.55)] transition-all duration-(--transition-fast) ${confirmButtonClasses}`}
+                        className={`px-3 py-1.5 text-xs font-medium rounded-(--radius-control) transition-all duration-(--transition-fast) ${confirmButtonClasses}`}
                     >
                         {confirmLabel}
                     </button>

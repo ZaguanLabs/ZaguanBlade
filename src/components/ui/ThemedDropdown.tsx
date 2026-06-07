@@ -6,7 +6,7 @@ interface ThemedDropdownSurfaceProps extends React.HTMLAttributes<HTMLDivElement
 export const ThemedDropdownSurface: React.FC<ThemedDropdownSurfaceProps> = ({ className, ...props }) => (
     <div
         className={cn(
-            'z-50 overflow-hidden rounded-[calc(var(--panel-radius)+6px)] border border-(--border-default) bg-[color-mix(in_srgb,var(--bg-panel)_92%,var(--bg-surface))] p-2 shadow-(--panel-shadow)',
+            'z-50 overflow-hidden rounded-(--radius-popover) border border-(--separator-default) bg-[color-mix(in_srgb,var(--surface-pane)_92%,var(--surface-overlay))] p-2 shadow-(--shadow-popover)',
             className,
         )}
         {...props}
@@ -32,7 +32,7 @@ interface ThemedDropdownSectionLabelProps extends React.HTMLAttributes<HTMLDivEl
 export const ThemedDropdownSectionLabel: React.FC<ThemedDropdownSectionLabelProps> = ({ className, ...props }) => (
     <div
         className={cn(
-            'border-t border-(--border-subtle) px-2 pt-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-(--fg-tertiary)',
+            'border-t border-(--separator-subtle) px-2 pt-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-(--fg-tertiary)',
             className,
         )}
         {...props}
@@ -41,10 +41,10 @@ export const ThemedDropdownSectionLabel: React.FC<ThemedDropdownSectionLabelProp
 
 export function themedDropdownItemClassName(selected: boolean, className?: string) {
     return cn(
-        'group w-full rounded-[calc(var(--panel-radius)+2px)] border text-left transition-[border-color,background-color,box-shadow,transform] duration-200 focus:outline-none',
+        'group w-full rounded-(--radius-control) border text-left transition-[border-color,background-color,box-shadow,transform] duration-200 focus:outline-none',
         selected
-            ? 'border-(--accent-ai) bg-[color-mix(in_srgb,var(--accent-ai)_14%,var(--bg-surface))] ring-1 ring-(--accent-ai)/30 shadow-(--shadow-sm)'
-            : 'border-transparent bg-(--bg-surface) hover:border-(--border-default) hover:bg-(--bg-surface-hover) focus:border-(--accent-ai) focus:bg-(--bg-surface-hover)',
+            ? 'border-(--accent-ai) bg-[color-mix(in_srgb,var(--accent-ai)_14%,var(--surface-overlay))] ring-1 ring-(--accent-ai)/30'
+            : 'border-transparent bg-(--surface-overlay) hover:border-(--separator-default) hover:bg-(--row-hover) focus:border-(--focus-ring) focus:bg-(--row-hover)',
         className,
     );
 }

@@ -178,7 +178,7 @@ const ContextMenuPortal: React.FC = () => {
     return (
         <div
             ref={menuRef}
-            className="fixed z-9999 min-w-[180px] max-w-[280px] py-1.5 bg-(--bg-surface) border border-(--border-focus) rounded-[calc(var(--panel-radius)*0.75)] shadow-(--shadow-lg) animate-in fade-in zoom-in-95 duration-(--transition-fast) overflow-hidden"
+            className="fixed z-9999 min-w-[180px] max-w-[280px] py-1.5 bg-(--surface-overlay) border border-(--focus-ring) rounded-(--radius-popover) shadow-(--shadow-popover) animate-in fade-in zoom-in-95 duration-(--transition-fast) overflow-hidden"
             style={{
                 left: adjustedPosition.x,
                 top: adjustedPosition.y,
@@ -189,7 +189,7 @@ const ContextMenuPortal: React.FC = () => {
                     return (
                         <div
                             key={`divider-${index}`}
-                            className="my-1.5 mx-2 h-px bg-(--border-subtle)"
+                            className="my-1.5 mx-2 h-px bg-(--separator-subtle)"
                         />
                     );
                 }
@@ -208,9 +208,9 @@ const ContextMenuPortal: React.FC = () => {
                                 ? 'text-(--fg-tertiary) cursor-not-allowed'
                                 : item.danger
                                     ? 'text-(--state-danger) hover:bg-[color-mix(in_srgb,var(--state-danger)_10%,transparent)]'
-                                    : 'text-(--fg-primary) hover:bg-(--bg-surface-hover)'
+                                    : 'text-(--fg-primary) hover:bg-(--row-hover)'
                             }
-                            ${isActive && !item.disabled ? 'bg-(--bg-surface-hover)' : ''}
+                            ${isActive && !item.disabled ? 'bg-(--row-hover)' : ''}
                         `}
                     >
                         {/* Icon */}
