@@ -932,6 +932,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                     }
                                 }}
                                 disabled={(!text.trim() && attachments.length === 0 && !loading) || disabled}
+                                aria-label={loading && !text.trim() ? t('chat.stop') : t('chat.send')}
                                 className={`absolute bottom-2 right-2 z-20 inline-flex h-9 w-9 items-center justify-center rounded-[calc(var(--panel-radius)*0.55)] border transition-colors ${loading && !text.trim()
                                     ? 'border-(--state-danger)/30 bg-[color-mix(in_srgb,var(--state-danger)_10%,transparent)] text-(--state-danger) hover:bg-[color-mix(in_srgb,var(--state-danger)_18%,transparent)]'
                                     : chatMode === 'planning'
