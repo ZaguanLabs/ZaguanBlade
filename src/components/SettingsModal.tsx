@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useEffect } from 'react';
+import React, { useId, useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { emit } from '@tauri-apps/api/event';
@@ -623,6 +623,7 @@ const ConfigurationSettings: React.FC<ConfigurationSettingsProps> = ({
     onAutoApproveRunCommandsChange,
 }) => {
     const { t } = useTranslation();
+    const languageSelectId = useId();
 
     return (
         <div className="space-y-6">
@@ -661,12 +662,13 @@ const ConfigurationSettings: React.FC<ConfigurationSettingsProps> = ({
                 </div>
 
                 <div className="space-y-2.5">
-                    <label className="text-xs font-medium uppercase tracking-[0.16em] text-(--fg-secondary) block">
+                    <label htmlFor={languageSelectId} className="text-xs font-medium uppercase tracking-[0.16em] text-(--fg-secondary) block">
                         {t('settings.configurationSection.interfaceLanguage')}
                     </label>
 
                     <div className="relative">
                         <select
+                            id={languageSelectId}
                             value={settings.language}
                             onChange={(e) => onChange({ language: e.target.value as AppLanguage })}
                             className="w-full appearance-none rounded-[calc(var(--panel-radius)+2px)] border border-(--border-default) bg-(--bg-surface) px-3 py-2 pr-9 text-sm text-(--fg-primary) transition-[border-color,background-color] duration-200 focus:border-(--accent-ai) focus:outline-none hover:bg-(--bg-surface-hover) cursor-pointer"
@@ -727,6 +729,9 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
     const [openaiTestResult, setOpenaiTestResult] = useState<'idle' | 'success' | 'error'>('idle');
     const [openaiTestMessage, setOpenaiTestMessage] = useState<string | null>(null);
     const [isRefreshingOpenAI, setIsRefreshingOpenAI] = useState(false);
+    const ollamaUrlId = useId();
+    const ollamaCloudApiKeyId = useId();
+    const openaiCompatUrlId = useId();
 
     const handleTestOllamaConnection = async () => {
         setIsTestingOllama(true);
@@ -813,8 +818,9 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                 </div>
 
                 <div className="space-y-2">
-                    <label className="text-xs text-(--fg-secondary) block">{t('settings.serverUrl')}</label>
+                    <label htmlFor={ollamaUrlId} className="text-xs text-(--fg-secondary) block">{t('settings.serverUrl')}</label>
                     <input
+                        id={ollamaUrlId}
                         type="text"
                         value={settings.ollamaUrl}
                         onChange={(e) => onChange({ ollamaUrl: e.target.value })}
@@ -870,8 +876,9 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                 </div>
 
                 <div className="space-y-2">
-                    <label className="text-xs text-(--fg-secondary) block">{t('settings.apiKey')}</label>
+                    <label htmlFor={ollamaCloudApiKeyId} className="text-xs text-(--fg-secondary) block">{t('settings.apiKey')}</label>
                     <input
+                        id={ollamaCloudApiKeyId}
                         type="password"
                         value={settings.ollamaCloudApiKey}
                         onChange={(e) => onChange({ ollamaCloudApiKey: e.target.value })}
@@ -901,8 +908,9 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                 </div>
 
                 <div className="space-y-2">
-                    <label className="text-xs text-(--fg-secondary) block">{t('settings.serverUrl')}</label>
+                    <label htmlFor={openaiCompatUrlId} className="text-xs text-(--fg-secondary) block">{t('settings.serverUrl')}</label>
                     <input
+                        id={openaiCompatUrlId}
                         type="text"
                         value={settings.openaiCompatUrl}
                         onChange={(e) => onChange({ openaiCompatUrl: e.target.value })}
