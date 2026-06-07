@@ -125,8 +125,8 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
             {/* Content */}
             <ScrollArea className="flex-1 p-4 custom-scrollbar">
                 {loading ? (
-                    <div className="flex items-center justify-center py-10">
-                        <Loader2 className="w-6 h-6 animate-spin text-(--accent-ai)" />
+                    <div role="status" aria-live="polite" aria-label={t('common.loading')} className="flex items-center justify-center py-10">
+                        <Loader2 aria-hidden="true" className="w-6 h-6 animate-spin text-(--accent-ai)" />
                     </div>
                 ) : error ? (
                     <div className="p-3 bg-[color-mix(in_srgb,var(--state-danger)_10%,transparent)] border border-(--state-danger)/20 rounded-[calc(var(--panel-radius)*0.45)] text-xs text-(--state-danger)">

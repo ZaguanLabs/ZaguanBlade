@@ -165,7 +165,7 @@ export const OutlinePanel: React.FC<OutlinePanelProps> = ({ filePath, onNavigate
 
     if (loading) {
         return (
-            <div className="flex items-center justify-center p-8 text-(--fg-tertiary)">
+            <div role="status" aria-live="polite" className="flex items-center justify-center p-8 text-(--fg-tertiary)">
                 <div className="animate-pulse text-xs italic">{t('outline.loadingStructure')}</div>
             </div>
         );

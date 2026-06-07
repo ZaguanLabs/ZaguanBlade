@@ -34,7 +34,7 @@ export const FileHistoryPanel: React.FC<FileHistoryPanelProps> = ({ activeFile }
     }
 
     if (loading && history.length === 0) {
-        return <div className="p-4 text-xs text-(--fg-tertiary)">{t('fileHistory.loading')}</div>;
+        return <div role="status" aria-live="polite" className="p-4 text-xs text-(--fg-tertiary)">{t('fileHistory.loading')}</div>;
     }
 
     if (history.length === 0) {
