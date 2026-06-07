@@ -786,7 +786,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
 
                                 {/* Loading indicator */}
                                 {item.isLoading?.() && (
-                                    <Loader2 className="w-3 h-3 text-(--fg-tertiary) animate-spin" />
+                                    <Loader2 aria-hidden="true" className="w-3 h-3 text-(--fg-tertiary) animate-spin" />
                                 )}
 
                                 {/* Inline rename input or item name */}
@@ -859,7 +859,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                 </div>
 
                 {tree.getItems().length === 0 && (
-                    <div className="p-4 text-(--fg-tertiary) italic">
+                    <div role="status" aria-live="polite" className="p-4 text-(--fg-tertiary) italic">
                         {roots.length > 0 ? t('fileTree.loadingTree') : t('fileTree.waitingForWorkspace')}
                     </div>
                 )}
