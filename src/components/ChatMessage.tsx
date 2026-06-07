@@ -288,6 +288,7 @@ const ReferencedPathsDisplay: React.FC<{
                             onClick={() => onOpenFile?.(mention.path)}
                             className="inline-flex max-w-full items-center gap-1.5 rounded-[calc(var(--panel-radius)*0.45)] border border-(--accent-mention)/15 bg-(--bg-app)/30 px-2 py-1 text-[10px] text-(--fg-secondary) transition-colors hover:bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)] hover:text-(--fg-bright)"
                             title={t('chatMessage.openPath', { path: mention.path })}
+                            aria-label={t('chatMessage.openPath', { path: mention.path })}
                         >
                             {content}
                         </button>
