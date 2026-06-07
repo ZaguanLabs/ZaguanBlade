@@ -1,5 +1,5 @@
 'use client';
-import React, { useState } from 'react';
+import React, { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { HardDrive, Cloud, Shield, Zap, ArrowRight, Loader2 } from 'lucide-react';
@@ -19,6 +19,8 @@ export const StorageSetupModal: React.FC<StorageSetupModalProps> = ({
     onComplete,
 }) => {
     const { t } = useTranslation();
+    const titleId = useId();
+    const descriptionId = useId();
     const [selectedMode, setSelectedMode] = useState<StorageMode>('local');
     const [isSettingUp, setIsSettingUp] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -73,16 +75,22 @@ export const StorageSetupModal: React.FC<StorageSetupModalProps> = ({
     return (
         <div className="fixed inset-0 z-9999 flex items-center justify-center">
             {/* Backdrop */}
-            <div className="absolute inset-0 bg-black/70" />
+            <div className="absolute inset-0 bg-black/70" aria-hidden="true" />
 
             {/* Modal */}
-            <div className="relative bg-(--bg-surface) border border-(--border-focus) rounded-(--panel-radius) shadow-(--shadow-xl) w-full max-w-2xl mx-4 animate-in fade-in zoom-in-95 duration-(--transition-base) overflow-hidden">
+            <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={titleId}
+                aria-describedby={descriptionId}
+                className="relative bg-(--bg-surface) border border-(--border-focus) rounded-(--panel-radius) shadow-(--shadow-xl) w-full max-w-2xl mx-4 animate-in fade-in zoom-in-95 duration-(--transition-base) overflow-hidden"
+            >
                 {/* Header */}
                 <div className="px-8 pt-8 pb-4">
-                    <h2 className="text-2xl font-bold text-(--fg-primary)">
+                    <h2 id={titleId} className="text-2xl font-bold text-(--fg-primary)">
                         {t('storageSetup.title')}
                     </h2>
-                    <p className="mt-2 text-(--fg-secondary)">
+                    <p id={descriptionId} className="mt-2 text-(--fg-secondary)">
                         {t('storageSetup.description')}
                     </p>
                 </div>
