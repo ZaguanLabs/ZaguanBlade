@@ -83,6 +83,8 @@ export const ProgressIndicator: React.FC<ProgressIndicatorProps> = ({ progress }
 
     return (
         <div
+            role="status"
+            aria-live="polite"
             className="my-3 overflow-hidden rounded-[calc(var(--panel-radius)*1.2)] border px-4 py-3 transition-all duration-(--transition-slow)"
             style={{
                 borderColor: `color-mix(in srgb, ${stageTone} 38%, var(--border-default))`,
