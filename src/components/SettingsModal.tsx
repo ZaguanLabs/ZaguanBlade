@@ -459,6 +459,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                                 type="button"
                                 key={section.id}
                                 onClick={() => setActiveSection(section.id)}
+                                aria-current={activeSection === section.id ? 'page' : undefined}
                                 className={`w-full flex items-center justify-between gap-3 rounded-[calc(var(--panel-radius)*0.65)] px-3 py-2.5 text-sm transition-colors border ${activeSection === section.id
                                     ? 'bg-(--bg-active) text-(--fg-primary) border-(--border-focus)'
                                     : 'text-(--fg-secondary) border-transparent hover:bg-(--bg-surface) hover:text-(--fg-primary)'
