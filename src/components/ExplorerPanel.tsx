@@ -96,7 +96,7 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
                 <div className="h-9 px-4 flex items-center bg-(--bg-panel) border-b border-(--border-subtle) text-[10px] uppercase tracking-wider font-semibold select-none justify-between text-(--fg-tertiary) shrink-0">
                     <span>{t('fileTree.title')}</span>
                     <button type="button" onClick={() => { loadRoot(); setRefreshKey(prev => prev + 1); }} className="hover:text-(--fg-primary)" title={t('fileTree.refresh')} aria-label={t('fileTree.refresh')}>
-                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                        <svg aria-hidden="true" className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
                     </button>
                 </div>
 
