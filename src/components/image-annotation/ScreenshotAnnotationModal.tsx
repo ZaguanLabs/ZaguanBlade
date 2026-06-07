@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState } from 'react';
 import { ArrowUpRight, Check, Circle, Eraser, MousePointer2, Pencil, Redo2, Square, Trash2, Type, Undo2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -161,6 +161,8 @@ export const ScreenshotAnnotationModal: React.FC<{
     onDone: (dataUrl: string, name: string) => void;
 }> = ({ dataUrl, name, onCancel, onDone }) => {
     const { t } = useTranslation();
+    const titleId = useId();
+    const descriptionId = useId();
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const canvasWrapRef = useRef<HTMLDivElement>(null);
     const imageRef = useRef<HTMLImageElement | null>(null);
@@ -716,11 +718,17 @@ export const ScreenshotAnnotationModal: React.FC<{
 
     return (
         <div className="fixed inset-0 z-9999 flex items-center justify-center bg-(--bg-app)/85 p-4">
-            <div className="flex max-h-[94vh] w-full max-w-7xl flex-col overflow-hidden rounded-(--panel-radius) border border-(--border-focus) bg-(--bg-surface) shadow-(--shadow-xl)">
+            <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={titleId}
+                aria-describedby={descriptionId}
+                className="flex max-h-[94vh] w-full max-w-7xl flex-col overflow-hidden rounded-(--panel-radius) border border-(--border-focus) bg-(--bg-surface) shadow-(--shadow-xl)"
+            >
                 <div className="flex shrink-0 items-center justify-between gap-3 border-b border-(--border-subtle) px-4 py-3">
                     <div className="min-w-0">
-                        <div className="text-sm font-semibold text-(--fg-primary)">{t('screenshot.editor.title')}</div>
-                        <div className="truncate text-xs text-(--fg-tertiary)">{name}</div>
+                        <div id={titleId} className="text-sm font-semibold text-(--fg-primary)">{t('screenshot.editor.title')}</div>
+                        <div id={descriptionId} className="truncate text-xs text-(--fg-tertiary)">{name}</div>
                     </div>
                     <button type="button" onClick={onCancel} aria-label={t('common.close')} className="rounded-[calc(var(--panel-radius)*0.35)] p-1 text-(--fg-tertiary) transition hover:bg-(--bg-surface-hover) hover:text-(--fg-primary)">
                         <X className="h-4 w-4" />
