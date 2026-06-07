@@ -746,6 +746,7 @@ export const ScreenshotAnnotationModal: React.FC<{
                                     key={entry.id}
                                     type="button"
                                     title={entry.label}
+                                    aria-pressed={active}
                                     disabled={!imageReady}
                                     onClick={() => {
                                         if (textDraft) {
@@ -768,6 +769,7 @@ export const ScreenshotAnnotationModal: React.FC<{
                                 key={entry}
                                 type="button"
                                 aria-label={t('screenshot.editor.useColor', { color: entry })}
+                                aria-pressed={color === entry}
                                 disabled={!imageReady}
                                 onClick={() => applyColor(entry)}
                                 className={`h-6 w-6 rounded-[calc(var(--panel-radius)*0.35)] border transition ${color === entry ? 'border-(--fg-primary) ring-2 ring-(--accent-ai)/35' : 'border-(--border-subtle)'}`}
