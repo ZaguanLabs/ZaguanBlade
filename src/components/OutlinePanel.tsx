@@ -65,30 +65,37 @@ const OutlineItem: React.FC<{
     return (
         <div className="select-none">
             <div
-                className="flex items-center gap-1.5 py-0.5 px-2 hover:bg-(--bg-surface-hover) cursor-pointer text-xs group"
+                className="flex items-center gap-1.5 py-0.5 px-2 hover:bg-(--bg-surface-hover) text-xs group"
                 style={{ paddingLeft: `${depth * 16 + 8}px` }}
-                onClick={handleClick}
             >
                 {hasChildren ? (
-                    <span
-                        className={`transition-transform cursor-pointer hover:text-(--fg-primary) p-0.5 rounded-[calc(var(--panel-radius)*0.25)] ${expanded ? 'rotate-90' : ''}`}
+                    <button
+                        type="button"
+                        className={`transition-transform hover:text-(--fg-primary) p-0.5 rounded-[calc(var(--panel-radius)*0.25)] ${expanded ? 'rotate-90' : ''}`}
                         onClick={toggleExpand}
+                        aria-label={expanded ? 'Collapse symbol' : 'Expand symbol'}
                     >
                         <ChevronRight className="w-3 h-3 text-(--fg-tertiary)" />
-                    </span>
+                    </button>
                 ) : (
                     <span className="w-4" />
                 )}
 
-                <SymbolIcon kind={node.kind} />
-                <span className="truncate text-(--fg-secondary) group-hover:text-(--fg-primary) transition-colors">
-                    {node.name}
-                </span>
-                {node.detail && (
-                    <span className="ml-auto text-[10px] text-(--fg-tertiary) opacity-0 group-hover:opacity-100 transition-opacity">
-                        {node.detail}
+                <button
+                    type="button"
+                    className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+                    onClick={handleClick}
+                >
+                    <SymbolIcon kind={node.kind} />
+                    <span className="truncate text-(--fg-secondary) group-hover:text-(--fg-primary) transition-colors">
+                        {node.name}
                     </span>
-                )}
+                    {node.detail && (
+                        <span className="ml-auto text-[10px] text-(--fg-tertiary) opacity-0 group-hover:opacity-100 transition-opacity">
+                            {node.detail}
+                        </span>
+                    )}
+                </button>
             </div>
 
             {expanded && hasChildren && (
