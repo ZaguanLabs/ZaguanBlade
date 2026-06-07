@@ -147,7 +147,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
     if (error) {
         return (
             <div className="h-full flex items-center justify-center bg-(--bg-app)">
-                <div className="flex flex-col items-center gap-3 max-w-md text-center">
+                <div role="alert" className="flex flex-col items-center gap-3 max-w-md text-center">
                     <FileText className="w-12 h-12 text-(--state-danger) opacity-50" />
                     <p className="text-sm text-(--state-danger)">{t('pdf.loadFailed')}</p>
                     <p className="text-xs text-(--fg-tertiary) font-mono">{error}</p>
