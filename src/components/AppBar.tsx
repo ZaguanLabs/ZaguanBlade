@@ -249,6 +249,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                 <div className="flex items-center shrink-0" ref={fileMenuRef}>
                     <div className="relative">
                         <button
+                            type="button"
                             onClick={handleFileMenuClick}
                             className={`flex items-center gap-1 px-3 h-9 text-[11px] font-medium transition-colors ${
                                 fileMenuOpen
@@ -265,6 +266,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                                 className="absolute top-full left-0 z-100 mt-0.5 min-w-[180px] rounded-(--radius-popover) border border-(--separator-subtle) bg-(--surface-overlay) py-1.5 shadow-(--shadow-popover)"
                             >
                                 <button
+                                    type="button"
                                     onClick={() => {
                                         setFileMenuOpen(false);
                                         window.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, bubbles: true }));
@@ -275,6 +277,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                                     <span className="text-[10px] text-(--fg-tertiary) font-mono">Ctrl+N</span>
                                 </button>
                                 <button
+                                    type="button"
                                     disabled
                                     className="w-full flex cursor-not-allowed items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-tertiary) opacity-55"
                                 >
@@ -282,12 +285,14 @@ export const AppBar: React.FC<AppBarProps> = ({
                                 </button>
                                 <div className="my-1.5 mx-2 h-px bg-(--separator-subtle)" />
                                 <button
+                                    type="button"
                                     disabled
                                     className="w-full flex cursor-not-allowed items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-tertiary) opacity-55"
                                 >
                                     <span>{t('common.save')}</span>
                                 </button>
                                 <button
+                                    type="button"
                                     disabled
                                     className="w-full flex cursor-not-allowed items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-tertiary) opacity-55"
                                 >
@@ -295,6 +300,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                                 </button>
                                 <div className="my-1.5 mx-2 h-px bg-(--separator-subtle)" />
                                 <button
+                                    type="button"
                                     onClick={() => { setFileMenuOpen(false); appWindow.close(); }}
                                     className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-primary) transition-colors hover:bg-(--row-hover)"
                                 >
@@ -459,6 +465,7 @@ export const AppBar: React.FC<AppBarProps> = ({
             {!isFullscreen && (
                 <div className="flex items-center gap-1 pr-1 shrink-0">
                     <button
+                        type="button"
                         onClick={handleMinimize}
                         className="h-7 w-7 rounded-(--radius-control) flex items-center justify-center text-(--fg-tertiary) hover:bg-(--surface-overlay) hover:text-(--fg-secondary) active:scale-95 transition-all duration-150"
                         title={t('windowControls.minimize')}
@@ -466,6 +473,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                         <Minus className="w-3.5 h-3.5" strokeWidth={1.8} />
                     </button>
                     <button
+                        type="button"
                         onClick={handleMaximizeRestore}
                         className="h-7 w-7 rounded-(--radius-control) flex items-center justify-center text-(--fg-tertiary) hover:bg-(--surface-overlay) hover:text-(--fg-secondary) active:scale-95 transition-all duration-150"
                         title={isMaximized ? t('windowControls.restore') : t('windowControls.maximize')}
@@ -477,6 +485,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                         )}
                     </button>
                     <button
+                        type="button"
                         onClick={handleClose}
                         className="h-7 w-7 rounded-(--radius-control) flex items-center justify-center text-(--fg-tertiary) hover:bg-(--state-danger) hover:text-(--fg-bright) active:scale-95 transition-all duration-150"
                         title={t('windowControls.close')}

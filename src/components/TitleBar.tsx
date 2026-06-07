@@ -133,6 +133,7 @@ export const TitleBar: React.FC = () => {
                 <div className="flex items-center h-full" ref={fileMenuRef}>
                     <div className="relative">
                         <button
+                            type="button"
                             onClick={handleFileMenuClick}
                             className={`flex items-center gap-1 px-3 h-9 text-[11px] font-medium transition-colors ${fileMenuOpen
                                     ? 'bg-(--bg-surface) text-(--fg-primary)'
@@ -148,6 +149,7 @@ export const TitleBar: React.FC = () => {
                             <div className="absolute top-full left-0 mt-0.5 min-w-[180px] py-1.5 bg-(--bg-surface) border border-(--border-focus) rounded-[calc(var(--panel-radius)*0.75)] shadow-(--shadow-xl) z-100"
                             >
                                 <button
+                                    type="button"
                                     onClick={() => {
                                         setFileMenuOpen(false);
                                         window.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, bubbles: true }));
@@ -158,6 +160,7 @@ export const TitleBar: React.FC = () => {
                                     <span className="text-[10px] text-(--fg-tertiary) font-mono">Ctrl+N</span>
                                 </button>
                                 <button
+                                    type="button"
                                     onClick={() => { setFileMenuOpen(false); }}
                                     className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-primary) hover:bg-(--bg-surface-hover) transition-colors"
                                 >
@@ -166,6 +169,7 @@ export const TitleBar: React.FC = () => {
                                 </button>
                                 <div className="my-1.5 mx-2 h-px bg-(--border-subtle)" />
                                 <button
+                                    type="button"
                                     onClick={() => { setFileMenuOpen(false); }}
                                     className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-primary) hover:bg-(--bg-surface-hover) transition-colors"
                                 >
@@ -173,6 +177,7 @@ export const TitleBar: React.FC = () => {
                                     <span className="text-[10px] text-(--fg-tertiary) font-mono">Ctrl+S</span>
                                 </button>
                                 <button
+                                    type="button"
                                     onClick={() => { setFileMenuOpen(false); }}
                                     className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-primary) hover:bg-(--bg-surface-hover) transition-colors"
                                 >
@@ -181,6 +186,7 @@ export const TitleBar: React.FC = () => {
                                 </button>
                                 <div className="my-1.5 mx-2 h-px bg-(--border-subtle)" />
                                 <button
+                                    type="button"
                                     onClick={() => { setFileMenuOpen(false); appWindow.close(); }}
                                     className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-primary) hover:bg-(--bg-surface-hover) transition-colors"
                                 >
@@ -222,6 +228,7 @@ export const TitleBar: React.FC = () => {
                 <div className="flex items-center h-full gap-1 pr-1">
                     {/* Minimize */}
                     <button
+                        type="button"
                         onClick={handleMinimize}
                         className="window-control-btn h-7 w-7 rounded-[calc(var(--panel-radius)*0.45)] flex items-center justify-center text-(--fg-tertiary) hover:bg-(--bg-surface) hover:text-(--fg-secondary) active:scale-95 transition-all duration-(--transition-fast)"
                         title={t('windowControls.minimize')}
@@ -231,6 +238,7 @@ export const TitleBar: React.FC = () => {
 
                     {/* Maximize/Restore */}
                     <button
+                        type="button"
                         onClick={handleMaximizeRestore}
                         className="window-control-btn h-7 w-7 rounded-[calc(var(--panel-radius)*0.45)] flex items-center justify-center text-(--fg-tertiary) hover:bg-(--bg-surface) hover:text-(--fg-secondary) active:scale-95 transition-all duration-(--transition-fast)"
                         title={isMaximized ? t('windowControls.restore') : t('windowControls.maximize')}
@@ -244,6 +252,7 @@ export const TitleBar: React.FC = () => {
 
                     {/* Close */}
                     <button
+                        type="button"
                         onClick={handleClose}
                         className="window-control-btn h-7 w-7 rounded-[calc(var(--panel-radius)*0.45)] flex items-center justify-center text-(--fg-tertiary) hover:bg-(--state-danger) hover:text-(--fg-bright) active:scale-95 transition-all duration-(--transition-fast)"
                         title={t('windowControls.close')}
