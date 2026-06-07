@@ -224,6 +224,8 @@ type SettingsSection = 'configuration' | 'account' | 'localai' | 'storage' | 'co
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialSection, workspacePath, onRefreshModels }) => {
     const { t } = useTranslation();
+    const titleId = useId();
+    const subtitleId = useId();
     const [settings, setSettings] = useState<SettingsState>(defaultSettings);
     const [loadedSettings, setLoadedSettings] = useState<SettingsState>(defaultSettings);
     const [activeSection, setActiveSection] = useState<SettingsSection>('configuration');
@@ -420,16 +422,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
             {/* Backdrop */}
             <div
                 className="absolute inset-0 bg-black/72"
+                aria-hidden="true"
                 onClick={onClose}
             />
 
             {/* Modal */}
-            <div className="relative w-full max-w-[980px] h-[min(760px,92vh)] flex flex-col animate-in fade-in zoom-in-95 duration-150 rounded-(--panel-radius) border border-(--border-default) bg-(--bg-panel) shadow-(--shadow-xl) overflow-hidden">
+            <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={titleId}
+                aria-describedby={subtitleId}
+                className="relative w-full max-w-[980px] h-[min(760px,92vh)] flex flex-col animate-in fade-in zoom-in-95 duration-150 rounded-(--panel-radius) border border-(--border-default) bg-(--bg-panel) shadow-(--shadow-xl) overflow-hidden"
+            >
                 {/* Header */}
                 <div className="flex items-start justify-between px-6 py-4 border-b border-(--border-default) bg-[color-mix(in_srgb,var(--bg-panel)_82%,var(--bg-surface))]">
                     <div>
-                        <h2 className="text-lg font-semibold text-(--fg-primary)">{t('settings.title')}</h2>
-                        <p className="text-xs text-(--fg-tertiary) mt-0.5">{t('settings.subtitle')}</p>
+                        <h2 id={titleId} className="text-lg font-semibold text-(--fg-primary)">{t('settings.title')}</h2>
+                        <p id={subtitleId} className="text-xs text-(--fg-tertiary) mt-0.5">{t('settings.subtitle')}</p>
                     </div>
                     <button
                         type="button"
