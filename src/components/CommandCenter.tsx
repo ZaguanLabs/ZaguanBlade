@@ -829,6 +829,8 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                     <div className={`relative px-1.5 pb-0 pt-1.5 transition-colors ${loading ? 'bg-(--bg-surface)/40' : ''}`}>
                         {showSuggestions && suggestions.length > 0 && (
                             <div
+                                role="listbox"
+                                aria-label={t('chat.mentionSuggestions')}
                                 className="absolute bottom-full left-0 right-0 z-80 mx-0.5 mb-1.5 overflow-hidden rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-surface) shadow-(--shadow-lg)"
                             >
                                 {suggestions.map((suggestion, idx) => {
@@ -838,6 +840,8 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                         return (
                                             <button
                                                 type="button"
+                                                role="option"
+                                                aria-selected={isActiveSuggestion}
                                                 key={suggestion.key}
                                                 onClick={() => insertSuggestion(suggestion)}
                                                 title={suggestion.tooltip}
@@ -860,6 +864,8 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                     return (
                                         <button
                                             type="button"
+                                            role="option"
+                                            aria-selected={isActiveSuggestion}
                                             key={suggestion.key}
                                             onClick={() => insertSuggestion(suggestion)}
                                             className={`w-full flex items-center gap-2 px-2 py-1.5 text-left transition-colors ${isActiveSuggestion
