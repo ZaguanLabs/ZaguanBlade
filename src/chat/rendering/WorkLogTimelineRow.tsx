@@ -54,7 +54,7 @@ export const WorkLogTimelineRow: React.FC<WorkLogTimelineRowProps> = React.memo(
                     <div className="mt-1.5 space-y-1">
                         {visibleEntries.map((entry) => (
                             <div key={entry.id} className="flex min-w-0 items-center gap-2 rounded-[calc(var(--panel-radius)*0.35)] px-1 py-0.5">
-                                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${workEntryToneClass(entry)}`} />
+                                <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${workEntryToneClass(entry)}`} />
                                 <span className="shrink-0 text-[10px] font-medium text-(--fg-secondary)">
                                     {entry.label}
                                 </span>

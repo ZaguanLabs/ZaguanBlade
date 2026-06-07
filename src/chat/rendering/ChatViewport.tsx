@@ -221,7 +221,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                     {showPendingResponse && (
                         <div className="px-4 py-3">
                             <div className="inline-flex max-w-full items-center gap-3 rounded-[calc(var(--panel-radius)*0.9)] border border-[color-mix(in_srgb,var(--accent-ai)_18%,transparent)] bg-(--bg-surface)/70 px-4 py-3 text-[11px] font-medium text-(--fg-secondary)">
-                                <span className="h-2 w-2 rounded-full bg-(--accent-ai)" />
+                                <span aria-hidden="true" className="h-2 w-2 rounded-full bg-(--accent-ai)" />
                                 <span className="truncate">{toolActivity?.action ?? t('chat.assistantResponding')}</span>
                             </div>
                         </div>
