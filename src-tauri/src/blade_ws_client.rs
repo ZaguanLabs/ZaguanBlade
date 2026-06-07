@@ -740,11 +740,20 @@ impl BladeWsClient {
             id: request_id.clone(),
             msg_type: "chat_request".to_string(),
             timestamp: chrono::Utc::now().timestamp_millis(),
-            payload: Some(serde_json::to_value(payload).unwrap()),
+            payload: Some(serde_json::to_value(&payload).unwrap()),
         };
 
         let json =
             serde_json::to_string(&msg).map_err(|e| format!("JSON serialization error: {}", e))?;
+
+        eprintln!(
+            "[BLADE WS] Sending chat_request: id={}, model={}, message_len={}, image_count={}, workspace_root={:?}",
+            request_id,
+            payload.model_id,
+            payload.message.len(),
+            payload.images.as_ref().map_or(0, Vec::len),
+            payload.workspace.as_ref().map(|workspace| workspace.root.as_str())
+        );
 
         conn.tx
             .send(WsMessage::Send(json))

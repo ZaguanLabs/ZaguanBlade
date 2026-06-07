@@ -12,6 +12,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 const CHAT_EVENT_NOTIFY_FALLBACK_MS: u64 = 16;
 const CHAT_IDLE_NOTIFY_FALLBACK_MS: u64 = 50;
+const CHAT_CONTEXT_INFERENCE_TIMEOUT_MS: u64 = 300;
 
 fn extract_explicit_output_path(message: &str) -> Option<String> {
     message
@@ -371,18 +372,33 @@ pub async fn handle_send_message<R: Runtime>(
     if active_file.is_none() && effective_open_files.is_empty() {
         let blocking_app = app.clone();
         let blocking_query = actual_message.clone();
-        effective_open_files = tokio::task::spawn_blocking(move || {
+        let inference_task = tokio::task::spawn_blocking(move || {
             let state = blocking_app.state::<AppState>();
             infer_context_files_from_query(&state, blocking_query.as_str(), 6)
-        })
+        });
+
+        effective_open_files = match tokio::time::timeout(
+            Duration::from_millis(CHAT_CONTEXT_INFERENCE_TIMEOUT_MS),
+            inference_task,
+        )
         .await
-        .unwrap_or_else(|error| {
-            eprintln!(
-                "[LANGUAGE] Context inference task failed for chat query fallback: {}",
-                error
-            );
-            Vec::new()
-        })
+        {
+            Ok(Ok(files)) => files,
+            Ok(Err(error)) => {
+                eprintln!(
+                    "[LANGUAGE] Context inference task failed for chat query fallback: {}",
+                    error
+                );
+                Vec::new()
+            }
+            Err(_) => {
+                eprintln!(
+                    "[LANGUAGE] Context inference timed out after {}ms; sending chat without inferred files",
+                    CHAT_CONTEXT_INFERENCE_TIMEOUT_MS
+                );
+                Vec::new()
+            }
+        }
         .into_iter()
         .map(|path| normalize_to_workspace(path))
         .collect();
@@ -845,7 +861,8 @@ pub async fn handle_send_message<R: Runtime>(
                 let app_handle_clone = app_handle.clone();
                 let chunk_clone = chunk.clone();
                 tauri::async_runtime::spawn(async move {
-                    crate::telegram_service::update_telegram_text(&app_handle_clone, &chunk_clone).await;
+                    crate::telegram_service::update_telegram_text(&app_handle_clone, &chunk_clone)
+                        .await;
                 });
             } else if let DrainResult::Reasoning(msg_id, chunk) = result {
                 let msg_id = if msg_id.is_empty() {
@@ -864,7 +881,11 @@ pub async fn handle_send_message<R: Runtime>(
                 let app_handle_clone = app_handle.clone();
                 let chunk_clone = chunk.clone();
                 tauri::async_runtime::spawn(async move {
-                    crate::telegram_service::update_telegram_reasoning(&app_handle_clone, &chunk_clone).await;
+                    crate::telegram_service::update_telegram_reasoning(
+                        &app_handle_clone,
+                        &chunk_clone,
+                    )
+                    .await;
                 });
             } else if let DrainResult::Error(e) = result {
                 window
@@ -898,7 +919,11 @@ pub async fn handle_send_message<R: Runtime>(
                 let app_handle_clone = app_handle.clone();
                 let new_calls_clone = new_calls.clone();
                 tauri::async_runtime::spawn(async move {
-                    crate::telegram_service::update_telegram_tools(&app_handle_clone, &new_calls_clone).await;
+                    crate::telegram_service::update_telegram_tools(
+                        &app_handle_clone,
+                        &new_calls_clone,
+                    )
+                    .await;
                 });
             } else if let DrainResult::ToolActivity {
                 tool_name,
@@ -954,7 +979,11 @@ pub async fn handle_send_message<R: Runtime>(
                     let app_handle_clone = app_handle.clone();
                     let tool_calls_clone = tool_calls.clone();
                     tauri::async_runtime::spawn(async move {
-                        crate::telegram_service::update_telegram_tools(&app_handle_clone, &tool_calls_clone).await;
+                        crate::telegram_service::update_telegram_tools(
+                            &app_handle_clone,
+                            &tool_calls_clone,
+                        )
+                        .await;
                     });
                 }
             } else if let DrainResult::Progress {
@@ -1016,18 +1045,28 @@ pub async fn handle_send_message<R: Runtime>(
                 let app_handle_clone = app_handle.clone();
                 let id_clone = id.clone();
                 tauri::async_runtime::spawn(async move {
-                    if !crate::telegram_service::complete_telegram_interaction(&app_handle_clone, &id_clone).await {
+                    if !crate::telegram_service::complete_telegram_interaction(
+                        &app_handle_clone,
+                        &id_clone,
+                    )
+                    .await
+                    {
                         let state = app_handle_clone.state::<AppState>();
                         let text_to_send = {
                             let conversation = state.conversation.lock().unwrap();
-                            conversation.get_messages().iter()
+                            conversation
+                                .get_messages()
+                                .iter()
                                 .find(|m| m.id.as_ref() == Some(&id_clone))
                                 .filter(|m| m.role == crate::protocol::ChatRole::Assistant)
                                 .map(|m| m.content.clone())
                         };
-                        
+
                         if let Some(text) = text_to_send {
-                            if let Err(e) = crate::telegram_service::send_to_telegram(&app_handle_clone, &text).await {
+                            if let Err(e) =
+                                crate::telegram_service::send_to_telegram(&app_handle_clone, &text)
+                                    .await
+                            {
                                 eprintln!("[TELEGRAM] Failed to send response: {}", e);
                             }
                         }
