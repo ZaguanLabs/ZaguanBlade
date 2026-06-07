@@ -93,6 +93,7 @@ export const StorageSetupModal: React.FC<StorageSetupModalProps> = ({
                     <button
                         type="button"
                         onClick={() => setSelectedMode('local')}
+                        aria-pressed={selectedMode === 'local'}
                         className={`w-full p-5 rounded-[calc(var(--panel-radius)+2px)] border-2 text-left transition-all ${
                             selectedMode === 'local'
                                 ? 'border-[color-mix(in_srgb,var(--accent-mention)_72%,var(--border-focus))] bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)] shadow-(--shadow-sm)'
@@ -133,6 +134,7 @@ export const StorageSetupModal: React.FC<StorageSetupModalProps> = ({
                     <button
                         type="button"
                         onClick={() => setSelectedMode('server')}
+                        aria-pressed={selectedMode === 'server'}
                         className={`w-full p-5 rounded-[calc(var(--panel-radius)+2px)] border-2 text-left transition-all ${
                             selectedMode === 'server'
                                 ? 'border-[color-mix(in_srgb,var(--accent-planning)_72%,var(--border-focus))] bg-[color-mix(in_srgb,var(--accent-planning)_10%,transparent)] shadow-(--shadow-sm)'

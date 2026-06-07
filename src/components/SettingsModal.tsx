@@ -968,6 +968,7 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
                     <button
                         type="button"
                         onClick={() => onChange({ mode: 'local' })}
+                        aria-pressed={settings.mode === 'local'}
                         className={`relative rounded-[calc(var(--panel-radius)+2px)] p-4 border text-left transition-all ${settings.mode === 'local'
                             ? 'border-(--border-focus) bg-[color-mix(in_srgb,var(--bg-active)_78%,transparent)] shadow-(--shadow-sm)'
                             : 'border-(--border-default) hover:border-(--border-focus) bg-[color-mix(in_srgb,var(--bg-panel)_86%,var(--bg-editor))]'
@@ -1005,6 +1006,7 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
                     <button
                         type="button"
                         onClick={() => onChange({ mode: 'server' })}
+                        aria-pressed={settings.mode === 'server'}
                         className={`relative rounded-[calc(var(--panel-radius)+2px)] p-4 border text-left transition-all ${settings.mode === 'server'
                             ? 'border-(--border-focus) bg-[color-mix(in_srgb,var(--bg-active)_78%,transparent)] shadow-(--shadow-sm)'
                             : 'border-(--border-default) hover:border-(--border-focus) bg-[color-mix(in_srgb,var(--bg-panel)_86%,var(--bg-editor))]'
@@ -1169,6 +1171,7 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, a
                             <button
                                 type="button"
                                 onClick={() => onChange({ compression: { ...settings.compression, model: 'remote' } })}
+                                aria-pressed={settings.compression.model === 'remote'}
                                 className={`flex-1 px-3 py-2 rounded-[calc(var(--panel-radius)*0.65)] text-sm transition-colors ${settings.compression.model === 'remote'
                                     ? 'bg-(--accent-ai) text-(--fg-bright)'
                                     : 'bg-(--bg-surface) text-(--fg-secondary) hover:bg-(--bg-surface-hover)'
@@ -1180,6 +1183,7 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, a
                             <button
                                 type="button"
                                 onClick={() => onChange({ compression: { ...settings.compression, model: 'local' } })}
+                                aria-pressed={settings.compression.model === 'local'}
                                 className={`flex-1 px-3 py-2 rounded-[calc(var(--panel-radius)*0.65)] text-sm transition-colors ${settings.compression.model === 'local'
                                     ? 'bg-(--accent-ai) text-(--fg-bright)'
                                     : 'bg-(--bg-surface) text-(--fg-secondary) hover:bg-(--bg-surface-hover)'
