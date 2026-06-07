@@ -55,6 +55,7 @@ export const FileChangeBar: React.FC<FileChangeBarProps> = ({
 
       {/* Accept */}
       <button
+        type="button"
         onClick={onAccept}
         disabled={disabled}
         className="flex items-center gap-1 text-[11px] font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
@@ -67,6 +68,7 @@ export const FileChangeBar: React.FC<FileChangeBarProps> = ({
 
       {/* Reject */}
       <button
+        type="button"
         onClick={onReject}
         disabled={disabled}
         className="flex items-center gap-1 text-[11px] font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"

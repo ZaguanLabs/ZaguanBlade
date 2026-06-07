@@ -45,6 +45,7 @@ export const GlobalChangeActions: React.FC<GlobalChangeActionsProps> = ({
 
           <div className="flex shrink-0 items-center gap-3 text-[11px] font-medium">
             <button
+              type="button"
               onClick={onAcceptAll}
               disabled={disabled}
               className="flex items-center gap-1 px-1 py-0.5 text-(--accent-mention) transition-colors disabled:cursor-not-allowed disabled:opacity-50 hover:text-(--fg-primary)"
@@ -54,6 +55,7 @@ export const GlobalChangeActions: React.FC<GlobalChangeActionsProps> = ({
               {t('diff.acceptAll')}
             </button>
             <button
+              type="button"
               onClick={onRejectAll}
               disabled={disabled}
               className="flex items-center gap-1 px-1 py-0.5 text-(--state-danger) transition-colors disabled:cursor-not-allowed disabled:opacity-50 hover:text-(--fg-primary)"

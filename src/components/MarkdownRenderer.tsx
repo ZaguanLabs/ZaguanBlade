@@ -92,6 +92,7 @@ const CodeBlock = React.memo<CodeBlockProps>(({ language, value }) => {
                     {displayLanguage}
                 </span>
                 <button
+                    type="button"
                     onClick={handleCopy}
                     className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-(--markdown-marker) hover:text-(--markdown-heading) transition-colors"
                     style={{ backgroundColor: copied ? 'color-mix(in srgb, var(--accent-ai) 14%, transparent)' : undefined }}
@@ -150,6 +151,7 @@ const PlainCodeBlock = React.memo<CodeBlockProps>(({ language, value }) => {
                     {displayLanguage}
                 </span>
                 <button
+                    type="button"
                     onClick={handleCopy}
                     className="flex items-center gap-1 rounded px-2 py-0.5 text-[10px] text-(--markdown-marker) transition-colors hover:text-(--markdown-heading)"
                     style={{ backgroundColor: copied ? 'color-mix(in srgb, var(--accent-ai) 14%, transparent)' : undefined }}

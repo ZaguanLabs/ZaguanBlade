@@ -180,6 +180,7 @@ const WelcomePage: React.FC<{
                     {!isLoading && (
                         <>
                             <button
+                                type="button"
                                 onClick={() => openSettingsSection('localai')}
                                 className="flex items-center justify-center gap-2 w-full py-3 px-4 bg-(--accent-mention) text-(--fg-bright) rounded-[calc(var(--panel-radius)*0.65)] font-medium transition-opacity shadow-(--shadow-md) hover:opacity-90"
                             >
@@ -188,6 +189,7 @@ const WelcomePage: React.FC<{
                             </button>
 
                             <button
+                                type="button"
                                 onClick={() => openSettingsSection('account')}
                                 className="flex items-center justify-center gap-2 w-full py-3 px-4 bg-(--bg-surface) hover:bg-(--bg-surface-hover) border border-(--border-subtle) hover:border-(--border-focus) text-(--fg-primary) rounded-[calc(var(--panel-radius)*0.65)] font-medium transition-all"
                             >
