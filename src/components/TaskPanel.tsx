@@ -59,6 +59,7 @@ const TaskPanelComponent: React.FC<TaskPanelProps> = ({ todos, isCollapsed, onTo
             style={{ overflow: 'hidden' }}
         >
             <button
+                type="button"
                 onClick={onToggleCollapse}
                 className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-(--bg-surface-hover) transition-colors text-left"
             >

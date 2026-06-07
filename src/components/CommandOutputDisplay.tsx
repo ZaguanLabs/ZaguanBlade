@@ -78,6 +78,7 @@ export const CommandOutputDisplay: React.FC<CommandOutputDisplayProps> = ({
         >
             {/* Header */}
             <button
+                type="button"
                 onClick={() => setIsExpanded(!isExpanded)}
                 className="w-full flex items-center gap-3 px-4 py-3 transition-colors text-left"
                 style={{ backgroundColor: 'color-mix(in srgb, var(--bg-panel) 84%, var(--bg-app))' }}
