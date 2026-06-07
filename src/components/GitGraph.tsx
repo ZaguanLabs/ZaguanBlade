@@ -218,7 +218,7 @@ const CommitTooltip: React.FC<CommitTooltipProps> = ({ entry, remoteUrl, onCopy,
                 />
                 <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="font-semibold text-(--fg-primary)">{entry.authorName}</span>
-                    <span className="text-(--fg-tertiary)">⏱</span>
+                    <span className="text-(--fg-tertiary)" aria-hidden="true">⏱</span>
                     <span className="text-(--fg-tertiary)">{entry.relativeDate}</span>
                     <span className="text-(--fg-tertiary)">({formattedDate})</span>
                 </div>
@@ -240,7 +240,7 @@ const CommitTooltip: React.FC<CommitTooltipProps> = ({ entry, remoteUrl, onCopy,
 
             {/* Hash + Open on GitHub */}
             <div className="flex items-center gap-2 pt-1 border-t border-(--border-subtle)">
-                <span className="text-(--fg-tertiary)">◇</span>
+                <span className="text-(--fg-tertiary)" aria-hidden="true">◇</span>
                 <button
                     type="button"
                     className="font-mono text-(--accent-ai) hover:underline cursor-pointer flex items-center gap-1"
@@ -250,9 +250,9 @@ const CommitTooltip: React.FC<CommitTooltipProps> = ({ entry, remoteUrl, onCopy,
                 >
                     {entry.shortHash}
                     {copied ? (
-                        <Check className="w-3 h-3 text-(--accent-mention)" />
+                        <Check className="w-3 h-3 text-(--accent-mention)" aria-hidden="true" />
                     ) : (
-                        <Copy className="w-3 h-3 opacity-60" />
+                        <Copy className="w-3 h-3 opacity-60" aria-hidden="true" />
                     )}
                 </button>
                 {commitUrl && (
@@ -265,7 +265,7 @@ const CommitTooltip: React.FC<CommitTooltipProps> = ({ entry, remoteUrl, onCopy,
                             className="text-(--accent-ai) hover:underline flex items-center gap-1"
                             onClick={(e) => e.stopPropagation()}
                         >
-                            <ExternalLink className="w-3 h-3" />
+                            <ExternalLink className="w-3 h-3" aria-hidden="true" />
                             {t('gitGraph.openOnGitHub')}
                         </a>
                     </>
@@ -375,7 +375,7 @@ export const GitGraph: React.FC<GitGraphProps> = ({ expanded, onToggle }) => {
                 aria-expanded={expanded}
             >
                 <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-(--fg-secondary) font-semibold">
-                    {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                    {expanded ? <ChevronDown className="w-3 h-3" aria-hidden="true" /> : <ChevronRight className="w-3 h-3" aria-hidden="true" />}
                     {t('gitGraph.title')}
                 </div>
             </button>
@@ -479,7 +479,7 @@ export const GitGraph: React.FC<GitGraphProps> = ({ expanded, onToggle }) => {
                                                                 : 'bg-[color-mix(in_srgb,var(--accent-ai)_16%,transparent)] text-(--accent-ai) border border-[color-mix(in_srgb,var(--accent-ai)_28%,transparent)]'
                                                         }`}
                                                     >
-                                                        {isHead && <GitCommit className="w-2.5 h-2.5" />}
+                                                        {isHead && <GitCommit className="w-2.5 h-2.5" aria-hidden="true" />}
                                                         {displayRef}
                                                     </span>
                                                 );

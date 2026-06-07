@@ -148,7 +148,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
         return (
             <div className="h-full flex items-center justify-center bg-(--bg-app)">
                 <div role="alert" className="flex flex-col items-center gap-3 max-w-md text-center">
-                    <FileText className="w-12 h-12 text-(--state-danger) opacity-50" />
+                    <FileText className="w-12 h-12 text-(--state-danger) opacity-50" aria-hidden="true" />
                     <p className="text-sm text-(--state-danger)">{t('pdf.loadFailed')}</p>
                     <p className="text-xs text-(--fg-tertiary) font-mono">{error}</p>
                 </div>
@@ -169,7 +169,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
                         title={t('pdf.previousPage')}
                         aria-label={t('pdf.previousPage')}
                     >
-                        <ChevronLeft className="w-4 h-4 text-(--fg-secondary)" />
+                        <ChevronLeft className="w-4 h-4 text-(--fg-secondary)" aria-hidden="true" />
                     </button>
                     <span className="text-xs text-(--fg-secondary) font-mono min-w-[80px] text-center">
                         {currentPage} / {numPages}
@@ -182,7 +182,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
                         title={t('pdf.nextPage')}
                         aria-label={t('pdf.nextPage')}
                     >
-                        <ChevronRight className="w-4 h-4 text-(--fg-secondary)" />
+                        <ChevronRight className="w-4 h-4 text-(--fg-secondary)" aria-hidden="true" />
                     </button>
                 </div>
 
@@ -194,7 +194,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
                         title={t('pdf.zoomOut')}
                         aria-label={t('pdf.zoomOut')}
                     >
-                        <ZoomOut className="w-4 h-4 text-(--fg-secondary)" />
+                        <ZoomOut className="w-4 h-4 text-(--fg-secondary)" aria-hidden="true" />
                     </button>
                     <span className="text-xs text-(--fg-secondary) font-mono min-w-[50px] text-center">
                         {Math.round(scale * 100)}%
@@ -206,7 +206,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
                         title={t('pdf.zoomIn')}
                         aria-label={t('pdf.zoomIn')}
                     >
-                        <ZoomIn className="w-4 h-4 text-(--fg-secondary)" />
+                        <ZoomIn className="w-4 h-4 text-(--fg-secondary)" aria-hidden="true" />
                     </button>
                     <button
                         type="button"
@@ -215,7 +215,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
                         title={t('pdf.fitToWidth')}
                         aria-label={t('pdf.fitToWidth')}
                     >
-                        <Maximize2 className="w-4 h-4 text-(--fg-secondary)" />
+                        <Maximize2 className="w-4 h-4 text-(--fg-secondary)" aria-hidden="true" />
                     </button>
                 </div>
             </div>

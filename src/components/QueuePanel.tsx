@@ -20,7 +20,7 @@ const QueuePanelComponent: React.FC<QueuePanelProps> = ({ requests, onEditReques
         <div className="border-t border-(--border-subtle) bg-(--bg-surface)">
             <div className="flex items-center gap-3 px-3 py-2.5 text-[11px] text-(--fg-secondary)">
                 <div className="flex h-7 w-7 items-center justify-center rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-app)/40">
-                    <ListOrdered className="h-3.5 w-3.5 text-(--fg-tertiary)" />
+                    <ListOrdered className="h-3.5 w-3.5 text-(--fg-tertiary)" aria-hidden="true" />
                 </div>
                 <span className="font-semibold uppercase tracking-[0.16em]">{t('chat.queue.title', { count: requests.length })}</span>
             </div>
@@ -52,7 +52,7 @@ const QueuePanelComponent: React.FC<QueuePanelProps> = ({ requests, onEditReques
                                     onClick={() => onEditRequest(index)}
                                     title={t('chat.queue.editQueuedRequest')}
                                 >
-                                    <Pencil className="w-3 h-3" />
+                                    <Pencil className="w-3 h-3" aria-hidden="true" />
                                 </IconButton>
                                 <IconButton
                                     size="xs"
@@ -60,7 +60,7 @@ const QueuePanelComponent: React.FC<QueuePanelProps> = ({ requests, onEditReques
                                     onClick={() => onDeleteRequest(index)}
                                     title={t('chat.queue.deleteQueuedRequest')}
                                 >
-                                    <Trash2 className="w-3 h-3" />
+                                    <Trash2 className="w-3 h-3" aria-hidden="true" />
                                 </IconButton>
                             </div>
                         </Surface>
