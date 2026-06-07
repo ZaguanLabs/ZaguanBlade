@@ -733,7 +733,7 @@ export const ScreenshotAnnotationModal: React.FC<{
                         <div id={descriptionId} className="truncate text-xs text-(--fg-tertiary)">{name}</div>
                     </div>
                     <button type="button" onClick={onCancel} aria-label={t('common.close')} className="rounded-[calc(var(--panel-radius)*0.35)] p-1 text-(--fg-tertiary) transition hover:bg-(--bg-surface-hover) hover:text-(--fg-primary)">
-                        <X className="h-4 w-4" />
+                        <X aria-hidden="true" className="h-4 w-4" />
                     </button>
                 </div>
                 <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-(--border-subtle) bg-(--bg-panel) px-4 py-2">
@@ -756,7 +756,7 @@ export const ScreenshotAnnotationModal: React.FC<{
                                     }}
                                     className={`inline-flex h-8 items-center gap-1.5 rounded-[calc(var(--panel-radius)*0.45)] border px-2 text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${active ? 'border-[color-mix(in_srgb,var(--accent-ai)_45%,transparent)] bg-[color-mix(in_srgb,var(--accent-ai)_14%,transparent)] text-(--fg-primary)' : 'border-(--border-subtle) bg-(--bg-app) text-(--fg-secondary) hover:text-(--fg-primary)'}`}
                                 >
-                                    <Icon className={`h-3.5 w-3.5 ${entry.id.startsWith('filled') ? 'fill-current' : ''}`} />
+                                    <Icon aria-hidden="true" className={`h-3.5 w-3.5 ${entry.id.startsWith('filled') ? 'fill-current' : ''}`} />
                                     {entry.label}
                                 </button>
                             );
@@ -800,19 +800,19 @@ export const ScreenshotAnnotationModal: React.FC<{
                     </label>
                     <div className="ml-auto flex items-center gap-1">
                         <button type="button" onClick={undo} disabled={undoStack.length === 0 || !imageReady} className="inline-flex h-8 items-center gap-1 rounded-[calc(var(--panel-radius)*0.45)] px-2 text-[11px] text-(--fg-secondary) transition hover:bg-(--bg-surface-hover) hover:text-(--fg-primary) disabled:opacity-40">
-                            <Undo2 className="h-3.5 w-3.5" />
+                            <Undo2 aria-hidden="true" className="h-3.5 w-3.5" />
                             {t('common.undo')}
                         </button>
                         <button type="button" onClick={redo} disabled={redoStack.length === 0 || !imageReady} className="inline-flex h-8 items-center gap-1 rounded-[calc(var(--panel-radius)*0.45)] px-2 text-[11px] text-(--fg-secondary) transition hover:bg-(--bg-surface-hover) hover:text-(--fg-primary) disabled:opacity-40">
-                            <Redo2 className="h-3.5 w-3.5" />
+                            <Redo2 aria-hidden="true" className="h-3.5 w-3.5" />
                             {t('screenshot.editor.redo')}
                         </button>
                         <button type="button" onClick={deleteSelected} disabled={!selectedAnnotation || !imageReady} className="inline-flex h-8 items-center gap-1 rounded-[calc(var(--panel-radius)*0.45)] px-2 text-[11px] text-(--fg-secondary) transition hover:bg-(--bg-surface-hover) hover:text-(--fg-primary) disabled:opacity-40">
-                            <Trash2 className="h-3.5 w-3.5" />
+                            <Trash2 aria-hidden="true" className="h-3.5 w-3.5" />
                             {t('common.delete')}
                         </button>
                         <button type="button" onClick={clear} disabled={annotations.length === 0 || !imageReady} className="inline-flex h-8 items-center gap-1 rounded-[calc(var(--panel-radius)*0.45)] px-2 text-[11px] text-(--fg-secondary) transition hover:bg-(--bg-surface-hover) hover:text-(--fg-primary) disabled:opacity-40">
-                            <Eraser className="h-3.5 w-3.5" />
+                            <Eraser aria-hidden="true" className="h-3.5 w-3.5" />
                             {t('common.clear')}
                         </button>
                     </div>
@@ -864,7 +864,7 @@ export const ScreenshotAnnotationModal: React.FC<{
                             {t('common.cancel')}
                         </button>
                         <button type="button" onClick={finish} disabled={!imageReady} className="inline-flex items-center gap-1.5 rounded-[calc(var(--panel-radius)*0.45)] bg-(--accent-ai) px-3 py-1.5 text-xs font-medium text-(--fg-bright) transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">
-                            <Check className="h-3.5 w-3.5" />
+                            <Check aria-hidden="true" className="h-3.5 w-3.5" />
                             {t('common.finish')}
                         </button>
                     </div>

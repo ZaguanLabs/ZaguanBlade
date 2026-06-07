@@ -33,7 +33,7 @@ export const ScreenshotCapturePreview: React.FC<{
                         aria-label={t('common.close')}
                         className="rounded-[calc(var(--panel-radius)*0.35)] p-1 text-(--fg-tertiary) transition hover:bg-(--bg-surface-hover) hover:text-(--fg-primary)"
                     >
-                        <X className="h-4 w-4" />
+                        <X aria-hidden="true" className="h-4 w-4" />
                     </button>
                 </div>
                 <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-(--bg-app) p-4">
@@ -57,7 +57,7 @@ export const ScreenshotCapturePreview: React.FC<{
                         onClick={onEdit}
                         className="inline-flex items-center gap-1.5 rounded-[calc(var(--panel-radius)*0.45)] border border-(--border-subtle) bg-(--bg-app) px-3 py-1.5 text-xs font-medium text-(--fg-secondary) transition hover:border-[color-mix(in_srgb,var(--accent-ai)_34%,transparent)] hover:text-(--fg-primary)"
                     >
-                        <Pencil className="h-3.5 w-3.5" />
+                        <Pencil aria-hidden="true" className="h-3.5 w-3.5" />
                         {t('common.edit')}
                     </button>
                     <button
@@ -65,7 +65,7 @@ export const ScreenshotCapturePreview: React.FC<{
                         onClick={onAdd}
                         className="inline-flex items-center gap-1.5 rounded-[calc(var(--panel-radius)*0.45)] bg-(--accent-ai) px-3 py-1.5 text-xs font-medium text-(--fg-bright) transition hover:opacity-90"
                     >
-                        <Check className="h-3.5 w-3.5" />
+                        <Check aria-hidden="true" className="h-3.5 w-3.5" />
                         {t('common.add')}
                     </button>
                 </div>
