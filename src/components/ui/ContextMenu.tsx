@@ -178,6 +178,7 @@ const ContextMenuPortal: React.FC = () => {
     return (
         <div
             ref={menuRef}
+            role="menu"
             className="fixed z-9999 min-w-[180px] max-w-[280px] py-1.5 bg-(--surface-overlay) border border-(--focus-ring) rounded-(--radius-popover) shadow-(--shadow-popover) animate-in fade-in zoom-in-95 duration-(--transition-fast) overflow-hidden"
             style={{
                 left: adjustedPosition.x,
@@ -189,6 +190,7 @@ const ContextMenuPortal: React.FC = () => {
                     return (
                         <div
                             key={`divider-${index}`}
+                            role="separator"
                             className="my-1.5 mx-2 h-px bg-(--separator-subtle)"
                         />
                     );
@@ -199,6 +201,8 @@ const ContextMenuPortal: React.FC = () => {
 
                 return (
                     <button
+                        type="button"
+                        role="menuitem"
                         key={item.id}
                         onClick={() => handleItemClick(item)}
                         disabled={item.disabled}
