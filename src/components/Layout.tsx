@@ -1073,6 +1073,21 @@ const AppLayoutInner: React.FC = () => {
         border: '1px solid var(--border-default)',
         boxShadow: 'var(--panel-shadow)',
     };
+    const statusBarStyle: React.CSSProperties = desktopShellV1 ? {
+        height: '24px',
+        backgroundColor: 'var(--surface-toolbar)',
+        margin: '0',
+        borderRadius: '0',
+        borderTop: '1px solid var(--separator-default)',
+        boxShadow: 'var(--shadow-persistent)',
+    } : {
+        height: '24px',
+        backgroundColor: 'var(--bg-panel)',
+        margin: '0 var(--panel-gap) var(--panel-gap)',
+        borderRadius: 'var(--panel-radius)',
+        border: '1px solid var(--border-default)',
+        boxShadow: 'var(--panel-shadow)',
+    };
 
     return (
         <div className="h-screen w-screen bg-(--bg-app) overflow-hidden flex flex-col relative font-sans text-(--fg-primary)">
@@ -1474,14 +1489,7 @@ const AppLayoutInner: React.FC = () => {
             {/* Status Bar */}
             <div
                 className="text-(--fg-tertiary) flex items-center px-3 text-[10px] font-mono justify-between select-none z-40"
-                style={{
-                    height: '24px',
-                    backgroundColor: 'var(--bg-panel)',
-                    margin: '0 var(--panel-gap) var(--panel-gap)',
-                    borderRadius: 'var(--panel-radius)',
-                    border: '1px solid var(--border-default)',
-                    boxShadow: 'var(--panel-shadow)',
-                }}
+                style={statusBarStyle}
             >
                 <div className="flex items-center gap-1.5">
                     <span className="flex items-center gap-1.5 hover:text-(--fg-secondary) cursor-pointer transition-colors duration-(--transition-fast)">
