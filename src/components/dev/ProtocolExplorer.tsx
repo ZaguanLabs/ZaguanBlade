@@ -59,6 +59,7 @@ export const ProtocolExplorer: React.FC = () => {
                 onClick={() => setIsOpen(true)}
                 className="fixed bottom-4 right-4 z-50 p-2 bg-(--bg-surface) border border-(--border-subtle) rounded-full shadow-(--shadow-lg) hover:bg-(--bg-surface-hover) transition-all text-xs text-(--fg-tertiary) flex items-center gap-2 group"
                 title={t('protocolExplorer.open')}
+                aria-label={t('protocolExplorer.open')}
             >
                 <Activity className="w-4 h-4 text-(--accent-mention) group-hover:text-(--accent-ai)" />
             </button>
@@ -79,6 +80,7 @@ export const ProtocolExplorer: React.FC = () => {
                         onClick={() => setIsPaused(!isPaused)}
                         className={`p-1 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface-hover) ${isPaused ? 'text-(--accent-warning)' : 'text-(--fg-tertiary)'}`}
                         title={isPaused ? t('protocolExplorer.resume') : t('protocolExplorer.pause')}
+                        aria-label={isPaused ? t('protocolExplorer.resume') : t('protocolExplorer.pause')}
                     >
                         {isPaused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}
                     </button>
@@ -87,6 +89,7 @@ export const ProtocolExplorer: React.FC = () => {
                         onClick={() => setLogs([])}
                         className="p-1 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface-hover) text-(--fg-tertiary) hover:text-(--state-danger)"
                         title={t('protocolExplorer.clearLogs')}
+                        aria-label={t('protocolExplorer.clearLogs')}
                     >
                         <Trash2 className="w-3 h-3" />
                     </button>
@@ -94,6 +97,7 @@ export const ProtocolExplorer: React.FC = () => {
                     <button
                         type="button"
                         onClick={() => setIsOpen(false)}
+                        aria-label={t('common.close')}
                         className="p-1 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface-hover) text-(--fg-tertiary) hover:text-(--fg-primary)"
                     >
                         <X className="w-3 h-3" />
