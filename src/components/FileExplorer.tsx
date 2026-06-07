@@ -686,6 +686,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                 <Search className="w-3 h-3 text-(--fg-tertiary)" />
                 <input
                     type="text"
+                    aria-label={t('fileTree.searchPlaceholder')}
                     placeholder={t('fileTree.searchPlaceholder')}
                     className="bg-transparent border-none outline-none text-xs w-full text-(--fg-primary) placeholder-(--fg-tertiary)"
                     onChange={(e) => tree.setSearch(e.target.value)}
@@ -708,6 +709,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                         <input
                             ref={newItemInputRef}
                             type="text"
+                            aria-label={newItem.isDir ? t('fileTree.folderNamePlaceholder') : t('fileTree.fileNamePlaceholder')}
                             value={newItem.name}
                             onChange={(e) => setNewItem(prev => prev ? { ...prev, name: e.target.value } : null)}
                             onKeyDown={(e) => {
@@ -791,6 +793,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                                 {item.isRenaming?.() ? (
                                     <input
                                         {...(item.getRenameInputProps?.() || {})}
+                                        aria-label={t('fileTree.rename')}
                                         className="bg-(--bg-surface) border border-(--border-focus) rounded-[calc(var(--panel-radius)*0.4)] px-1 text-xs text-(--fg-primary) outline-none flex-1 min-w-0"
                                         autoFocus
                                     />
@@ -822,6 +825,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                                     <input
                                         ref={newItemInputRef}
                                         type="text"
+                                        aria-label={newItem.isDir ? t('fileTree.folderNamePlaceholder') : t('fileTree.fileNamePlaceholder')}
                                         value={newItem.name}
                                         onChange={(e) => setNewItem(prev => prev ? { ...prev, name: e.target.value } : null)}
                                         onKeyDown={(e) => {

@@ -106,6 +106,7 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
                             <p className="text-xs text-(--fg-tertiary) italic text-center">{t('fileTree.noWorkspace')}.</p>
                             <div className="flex gap-1">
                                 <input
+                                    aria-label={t('common.pathPlaceholder')}
                                     className="bg-(--bg-surface) border border-(--border-subtle) text-xs p-1 w-full rounded-[calc(var(--panel-radius)*0.25)] text-(--fg-primary)"
                                     placeholder={t('common.pathPlaceholder')}
                                     value={pathInput}
