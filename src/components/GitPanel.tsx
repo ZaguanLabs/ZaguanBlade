@@ -296,6 +296,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                 rows={5}
                                 className="w-full min-h-[96px] max-h-[180px] overflow-y-auto bg-(--bg-surface) border border-(--border-default) rounded-[calc(var(--panel-radius)*0.75)] p-2.5 text-[11px] text-(--fg-primary) placeholder-(--fg-secondary) resize-none focus:outline-none focus:border-(--accent-ai) focus:ring-1 focus:ring-(--accent-ai)/20 transition-all"
                                 placeholder={t('git.commitMessagePlaceholder')}
+                                aria-label={t('git.commitMessagePlaceholder')}
                                 value={commitMessage}
                                 onChange={e => {
                                     setCommitMessage(e.target.value);

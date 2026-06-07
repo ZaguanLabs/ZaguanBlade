@@ -843,6 +843,7 @@ export const ScreenshotAnnotationModal: React.FC<{
                                 }
                             }}
                             placeholder={t('screenshot.editor.textPlaceholder')}
+                            aria-label={t('screenshot.editor.textPlaceholder')}
                             className="absolute min-h-10 w-64 resize-none rounded-[calc(var(--panel-radius)*0.35)] border border-[color-mix(in_srgb,var(--accent-ai)_44%,transparent)] bg-(--bg-surface)/95 px-2 py-1 font-semibold text-(--fg-primary) shadow-(--shadow-lg) outline-none"
                             style={{
                                 left: textDraft.left,
