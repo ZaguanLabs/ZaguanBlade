@@ -83,7 +83,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-(--border-subtle) bg-(--bg-panel)/60">
         <div className="flex items-center gap-2">
-          <FileText className="w-4 h-4 text-(--accent-mention)" />
+          <FileText aria-hidden="true" className="w-4 h-4 text-(--accent-mention)" />
           <span className="text-sm font-medium text-(--fg-primary)">{title}</span>
           {isEphemeral && (
             <span className="text-xs px-2 py-0.5 rounded-[calc(var(--panel-radius)*0.35)] bg-[color-mix(in_srgb,var(--accent-warning)_10%,transparent)] text-(--accent-warning) border border-(--accent-warning)/20">
@@ -109,7 +109,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
               disabled={isSaving}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-[calc(var(--panel-radius)*0.45)] bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)] text-(--accent-mention) hover:bg-[color-mix(in_srgb,var(--accent-mention)_18%,transparent)] border border-(--accent-mention)/20 transition-colors disabled:opacity-50"
             >
-              <Save className="w-3.5 h-3.5" />
+              <Save aria-hidden="true" className="w-3.5 h-3.5" />
               {isSaving ? t('statusBar.saving') : t('common.save')}
             </button>
           )}
@@ -119,7 +119,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
             aria-label={t('common.close')}
             className="p-1.5 rounded-[calc(var(--panel-radius)*0.4)] hover:bg-(--bg-surface-hover) text-(--fg-tertiary) hover:text-(--fg-primary) transition-colors"
           >
-            <X className="w-4 h-4" />
+            <X aria-hidden="true" className="w-4 h-4" />
           </button>
         </div>
       </div>
