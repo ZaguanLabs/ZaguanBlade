@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useId, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Minus, Square, X, Maximize2, ChevronDown, FileText } from 'lucide-react';
@@ -47,6 +47,7 @@ export const AppBar: React.FC<AppBarProps> = ({
     const [isMaximized, setIsMaximized] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [fileMenuOpen, setFileMenuOpen] = useState(false);
+    const fileMenuId = useId();
     const fileMenuRef = useRef<HTMLDivElement>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
     const activeTabRef = useRef<HTMLDivElement>(null);
@@ -251,6 +252,9 @@ export const AppBar: React.FC<AppBarProps> = ({
                         <button
                             type="button"
                             onClick={handleFileMenuClick}
+                            aria-haspopup="menu"
+                            aria-expanded={fileMenuOpen}
+                            aria-controls={fileMenuOpen ? fileMenuId : undefined}
                             className={`flex items-center gap-1 px-3 h-9 text-[11px] font-medium transition-colors ${
                                 fileMenuOpen
                                     ? 'bg-(--surface-overlay) text-(--fg-primary)'
@@ -263,10 +267,14 @@ export const AppBar: React.FC<AppBarProps> = ({
 
                         {fileMenuOpen && (
                             <div
+                                id={fileMenuId}
+                                role="menu"
+                                aria-label={t('app.menu.file')}
                                 className="absolute top-full left-0 z-100 mt-0.5 min-w-[180px] rounded-(--radius-popover) border border-(--separator-subtle) bg-(--surface-overlay) py-1.5 shadow-(--shadow-popover)"
                             >
                                 <button
                                     type="button"
+                                    role="menuitem"
                                     onClick={() => {
                                         setFileMenuOpen(false);
                                         window.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, bubbles: true }));
@@ -278,14 +286,16 @@ export const AppBar: React.FC<AppBarProps> = ({
                                 </button>
                                 <button
                                     type="button"
+                                    role="menuitem"
                                     disabled
                                     className="w-full flex cursor-not-allowed items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-tertiary) opacity-55"
                                 >
                                     <span>{t('fileTree.openFolder')}...</span>
                                 </button>
-                                <div className="my-1.5 mx-2 h-px bg-(--separator-subtle)" />
+                                <div role="separator" className="my-1.5 mx-2 h-px bg-(--separator-subtle)" />
                                 <button
                                     type="button"
+                                    role="menuitem"
                                     disabled
                                     className="w-full flex cursor-not-allowed items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-tertiary) opacity-55"
                                 >
@@ -293,14 +303,16 @@ export const AppBar: React.FC<AppBarProps> = ({
                                 </button>
                                 <button
                                     type="button"
+                                    role="menuitem"
                                     disabled
                                     className="w-full flex cursor-not-allowed items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-tertiary) opacity-55"
                                 >
                                     <span>{t('common.saveAs')}</span>
                                 </button>
-                                <div className="my-1.5 mx-2 h-px bg-(--separator-subtle)" />
+                                <div role="separator" className="my-1.5 mx-2 h-px bg-(--separator-subtle)" />
                                 <button
                                     type="button"
+                                    role="menuitem"
                                     onClick={() => { setFileMenuOpen(false); appWindow.close(); }}
                                     className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-primary) transition-colors hover:bg-(--row-hover)"
                                 >
