@@ -95,6 +95,7 @@ const PathButton: React.FC<{ path: string; onOpenFile?: (path: string) => void; 
         disabled={!onOpenFile}
         className={`min-w-0 truncate text-left font-mono text-[10px] ${onOpenFile ? 'text-(--accent-ai) hover:text-(--fg-primary)' : 'text-(--fg-secondary)'}`}
         title={path}
+        aria-label={path}
     >
         {children || path}
     </button>
@@ -572,9 +573,10 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                                             ? isVisuallyComplete
                                                 ? 'text-(--fg-tertiary) hover:text-(--fg-secondary)'
                                                 : 'text-(--fg-secondary) hover:text-(--fg-primary)'
-                                            : 'text-(--fg-tertiary)'
+                                        : 'text-(--fg-tertiary)'
                                             }`}
                                         title={pathText || displayPathText}
+                                        aria-label={pathText || displayPathText}
                                     >
                                         {displayPathText}
                                     </button>
@@ -606,13 +608,14 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                                         type="button"
                                         onClick={() => setIsExpanded(!isExpanded)}
                                         aria-expanded={isExpanded}
+                                        aria-label={isExpanded ? t('toolCall.hideDetails') : t('toolCall.showDetails')}
                                         className="rounded p-0.5 text-(--fg-tertiary) transition-colors hover:text-(--fg-primary)"
                                         title={isExpanded ? t('toolCall.hideDetails') : t('toolCall.showDetails')}
                                     >
                                         {isExpanded ? (
-                                            <ChevronDown className="w-3 h-3" />
+                                            <ChevronDown aria-hidden="true" className="w-3 h-3" />
                                         ) : (
-                                            <ChevronRight className="w-3 h-3" />
+                                            <ChevronRight aria-hidden="true" className="w-3 h-3" />
                                         )}
                                     </button>
                                 )}
@@ -637,7 +640,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                                     className="flex items-center gap-1 rounded px-1 py-0.5 text-[9px] text-(--fg-tertiary) transition-colors hover:text-(--state-danger)"
                                     title={t('toolCall.undoChanges')}
                                 >
-                                    <RotateCcw className="w-2.5 h-2.5" />
+                                    <RotateCcw aria-hidden="true" className="w-2.5 h-2.5" />
                                     {t('toolCall.undo')}
                                 </button>
                             )}
@@ -695,7 +698,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                             title={t('toolCall.stopCommand')}
                             aria-label={t('toolCall.stopCommand')}
                         >
-                            <StopCircle className="h-3 w-3" />
+                            <StopCircle aria-hidden="true" className="h-3 w-3" />
                             {t('common.stop', { defaultValue: 'Stop' })}
                         </button>
                     )}
@@ -727,9 +730,9 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                             aria-label={t('toolCall.copyCommand')}
                         >
                             {copied ? (
-                                <Check className="w-3.5 h-3.5 text-(--accent-mention)" />
+                                <Check aria-hidden="true" className="w-3.5 h-3.5 text-(--accent-mention)" />
                             ) : (
-                                <Copy className="w-3.5 h-3.5 text-(--fg-tertiary) group-hover/copy:text-(--fg-primary)" />
+                                <Copy aria-hidden="true" className="w-3.5 h-3.5 text-(--fg-tertiary) group-hover/copy:text-(--fg-primary)" />
                             )}
                         </button>
                     </div>
