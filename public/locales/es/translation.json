@@ -811,6 +811,7 @@
       "size": "Tamaño",
       "redo": "Rehacer",
       "textPlaceholder": "Texto",
+      "canvasLabel": "Lienzo de anotación de captura",
       "loading": "Cargando captura...",
       "loadFailed": "No se pudo cargar la captura.",
       "useColor": "Usar color {{color}}",
@@ -846,7 +847,8 @@
     "nextPage": "Página siguiente",
     "zoomOut": "Alejar",
     "zoomIn": "Acercar",
-    "fitToWidth": "Ajustar al ancho"
+    "fitToWidth": "Ajustar al ancho",
+    "pageCanvas": "Página {{page}} de {{total}} del PDF"
   },
   "chatMessage": {
     "reasoning": "Razonamiento",

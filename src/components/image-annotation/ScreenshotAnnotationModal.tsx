@@ -820,6 +820,7 @@ export const ScreenshotAnnotationModal: React.FC<{
                 <div ref={canvasWrapRef} className="relative flex min-h-0 flex-1 items-center justify-center overflow-auto bg-(--bg-app) p-4">
                     <canvas
                         ref={canvasRef}
+                        aria-label={t('screenshot.editor.canvasLabel')}
                         onPointerDown={handlePointerDown}
                         onPointerMove={handlePointerMove}
                         onPointerUp={handlePointerUp}

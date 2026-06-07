@@ -815,6 +815,7 @@
       "size": "Size",
       "redo": "Redo",
       "textPlaceholder": "Text",
+      "canvasLabel": "Screenshot annotation canvas",
       "loading": "Loading screenshot...",
       "loadFailed": "Failed to load screenshot.",
       "useColor": "Use color {{color}}",
@@ -850,7 +851,8 @@
     "nextPage": "Next page",
     "zoomOut": "Zoom out",
     "zoomIn": "Zoom in",
-    "fitToWidth": "Fit to width"
+    "fitToWidth": "Fit to width",
+    "pageCanvas": "PDF page {{page}} of {{total}}"
   },
   "chatMessage": {
     "reasoning": "Reasoning",

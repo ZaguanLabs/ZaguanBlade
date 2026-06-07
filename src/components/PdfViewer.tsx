@@ -227,6 +227,8 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
             >
                 <canvas
                     ref={canvasRef}
+                    role="img"
+                    aria-label={t('pdf.pageCanvas', { page: currentPage, total: numPages })}
                     className="shadow-(--shadow-xl)"
                     style={{ maxWidth: '100%', height: 'auto' }}
                 />
