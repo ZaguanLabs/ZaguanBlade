@@ -603,6 +603,7 @@ const ThemeGrid: React.FC<{
                         key={theme.id}
                         type="button"
                         onClick={() => onChange(theme.id)}
+                        aria-pressed={isSelected}
                         className={`rounded-[calc(var(--panel-radius)+2px)] border p-3 text-left transition-[border-color,background-color,box-shadow] duration-200 focus:outline-none ${
                             isSelected
                                 ? 'border-(--accent-ai) bg-[color-mix(in_srgb,var(--accent-ai)_10%,var(--bg-surface))] shadow-(--shadow-sm)'
