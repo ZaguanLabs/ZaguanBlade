@@ -65,7 +65,7 @@ const TaskPanelComponent: React.FC<TaskPanelProps> = ({ todos, isCollapsed, onTo
                 className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-(--bg-surface-hover) transition-colors text-left"
             >
                 <div className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-[calc(var(--panel-radius)*0.35)] border ${allDoneState ? 'border-(--accent-mention)/20 bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)]' : 'border-(--accent-ai)/20 bg-[color-mix(in_srgb,var(--accent-ai)_10%,transparent)]'}`}>
-                    <Zap className={`h-3 w-3 ${allDoneState ? 'text-(--accent-mention)' : 'text-(--accent-ai)'}`} />
+                    <Zap className={`h-3 w-3 ${allDoneState ? 'text-(--accent-mention)' : 'text-(--accent-ai)'}`} aria-hidden="true" />
                 </div>
                 <span className={`flex-1 truncate text-[10px] font-medium uppercase tracking-[0.12em] ${
                     allDoneState ? 'text-(--accent-mention)' : 'text-(--fg-secondary)'
@@ -76,9 +76,9 @@ const TaskPanelComponent: React.FC<TaskPanelProps> = ({ todos, isCollapsed, onTo
                     {t('taskPanel.itemsCount', { count: totalCount })}
                 </span>
                 {isCollapsed ? (
-                    <ChevronRight className="w-3 h-3 text-(--fg-tertiary) shrink-0" />
+                    <ChevronRight className="w-3 h-3 text-(--fg-tertiary) shrink-0" aria-hidden="true" />
                 ) : (
-                    <ChevronDown className="w-3 h-3 text-(--fg-tertiary) shrink-0" />
+                    <ChevronDown className="w-3 h-3 text-(--fg-tertiary) shrink-0" aria-hidden="true" />
                 )}
             </button>
 

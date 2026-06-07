@@ -93,7 +93,7 @@ export const ChatTabBar: React.FC<ChatTabBarProps> = ({ activeTab, onTabChange, 
                 className="inline-flex h-9 w-9 items-center justify-center rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-surface)/70 text-(--fg-secondary) transition-colors hover:border-[color-mix(in_srgb,var(--accent-ai)_32%,transparent)] hover:text-(--fg-primary)"
                 title={t('chat.newConversation')}
             >
-                <Plus className="w-4 h-4" />
+                <Plus className="w-4 h-4" aria-hidden="true" />
             </button>
         </div>
     );

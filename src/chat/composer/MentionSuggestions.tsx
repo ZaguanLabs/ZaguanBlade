@@ -37,7 +37,7 @@ export const MentionSuggestions: React.FC<{
                             onClick={() => onSelect(suggestion)}
                             className={`flex w-full items-center gap-2 px-2 py-1.5 text-left ${isSelected ? 'bg-(--accent-ai)/15 text-(--fg-primary)' : 'text-(--fg-secondary) hover:bg-(--bg-surface-hover)'}`}
                         >
-                            <Icon className="h-3.5 w-3.5 shrink-0 text-(--accent-ai)" />
+                            <Icon className="h-3.5 w-3.5 shrink-0 text-(--accent-ai)" aria-hidden="true" />
                             <span className="min-w-0 flex-1 truncate text-[11px]">@{suggestion.name}</span>
                             <span className="text-[9px] text-(--fg-tertiary)">command</span>
                         </button>
@@ -54,7 +54,7 @@ export const MentionSuggestions: React.FC<{
                         onClick={() => onSelect(suggestion)}
                         className={`flex w-full items-center gap-2 px-2 py-1.5 text-left ${isSelected ? 'bg-(--accent-ai)/15 text-(--fg-primary)' : 'text-(--fg-secondary) hover:bg-(--bg-surface-hover)'}`}
                     >
-                        <Icon className="h-3.5 w-3.5 shrink-0 text-(--accent-ai)" />
+                        <Icon className="h-3.5 w-3.5 shrink-0 text-(--accent-ai)" aria-hidden="true" />
                         <span className="min-w-0 flex-1 truncate text-[11px]">@{suggestion.entry.path}</span>
                         <span className="text-[9px] text-(--fg-tertiary)">{suggestion.entry.is_dir ? 'folder' : 'file'}</span>
                     </button>

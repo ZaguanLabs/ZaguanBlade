@@ -34,7 +34,7 @@ export const ImageAttachmentBar: React.FC<ImageAttachmentBarProps> = ({ attachme
                             className="absolute right-1 top-1 rounded-full bg-(--bg-app)/75 p-1 text-(--fg-bright) opacity-0 transition-opacity group-hover:opacity-100"
                             aria-label={t('chat.attachments.removeImage')}
                         >
-                            <X className="w-3 h-3" />
+                            <X className="w-3 h-3" aria-hidden="true" />
                         </button>
                     </div>
                 ))}

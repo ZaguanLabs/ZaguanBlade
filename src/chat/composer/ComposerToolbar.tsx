@@ -58,11 +58,11 @@ export const ComposerToolbar: React.FC<{
                 />
                 <div className="inline-flex rounded-[calc(var(--panel-radius)*0.55)] border border-(--border-subtle) bg-(--bg-app) p-1">
                     <button type="button" onClick={() => setChatMode('code')} disabled={disabled} aria-pressed={chatMode === 'code'} className={`inline-flex items-center gap-1 rounded-[calc(var(--panel-radius)*0.35)] px-2 py-1 text-[10px] ${chatMode === 'code' ? 'bg-(--accent-ai)/15 text-(--fg-primary)' : 'text-(--fg-tertiary)'}`}>
-                        <Code2 className="h-3 w-3" />
+                        <Code2 className="h-3 w-3" aria-hidden="true" />
                         Code
                     </button>
                     <button type="button" onClick={() => setChatMode('planning')} disabled={disabled} aria-pressed={chatMode === 'planning'} className={`inline-flex items-center gap-1 rounded-[calc(var(--panel-radius)*0.35)] px-2 py-1 text-[10px] ${chatMode === 'planning' ? 'bg-[color-mix(in_srgb,var(--accent-planning)_20%,transparent)] text-(--fg-primary)' : 'text-(--fg-tertiary)'}`}>
-                        <MapIcon className="h-3 w-3" />
+                        <MapIcon className="h-3 w-3" aria-hidden="true" />
                         Plan
                     </button>
                 </div>
@@ -91,7 +91,7 @@ export const ComposerToolbar: React.FC<{
                 : 'border-(--border-subtle) bg-(--bg-surface) text-(--fg-tertiary) hover:text-(--fg-primary)'
                 }`}
         >
-            {loading && !canSend ? <Square className="h-4 w-4 fill-current" /> : <Send className="h-4 w-4" />}
+            {loading && !canSend ? <Square className="h-4 w-4 fill-current" aria-hidden="true" /> : <Send className="h-4 w-4" aria-hidden="true" />}
         </button>
     </>
 );
