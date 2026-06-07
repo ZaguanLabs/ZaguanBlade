@@ -67,6 +67,7 @@ export const FeatureMenu: React.FC<FeatureMenuProps> = ({ onScreenshot, onUpload
                 <div
                     id={menuId}
                     role="menu"
+                    aria-label={t('common.add')}
                     className="absolute bottom-full left-0 z-120 mb-1.5 w-44 overflow-hidden rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-focus) bg-(--bg-surface) py-0.5 shadow-(--shadow-lg)"
                 >
                     <div className="px-2 py-1 text-[8px] uppercase tracking-[0.16em] text-(--fg-tertiary)">
