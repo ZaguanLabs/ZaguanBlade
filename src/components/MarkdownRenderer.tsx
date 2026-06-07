@@ -100,12 +100,12 @@ const CodeBlock = React.memo<CodeBlockProps>(({ language, value }) => {
                 >
                     {copied ? (
                         <>
-                            <Check className="w-3 h-3 text-(--markdown-link)" />
+                            <Check aria-hidden="true" className="w-3 h-3 text-(--markdown-link)" />
                             <span className="text-(--markdown-link)">{t('common.copied')}</span>
                         </>
                     ) : (
                         <>
-                            <Copy className="w-3 h-3" />
+                            <Copy aria-hidden="true" className="w-3 h-3" />
                             <span>{t('common.copy')}</span>
                         </>
                     )}
@@ -159,12 +159,12 @@ const PlainCodeBlock = React.memo<CodeBlockProps>(({ language, value }) => {
                 >
                     {copied ? (
                         <>
-                            <Check className="h-3 w-3 text-(--markdown-link)" />
+                            <Check aria-hidden="true" className="h-3 w-3 text-(--markdown-link)" />
                             <span className="text-(--markdown-link)">{t('common.copied')}</span>
                         </>
                     ) : (
                         <>
-                            <Copy className="h-3 w-3" />
+                            <Copy aria-hidden="true" className="h-3 w-3" />
                             <span>{t('common.copy')}</span>
                         </>
                     )}

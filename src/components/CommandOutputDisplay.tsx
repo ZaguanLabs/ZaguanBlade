@@ -86,15 +86,15 @@ export const CommandOutputDisplay: React.FC<CommandOutputDisplayProps> = ({
             >
                 <div className={`p-1.5 rounded-[calc(var(--panel-radius)*0.35)] ${isSuccess ? 'bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)]' : 'bg-[color-mix(in_srgb,var(--state-danger)_10%,transparent)]'}`}>
                     {isSuccess ? (
-                        <CheckCircle2 className="w-4 h-4 text-(--accent-mention)" />
+                        <CheckCircle2 aria-hidden="true" className="w-4 h-4 text-(--accent-mention)" />
                     ) : (
-                        <XCircle className="w-4 h-4 text-(--state-danger)" />
+                        <XCircle aria-hidden="true" className="w-4 h-4 text-(--state-danger)" />
                     )}
                 </div>
 
                 <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
-                        <Terminal className="w-3.5 h-3.5 text-(--fg-tertiary)" />
+                        <Terminal aria-hidden="true" className="w-3.5 h-3.5 text-(--fg-tertiary)" />
                         <code className="text-sm font-mono text-(--fg-primary) truncate">
                             {command}
                         </code>
@@ -109,7 +109,7 @@ export const CommandOutputDisplay: React.FC<CommandOutputDisplayProps> = ({
                 <div className="flex items-center gap-3 text-xs text-(--fg-tertiary)">
                     {duration !== undefined && (
                         <div className="flex items-center gap-1">
-                            <Clock className="w-3 h-3" />
+                            <Clock aria-hidden="true" className="w-3 h-3" />
                             <span>{duration}ms</span>
                         </div>
                     )}
@@ -120,9 +120,9 @@ export const CommandOutputDisplay: React.FC<CommandOutputDisplayProps> = ({
                         Exit {exitCode}
                     </div>
                     {isExpanded ? (
-                        <ChevronDown className="w-4 h-4" />
+                        <ChevronDown aria-hidden="true" className="w-4 h-4" />
                     ) : (
-                        <ChevronRight className="w-4 h-4" />
+                        <ChevronRight aria-hidden="true" className="w-4 h-4" />
                     )}
                 </div>
             </button>
