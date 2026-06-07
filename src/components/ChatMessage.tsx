@@ -216,21 +216,21 @@ const PlanSummaryDisplay: React.FC<{ todos: import('../types/events').TodoItem[]
                 onClick={() => setIsExpanded(!isExpanded)}
                 className="flex items-center gap-2 px-3 py-1.5 rounded-[calc(var(--panel-radius)*0.45)] bg-[color-mix(in_srgb,var(--accent-mention)_5%,transparent)] border border-(--accent-mention)/20 hover:bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)] transition-colors text-left w-full"
             >
-                <Check className="w-3.5 h-3.5 text-(--accent-mention) shrink-0" />
+                <Check className="w-3.5 h-3.5 text-(--accent-mention) shrink-0" aria-hidden="true" />
                 <span className="text-[11px] text-(--accent-mention) font-medium">
                     {t('chatMessage.planCompleted', { completed: completedCount, total: todos.length })}
                 </span>
                 {isExpanded ? (
-                    <ChevronDown className="w-3 h-3 text-(--fg-tertiary) ml-auto shrink-0" />
+                    <ChevronDown className="w-3 h-3 text-(--fg-tertiary) ml-auto shrink-0" aria-hidden="true" />
                 ) : (
-                    <ChevronRight className="w-3 h-3 text-(--fg-tertiary) ml-auto shrink-0" />
+                    <ChevronRight className="w-3 h-3 text-(--fg-tertiary) ml-auto shrink-0" aria-hidden="true" />
                 )}
             </button>
             {isExpanded && (
                 <div className="mt-1 px-3 py-2 rounded-[calc(var(--panel-radius)*0.45)] bg-[color-mix(in_srgb,var(--accent-mention)_5%,transparent)] border border-(--accent-mention)/10 space-y-0.5">
                     {todos.map((todo, idx) => (
                         <div key={idx} className="flex items-center gap-2 text-[11px]">
-                            <Check className="w-3 h-3 text-(--accent-mention)/60 shrink-0" />
+                            <Check className="w-3 h-3 text-(--accent-mention)/60 shrink-0" aria-hidden="true" />
                             <span className="text-(--fg-tertiary) line-through">{todo.content}</span>
                         </div>
                     ))}
@@ -261,9 +261,9 @@ const ReferencedPathsDisplay: React.FC<{
                     const content = (
                         <>
                             {mention.is_dir ? (
-                                <Folder className="h-3 w-3 shrink-0 text-(--accent-mention)/80" />
+                                <Folder className="h-3 w-3 shrink-0 text-(--accent-mention)/80" aria-hidden="true" />
                             ) : (
-                                <FileText className="h-3 w-3 shrink-0 text-(--accent-mention)/80" />
+                                <FileText className="h-3 w-3 shrink-0 text-(--accent-mention)/80" aria-hidden="true" />
                             )}
                             <span className="truncate">{mention.path}</span>
                         </>
@@ -778,10 +778,10 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                         <div className="flex flex-col gap-2">
                             <div className="flex min-h-6 items-center gap-2">
                                 <div className="opacity-90 transition-opacity group-hover:opacity-100">
-                                    {isUser && <div className="flex h-6 w-6 items-center justify-center rounded-[calc(var(--panel-radius)*0.55)] border" style={userIconStyle}><User className="h-3 w-3 text-(--fg-secondary)" /></div>}
-                                    {isAssistant && <div className="flex h-6 w-6 items-center justify-center rounded-[calc(var(--panel-radius)*0.55)] border shadow-(--shadow-sm)" style={assistantIconStyle}><Bot className="h-3 w-3 text-(--accent-ai)" /></div>}
-                                    {isSystem && <div className="flex h-6 w-6 items-center justify-center rounded-[calc(var(--panel-radius)*0.55)] border border-(--accent-warning)/20 bg-[color-mix(in_srgb,var(--accent-warning)_10%,transparent)]"><Terminal className="h-3 w-3 text-(--accent-warning)" /></div>}
-                                    {isTool && <div className="flex h-6 w-6 items-center justify-center rounded-[calc(var(--panel-radius)*0.55)] border border-(--accent-planning)/20 bg-[color-mix(in_srgb,var(--accent-planning)_10%,transparent)]"><Terminal className="h-3 w-3 text-(--accent-planning)" /></div>}
+                                    {isUser && <div className="flex h-6 w-6 items-center justify-center rounded-[calc(var(--panel-radius)*0.55)] border" style={userIconStyle}><User className="h-3 w-3 text-(--fg-secondary)" aria-hidden="true" /></div>}
+                                    {isAssistant && <div className="flex h-6 w-6 items-center justify-center rounded-[calc(var(--panel-radius)*0.55)] border shadow-(--shadow-sm)" style={assistantIconStyle}><Bot className="h-3 w-3 text-(--accent-ai)" aria-hidden="true" /></div>}
+                                    {isSystem && <div className="flex h-6 w-6 items-center justify-center rounded-[calc(var(--panel-radius)*0.55)] border border-(--accent-warning)/20 bg-[color-mix(in_srgb,var(--accent-warning)_10%,transparent)]"><Terminal className="h-3 w-3 text-(--accent-warning)" aria-hidden="true" /></div>}
+                                    {isTool && <div className="flex h-6 w-6 items-center justify-center rounded-[calc(var(--panel-radius)*0.55)] border border-(--accent-planning)/20 bg-[color-mix(in_srgb,var(--accent-planning)_10%,transparent)]"><Terminal className="h-3 w-3 text-(--accent-planning)" aria-hidden="true" /></div>}
                                 </div>
                                 <span className={`rounded-[calc(var(--panel-radius)*0.35)] border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] ${
                                     isUser

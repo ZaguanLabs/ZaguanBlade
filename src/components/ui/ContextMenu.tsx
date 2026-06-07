@@ -228,7 +228,7 @@ const ContextMenuPortal: React.FC = () => {
                     >
                         {/* Icon */}
                         {item.icon && (
-                            <span className="w-4 h-4 flex items-center justify-center opacity-70">
+                            <span className="w-4 h-4 flex items-center justify-center opacity-70" aria-hidden="true">
                                 {item.icon}
                             </span>
                         )}
