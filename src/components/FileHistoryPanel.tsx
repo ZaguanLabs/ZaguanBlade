@@ -27,7 +27,7 @@ export const FileHistoryPanel: React.FC<FileHistoryPanelProps> = ({ activeFile }
     if (!activeFile) {
         return (
             <div className="flex flex-col items-center justify-center h-full text-(--fg-tertiary) p-4 text-center">
-                <Clock className="w-8 h-8 opacity-20 mb-2" />
+                <Clock className="w-8 h-8 opacity-20 mb-2" aria-hidden="true" />
                 <p className="text-sm">{t('fileHistory.noFileSelected')}</p>
             </div>
         );
@@ -40,7 +40,7 @@ export const FileHistoryPanel: React.FC<FileHistoryPanelProps> = ({ activeFile }
     if (history.length === 0) {
         return (
             <div className="flex flex-col items-center justify-center h-full text-(--fg-tertiary) p-4 text-center">
-                <Clock className="w-8 h-8 opacity-20 mb-2" />
+                <Clock className="w-8 h-8 opacity-20 mb-2" aria-hidden="true" />
                 <p className="text-sm">{t('fileHistory.empty')}</p>
             </div>
         );
@@ -49,7 +49,7 @@ export const FileHistoryPanel: React.FC<FileHistoryPanelProps> = ({ activeFile }
     return (
         <div className="flex flex-col h-full bg-(--bg-panel) w-full">
             <div className="p-3 border-b border-(--border-subtle) font-medium text-xs uppercase tracking-wider text-(--fg-secondary) flex items-center gap-2 select-none">
-                <Clock className="w-3 h-3" />
+                <Clock className="w-3 h-3" aria-hidden="true" />
                 <span>{t('fileHistory.title')}</span>
             </div>
 
@@ -70,7 +70,7 @@ export const FileHistoryPanel: React.FC<FileHistoryPanelProps> = ({ activeFile }
                                 title={t('fileHistory.revertToVersion')}
                                 className="opacity-0 group-hover:opacity-100 p-1.5 rounded-[calc(var(--panel-radius)*0.45)] transition-opacity"
                             >
-                                <RotateCcw className="w-3.5 h-3.5" />
+                                <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
                             </IconButton>
                         </div>
                         <div className="text-[10px] font-mono text-(--fg-tertiary) truncate" title={entry.id}>

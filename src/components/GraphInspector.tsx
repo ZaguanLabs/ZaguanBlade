@@ -112,7 +112,7 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
             {/* Header */}
             <div className="h-12 border-b border-(--border-subtle) flex items-center justify-between px-4 bg-(--bg-app)">
                 <div className="flex items-center gap-2 text-(--fg-primary) font-medium">
-                    <Network className="w-4 h-4 text-(--accent-ai)" />
+                    <Network className="w-4 h-4 text-(--accent-ai)" aria-hidden="true" />
                     <span className="truncate max-w-[180px]">{symbolName}</span>
                 </div>
                 <IconButton
@@ -135,7 +135,7 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
                     </div>
                 ) : graph ? (
                     <>
-                        {renderNodeList(getIncomingNodes(), t('graphInspector.incomingCalls'), <ArrowLeft className="w-3.5 h-3.5 text-(--accent-warning)" />)}
+                        {renderNodeList(getIncomingNodes(), t('graphInspector.incomingCalls'), <ArrowLeft className="w-3.5 h-3.5 text-(--accent-warning)" aria-hidden="true" />)}
 
                         {/* Current Node Representation */}
                         <Surface variant="row" className="my-6 p-3 bg-[color-mix(in_srgb,var(--accent-ai)_12%,var(--bg-surface))] border-(--accent-ai)/25 rounded-[calc(var(--panel-radius)*0.55)] text-center">
@@ -143,7 +143,7 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
                             <div className="font-mono text-sm font-bold text-(--fg-primary)">{symbolName}</div>
                         </Surface>
 
-                        {renderNodeList(getOutgoingNodes(), t('graphInspector.outgoingCalls'), <ArrowRight className="w-3.5 h-3.5 text-(--accent-planning)" />)}
+                        {renderNodeList(getOutgoingNodes(), t('graphInspector.outgoingCalls'), <ArrowRight className="w-3.5 h-3.5 text-(--accent-planning)" aria-hidden="true" />)}
 
                         {getIncomingNodes().length === 0 && getOutgoingNodes().length === 0 && (
                             <div className="text-center text-xs text-(--fg-tertiary) italic py-4">

@@ -112,7 +112,7 @@ export const StorageSetupModal: React.FC<StorageSetupModalProps> = ({
                             <div className={`p-3 rounded-[calc(var(--panel-radius)*0.75)] ${
                                 selectedMode === 'local' ? 'bg-[color-mix(in_srgb,var(--accent-mention)_18%,transparent)]' : 'bg-(--bg-surface-hover)'
                             }`}>
-                                <HardDrive className={`w-6 h-6 ${
+                                <HardDrive aria-hidden="true" className={`w-6 h-6 ${
                                     selectedMode === 'local' ? 'text-(--accent-mention)' : 'text-(--fg-tertiary)'
                                 }`} />
                             </div>
@@ -128,10 +128,10 @@ export const StorageSetupModal: React.FC<StorageSetupModalProps> = ({
                                 </p>
                                 <div className="mt-3 flex items-center gap-4 text-xs text-(--fg-tertiary)">
                                     <span className="flex items-center gap-1">
-                                        <Shield className="w-3.5 h-3.5" /> {t('storageSetup.localCodePrivate')}
+                                        <Shield className="w-3.5 h-3.5" aria-hidden="true" /> {t('storageSetup.localCodePrivate')}
                                     </span>
                                     <span className="flex items-center gap-1">
-                                        <HardDrive className="w-3.5 h-3.5" /> {t('storageSetup.localStoredInProject')}
+                                        <HardDrive className="w-3.5 h-3.5" aria-hidden="true" /> {t('storageSetup.localStoredInProject')}
                                     </span>
                                 </div>
                             </div>
@@ -153,7 +153,7 @@ export const StorageSetupModal: React.FC<StorageSetupModalProps> = ({
                             <div className={`p-3 rounded-[calc(var(--panel-radius)*0.75)] ${
                                 selectedMode === 'server' ? 'bg-[color-mix(in_srgb,var(--accent-planning)_18%,transparent)]' : 'bg-(--bg-surface-hover)'
                             }`}>
-                                <Cloud className={`w-6 h-6 ${
+                                <Cloud aria-hidden="true" className={`w-6 h-6 ${
                                     selectedMode === 'server' ? 'text-(--accent-planning)' : 'text-(--fg-tertiary)'
                                 }`} />
                             </div>
@@ -164,10 +164,10 @@ export const StorageSetupModal: React.FC<StorageSetupModalProps> = ({
                                 </p>
                                 <div className="mt-3 flex items-center gap-4 text-xs text-(--fg-tertiary)">
                                     <span className="flex items-center gap-1">
-                                        <Zap className="w-3.5 h-3.5" /> {t('storageSetup.serverFasterResponses')}
+                                        <Zap className="w-3.5 h-3.5" aria-hidden="true" /> {t('storageSetup.serverFasterResponses')}
                                     </span>
                                     <span className="flex items-center gap-1">
-                                        <Cloud className="w-3.5 h-3.5" /> {t('storageSetup.serverEncrypted')}
+                                        <Cloud className="w-3.5 h-3.5" aria-hidden="true" /> {t('storageSetup.serverEncrypted')}
                                     </span>
                                 </div>
                             </div>
@@ -201,7 +201,7 @@ export const StorageSetupModal: React.FC<StorageSetupModalProps> = ({
                         ) : (
                             <>
                                 {t('common.getStarted')}
-                                <ArrowRight className="w-4 h-4" />
+                                <ArrowRight className="w-4 h-4" aria-hidden="true" />
                             </>
                         )}
                     </button>

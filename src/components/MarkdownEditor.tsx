@@ -111,12 +111,12 @@ export const MarkdownEditor = forwardRef<CodeEditorHandle, MarkdownEditorProps>(
                     >
                         {mode === 'edit' ? (
                             <>
-                                <Edit3 className="w-3.5 h-3.5" />
+                                <Edit3 className="w-3.5 h-3.5" aria-hidden="true" />
                                 <span>{t('editor.editing')}</span>
                             </>
                         ) : (
                             <>
-                                <Eye className="w-3.5 h-3.5" />
+                                <Eye className="w-3.5 h-3.5" aria-hidden="true" />
                                 <span>{t('editor.viewing')}</span>
                             </>
                         )}
