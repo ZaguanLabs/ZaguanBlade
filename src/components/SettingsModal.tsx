@@ -432,6 +432,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                         <p className="text-xs text-(--fg-tertiary) mt-0.5">{t('settings.subtitle')}</p>
                     </div>
                     <button
+                        type="button"
                         onClick={onClose}
                         className="rounded-[calc(var(--panel-radius)*0.35)] p-1.5 text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover) transition-colors"
                     >
@@ -445,6 +446,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                     <div className="w-56 border-r border-(--border-default) py-3 px-2 bg-[color-mix(in_srgb,var(--bg-app)_82%,var(--bg-panel))]">
                         {sections.map(section => (
                             <button
+                                type="button"
                                 key={section.id}
                                 onClick={() => setActiveSection(section.id)}
                                 className={`w-full flex items-center justify-between gap-3 rounded-[calc(var(--panel-radius)*0.65)] px-3 py-2.5 text-sm transition-colors border ${activeSection === section.id
@@ -541,12 +543,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                     </div>
                     <div className="flex items-center gap-2">
                         <button
+                            type="button"
                             onClick={onClose}
                             className="rounded-[calc(var(--panel-radius)*0.65)] px-4 py-2 text-sm font-medium text-(--fg-secondary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover) transition-colors"
                         >
                             {t('common.cancel')}
                         </button>
                         <button
+                            type="button"
                             onClick={handleSave}
                             disabled={!hasChanges || isSaving}
                             className="flex items-center gap-2 rounded-[calc(var(--panel-radius)*0.65)] bg-(--accent-ai) px-4 py-2 text-sm font-medium text-(--fg-bright) transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
@@ -961,6 +965,7 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
                 <div className="grid grid-cols-2 gap-4">
                     {/* Local Storage Option */}
                     <button
+                        type="button"
                         onClick={() => onChange({ mode: 'local' })}
                         className={`relative rounded-[calc(var(--panel-radius)+2px)] p-4 border text-left transition-all ${settings.mode === 'local'
                             ? 'border-(--border-focus) bg-[color-mix(in_srgb,var(--bg-active)_78%,transparent)] shadow-(--shadow-sm)'
@@ -997,6 +1002,7 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
 
                     {/* Server Storage Option */}
                     <button
+                        type="button"
                         onClick={() => onChange({ mode: 'server' })}
                         className={`relative rounded-[calc(var(--panel-radius)+2px)] p-4 border text-left transition-all ${settings.mode === 'server'
                             ? 'border-(--border-focus) bg-[color-mix(in_srgb,var(--bg-active)_78%,transparent)] shadow-(--shadow-sm)'
@@ -1160,6 +1166,7 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, a
                         <label className="text-xs text-(--fg-secondary) block">{t('settings.context.compressionModel')}</label>
                         <div className="flex gap-3">
                             <button
+                                type="button"
                                 onClick={() => onChange({ compression: { ...settings.compression, model: 'remote' } })}
                                 className={`flex-1 px-3 py-2 rounded-[calc(var(--panel-radius)*0.65)] text-sm transition-colors ${settings.compression.model === 'remote'
                                     ? 'bg-(--accent-ai) text-(--fg-bright)'
@@ -1170,6 +1177,7 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, a
                                 {t('settings.context.compressionRemote')}
                             </button>
                             <button
+                                type="button"
                                 onClick={() => onChange({ compression: { ...settings.compression, model: 'local' } })}
                                 className={`flex-1 px-3 py-2 rounded-[calc(var(--panel-radius)*0.65)] text-sm transition-colors ${settings.compression.model === 'local'
                                     ? 'bg-(--accent-ai) text-(--fg-bright)'
@@ -1377,6 +1385,7 @@ interface ToggleProps {
 const Toggle: React.FC<ToggleProps> = ({ checked, onChange }) => {
     return (
         <button
+            type="button"
             role="switch"
             aria-checked={checked}
             onClick={() => onChange(!checked)}
@@ -1505,6 +1514,7 @@ const RemoteSettings: React.FC = () => {
                                     className="flex-1 px-3 py-2 bg-(--bg-input) border border-(--border-input) rounded-[calc(var(--panel-radius)*0.75)] text-sm text-(--fg-primary) placeholder:text-(--fg-tertiary) focus:outline-none focus:border-(--border-focus) focus:ring-1 focus:ring-(--border-focus) transition-all"
                                 />
                                 <button
+                                    type="button"
                                     onClick={handleConnectBot}
                                     disabled={isLoading || !tokenInput.trim()}
                                     className="shrink-0 flex items-center gap-2 rounded-[calc(var(--panel-radius)*0.65)] bg-(--accent-ai) px-5 py-2.5 text-sm font-medium text-(--fg-bright) transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
@@ -1540,6 +1550,7 @@ const RemoteSettings: React.FC = () => {
                                 </div>
                             </div>
                             <button
+                                type="button"
                                 onClick={handleDisconnect}
                                 disabled={isLoading}
                                 className="rounded-[calc(var(--panel-radius)*0.65)] px-3 py-1.5 text-xs font-medium text-(--state-danger) border border-[color-mix(in_srgb,var(--state-danger)_30%,var(--border-default))] bg-[color-mix(in_srgb,var(--state-danger)_8%,transparent)] hover:bg-[color-mix(in_srgb,var(--state-danger)_16%,transparent)] transition-colors disabled:opacity-50"
