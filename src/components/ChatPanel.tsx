@@ -1012,7 +1012,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                                 onClick={scrollToBottom}
                                 className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-(--border-subtle) bg-(--bg-surface)/95 px-4 py-2 text-xs font-medium text-(--fg-secondary) shadow-(--shadow-lg) transition-colors hover:text-(--fg-primary)"
                             >
-                                <ArrowDown className="h-3.5 w-3.5" />
+                                <ArrowDown className="h-3.5 w-3.5" aria-hidden="true" />
                                 {t('chat.jumpToLatest')}
                             </button>
                         </div>

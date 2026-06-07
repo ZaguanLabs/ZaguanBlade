@@ -35,18 +35,18 @@ interface FileExplorerProps {
 }
 
 const getIcon = (name: string | undefined, isDir: boolean, expanded: boolean) => {
-    if (!name) return <FileBox className="w-3.5 h-3.5 text-(--fg-tertiary)" />;
+    if (!name) return <FileBox className="w-3.5 h-3.5 text-(--fg-tertiary)" aria-hidden="true" />;
 
     if (isDir) {
         return expanded
-            ? <Folder className="w-3.5 h-3.5 text-(--fg-secondary) fill-(--fg-secondary)/20" />
-            : <Folder className="w-3.5 h-3.5 text-(--fg-tertiary)" />;
+            ? <Folder className="w-3.5 h-3.5 text-(--fg-secondary) fill-(--fg-secondary)/20" aria-hidden="true" />
+            : <Folder className="w-3.5 h-3.5 text-(--fg-tertiary)" aria-hidden="true" />;
     }
-    if (name.endsWith('.rs')) return <FileCode className="w-3.5 h-3.5 text-(--syntax-number)" />;
-    if (name.endsWith('.tsx') || name.endsWith('.ts')) return <FileCode className="w-3.5 h-3.5 text-(--syntax-type)" />;
-    if (name.endsWith('.json') || name.endsWith('.toml')) return <FileCode className="w-3.5 h-3.5 text-(--accent-warning)" />;
-    if (name.endsWith('.md')) return <FileText className="w-3.5 h-3.5 text-(--fg-secondary)" />;
-    return <FileBox className="w-3.5 h-3.5 text-(--fg-tertiary)" />;
+    if (name.endsWith('.rs')) return <FileCode className="w-3.5 h-3.5 text-(--syntax-number)" aria-hidden="true" />;
+    if (name.endsWith('.tsx') || name.endsWith('.ts')) return <FileCode className="w-3.5 h-3.5 text-(--syntax-type)" aria-hidden="true" />;
+    if (name.endsWith('.json') || name.endsWith('.toml')) return <FileCode className="w-3.5 h-3.5 text-(--accent-warning)" aria-hidden="true" />;
+    if (name.endsWith('.md')) return <FileText className="w-3.5 h-3.5 text-(--fg-secondary)" aria-hidden="true" />;
+    return <FileBox className="w-3.5 h-3.5 text-(--fg-tertiary)" aria-hidden="true" />;
 };
 
 const getParentPath = (path: string) => {
@@ -683,7 +683,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
         <div className="flex flex-col h-full w-full">
             {/* Search Bar */}
             <div className="px-2 py-2 border-b border-(--border-subtle) flex items-center gap-2">
-                <Search className="w-3 h-3 text-(--fg-tertiary)" />
+                <Search className="w-3 h-3 text-(--fg-tertiary)" aria-hidden="true" />
                 <input
                     type="text"
                     aria-label={t('fileTree.searchPlaceholder')}
@@ -779,7 +779,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                                 ))}
 
                                 <span className={`transition-transform duration-200 ${item.isExpanded() ? 'rotate-90' : ''}`}>
-                                    {item.isFolder() ? <ChevronRight className="w-3 h-3 text-(--fg-tertiary) group-hover:text-(--fg-secondary) transition-colors" /> : <span className="w-3" />}
+                                    {item.isFolder() ? <ChevronRight className="w-3 h-3 text-(--fg-tertiary) group-hover:text-(--fg-secondary) transition-colors" aria-hidden="true" /> : <span className="w-3" />}
                                 </span>
 
                                 {getIcon(item.getItemName(), item.isFolder(), item.isExpanded())}

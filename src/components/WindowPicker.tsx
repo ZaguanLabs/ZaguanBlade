@@ -78,7 +78,7 @@ export const WindowPicker: React.FC<WindowPickerProps> = ({
                             className="flex items-start gap-3 px-3 py-2"
                         >
                             <div className="mt-0.5">
-                                <Monitor className="w-4 h-4 text-(--accent-ai)" />
+                                <Monitor className="w-4 h-4 text-(--accent-ai)" aria-hidden="true" />
                             </div>
                             <div className="flex-1 min-w-0">
                                 <div className="text-sm text-(--fg-primary) truncate">

@@ -777,7 +777,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                                     : 'text-(--fg-tertiary) hover:text-(--fg-primary)'
                                                     }`}
                                             >
-                                                <Icon className="h-3 w-3" />
+                                                <Icon className="h-3 w-3" aria-hidden="true" />
                                                 <span>{option.label}</span>
                                             </button>
                                         );
@@ -852,7 +852,7 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                                     }`}
                                             >
                                                 <div className="flex h-6 w-6 items-center justify-center rounded-[calc(var(--panel-radius)*0.45)] border border-(--border-subtle) bg-(--bg-app)">
-                                                    <Icon className="h-3 w-3 text-(--accent-ai)" />
+                                                    <Icon className="h-3 w-3 text-(--accent-ai)" aria-hidden="true" />
                                                 </div>
                                                 <div className="min-w-0 flex-1">
                                                     <span className="text-[10px] font-semibold">@{suggestion.name}</span>
@@ -877,9 +877,9 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                         >
                                             <div className="flex h-6 w-6 items-center justify-center rounded-[calc(var(--panel-radius)*0.45)] border border-(--border-subtle) bg-(--bg-app)">
                                                 {suggestion.isDir ? (
-                                                    <Folder className="h-3 w-3 text-(--accent-ai)" />
+                                                    <Folder className="h-3 w-3 text-(--accent-ai)" aria-hidden="true" />
                                                 ) : (
-                                                    <FileText className="h-3 w-3 text-(--accent-ai)" />
+                                                    <FileText className="h-3 w-3 text-(--accent-ai)" aria-hidden="true" />
                                                 )}
                                             </div>
                                             <div className="min-w-0 flex-1">
