@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useId } from 'react';
+import { useTranslation } from 'react-i18next';
 import { X } from 'lucide-react';
 
 /**
@@ -31,6 +32,7 @@ export const InputModal: React.FC<InputModalProps> = ({
     onConfirm,
     onCancel,
 }) => {
+    const { t } = useTranslation();
     const [value, setValue] = useState(defaultValue);
     const inputRef = useRef<HTMLInputElement>(null);
     const titleId = useId();
@@ -88,7 +90,7 @@ export const InputModal: React.FC<InputModalProps> = ({
                     <h2 id={titleId} className="text-sm font-semibold text-(--fg-primary)">{title}</h2>
                     <button
                         type="button"
-                        aria-label="Close"
+                        aria-label={t('common.close')}
                         onClick={onCancel}
                         className="p-1 text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--row-hover) rounded-(--radius-control) transition-all duration-(--transition-fast)"
                     >
@@ -160,6 +162,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
     onConfirm,
     onCancel,
 }) => {
+    const { t } = useTranslation();
     const titleId = useId();
     const messageId = useId();
 
@@ -207,7 +210,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
                     <h2 id={titleId} className="text-sm font-semibold text-(--fg-primary)">{title}</h2>
                     <button
                         type="button"
-                        aria-label="Close"
+                        aria-label={t('common.close')}
                         onClick={onCancel}
                         className="p-1 text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--row-hover) rounded-(--radius-control) transition-all duration-(--transition-fast)"
                     >
