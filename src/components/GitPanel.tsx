@@ -221,6 +221,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                 <div className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 transition-opacity">
                     {isStaged ? (
                         <button
+                            type="button"
                             className="p-0.5 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface) text-(--fg-tertiary) hover:text-(--fg-primary)"
                             onClick={() => runAction(`unstage-${file.path}`, () => onUnstageFile(file.path))}
                             disabled={busyAction === `unstage-${file.path}`}
@@ -230,6 +231,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                         </button>
                     ) : (
                         <button
+                            type="button"
                             className="p-0.5 rounded-[calc(var(--panel-radius)*0.35)] hover:bg-(--bg-surface) text-(--fg-tertiary) hover:text-(--fg-primary)"
                             onClick={() => runAction(`stage-${file.path}`, () => onStageFile(file.path))}
                             disabled={busyAction === `stage-${file.path}`}
@@ -249,6 +251,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
             <div className="h-9 px-4 flex items-center bg-(--bg-panel) border-b border-(--border-subtle) text-[10px] uppercase tracking-wider font-semibold select-none justify-between text-(--fg-secondary)">
                 <span>{t('git.sourceControlTitle')}</span>
                 <button
+                    type="button"
                     onClick={() => runAction('refresh', async () => onRefresh())}
                     className="hover:text-(--fg-primary) transition-colors"
                     title={t('fileTree.refresh')}
@@ -301,6 +304,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                             <div className="flex items-center gap-2 mt-2">
                                 {/* Generate button - always visible */}
                                 <button
+                                    type="button"
                                     className={`flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-[calc(var(--panel-radius)*0.55)] transition-all font-medium border ${
                                         busyAction === 'generate-message'
                                             ? 'border-(--accent-ai)/40 text-(--accent-ai) animate-generate-pulse'
@@ -326,6 +330,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                 {/* Dynamic Commit/Push button */}
                                 {showPushButton ? (
                                     <button
+                                        type="button"
                                         className={`relative flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-[calc(var(--panel-radius)*0.55)] transition-all duration-300 font-medium overflow-hidden ${
                                             pushSuccess ? 'scale-[1.02]' : ''
                                         } ${
@@ -412,6 +417,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                     </button>
                                 ) : (
                                     <button
+                                        type="button"
                                         className={`flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-[calc(var(--panel-radius)*0.55)] transition-all font-medium ${
                                             busyAction === 'commit' || !canCommit
                                                 ? 'bg-(--bg-surface) text-(--fg-tertiary) cursor-not-allowed'
@@ -476,6 +482,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                     {/* Staged Changes */}
                                     <div className="border-b border-(--border-subtle)">
                                         <button
+                                            type="button"
                                             className="w-full flex items-center justify-between px-3 py-2 hover:bg-(--bg-surface-hover) transition-colors"
                                             onClick={() => setStagedExpanded(!stagedExpanded)}
                                         >
@@ -488,6 +495,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                             </div>
                                             {stagedFiles.length > 0 && (
                                                 <button
+                                                    type="button"
                                                     className="text-[10px] px-2 py-0.5 rounded-[calc(var(--panel-radius)*0.45)] text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--bg-surface)"
                                                     onClick={(e) => {
                                                         e.stopPropagation();
@@ -522,6 +530,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                     {/* Unstaged/Untracked Changes */}
                                     <div>
                                         <button
+                                            type="button"
                                             className="w-full flex items-center justify-between px-3 py-2 hover:bg-(--bg-surface-hover) transition-colors"
                                             onClick={() => setUnstagedExpanded(!unstagedExpanded)}
                                         >
@@ -534,6 +543,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                             </div>
                                             {unstagedFiles.length > 0 && (
                                                 <button
+                                                    type="button"
                                                     className="text-[10px] px-2 py-0.5 rounded-[calc(var(--panel-radius)*0.45)] text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--bg-surface)"
                                                     onClick={(e) => {
                                                         e.stopPropagation();

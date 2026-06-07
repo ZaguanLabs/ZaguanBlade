@@ -242,6 +242,7 @@ const CommitTooltip: React.FC<CommitTooltipProps> = ({ entry, remoteUrl, onCopy,
             <div className="flex items-center gap-2 pt-1 border-t border-(--border-subtle)">
                 <span className="text-(--fg-tertiary)">◇</span>
                 <button
+                    type="button"
                     className="font-mono text-(--accent-ai) hover:underline cursor-pointer flex items-center gap-1"
                     onClick={(e) => { e.stopPropagation(); onCopy(entry.hash); }}
                     title={t('gitGraph.copyFullCommitHash')}
@@ -367,6 +368,7 @@ export const GitGraph: React.FC<GitGraphProps> = ({ expanded, onToggle }) => {
         <div className={`flex flex-col ${expanded ? 'basis-1/2 shrink-0 grow-0 min-h-0' : ''}`}>
             {/* Header */}
             <button
+                type="button"
                 className="w-full flex items-center gap-1.5 px-3 py-2 hover:bg-(--bg-surface-hover) transition-colors border-t border-(--border-subtle) shrink-0"
                 onClick={onToggle}
             >
