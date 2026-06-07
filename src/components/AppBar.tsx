@@ -50,6 +50,7 @@ export const AppBar: React.FC<AppBarProps> = ({
     const fileMenuRef = useRef<HTMLDivElement>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
     const activeTabRef = useRef<HTMLDivElement>(null);
+    const focusActiveTabAfterKeyboardRef = useRef(false);
     const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
     const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
     const { t } = useTranslation();
@@ -224,6 +225,10 @@ export const AppBar: React.FC<AppBarProps> = ({
                 block: 'nearest',
                 inline: 'nearest',
             });
+            if (focusActiveTabAfterKeyboardRef.current) {
+                activeTabRef.current.focus();
+                focusActiveTabAfterKeyboardRef.current = false;
+            }
         }
     }, [activeTabId]);
 
@@ -337,22 +342,25 @@ export const AppBar: React.FC<AppBarProps> = ({
                                         e.preventDefault();
                                         const direction = e.key === 'ArrowLeft' ? -1 : 1;
                                         const nextIndex = (index + direction + tabs.length) % tabs.length;
+                                        focusActiveTabAfterKeyboardRef.current = true;
                                         onTabClick?.(tabs[nextIndex]?.id);
                                         return;
                                     }
                                     if (e.key === 'Home') {
                                         e.preventDefault();
+                                        focusActiveTabAfterKeyboardRef.current = true;
                                         onTabClick?.(tabs[0]?.id);
                                         return;
                                     }
                                     if (e.key === 'End') {
                                         e.preventDefault();
+                                        focusActiveTabAfterKeyboardRef.current = true;
                                         onTabClick?.(tabs[tabs.length - 1]?.id);
                                     }
                                 }}
                                 onContextMenu={(e) => handleTabContextMenu(e, tab, index)}
                                 role="tab"
-                                tabIndex={0}
+                                tabIndex={isActive ? 0 : -1}
                                 aria-selected={isActive}
                                 title={tab.title}
                                 className={`
