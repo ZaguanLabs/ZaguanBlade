@@ -152,6 +152,7 @@ export const ScreenshotPickerLauncher: React.FC<{
                     <div
                         id={menuId}
                         role="menu"
+                        aria-label={t('screenshot.launcher.actions')}
                         className="absolute bottom-full left-0 z-50 mb-2 w-60 overflow-hidden rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-surface) p-1.5 shadow-(--shadow-lg)"
                     >
                         <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wider text-(--fg-tertiary)">
