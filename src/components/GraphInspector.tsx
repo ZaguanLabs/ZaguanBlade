@@ -129,7 +129,7 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
                         <Loader2 aria-hidden="true" className="w-6 h-6 animate-spin text-(--accent-ai)" />
                     </div>
                 ) : error ? (
-                    <div className="p-3 bg-[color-mix(in_srgb,var(--state-danger)_10%,transparent)] border border-(--state-danger)/20 rounded-[calc(var(--panel-radius)*0.45)] text-xs text-(--state-danger)">
+                    <div role="alert" className="p-3 bg-[color-mix(in_srgb,var(--state-danger)_10%,transparent)] border border-(--state-danger)/20 rounded-[calc(var(--panel-radius)*0.45)] text-xs text-(--state-danger)">
                         {error}
                     </div>
                 ) : graph ? (

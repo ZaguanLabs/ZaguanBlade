@@ -754,12 +754,12 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 <Breadcrumb filePath={activeFile} workspaceRoot={workspaceRoot || undefined} />
             )}
             {loading && !isPdfFile && (
-                <div className="absolute inset-0 bg-[color-mix(in_srgb,var(--bg-app)_72%,transparent)] z-10 flex items-center justify-center">
-                    <div className="animate-spin w-5 h-5 border-2 border-(--accent-mention) border-t-transparent rounded-full" />
+                <div role="status" aria-live="polite" aria-label={t('common.loading')} className="absolute inset-0 bg-[color-mix(in_srgb,var(--bg-app)_72%,transparent)] z-10 flex items-center justify-center">
+                    <div aria-hidden="true" className="animate-spin w-5 h-5 border-2 border-(--accent-mention) border-t-transparent rounded-full" />
                 </div>
             )}
             {error && !isPdfFile && (
-                <div className="bg-[color-mix(in_srgb,var(--state-danger)_16%,var(--bg-app))] text-(--state-danger) p-2 text-xs font-mono">
+                <div role="alert" className="bg-[color-mix(in_srgb,var(--state-danger)_16%,var(--bg-app))] text-(--state-danger) p-2 text-xs font-mono">
                     {error}
                 </div>
             )}

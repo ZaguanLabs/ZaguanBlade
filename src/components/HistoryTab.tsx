@@ -69,9 +69,9 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
     if (loading && conversations.length === 0) {
         return (
             <div className="flex flex-1 items-center justify-center bg-(--bg-app) px-4">
-                <Surface variant="elevated" className="flex flex-col items-center gap-4 px-8 py-8 text-(--fg-tertiary)">
+                <Surface role="status" aria-live="polite" variant="elevated" className="flex flex-col items-center gap-4 px-8 py-8 text-(--fg-tertiary)">
                     <div className="flex h-14 w-14 items-center justify-center rounded-[calc(var(--panel-radius)*1.1)] border border-(--border-subtle) bg-(--bg-app)">
-                        <Loader2 className="h-7 w-7 animate-spin" />
+                        <Loader2 aria-hidden="true" className="h-7 w-7 animate-spin" />
                     </div>
                     <p className="text-xs font-semibold uppercase tracking-[0.18em]">{t('historyTab.loading')}</p>
                 </Surface>
@@ -82,7 +82,7 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
     if (error) {
         return (
             <div className="flex flex-1 items-center justify-center bg-(--bg-app) px-4">
-                <Surface variant="danger" className="flex flex-col items-center gap-3 px-8 py-8 text-(--state-danger)">
+                <Surface role="alert" variant="danger" className="flex flex-col items-center gap-3 px-8 py-8 text-(--state-danger)">
                     <p className="text-xs font-semibold uppercase tracking-[0.18em]">{t('historyTab.loadFailed')}</p>
                     <p className="text-[10px] opacity-70">{error}</p>
                 </Surface>

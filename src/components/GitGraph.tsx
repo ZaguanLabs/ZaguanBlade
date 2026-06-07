@@ -383,10 +383,10 @@ export const GitGraph: React.FC<GitGraphProps> = ({ expanded, onToggle }) => {
             {expanded && (
                 <div ref={containerRef} className="relative flex-1 min-h-0 overflow-y-auto">
                     {loading && (
-                        <div className="p-3 text-[10px] text-(--fg-tertiary) italic">{t('gitGraph.loadingCommits')}</div>
+                        <div role="status" aria-live="polite" className="p-3 text-[10px] text-(--fg-tertiary) italic">{t('gitGraph.loadingCommits')}</div>
                     )}
                     {error && (
-                        <div className="p-3 text-[10px] text-(--state-danger)">{error}</div>
+                        <div role="alert" className="p-3 text-[10px] text-(--state-danger)">{error}</div>
                     )}
                     {!loading && !error && entries.length === 0 && (
                         <div className="p-3 text-[10px] text-(--fg-tertiary) italic">{t('gitGraph.noCommits')}</div>
