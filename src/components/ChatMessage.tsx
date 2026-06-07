@@ -340,9 +340,10 @@ const CompactWorkLog: React.FC<{
                 type="button"
                 className="flex w-full items-center justify-between gap-3 text-left"
                 onClick={() => setIsExpanded((value) => !value)}
+                aria-expanded={isExpanded}
             >
                 <span className="flex min-w-0 items-center gap-2">
-                    <Terminal className="h-3.5 w-3.5 shrink-0 text-(--fg-tertiary)" />
+                    <Terminal aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-(--fg-tertiary)" />
                     <span className="text-[9px] font-semibold uppercase tracking-[0.16em] text-(--fg-tertiary)">
                         Work log ({entries.length})
                     </span>
@@ -353,16 +354,16 @@ const CompactWorkLog: React.FC<{
                     )}
                 </span>
                 {isExpanded ? (
-                    <ChevronDown className="h-3.5 w-3.5 shrink-0 text-(--fg-tertiary)" />
+                    <ChevronDown aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-(--fg-tertiary)" />
                 ) : (
-                    <ChevronRight className="h-3.5 w-3.5 shrink-0 text-(--fg-tertiary)" />
+                    <ChevronRight aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-(--fg-tertiary)" />
                 )}
             </button>
             {(isExpanded || entries.length > 3) && (
                 <div className="mt-1.5 space-y-1">
                     {visibleEntries.map((entry) => (
                         <div key={entry.id} className="flex min-w-0 items-center gap-2 rounded-[calc(var(--panel-radius)*0.35)] px-1 py-0.5">
-                            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${compactWorkEntryToneClass(entry)}`} />
+                            <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${compactWorkEntryToneClass(entry)}`} />
                             <span className="shrink-0 text-[10px] font-medium text-(--fg-secondary)">
                                 {entry.label}
                             </span>
@@ -386,6 +387,7 @@ const CompactWorkLog: React.FC<{
                     className="rounded-[calc(var(--panel-radius)*0.35)] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-(--fg-tertiary) transition-colors hover:text-(--fg-secondary) disabled:cursor-default disabled:opacity-60"
                     onClick={onToggleDetails}
                     disabled={detailsLockedOpen}
+                    aria-pressed={showDetails || detailsLockedOpen}
                 >
                     {detailsLockedOpen ? 'Details visible' : showDetails ? 'Hide details' : 'Show details'}
                 </button>

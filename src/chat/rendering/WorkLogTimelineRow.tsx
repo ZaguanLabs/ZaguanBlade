@@ -34,7 +34,7 @@ export const WorkLogTimelineRow: React.FC<WorkLogTimelineRowProps> = React.memo(
                     aria-expanded={isExpanded}
                 >
                     <span className="flex min-w-0 items-center gap-2">
-                        <Terminal className="h-3.5 w-3.5 shrink-0 text-(--fg-tertiary)" />
+                        <Terminal aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-(--fg-tertiary)" />
                         <span className="text-[9px] font-semibold uppercase tracking-[0.16em] text-(--fg-tertiary)">
                             Work log ({entries.length})
                         </span>
@@ -45,9 +45,9 @@ export const WorkLogTimelineRow: React.FC<WorkLogTimelineRowProps> = React.memo(
                         )}
                     </span>
                     {isExpanded ? (
-                        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-(--fg-tertiary)" />
+                        <ChevronDown aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-(--fg-tertiary)" />
                     ) : (
-                        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-(--fg-tertiary)" />
+                        <ChevronRight aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-(--fg-tertiary)" />
                     )}
                 </button>
                 {(isExpanded || entries.length > 4) && (
