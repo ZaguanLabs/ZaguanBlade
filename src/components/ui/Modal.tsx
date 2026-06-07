@@ -94,7 +94,7 @@ export const InputModal: React.FC<InputModalProps> = ({
                         onClick={onCancel}
                         className="p-1 text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--row-hover) rounded-(--radius-control) transition-all duration-(--transition-fast)"
                     >
-                        <X className="w-4 h-4" />
+                        <X className="w-4 h-4" aria-hidden="true" />
                     </button>
                 </div>
 
@@ -214,7 +214,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
                         onClick={onCancel}
                         className="p-1 text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--row-hover) rounded-(--radius-control) transition-all duration-(--transition-fast)"
                     >
-                        <X className="w-4 h-4" />
+                        <X className="w-4 h-4" aria-hidden="true" />
                     </button>
                 </div>
 

@@ -123,7 +123,7 @@ const WelcomePage: React.FC<{
                                     onClick={() => openSettingsSection('localai')}
                                     className="flex w-full items-center justify-center gap-2 rounded-(--radius-control) bg-(--accent-mention) px-3 py-2 text-sm font-medium text-(--fg-bright) transition-opacity hover:opacity-90"
                                 >
-                                    <Server className="h-4 w-4" />
+                                    <Server className="h-4 w-4" aria-hidden="true" />
                                     {t('editor.landing.useLocalAi')}
                                 </button>
 
@@ -132,7 +132,7 @@ const WelcomePage: React.FC<{
                                     onClick={() => openSettingsSection('account')}
                                     className="flex w-full items-center justify-center gap-2 rounded-(--radius-control) border border-(--separator-subtle) bg-(--bg-surface) px-3 py-2 text-sm font-medium text-(--fg-primary) transition-colors hover:border-(--focus-ring) hover:bg-(--bg-surface-hover)"
                                 >
-                                    <Cloud className="h-4 w-4" />
+                                    <Cloud className="h-4 w-4" aria-hidden="true" />
                                     {t('editor.landing.useCloudModels')}
                                 </button>
 
@@ -143,7 +143,7 @@ const WelcomePage: React.FC<{
                                     className="flex w-full items-center justify-center gap-2 rounded-(--radius-control) px-3 py-1.5 text-sm font-medium text-(--fg-secondary) transition-colors hover:text-(--fg-primary)"
                                 >
                                     {t('editor.landing.manageSubscription')}
-                                    <ArrowRight className="h-4 w-4 opacity-70" />
+                                    <ArrowRight className="h-4 w-4 opacity-70" aria-hidden="true" />
                                 </a>
                             </>
                         )}
@@ -184,7 +184,7 @@ const WelcomePage: React.FC<{
                                 onClick={() => openSettingsSection('localai')}
                                 className="flex items-center justify-center gap-2 w-full py-3 px-4 bg-(--accent-mention) text-(--fg-bright) rounded-[calc(var(--panel-radius)*0.65)] font-medium transition-opacity shadow-(--shadow-md) hover:opacity-90"
                             >
-                                <Server className="w-4 h-4" />
+                                <Server className="w-4 h-4" aria-hidden="true" />
                                 {t('editor.landing.useLocalAi')}
                             </button>
 
@@ -193,7 +193,7 @@ const WelcomePage: React.FC<{
                                 onClick={() => openSettingsSection('account')}
                                 className="flex items-center justify-center gap-2 w-full py-3 px-4 bg-(--bg-surface) hover:bg-(--bg-surface-hover) border border-(--border-subtle) hover:border-(--border-focus) text-(--fg-primary) rounded-[calc(var(--panel-radius)*0.65)] font-medium transition-all"
                             >
-                                <Cloud className="w-4 h-4" />
+                                <Cloud className="w-4 h-4" aria-hidden="true" />
                                 {t('editor.landing.useCloudModels')}
                             </button>
 
@@ -204,7 +204,7 @@ const WelcomePage: React.FC<{
                                 className="flex items-center justify-center gap-2 w-full py-2 px-4 rounded-[calc(var(--panel-radius)*0.55)] font-medium transition-all text-(--fg-secondary) hover:text-(--fg-primary)"
                             >
                                 {t('editor.landing.manageSubscription')}
-                                <ArrowRight className="w-4 h-4 opacity-70" />
+                                <ArrowRight className="w-4 h-4 opacity-70" aria-hidden="true" />
                             </a>
                         </>
                     )}

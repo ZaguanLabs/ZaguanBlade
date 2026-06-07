@@ -95,7 +95,7 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
             <div className="flex flex-1 items-center justify-center bg-(--bg-app) px-4">
                 <Surface variant="elevated" className="select-none flex flex-col items-center gap-4 px-8 py-8 text-(--fg-tertiary)">
                     <div className="flex h-16 w-16 items-center justify-center rounded-[calc(var(--panel-radius)*1.1)] border border-(--border-subtle) bg-(--bg-app)">
-                        <Clock className="h-8 w-8 opacity-50" />
+                        <Clock className="h-8 w-8 opacity-50" aria-hidden="true" />
                     </div>
                     <div className="text-center">
                         <h3 className="mb-2 text-sm font-semibold uppercase tracking-[0.18em] text-(--fg-secondary)">
@@ -174,7 +174,7 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({ projectId, onSelectConve
                                     >
                                         <div className="flex items-center gap-3">
                                             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-app)">
-                                                <MessageSquare className="h-4 w-4 text-(--fg-tertiary) group-hover:text-(--fg-secondary)" />
+                                                <MessageSquare className="h-4 w-4 text-(--fg-tertiary) group-hover:text-(--fg-secondary)" aria-hidden="true" />
                                             </div>
                                             <div className="flex-1 min-w-0">
                                                 <h4 className="text-sm font-medium text-(--fg-primary) truncate">

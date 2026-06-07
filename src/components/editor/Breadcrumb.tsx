@@ -30,7 +30,7 @@ export const Breadcrumb: React.FC<BreadcrumbProps> = ({ filePath, workspaceRoot 
             {segments.map((segment, index) => (
                 <React.Fragment key={index}>
                     {index > 0 && (
-                        <ChevronRight className="w-3.5 h-3.5 shrink-0 opacity-50" />
+                        <ChevronRight className="w-3.5 h-3.5 shrink-0 opacity-50" aria-hidden="true" />
                     )}
                     <span
                         className={`${
