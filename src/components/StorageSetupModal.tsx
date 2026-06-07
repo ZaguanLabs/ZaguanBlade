@@ -177,7 +177,7 @@ export const StorageSetupModal: React.FC<StorageSetupModalProps> = ({
 
                 {/* Error */}
                 {error && (
-                    <div className="mx-8 p-3 bg-[color-mix(in_srgb,var(--state-danger)_10%,transparent)] border border-[color-mix(in_srgb,var(--state-danger)_30%,transparent)] rounded-[calc(var(--panel-radius)*0.75)] text-sm text-(--state-danger)">
+                    <div role="alert" className="mx-8 p-3 bg-[color-mix(in_srgb,var(--state-danger)_10%,transparent)] border border-[color-mix(in_srgb,var(--state-danger)_30%,transparent)] rounded-[calc(var(--panel-radius)*0.75)] text-sm text-(--state-danger)">
                         {error}
                     </div>
                 )}
@@ -195,7 +195,7 @@ export const StorageSetupModal: React.FC<StorageSetupModalProps> = ({
                     >
                         {isSettingUp ? (
                             <>
-                                <Loader2 className="w-4 h-4 animate-spin" />
+                                <Loader2 aria-hidden="true" className="w-4 h-4 animate-spin" />
                                 {t('storageSetup.settingUp')}
                             </>
                         ) : (

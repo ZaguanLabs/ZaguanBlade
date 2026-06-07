@@ -477,13 +477,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                     {/* Main Content */}
                     <ScrollArea className="flex-1 p-6 bg-(--bg-editor)">
                         {isLoading ? (
-                            <div className="flex items-center justify-center h-full">
-                                <Loader2 className="w-6 h-6 text-(--fg-tertiary) animate-spin" />
+                            <div role="status" aria-live="polite" aria-label={t('common.loading')} className="flex items-center justify-center h-full">
+                                <Loader2 aria-hidden="true" className="w-6 h-6 text-(--fg-tertiary) animate-spin" />
                             </div>
                         ) : (
                             <>
                                 {error && (
-                                    <div className="mb-4 rounded-[calc(var(--panel-radius)*0.75)] border border-[color-mix(in_srgb,var(--state-danger)_32%,transparent)] bg-[color-mix(in_srgb,var(--state-danger)_10%,transparent)] p-3 text-sm text-(--state-danger)">
+                                    <div role="alert" className="mb-4 rounded-[calc(var(--panel-radius)*0.75)] border border-[color-mix(in_srgb,var(--state-danger)_32%,transparent)] bg-[color-mix(in_srgb,var(--state-danger)_10%,transparent)] p-3 text-sm text-(--state-danger)">
                                         {error}
                                     </div>
                                 )}
@@ -566,7 +566,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                             disabled={!hasChanges || isSaving}
                             className="flex items-center gap-2 rounded-[calc(var(--panel-radius)*0.65)] bg-(--accent-ai) px-4 py-2 text-sm font-medium text-(--fg-bright) transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                            {isSaving && <Loader2 className="w-4 h-4 animate-spin" />}
+                            {isSaving && <Loader2 aria-hidden="true" className="w-4 h-4 animate-spin" />}
                             {isSaving ? t('statusBar.saving') : t('settings.saveChanges')}
                         </button>
                     </div>
@@ -1552,7 +1552,7 @@ const RemoteSettings: React.FC = () => {
                                     disabled={isLoading || !tokenInput.trim()}
                                     className="shrink-0 flex items-center gap-2 rounded-[calc(var(--panel-radius)*0.65)] bg-(--accent-ai) px-5 py-2.5 text-sm font-medium text-(--fg-bright) transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
                                 >
-                                    {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Connect'}
+                                    {isLoading ? <Loader2 aria-hidden="true" className="w-4 h-4 animate-spin" /> : 'Connect'}
                                 </button>
                             </div>
                         </div>
