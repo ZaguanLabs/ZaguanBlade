@@ -136,8 +136,8 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
     if (loading) {
         return (
             <div className="h-full flex items-center justify-center bg-(--bg-app)">
-                <div className="flex flex-col items-center gap-3">
-                    <div className="animate-spin w-8 h-8 border-2 border-(--accent-ai) border-t-transparent rounded-full" />
+                <div role="status" aria-live="polite" className="flex flex-col items-center gap-3">
+                    <div aria-hidden="true" className="animate-spin w-8 h-8 border-2 border-(--accent-ai) border-t-transparent rounded-full" />
                     <p className="text-sm text-(--fg-secondary)">{t('pdf.loading')}</p>
                 </div>
             </div>

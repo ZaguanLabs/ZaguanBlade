@@ -854,7 +854,7 @@ export const ScreenshotAnnotationModal: React.FC<{
                             }}
                         />
                     )}
-                    {!imageReady && !imageLoadFailed && <div className="text-xs text-(--fg-tertiary)">{t('screenshot.editor.loading')}</div>}
+                    {!imageReady && !imageLoadFailed && <div role="status" aria-live="polite" className="text-xs text-(--fg-tertiary)">{t('screenshot.editor.loading')}</div>}
                     {imageLoadFailed && <div role="alert" className="text-xs text-(--state-danger)">{t('screenshot.editor.loadFailed')}</div>}
                 </div>
                 <div className="flex shrink-0 items-center justify-between gap-2 border-t border-(--border-subtle) px-4 py-3">
