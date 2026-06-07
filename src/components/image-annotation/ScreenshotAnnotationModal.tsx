@@ -722,7 +722,7 @@ export const ScreenshotAnnotationModal: React.FC<{
                         <div className="text-sm font-semibold text-(--fg-primary)">{t('screenshot.editor.title')}</div>
                         <div className="truncate text-xs text-(--fg-tertiary)">{name}</div>
                     </div>
-                    <button type="button" onClick={onCancel} className="rounded-[calc(var(--panel-radius)*0.35)] p-1 text-(--fg-tertiary) transition hover:bg-(--bg-surface-hover) hover:text-(--fg-primary)">
+                    <button type="button" onClick={onCancel} aria-label={t('common.close')} className="rounded-[calc(var(--panel-radius)*0.35)] p-1 text-(--fg-tertiary) transition hover:bg-(--bg-surface-hover) hover:text-(--fg-primary)">
                         <X className="h-4 w-4" />
                     </button>
                 </div>
