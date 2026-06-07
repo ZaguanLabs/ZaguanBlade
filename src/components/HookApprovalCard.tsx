@@ -81,6 +81,7 @@ export const HookApprovalCard: React.FC<HookApprovalCardProps> = ({
 
                 <div className="flex items-center gap-1.5">
                     <button
+                        type="button"
                         disabled={isWaiting}
                         onClick={() => {
                             setPendingIntent('deny');
@@ -96,6 +97,7 @@ export const HookApprovalCard: React.FC<HookApprovalCardProps> = ({
                         {pendingIntent === 'deny' ? t('approval.skipping') : t('approval.deny')}
                     </button>
                     <button
+                        type="button"
                         disabled={isWaiting}
                         onClick={() => {
                             setPendingIntent('approve');

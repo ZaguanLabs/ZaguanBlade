@@ -147,6 +147,7 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
             style={containerStyle}
         >
             <button
+                type="button"
                 onClick={handleToggle}
                 className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-(--bg-surface-hover)/45"
                 style={headerStyle}
@@ -211,6 +212,7 @@ const PlanSummaryDisplay: React.FC<{ todos: import('../types/events').TodoItem[]
     return (
         <div className="my-2">
             <button
+                type="button"
                 onClick={() => setIsExpanded(!isExpanded)}
                 className="flex items-center gap-2 px-3 py-1.5 rounded-[calc(var(--panel-radius)*0.45)] bg-[color-mix(in_srgb,var(--accent-mention)_5%,transparent)] border border-(--accent-mention)/20 hover:bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)] transition-colors text-left w-full"
             >

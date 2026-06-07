@@ -78,6 +78,7 @@ export const CommandApprovalCard: React.FC<CommandApprovalCardProps> = ({
 
                 <div className="flex items-center gap-1.5">
                     <button
+                        type="button"
                         disabled={isWaiting}
                         onClick={() => {
                             setPendingIntent('skip');
@@ -97,6 +98,7 @@ export const CommandApprovalCard: React.FC<CommandApprovalCardProps> = ({
                         {pendingIntent === 'skip' ? t('approval.skipping') : t('approval.skip')}
                     </button>
                     <button
+                        type="button"
                         disabled={isWaiting}
                         onClick={() => {
                             setPendingIntent('run');
