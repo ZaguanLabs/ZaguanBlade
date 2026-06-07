@@ -10,14 +10,14 @@ interface IconButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> 
 }
 
 const iconButtonSizeClassName: Record<IconButtonSize, string> = {
-    xs: 'p-0.5 rounded',
-    sm: 'p-1 rounded-[calc(var(--panel-radius)*0.35)]',
+    xs: 'p-0.5 rounded-(--radius-control)',
+    sm: 'p-1 rounded-(--radius-control)',
 };
 
 const iconButtonToneClassName: Record<IconButtonTone, string> = {
-    neutral: 'text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover)',
-    muted: 'text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover)',
-    accent: 'text-(--accent-ai) hover:text-(--accent-warning) hover:bg-(--bg-app)',
+    neutral: 'text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--row-hover)',
+    muted: 'text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--row-hover)',
+    accent: 'text-(--accent-ai) hover:text-(--accent-warning) hover:bg-(--surface-pane)',
     danger: 'text-(--fg-tertiary) hover:text-(--state-danger) hover:bg-[color-mix(in_srgb,var(--state-danger)_10%,transparent)]',
 };
 
