@@ -228,7 +228,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                             title={t('git.unstage')}
                             aria-label={t('git.unstage')}
                         >
-                            <Minus className="w-3 h-3" />
+                            <Minus aria-hidden="true" className="w-3 h-3" />
                         </button>
                     ) : (
                         <button
@@ -239,7 +239,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                             title={t('git.stage')}
                             aria-label={t('git.stage')}
                         >
-                            <Plus className="w-3 h-3" />
+                            <Plus aria-hidden="true" className="w-3 h-3" />
                         </button>
                     )}
                 </div>
@@ -259,7 +259,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                     title={t('fileTree.refresh')}
                     aria-label={t('fileTree.refresh')}
                 >
-                    <RefreshCw className={`w-3 h-3 ${busyAction === 'refresh' ? 'animate-spin' : ''}`} />
+                    <RefreshCw aria-hidden="true" className={`w-3 h-3 ${busyAction === 'refresh' ? 'animate-spin' : ''}`} />
                 </button>
             </div>
 
@@ -325,7 +325,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                     }
                                     title={t('git.generateCommitMessage')}
                                 >
-                                    <Sparkles className={`w-3 h-3 ${busyAction === 'generate-message' ? 'animate-spin' : ''}`} />
+                                    <Sparkles aria-hidden="true" className={`w-3 h-3 ${busyAction === 'generate-message' ? 'animate-spin' : ''}`} />
                                     {busyAction === 'generate-message' ? t('git.generating') : t('git.generate')}
                                 </button>
 
@@ -403,17 +403,17 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                         <span className="relative z-10 flex items-center gap-1.5">
                                             {pushSuccess ? (
                                                 <>
-                                                    <svg className="w-3.5 h-3.5 animate-[push-check_0.3s_ease-out]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                                                    <svg aria-hidden="true" className="w-3.5 h-3.5 animate-[push-check_0.3s_ease-out]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
                                                     {t('git.pushed')}
                                                 </>
                                             ) : isPushing ? (
                                                 <>
-                                                    <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round"><path d="M12 2a10 10 0 0 1 10 10" /></svg>
+                                                    <svg aria-hidden="true" className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round"><path d="M12 2a10 10 0 0 1 10 10" /></svg>
                                                     {t('git.pushing')}
                                                 </>
                                             ) : (
                                                 <>
-                                                    <Upload className="w-3 h-3" />
+                                                    <Upload aria-hidden="true" className="w-3 h-3" />
                                                     {pushLabel}
                                                 </>
                                             )}
@@ -453,7 +453,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                             })
                                         }
                                     >
-                                        <GitCommit className={`w-3 h-3 ${busyAction === 'commit' ? 'animate-spin' : ''}`} />
+                                        <GitCommit aria-hidden="true" className={`w-3 h-3 ${busyAction === 'commit' ? 'animate-spin' : ''}`} />
                                         {t('git.commit')}
                                     </button>
                                 )}
@@ -517,8 +517,8 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                                         <FileRow file={file} isStaged={true} />
                                                         {diffs[file.path]?.expanded && (
                                                             <div className="ml-6 mr-2 mb-1 rounded-[calc(var(--panel-radius)*0.55)] bg-(--bg-app) border border-(--border-subtle) p-2 text-[10px] font-mono whitespace-pre-wrap overflow-x-auto max-h-48 overflow-y-auto">
-                                                                {diffs[file.path]?.loading && <div className="text-(--fg-tertiary)">{t('common.loading')}</div>}
-                                                                {diffs[file.path]?.error && <div className="text-(--state-danger)">{diffs[file.path]?.error}</div>}
+                                                                {diffs[file.path]?.loading && <div role="status" aria-live="polite" className="text-(--fg-tertiary)">{t('common.loading')}</div>}
+                                                                {diffs[file.path]?.error && <div role="alert" className="text-(--state-danger)">{diffs[file.path]?.error}</div>}
                                                                 {!diffs[file.path]?.loading && !diffs[file.path]?.error && (
                                                                     <pre className="text-(--fg-secondary)">{diffs[file.path]?.staged || t('git.noChanges')}</pre>
                                                                 )}
@@ -564,8 +564,8 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                                         <FileRow file={file} isStaged={false} />
                                                         {diffs[file.path]?.expanded && !file.untracked && (
                                                             <div className="ml-6 mr-2 mb-1 rounded-[calc(var(--panel-radius)*0.55)] bg-(--bg-app) border border-(--border-subtle) p-2 text-[10px] font-mono whitespace-pre-wrap overflow-x-auto max-h-48 overflow-y-auto">
-                                                                {diffs[file.path]?.loading && <div className="text-(--fg-tertiary)">{t('common.loading')}</div>}
-                                                                {diffs[file.path]?.error && <div className="text-(--state-danger)">{diffs[file.path]?.error}</div>}
+                                                                {diffs[file.path]?.loading && <div role="status" aria-live="polite" className="text-(--fg-tertiary)">{t('common.loading')}</div>}
+                                                                {diffs[file.path]?.error && <div role="alert" className="text-(--state-danger)">{diffs[file.path]?.error}</div>}
                                                                 {!diffs[file.path]?.loading && !diffs[file.path]?.error && (
                                                                     <pre className="text-(--fg-secondary)">{diffs[file.path]?.unstaged || t('git.noChanges')}</pre>
                                                                 )}
