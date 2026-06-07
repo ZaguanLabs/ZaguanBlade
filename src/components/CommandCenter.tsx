@@ -811,9 +811,9 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                         title={mention.path}
                                     >
                                         {mention.is_dir ? (
-                                            <Folder className="h-3 w-3 shrink-0" />
+                                            <Folder className="h-3 w-3 shrink-0" aria-hidden="true" />
                                         ) : (
-                                            <FileText className="h-3 w-3 shrink-0" />
+                                            <FileText className="h-3 w-3 shrink-0" aria-hidden="true" />
                                         )}
                                         <span className="font-medium uppercase tracking-[0.12em] text-(--accent-mention)/80">
                                             {t('chat.pathRef')}
@@ -943,9 +943,9 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                                     }`}
                             >
                                 {loading && !text.trim() ? (
-                                    <Square className="h-4 w-4 fill-current animate-pulse" />
+                                    <Square className="h-4 w-4 fill-current animate-pulse" aria-hidden="true" />
                                 ) : (
-                                    <Send className="h-4 w-4" />
+                                    <Send className="h-4 w-4" aria-hidden="true" />
                                 )}
                             </button>
                         </div>

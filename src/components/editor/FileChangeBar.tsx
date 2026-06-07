@@ -38,13 +38,13 @@ export const FileChangeBar: React.FC<FileChangeBarProps> = ({
       <div className="flex items-center gap-1.5 text-[11px]">
         {change.added_lines > 0 && (
           <span className="flex items-center gap-0.5" style={{ color: 'var(--accent-mention)' }}>
-            <Plus className="w-3 h-3" />
+            <Plus className="w-3 h-3" aria-hidden="true" />
             {change.added_lines}
           </span>
         )}
         {change.removed_lines > 0 && (
           <span className="flex items-center gap-0.5" style={{ color: 'var(--state-danger)' }}>
-            <Minus className="w-3 h-3" />
+            <Minus className="w-3 h-3" aria-hidden="true" />
             {change.removed_lines}
           </span>
         )}

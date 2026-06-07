@@ -131,7 +131,7 @@ const FastContextResultCard: React.FC<{
         <div className={`rounded-[calc(var(--panel-radius)*0.55)] border border-(--accent-ai)/20 bg-[color-mix(in_srgb,var(--accent-ai)_7%,transparent)] p-2.5 text-[11px] transition-opacity duration-1000 ease-out ${isVisuallyComplete ? 'opacity-70' : 'opacity-100'}`}>
             <div className="flex items-start gap-2">
                 <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-(--accent-ai)/25 bg-(--bg-surface)/55">
-                    <FileSearch className="h-3.5 w-3.5 text-(--accent-ai)" />
+                    <FileSearch className="h-3.5 w-3.5 text-(--accent-ai)" aria-hidden="true" />
                 </div>
                 <div className="min-w-0 flex-1 space-y-2">
                     <div className="flex flex-wrap items-center gap-1.5">
@@ -209,7 +209,7 @@ const EditImpactResultCard: React.FC<{
         <div className={`rounded-[calc(var(--panel-radius)*0.55)] border border-(--accent-warning)/24 bg-[color-mix(in_srgb,var(--accent-warning)_7%,transparent)] p-2.5 text-[11px] transition-opacity duration-1000 ease-out ${isVisuallyComplete ? 'opacity-70' : 'opacity-100'}`}>
             <div className="flex items-start gap-2">
                 <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-(--accent-warning)/25 bg-(--bg-surface)/55">
-                    <ShieldAlert className="h-3.5 w-3.5 text-(--accent-warning)" />
+                    <ShieldAlert className="h-3.5 w-3.5 text-(--accent-warning)" aria-hidden="true" />
                 </div>
                 <div className="min-w-0 flex-1 space-y-2">
                     <div className="flex flex-wrap items-center gap-1.5">
@@ -269,7 +269,7 @@ const EditImpactResultCard: React.FC<{
                                 }
                                 return (
                                     <span key={`${path}-${index}`} className="inline-flex max-w-full items-center gap-1 rounded-full border border-(--accent-mention)/20 bg-[color-mix(in_srgb,var(--accent-mention)_7%,transparent)] px-1.5 py-0.5">
-                                        <GitBranch className="h-2.5 w-2.5 shrink-0 text-(--accent-mention)" />
+                                        <GitBranch className="h-2.5 w-2.5 shrink-0 text-(--accent-mention)" aria-hidden="true" />
                                         <PathButton path={path} onOpenFile={onOpenFile}>{path.split(/[/\\]/).slice(-2).join('/')}</PathButton>
                                     </span>
                                 );
