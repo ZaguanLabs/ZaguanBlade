@@ -405,16 +405,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
     if (!isOpen) return null;
 
     const sections: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
-        { id: 'configuration', label: t('settings.navigation.configuration'), icon: <Palette className="w-4 h-4" /> },
-        { id: 'account', label: t('settings.navigation.account'), icon: <Key className="w-4 h-4" /> },
-        { id: 'localai', label: t('settings.navigation.localAi'), icon: <Server className="w-4 h-4" /> },
-        { id: 'storage', label: t('settings.navigation.storage'), icon: <Database className="w-4 h-4" /> },
+        { id: 'configuration', label: t('settings.navigation.configuration'), icon: <Palette className="w-4 h-4" aria-hidden="true" /> },
+        { id: 'account', label: t('settings.navigation.account'), icon: <Key className="w-4 h-4" aria-hidden="true" /> },
+        { id: 'localai', label: t('settings.navigation.localAi'), icon: <Server className="w-4 h-4" aria-hidden="true" /> },
+        { id: 'storage', label: t('settings.navigation.storage'), icon: <Database className="w-4 h-4" aria-hidden="true" /> },
         ...(workspacePath ? [
-            { id: 'context', label: t('settings.navigation.context'), icon: <Zap className="w-4 h-4" /> },
+            { id: 'context', label: t('settings.navigation.context'), icon: <Zap className="w-4 h-4" aria-hidden="true" /> },
             // { id: 'privacy', label: 'Privacy', icon: <Shield className="w-4 h-4" /> },
         ] as const : []),
-        { id: 'remote', label: 'Remote', icon: <Smartphone className="w-4 h-4" /> },
-        { id: 'about', label: t('settings.navigation.about'), icon: <Info className="w-4 h-4" /> },
+        { id: 'remote', label: 'Remote', icon: <Smartphone className="w-4 h-4" aria-hidden="true" /> },
+        { id: 'about', label: t('settings.navigation.about'), icon: <Info className="w-4 h-4" aria-hidden="true" /> },
     ];
 
     return (
@@ -446,7 +446,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                         aria-label={t('common.close')}
                         className="rounded-[calc(var(--panel-radius)*0.35)] p-1.5 text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover) transition-colors"
                     >
-                        <X className="w-5 h-5" />
+                        <X className="w-5 h-5" aria-hidden="true" />
                     </button>
                 </div>
 
@@ -469,7 +469,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                                     {section.icon}
                                     {section.label}
                                 </span>
-                                {activeSection === section.id && <ChevronRight className="w-3.5 h-3.5 text-(--accent-ai)" />}
+                                {activeSection === section.id && <ChevronRight className="w-3.5 h-3.5 text-(--accent-ai)" aria-hidden="true" />}
                             </button>
                         ))}
                     </div>
@@ -612,7 +612,7 @@ const ThemeGrid: React.FC<{
                     >
                         <div className="flex items-center justify-between gap-2 mb-2">
                             <span className="text-[12px] font-semibold text-(--fg-primary) truncate">{getThemeI18nLabel(t, theme)}</span>
-                            {isSelected && <Check className="h-3.5 w-3.5 shrink-0 text-(--accent-ai)" />}
+                            {isSelected && <Check className="h-3.5 w-3.5 shrink-0 text-(--accent-ai)" aria-hidden="true" />}
                         </div>
                         <div className="flex gap-1">
                             <div className="h-3 flex-1 rounded-[calc(var(--panel-radius)*0.25)] border border-(--border-subtle)" style={{ backgroundColor: theme.tokens['--bg-app'] }} />
@@ -659,7 +659,7 @@ const ConfigurationSettings: React.FC<ConfigurationSettingsProps> = ({
                 />
 
                 <div className="flex items-center gap-2 text-[11px] text-(--fg-tertiary)">
-                    <span className="h-2 w-2 rounded-full bg-(--accent-ai)" />
+                    <span className="h-2 w-2 rounded-full bg-(--accent-ai)" aria-hidden="true" />
                     <span>{t('settings.configurationSection.themeScopeHelp')}</span>
                 </div>
             </div>
@@ -689,13 +689,13 @@ const ConfigurationSettings: React.FC<ConfigurationSettingsProps> = ({
                             ))}
                         </select>
                         <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 text-(--fg-secondary)">
-                            <ChevronDown className="h-4 w-4" />
+                            <ChevronDown className="h-4 w-4" aria-hidden="true" />
                         </div>
                     </div>
                 </div>
 
                 <div className="flex items-center gap-2 text-[11px] text-(--fg-tertiary)">
-                    <span className="h-2 w-2 rounded-full bg-(--accent-ai)" />
+                    <span className="h-2 w-2 rounded-full bg-(--accent-ai)" aria-hidden="true" />
                     <span>{t('settings.configurationSection.languageSaveHint')}</span>
                 </div>
             </div>
@@ -715,7 +715,7 @@ const ConfigurationSettings: React.FC<ConfigurationSettingsProps> = ({
                 </div>
 
                 <div className="flex items-center gap-2 text-[11px] text-(--accent-warning)">
-                    <span className="h-2 w-2 rounded-full bg-(--accent-warning)" />
+                    <span className="h-2 w-2 rounded-full bg-(--accent-warning)" aria-hidden="true" />
                     <span>{t('settings.configurationSection.yoloModeScopeHelp')}</span>
                 </div>
             </div>
@@ -997,7 +997,7 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
                     >
                         <div className="flex items-center gap-3 mb-3">
                             <div className={`rounded-[calc(var(--panel-radius)*0.55)] p-2 ${settings.mode === 'local' ? 'bg-[color-mix(in_srgb,var(--accent-ai)_22%,transparent)]' : 'bg-(--bg-surface)'}`}>
-                                <HardDrive className={`w-5 h-5 ${settings.mode === 'local' ? 'text-(--accent-ai)' : 'text-(--fg-secondary)'}`} />
+                                <HardDrive className={`w-5 h-5 ${settings.mode === 'local' ? 'text-(--accent-ai)' : 'text-(--fg-secondary)'}`} aria-hidden="true" />
                             </div>
                             <div>
                                 <div className="font-medium text-(--fg-primary)">{t('settings.storage.local')}</div>
@@ -1006,20 +1006,20 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
                         </div>
                         <ul className="text-xs text-(--fg-secondary) space-y-1">
                             <li className="flex items-center gap-1.5">
-                                <ChevronRight className="w-3 h-3 text-(--accent-ai)" />
+                                <ChevronRight className="w-3 h-3 text-(--accent-ai)" aria-hidden="true" />
                                 {t('settings.storage.localBullet1')}
                             </li>
                             <li className="flex items-center gap-1.5">
-                                <ChevronRight className="w-3 h-3 text-(--accent-ai)" />
+                                <ChevronRight className="w-3 h-3 text-(--accent-ai)" aria-hidden="true" />
                                 {t('settings.storage.localBullet2')}
                             </li>
                             <li className="flex items-center gap-1.5">
-                                <ChevronRight className="w-3 h-3 text-(--accent-ai)" />
+                                <ChevronRight className="w-3 h-3 text-(--accent-ai)" aria-hidden="true" />
                                 {t('settings.storage.localBullet3')}
                             </li>
                         </ul>
                         {settings.mode === 'local' && (
-                            <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-(--accent-ai)" />
+                            <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-(--accent-ai)" aria-hidden="true" />
                         )}
                     </button>
 
@@ -1035,7 +1035,7 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
                     >
                         <div className="flex items-center gap-3 mb-3">
                             <div className={`rounded-[calc(var(--panel-radius)*0.55)] p-2 ${settings.mode === 'server' ? 'bg-[color-mix(in_srgb,var(--accent-ai)_22%,transparent)]' : 'bg-(--bg-surface)'}`}>
-                                <Server className={`w-5 h-5 ${settings.mode === 'server' ? 'text-(--accent-ai)' : 'text-(--fg-secondary)'}`} />
+                                <Server className={`w-5 h-5 ${settings.mode === 'server' ? 'text-(--accent-ai)' : 'text-(--fg-secondary)'}`} aria-hidden="true" />
                             </div>
                             <div>
                                 <div className="font-medium text-(--fg-primary)">{t('settings.storage.server')}</div>
@@ -1044,27 +1044,27 @@ const StorageSettings: React.FC<StorageSettingsProps> = ({ settings, onChange })
                         </div>
                         <ul className="text-xs text-(--fg-secondary) space-y-1">
                             <li className="flex items-center gap-1.5">
-                                <ChevronRight className="w-3 h-3 text-(--accent-ai)" />
+                                <ChevronRight className="w-3 h-3 text-(--accent-ai)" aria-hidden="true" />
                                 {t('settings.storage.serverBullet1')}
                             </li>
                             <li className="flex items-center gap-1.5">
-                                <ChevronRight className="w-3 h-3 text-(--accent-ai)" />
+                                <ChevronRight className="w-3 h-3 text-(--accent-ai)" aria-hidden="true" />
                                 {t('settings.storage.serverBullet2')}
                             </li>
                             <li className="flex items-center gap-1.5">
-                                <ChevronRight className="w-3 h-3 text-(--accent-ai)" />
+                                <ChevronRight className="w-3 h-3 text-(--accent-ai)" aria-hidden="true" />
                                 {t('settings.storage.serverBullet3')}
                             </li>
                         </ul>
                         {settings.mode === 'server' && (
-                            <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-(--accent-ai)" />
+                            <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-(--accent-ai)" aria-hidden="true" />
                         )}
                     </button>
                 </div>
 
                 {/* Info box */}
                 <div className="mt-4 p-3 bg-(--bg-surface) border border-(--border-default) rounded-[calc(var(--panel-radius)*0.75)] flex gap-3">
-                    <Info className="w-4 h-4 text-(--fg-tertiary) shrink-0 mt-0.5" />
+                    <Info className="w-4 h-4 text-(--fg-tertiary) shrink-0 mt-0.5" aria-hidden="true" />
                     <p className="text-xs text-(--fg-tertiary)">
                         {settings.mode === 'local'
                             ? t('settings.storage.localInfo')
@@ -1203,7 +1203,7 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, a
                                     : 'bg-(--bg-surface) text-(--fg-secondary) hover:bg-(--bg-surface-hover)'
                                     }`}
                             >
-                                <Cloud className="w-4 h-4 inline-block mr-2" />
+                                <Cloud className="w-4 h-4 inline-block mr-2" aria-hidden="true" />
                                 {t('settings.context.compressionRemote')}
                             </button>
                             <button
@@ -1215,7 +1215,7 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, a
                                     : 'bg-(--bg-surface) text-(--fg-secondary) hover:bg-(--bg-surface-hover)'
                                     }`}
                             >
-                                <HardDrive className="w-4 h-4 inline-block mr-2" />
+                                <HardDrive className="w-4 h-4 inline-block mr-2" aria-hidden="true" />
                                 {t('settings.context.compressionLocal')}
                             </button>
                         </div>
@@ -1280,7 +1280,7 @@ const PrivacySettings: React.FC<PrivacySettingsProps> = ({ settings, onChange })
 
             <div className="p-3 bg-(--bg-app) border border-(--border-subtle) rounded-[calc(var(--panel-radius)*0.75)]">
                 <div className="flex gap-3">
-                    <Shield className="w-4 h-4 text-(--accent-mention) shrink-0 mt-0.5" />
+                    <Shield className="w-4 h-4 text-(--accent-mention) shrink-0 mt-0.5" aria-hidden="true" />
                     <div className="text-xs text-(--fg-tertiary)">
                         <p className="font-medium text-(--fg-secondary) mb-1">{t('settings.privacy.codeNeverShared')}</p>
                         <p>
@@ -1516,7 +1516,7 @@ const RemoteSettings: React.FC = () => {
                     <div className="flex flex-col gap-5">
                         <div className="flex items-center gap-4">
                             <div className="p-3 rounded-full bg-[color-mix(in_srgb,var(--accent-ai)_12%,transparent)] shrink-0">
-                                <Smartphone className="w-8 h-8 text-(--accent-ai)" />
+                                <Smartphone className="w-8 h-8 text-(--accent-ai)" aria-hidden="true" />
                             </div>
                             <div>
                                 <div className="text-sm font-medium text-(--fg-primary) mb-1">Create a Telegram Bot</div>
@@ -1567,7 +1567,7 @@ const RemoteSettings: React.FC = () => {
                     <div className="border border-[color-mix(in_srgb,var(--state-success)_30%,var(--border-default))] rounded-[calc(var(--panel-radius)+4px)] p-5 bg-[color-mix(in_srgb,var(--state-success)_8%,var(--bg-panel))] shadow-(--panel-shadow)">
                         <div className="flex items-start gap-4">
                             <div className="p-2.5 rounded-[calc(var(--panel-radius)*0.65)] bg-[color-mix(in_srgb,var(--state-success)_18%,transparent)]">
-                                <CheckCircle2 className="w-6 h-6 text-[var(--state-success)]" />
+                                <CheckCircle2 className="w-6 h-6 text-[var(--state-success)]" aria-hidden="true" />
                             </div>
                             <div className="flex-1">
                                 <div className="text-sm font-medium text-(--fg-primary)">
@@ -1679,9 +1679,9 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ settings, onChange })
                 <div className="flex gap-4">
                     <div className={`p-3 h-fit rounded-[calc(var(--panel-radius)*0.65)] ${settings.apiKey ? 'bg-[color-mix(in_srgb,var(--accent-ai)_22%,transparent)]' : 'bg-(--bg-editor)'}`}>
                         {settings.apiKey ? (
-                            <CheckCircle2 className="w-6 h-6 text-(--accent-ai)" />
+                            <CheckCircle2 className="w-6 h-6 text-(--accent-ai)" aria-hidden="true" />
                         ) : (
-                            <Key className="w-6 h-6 text-(--accent-ai)" />
+                            <Key className="w-6 h-6 text-(--accent-ai)" aria-hidden="true" />
                         )}
                     </div>
                     <div className="flex-1">
@@ -1727,9 +1727,9 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ settings, onChange })
                             className="absolute right-3 top-2 text-(--fg-tertiary) hover:text-(--fg-secondary)"
                         >
                             {showKey ? (
-                                <EyeOff className="w-4 h-4" />
+                                <EyeOff className="w-4 h-4" aria-hidden="true" />
                             ) : (
-                                <Eye className="w-4 h-4" />
+                                <Eye className="w-4 h-4" aria-hidden="true" />
                             )}
                         </button>
                     </div>
