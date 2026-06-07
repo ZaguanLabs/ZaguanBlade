@@ -462,7 +462,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                             {/* Preflight warning (e.g., detached HEAD) */}
                             {preflightWarning && (
                                 <div className="flex items-center gap-1.5 text-[10px] text-(--accent-warning) mt-2 p-2 bg-[color-mix(in_srgb,var(--accent-warning)_10%,transparent)] rounded-[calc(var(--panel-radius)*0.55)]">
-                                    <AlertTriangle className="w-3 h-3 shrink-0" />
+                                    <AlertTriangle className="w-3 h-3 shrink-0" aria-hidden="true" />
                                     <span>{preflightWarning}</span>
                                 </div>
                             )}
@@ -490,8 +490,9 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                                 type="button"
                                                 className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[10px] uppercase tracking-wider text-(--fg-secondary) font-semibold"
                                                 onClick={() => setStagedExpanded(!stagedExpanded)}
+                                                aria-expanded={stagedExpanded}
                                             >
-                                                {stagedExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                                                {stagedExpanded ? <ChevronDown className="w-3 h-3" aria-hidden="true" /> : <ChevronRight className="w-3 h-3" aria-hidden="true" />}
                                                 {t('git.stagedSection')}
                                                 <span className="text-(--accent-mention) font-normal normal-case">
                                                     ({stagedFiles.length})
@@ -537,8 +538,9 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                                 type="button"
                                                 className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[10px] uppercase tracking-wider text-(--fg-secondary) font-semibold"
                                                 onClick={() => setUnstagedExpanded(!unstagedExpanded)}
+                                                aria-expanded={unstagedExpanded}
                                             >
-                                                {unstagedExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                                                {unstagedExpanded ? <ChevronDown className="w-3 h-3" aria-hidden="true" /> : <ChevronRight className="w-3 h-3" aria-hidden="true" />}
                                                 {t('git.changes')}
                                                 <span className="text-(--accent-warning) font-normal normal-case">
                                                     ({unstagedFiles.length})
