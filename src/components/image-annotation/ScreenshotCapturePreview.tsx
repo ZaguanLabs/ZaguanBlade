@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useId } from 'react';
 import { Check, Pencil, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -10,14 +10,22 @@ export const ScreenshotCapturePreview: React.FC<{
     onCancel: () => void;
 }> = ({ dataUrl, name, onAdd, onEdit, onCancel }) => {
     const { t } = useTranslation();
+    const titleId = useId();
+    const descriptionId = useId();
 
     return (
         <div className="fixed inset-0 z-9999 flex items-center justify-center bg-(--bg-app)/85 p-6">
-            <div className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-(--panel-radius) border border-(--border-focus) bg-(--bg-surface) shadow-(--shadow-xl)">
+            <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={titleId}
+                aria-describedby={descriptionId}
+                className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-(--panel-radius) border border-(--border-focus) bg-(--bg-surface) shadow-(--shadow-xl)"
+            >
                 <div className="flex shrink-0 items-center justify-between border-b border-(--border-subtle) px-4 py-3">
                     <div className="min-w-0">
-                        <div className="text-sm font-semibold text-(--fg-primary)">{t('screenshot.preview.title')}</div>
-                        <div className="truncate text-xs text-(--fg-tertiary)">{name}</div>
+                        <div id={titleId} className="text-sm font-semibold text-(--fg-primary)">{t('screenshot.preview.title')}</div>
+                        <div id={descriptionId} className="truncate text-xs text-(--fg-tertiary)">{name}</div>
                     </div>
                     <button
                         type="button"
