@@ -603,6 +603,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                                 </span>
                                 {detailItems.length > 0 && (
                                     <button
+                                        type="button"
                                         onClick={() => setIsExpanded(!isExpanded)}
                                         className="rounded p-0.5 text-(--fg-tertiary) transition-colors hover:text-(--fg-primary)"
                                         title={isExpanded ? t('toolCall.hideDetails') : t('toolCall.showDetails')}
@@ -627,6 +628,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                             )}
                             {onUndo && status === 'complete' && (
                                 <button
+                                    type="button"
                                     onClick={(e) => {
                                         e.stopPropagation();
                                         onUndo();
@@ -683,6 +685,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                 <div className="flex items-center gap-1.5">
                     {canStopRunCommand && (
                         <button
+                            type="button"
                             onClick={(e) => {
                                 e.stopPropagation();
                                 onStopCommand();
@@ -716,6 +719,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                             {commandText}
                         </code>
                         <button
+                            type="button"
                             onClick={() => handleCopyCommand(commandText)}
                             className="group/copy shrink-0 rounded p-1 text-(--fg-tertiary) transition-colors hover:text-(--fg-primary)"
                             title={t('toolCall.copyCommand')}
