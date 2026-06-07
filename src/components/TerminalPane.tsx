@@ -219,7 +219,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(({
             >
                 <div className="p-2 text-xs font-semibold text-(--fg-tertiary) uppercase tracking-wider flex items-center justify-between">
                     <span>{t('terminal.terminals')}</span>
-                    <button type="button" onClick={addTerminal} className="hover:text-(--fg-primary) transition-colors">
+                    <button type="button" onClick={addTerminal} aria-label={t('terminal.newTerminal')} className="hover:text-(--fg-primary) transition-colors">
                         <Plus className="w-4 h-4" />
                     </button>
                 </div>
