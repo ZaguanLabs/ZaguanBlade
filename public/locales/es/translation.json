@@ -172,6 +172,7 @@
       "planningNoEdits": "No deben ejecutarse ediciones ni comandos",
       "enterToSend": "Enter para enviar",
       "shiftEnterNewline": "Mayús+Intro para salto de línea",
+      "inputLabel": "Mensaje de chat",
       "planPlaceholder": "Planifica un cambio...",
       "requestPlaceholder": "Pregunta o solicita un cambio...",
       "shiftEnterForNewline": "Mayús+Enter para nueva línea"

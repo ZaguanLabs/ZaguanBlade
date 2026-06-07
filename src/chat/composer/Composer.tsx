@@ -310,6 +310,7 @@ export const Composer: React.FC<ComposerProps> = ({
                                 }}
                                 disabled={disabled}
                                 placeholder={chatMode === 'planning' ? t('chat.composer.planPlaceholder') : t('chat.composer.requestPlaceholder')}
+                                ariaLabel={t('chat.composer.inputLabel')}
                                 showSuggestions={mentionQuery !== null}
                                 suggestions={suggestions}
                                 selectedSuggestionIndex={selectedSuggestionIndex}

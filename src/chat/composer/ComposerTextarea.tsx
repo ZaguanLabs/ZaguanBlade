@@ -12,6 +12,7 @@ interface ComposerTextareaProps {
     setText: (value: string) => void;
     disabled?: boolean;
     placeholder: string;
+    ariaLabel: string;
     showSuggestions: boolean;
     suggestions: ComposerSuggestion[];
     selectedSuggestionIndex: number;
@@ -48,6 +49,7 @@ export const ComposerTextarea = forwardRef<ComposerTextareaHandle, ComposerTexta
     setText,
     disabled,
     placeholder,
+    ariaLabel,
     showSuggestions,
     suggestions,
     selectedSuggestionIndex,
@@ -183,6 +185,7 @@ export const ComposerTextarea = forwardRef<ComposerTextareaHandle, ComposerTexta
                 }
             }}
             placeholder={placeholder}
+            aria-label={ariaLabel}
             disabled={disabled}
             rows={1}
             className="min-h-[88px] max-h-[360px] w-full resize-none overflow-y-auto bg-transparent px-3 pb-3 pt-2.5 pr-14 text-[13px] font-medium leading-[18px] text-(--fg-primary) outline-none placeholder-(--fg-tertiary)"

@@ -172,6 +172,7 @@
       "planningNoEdits": "No edits or commands should run",
       "enterToSend": "Enter to send",
       "shiftEnterNewline": "Shift+Enter for newline",
+      "inputLabel": "Chat message",
       "planPlaceholder": "Plan a change...",
       "requestPlaceholder": "Ask or request a change...",
       "shiftEnterForNewline": "Shift-Enter for newline"
