@@ -34,6 +34,7 @@ export const InputModal: React.FC<InputModalProps> = ({
     const [value, setValue] = useState(defaultValue);
     const inputRef = useRef<HTMLInputElement>(null);
     const titleId = useId();
+    const inputId = useId();
 
     // Reset value when modal opens
     useEffect(() => {
@@ -98,8 +99,10 @@ export const InputModal: React.FC<InputModalProps> = ({
                 {/* Content */}
                 <div className="p-4">
                     <input
+                        id={inputId}
                         ref={inputRef}
                         type="text"
+                        aria-label={title}
                         value={value}
                         onChange={(e) => setValue(e.target.value)}
                         placeholder={placeholder}
@@ -158,6 +161,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
     onCancel,
 }) => {
     const titleId = useId();
+    const messageId = useId();
 
     // Handle keyboard shortcuts
     useEffect(() => {
@@ -195,6 +199,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby={titleId}
+                aria-describedby={messageId}
                 className="relative bg-(--surface-overlay) border border-(--focus-ring) rounded-(--radius-dialog) shadow-(--shadow-dialog) w-full max-w-md mx-4 animate-in fade-in zoom-in-95 duration-(--transition-base) overflow-hidden"
             >
                 {/* Header */}
@@ -212,7 +217,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
 
                 {/* Content */}
                 <div className="p-4">
-                    <div className="text-sm text-(--fg-secondary)">
+                    <div id={messageId} className="text-sm text-(--fg-secondary)">
                         {message}
                     </div>
                 </div>
