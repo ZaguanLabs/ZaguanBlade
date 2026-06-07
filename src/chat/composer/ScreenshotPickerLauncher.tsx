@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { ChevronDown, ImageUp, Monitor, Plus, ScanLine } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -16,6 +16,7 @@ export const ScreenshotPickerLauncher: React.FC<{
 }> = ({ disabled, imagesDisabled, imageDisabledReason, onUploadImage, onCapture, onError }) => {
     const { t } = useTranslation();
     const menuRef = useRef<HTMLDivElement>(null);
+    const menuId = useId();
     const [menuOpen, setMenuOpen] = useState(false);
     const [open, setOpen] = useState(false);
     const [loading, setLoading] = useState(false);
@@ -138,6 +139,7 @@ export const ScreenshotPickerLauncher: React.FC<{
                     disabled={disabled}
                     aria-haspopup="menu"
                     aria-expanded={menuOpen}
+                    aria-controls={menuOpen ? menuId : undefined}
                     className="inline-flex h-8 items-center gap-1.5 rounded-[calc(var(--panel-radius)*0.45)] border border-(--border-subtle) bg-(--bg-app) px-2 text-[11px] font-medium text-(--fg-secondary) shadow-(--shadow-sm) transition-colors hover:border-[color-mix(in_srgb,var(--accent-ai)_32%,transparent)] hover:text-(--fg-primary) disabled:opacity-40"
                 >
                     <span className="inline-flex h-4 w-4 items-center justify-center rounded-[calc(var(--panel-radius)*0.25)] bg-[color-mix(in_srgb,var(--accent-ai)_14%,transparent)] text-(--accent-ai)">
@@ -148,6 +150,7 @@ export const ScreenshotPickerLauncher: React.FC<{
                 </button>
                 {menuOpen && (
                     <div
+                        id={menuId}
                         role="menu"
                         className="absolute bottom-full left-0 z-50 mb-2 w-60 overflow-hidden rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-surface) p-1.5 shadow-(--shadow-lg)"
                     >
@@ -182,7 +185,7 @@ export const ScreenshotPickerLauncher: React.FC<{
                                 <span className="block truncate text-[10px] text-(--fg-tertiary)">{t('screenshot.launcher.regionDescription')}</span>
                             </span>
                         </button>
-                        <div className="my-1 border-t border-(--border-subtle)" />
+                        <div role="separator" className="my-1 border-t border-(--border-subtle)" />
                         <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wider text-(--fg-tertiary)">
                             {t('screenshot.featureMenu.attachSection')}
                         </div>
