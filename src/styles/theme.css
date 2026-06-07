@@ -46,8 +46,8 @@
 
   /* Background Layers - Clear Luminance Hierarchy */
   --bg-app: #10131a;           /* App canvas */
-  --bg-editor: #171b24;        /* Editor card surface (primary work area) */
-  --bg-panel: #141925;         /* Sidebar / chat cards */
+  --bg-editor: #171b24;        /* Editor pane surface (primary work area) */
+  --bg-panel: #141925;         /* Sidebar / chat pane surface */
   --bg-surface: #202736;       /* Interactive surfaces (buttons, inputs) */
   --bg-surface-hover: #2a3448; /* Hover states */
   --bg-selection: #6366f133;   /* Selection background (violet tint) */
@@ -168,6 +168,30 @@
   /* Glass Effect */
   --glass-bg: rgba(13, 13, 15, 0.80);
   --glass-border: rgba(139, 139, 153, 0.12);
+
+  /* Desktop Surface Tokens */
+  --surface-app: var(--bg-app);
+  --surface-pane: var(--bg-panel);
+  --surface-editor: var(--bg-editor);
+  --surface-toolbar: var(--bg-panel);
+  --surface-overlay: var(--bg-surface);
+  --separator-subtle: var(--border-subtle);
+  --separator-default: var(--border-default);
+  --focus-ring: var(--border-focus);
+  --selection-bg: var(--bg-selection);
+  --row-hover: var(--bg-surface-hover);
+  --row-selected: var(--bg-active);
+
+  /* Desktop Radius Tokens */
+  --radius-pane: 0px;
+  --radius-control: 4px;
+  --radius-popover: 6px;
+  --radius-dialog: 8px;
+
+  /* Desktop Elevation Tokens */
+  --shadow-persistent: none;
+  --shadow-popover: var(--shadow-lg);
+  --shadow-dialog: var(--shadow-xl);
 
   /* Spatial Layout Tokens */
   --panel-radius: 10px;

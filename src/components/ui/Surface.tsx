@@ -8,11 +8,11 @@ interface SurfaceProps extends React.HTMLAttributes<HTMLDivElement> {
 }
 
 const surfaceVariantClassName: Record<SurfaceVariant, string> = {
-    card: 'rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-surface)',
-    row: 'rounded-[calc(var(--panel-radius)*0.65)] border border-(--border-subtle) bg-(--bg-surface)',
-    elevated: 'rounded-[calc(var(--panel-radius)*1.25)] border border-(--border-subtle) bg-(--bg-surface)/80 shadow-(--shadow-xl)',
-    danger: 'rounded-[calc(var(--panel-radius)*1.25)] border border-(--state-danger)/20 bg-[color-mix(in_srgb,var(--state-danger)_5%,transparent)] shadow-(--shadow-xl)',
-    modal: 'rounded-(--panel-radius) border border-(--border-focus) bg-(--bg-surface) shadow-(--shadow-xl)',
+    card: 'rounded-(--radius-control) border border-(--separator-subtle) bg-(--surface-overlay)',
+    row: 'rounded-(--radius-control) border border-(--separator-subtle) bg-(--surface-overlay)',
+    elevated: 'rounded-(--radius-popover) border border-(--separator-subtle) bg-(--surface-overlay)/80 shadow-(--shadow-popover)',
+    danger: 'rounded-(--radius-popover) border border-(--state-danger)/20 bg-[color-mix(in_srgb,var(--state-danger)_5%,transparent)] shadow-(--shadow-popover)',
+    modal: 'rounded-(--radius-dialog) border border-(--focus-ring) bg-(--surface-overlay) shadow-(--shadow-dialog)',
 };
 
 export const Surface = React.forwardRef<HTMLDivElement, SurfaceProps>(({ variant = 'card', className, ...props }, ref) => (
