@@ -20,6 +20,7 @@ import { useResizeHandlers } from '../hooks/useResizeHandlers';
 import { useLayoutEvents } from '../hooks/useLayoutEvents';
 import { subscribeBladeNestedEventType } from '../services/bladeEvents';
 import { readDebugFlag, readDebugSurfaceFlag } from '../utils/debugFlags';
+import { formatIndexStatusLabel, formatIndexStatusTitle, shouldShowIndexStatusCue } from '../utils/indexHealthStatus';
 import type { ChatMode } from '../types/chat';
 import type { BackendSettings } from '../types/settings';
 import type { IndexHealthSnapshot } from '../types/blade';
@@ -98,42 +99,6 @@ function findMatchingChangeRange(
         startLine,
         endLine: startLine + safeLineCount - 1,
     };
-}
-
-function formatIndexStatusLabel(indexHealth: IndexHealthSnapshot): string {
-    if (indexHealth.status === 'indexing') {
-        const progress = indexHealth.supported_files > 0
-            ? `${indexHealth.indexed_files}/${indexHealth.supported_files}`
-            : null;
-        const currentFile = indexHealth.current_file?.trim();
-        if (currentFile) {
-            return progress
-                ? `Indexing ${currentFile} (${progress})`
-                : `Indexing ${currentFile}`;
-        }
-        return progress ? `Indexing symbols (${progress})` : 'Indexing symbols';
-    }
-
-    if (indexHealth.status === 'checking') {
-        return 'Checking code index';
-    }
-
-    return indexHealth.message;
-}
-
-function formatIndexStatusTitle(indexHealth: IndexHealthSnapshot): string {
-    const parts = [
-        indexHealth.message,
-        `${indexHealth.indexed_files}/${indexHealth.supported_files} files indexed`,
-        `${indexHealth.symbol_count} symbols`,
-    ];
-    if (indexHealth.current_file) {
-        parts.push(`Current file: ${indexHealth.current_file}`);
-    }
-    if (indexHealth.queued_files > 0) {
-        parts.push(`${indexHealth.queued_files} queued`);
-    }
-    return parts.join(' • ');
 }
 
 function useNoopChat() {
@@ -1171,7 +1136,7 @@ const AppLayoutInner: React.FC = () => {
                         {isSidebarOpen && activeSidebar === 'explorer' && (
                             <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-(--accent-ai) rounded-r" />
                         )}
-                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <svg aria-hidden="true" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
                         </svg>
                     </button>
@@ -1189,7 +1154,7 @@ const AppLayoutInner: React.FC = () => {
                         {isSidebarOpen && activeSidebar === 'git' && (
                             <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-(--accent-ai) rounded-r" />
                         )}
-                        <GitBranch className="w-5 h-5" />
+                        <GitBranch className="w-5 h-5" aria-hidden="true" />
                         {gitStatus?.isRepo && gitChangedCount > 0 && (
                             <span className="absolute -bottom-1 -right-1 min-w-[14px] h-3 px-1 rounded-full bg-(--accent-ai) text-[9px] leading-3 text-(--fg-bright) text-center shadow-sm">
                                 {Math.min(gitChangedCount, 99)}
@@ -1210,7 +1175,7 @@ const AppLayoutInner: React.FC = () => {
                         {isSidebarOpen && activeSidebar === 'history' && (
                             <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-(--accent-ai) rounded-r" />
                         )}
-                        <Clock className="w-5 h-5" />
+                        <Clock className="w-5 h-5" aria-hidden="true" />
                     </button>
                     <button
                         type="button"
@@ -1219,7 +1184,7 @@ const AppLayoutInner: React.FC = () => {
                         aria-label={t('activityBar.search')}
                         className="hidden relative appearance-none border-0 bg-transparent p-2 rounded-[calc(var(--panel-radius)*0.45)] text-(--fg-nav) opacity-40 cursor-not-allowed transition-all duration-(--transition-fast)"
                     >
-                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <svg aria-hidden="true" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                         </svg>
                     </button>
@@ -1230,7 +1195,7 @@ const AppLayoutInner: React.FC = () => {
                         aria-label={t('activityBar.settings')}
                         className="relative mt-auto appearance-none border-0 bg-transparent p-2 rounded-[calc(var(--panel-radius)*0.45)] text-(--fg-nav) hover:text-(--fg-primary) hover:bg-(--bg-surface) transition-all duration-(--transition-fast) cursor-pointer"
                     >
-                        <Settings className="w-5 h-5" />
+                        <Settings className="w-5 h-5" aria-hidden="true" />
                     </button>
                     </div>
                 )}
@@ -1493,15 +1458,21 @@ const AppLayoutInner: React.FC = () => {
             >
                 <div className="flex items-center gap-1.5">
                     <span className="flex items-center gap-1.5 hover:text-(--fg-secondary) cursor-pointer transition-colors duration-(--transition-fast)">
-                        <GitBranch className="w-3 h-3" />
+                        <GitBranch className="w-3 h-3" aria-hidden="true" />
                         {gitStatus?.branch ?? t('statusBar.noBranch')}{gitStatus?.dirty ? '*' : ''}
                     </span>
-                    {indexHealth && (indexHealth.status === 'checking' || indexHealth.status === 'indexing') && (
+                    {shouldShowIndexStatusCue(indexHealth) && (
                         <span
-                            className="inline-flex max-w-[42vw] items-center gap-1 font-normal"
+                            className={`inline-flex max-w-[42vw] items-center gap-1 font-normal ${indexHealth.status === 'error' ? 'text-(--state-danger)' : ''}`}
                             title={formatIndexStatusTitle(indexHealth)}
                         >
-                            <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+                            {indexHealth.status === 'error' ? (
+                                <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden="true" />
+                            ) : indexHealth.status === 'partial' || indexHealth.status === 'stale' ? (
+                                <Clock className="h-3 w-3 shrink-0" aria-hidden="true" />
+                            ) : (
+                                <Loader2 className="h-3 w-3 shrink-0 animate-spin" aria-hidden="true" />
+                            )}
                             <span className="truncate">
                                 {formatIndexStatusLabel(indexHealth)}
                             </span>
@@ -1515,7 +1486,7 @@ const AppLayoutInner: React.FC = () => {
                             onClick={openConfigurationSettings}
                             className="yolo-pill inline-flex items-center gap-1 rounded-[calc(var(--panel-radius)*0.35)] border border-[color-mix(in_srgb,var(--accent-warning)_42%,transparent)] bg-[color-mix(in_srgb,var(--accent-warning)_12%,transparent)] px-1.5 py-0.5 font-semibold text-(--accent-warning) opacity-100 transition-colors hover:bg-[color-mix(in_srgb,var(--accent-warning)_18%,transparent)]"
                         >
-                            <AlertTriangle className="h-3 w-3" />
+                            <AlertTriangle className="h-3 w-3" aria-hidden="true" />
                             {t('statusBar.yoloMode')}
                         </button>
                     )}
@@ -1573,7 +1544,7 @@ const AppLayoutInner: React.FC = () => {
                     >
                         <div className="flex items-start gap-3 border-b border-(--border-subtle) bg-(--bg-surface)/70 px-5 py-4">
                             <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-[calc(var(--panel-radius)*0.7)] border border-[color-mix(in_srgb,var(--accent-warning)_38%,transparent)] bg-[color-mix(in_srgb,var(--accent-warning)_14%,transparent)] text-(--accent-warning)">
-                                <AlertTriangle className="h-5 w-5" />
+                                <AlertTriangle className="h-5 w-5" aria-hidden="true" />
                             </div>
                             <div className="min-w-0">
                                 <h2 id="shutdown-unsaved-title" className="text-base font-semibold text-(--fg-primary)">
@@ -1652,7 +1623,7 @@ const AppLayoutInner: React.FC = () => {
                     >
                         <div className="flex items-start gap-3 border-b border-(--border-subtle) bg-(--bg-surface)/70 px-5 py-4">
                             <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-[calc(var(--panel-radius)*0.7)] border border-[color-mix(in_srgb,var(--state-danger)_38%,transparent)] bg-[color-mix(in_srgb,var(--state-danger)_14%,transparent)] text-(--state-danger)">
-                                <AlertTriangle className="h-5 w-5" />
+                                <AlertTriangle className="h-5 w-5" aria-hidden="true" />
                             </div>
                             <div className="min-w-0">
                                 <h2 id="shutdown-save-error-title" className="text-base font-semibold text-(--fg-primary)">
