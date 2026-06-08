@@ -120,7 +120,11 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     }, [editLastUserMessage]);
 
     return (
-        <div className="flex h-full flex-col bg-(--bg-app) font-sans text-(--fg-primary)">
+        <div
+            className="flex h-full flex-col bg-(--bg-app) font-sans text-(--fg-primary)"
+            data-font-zoom-scope="chat"
+            style={{ '--markdown-font-size': 'var(--chat-content-font-size, 13px)' } as React.CSSProperties}
+        >
             <ChatHeader activeTab={activeTab} onTabChange={setActiveTab} onNewConversation={handleNewConversation} />
 
             {activeTab === 'chat' ? (

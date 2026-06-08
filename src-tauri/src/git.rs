@@ -284,6 +284,49 @@ fn parse_git_status(output: &str) -> GitStatusSummary {
     summary
 }
 
+fn status_has_conflicts(output: &str) -> bool {
+    output.lines().any(|line| {
+        let Some(rest) = line.strip_prefix("u ") else {
+            return false;
+        };
+        let path = rest.split_whitespace().last().unwrap_or("");
+        !is_local_git_status_excluded_path(path)
+    })
+}
+
+fn commit_preflight_from_status(output: &str, has_commits: bool) -> CommitPreflightResult {
+    let summary = parse_git_status(output);
+    let has_conflicts = status_has_conflicts(output);
+    let is_detached = summary.branch.is_none() && has_commits;
+    let staged_count = summary.staged_count;
+
+    let mut error_message = None;
+    let can_commit = if has_conflicts {
+        error_message = Some("Resolve merge conflicts before committing".to_string());
+        false
+    } else if staged_count == 0 {
+        error_message = Some("No staged changes to commit".to_string());
+        false
+    } else if is_detached {
+        error_message = Some("Warning: HEAD is detached. Commits may be lost.".to_string());
+        true
+    } else {
+        true
+    };
+
+    CommitPreflightResult {
+        can_commit,
+        is_repo: true,
+        branch: summary.branch,
+        is_detached,
+        has_upstream: summary.has_upstream,
+        has_conflicts,
+        staged_count,
+        error_message,
+        error_key: None,
+    }
+}
+
 fn workspace_root(state: &State<'_, AppState>) -> Option<String> {
     let ws = state.workspace.lock().unwrap();
     ws.workspace
@@ -961,6 +1004,24 @@ mod tests {
     }
 
     #[test]
+    fn commit_preflight_allows_unborn_branch_with_staged_changes() {
+        let output = "\
+# branch.oid (initial)
+# branch.head main
+1 A. N... 000000 100644 100644 0000000000000000000000000000000000000000 ce013625030ba8dba906f756967f9e9ca394464a README.md
+";
+
+        let preflight = commit_preflight_from_status(output, false);
+
+        assert!(preflight.can_commit);
+        assert!(preflight.is_repo);
+        assert_eq!(preflight.branch.as_deref(), Some("main"));
+        assert!(!preflight.is_detached);
+        assert_eq!(preflight.staged_count, 1);
+        assert!(preflight.error_message.is_none());
+    }
+
+    #[test]
     fn local_ai_commit_message_requests_do_not_include_system_prompt() {
         for body in [
             build_ollama_commit_message_body("llama3.2", "Generate a commit message"),
@@ -1105,82 +1166,29 @@ pub async fn git_commit_preflight(
 ) -> Result<CommitPreflightResult, String> {
     tokio::task::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
-        let repo = match open_repo(&state) {
-            Ok(r) => r,
-            Err(_) => {
-                return Ok(CommitPreflightResult {
-                    can_commit: false,
-                    is_repo: false,
-                    branch: None,
-                    is_detached: false,
-                    has_upstream: false,
-                    has_conflicts: false,
-                    staged_count: 0,
-                    error_message: Some("Not a Git repository".to_string()),
-                    error_key: Some("git.notRepository".to_string()),
-                });
-            }
-        };
-
-        let head = repo
-            .head()
-            .map_err(|e| format!("Failed to read HEAD: {}", e))?;
-        let is_detached = head.is_detached();
-        let branch = if is_detached {
-            None
-        } else {
-            head.referent_name().map(|n| n.shorten().to_string())
-        };
-
-        let has_upstream = branch.as_ref().map_or(false, |b| {
-            let config = repo.config_snapshot();
-            let key = format!("branch.{}.remote", b);
-            config.string(key.as_str()).is_some()
-        });
-
         let root = match workspace_root(&state) {
             Some(r) => r,
             None => return Err("No workspace open".to_string()),
         };
-        let status_output = run_git(&root, &["status", "--porcelain=v2"][..]).unwrap_or_default();
-        let has_conflicts = status_output.lines().any(|l| l.starts_with("u "));
-        let staged_count = status_output
-            .lines()
-            .filter(|l| {
-                if let Some(rest) = l.strip_prefix("1 ").or_else(|| l.strip_prefix("2 ")) {
-                    let xy = rest.split_whitespace().next().unwrap_or("..");
-                    xy.chars().next().unwrap_or('.') != '.'
-                } else {
-                    false
-                }
-            })
-            .count() as u32;
 
-        let mut error_message = None;
-        let can_commit = if has_conflicts {
-            error_message = Some("Resolve merge conflicts before committing".to_string());
-            false
-        } else if staged_count == 0 {
-            error_message = Some("No staged changes to commit".to_string());
-            false
-        } else if is_detached {
-            error_message = Some("Warning: HEAD is detached. Commits may be lost.".to_string());
-            true
-        } else {
-            true
+        let Some(status_output) = git_status_output(&root)? else {
+            return Ok(CommitPreflightResult {
+                can_commit: false,
+                is_repo: false,
+                branch: None,
+                is_detached: false,
+                has_upstream: false,
+                has_conflicts: false,
+                staged_count: 0,
+                error_message: Some("Not a Git repository".to_string()),
+                error_key: Some("git.notRepository".to_string()),
+            });
         };
 
-        Ok(CommitPreflightResult {
-            can_commit,
-            is_repo: true,
-            branch,
-            is_detached,
-            has_upstream,
-            has_conflicts,
-            staged_count,
-            error_message,
-            error_key: None,
-        })
+        Ok(commit_preflight_from_status(
+            &status_output,
+            git_has_commits(&root),
+        ))
     })
     .await
     .map_err(|e| format!("git commit preflight task failed: {}", e))?

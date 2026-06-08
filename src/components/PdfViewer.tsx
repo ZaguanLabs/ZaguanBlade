@@ -6,6 +6,7 @@ import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Maximize2, FileText } from 'lucide-react';
 import { readFile } from '@tauri-apps/plugin-fs';
 import { formatUnknownBackendError } from '../utils/backendErrors';
+import { useDisplaySettings } from '../contexts/DisplaySettingsContext';
 
 // Use the Vite-bundled worker URL. In Tauri's custom protocol (tauri://),
 // PDF.js's origin check fails and it wraps the URL in a blob with
@@ -18,7 +19,8 @@ interface PdfViewerProps {
 
 export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
     const { t } = useTranslation();
-    const canvasRef = useRef<HTMLCanvasElement>(null);
+    const { editorFontSize } = useDisplaySettings();
+    const canvasRefs = useRef<Map<number, HTMLCanvasElement>>(new Map());
     const containerRef = useRef<HTMLDivElement>(null);
     const [pdfDoc, setPdfDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
     const [currentPage, setCurrentPage] = useState(1);
@@ -28,11 +30,21 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
+        setScale(Math.max(0.5, Math.min(3, 1.5 * (editorFontSize / 14))));
+    }, [editorFontSize]);
+
+    useEffect(() => {
+        let isCancelled = false;
+
         async function loadPdf() {
             if (!filePath) return;
 
             setLoading(true);
             setError(null);
+            setPdfDoc(null);
+            setNumPages(0);
+            setCurrentPage(1);
+            canvasRefs.current.clear();
 
             try {
                 console.debug('[PDF] Loading file:', filePath);
@@ -51,12 +63,17 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
                 const loadingTask = pdfjsLib.getDocument(documentParams);
                 const pdf = await loadingTask.promise;
                 console.debug('[PDF] PDF loaded successfully, pages:', pdf.numPages);
+
+                if (isCancelled) {
+                    await pdf.destroy();
+                    return;
+                }
                 
                 setPdfDoc(pdf);
                 setNumPages(pdf.numPages);
-                setCurrentPage(1);
                 setLoading(false);
             } catch (err) {
+                if (isCancelled) return;
                 console.error('[PDF] Error loading PDF:', err);
                 setError(`${t('pdf.loadFailed')}: ${formatUnknownBackendError(err)}`);
                 setLoading(false);
@@ -66,51 +83,106 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
         loadPdf();
 
         return () => {
-            if (pdfDoc) {
-                pdfDoc.destroy();
-            }
+            isCancelled = true;
         };
-    }, [filePath]);
+    }, [filePath, t]);
 
     useEffect(() => {
-        async function renderPage() {
-            if (!pdfDoc || !canvasRef.current) return;
+        return () => {
+            if (pdfDoc) {
+                void pdfDoc.destroy();
+            }
+        };
+    }, [pdfDoc]);
+
+    useEffect(() => {
+        let isCancelled = false;
+        const renderTasks: pdfjsLib.RenderTask[] = [];
+
+        async function renderPages() {
+            if (!pdfDoc || numPages === 0) return;
 
             try {
-                const page = await pdfDoc.getPage(currentPage);
-                const viewport = page.getViewport({ scale });
-                const canvas = canvasRef.current;
-                const context = canvas.getContext('2d');
+                for (let pageNumber = 1; pageNumber <= numPages; pageNumber += 1) {
+                    if (isCancelled) return;
 
-                if (!context) return;
+                    const canvas = canvasRefs.current.get(pageNumber);
+                    if (!canvas) continue;
 
-                canvas.height = viewport.height;
-                canvas.width = viewport.width;
+                    const page = await pdfDoc.getPage(pageNumber);
+                    if (isCancelled) return;
 
-                const renderContext = {
-                    canvasContext: context,
-                    viewport: viewport,
-                };
+                    const viewport = page.getViewport({ scale });
+                    const context = canvas.getContext('2d');
 
-                await page.render(renderContext as any).promise;
+                    if (!context) continue;
+
+                    canvas.height = viewport.height;
+                    canvas.width = viewport.width;
+
+                    const renderTask = page.render({
+                        canvasContext: context,
+                        viewport,
+                    } as any);
+                    renderTasks.push(renderTask);
+                    await renderTask.promise;
+                    page.cleanup();
+                }
             } catch (err) {
-                console.error('Error rendering page:', err);
+                if (isCancelled || err instanceof Error && err.name === 'RenderingCancelledException') return;
+                console.error('[PDF] Error rendering pages:', err);
                 setError(`${t('pdf.renderFailed')}: ${formatUnknownBackendError(err)}`);
             }
         }
 
-        renderPage();
-    }, [pdfDoc, currentPage, scale]);
+        renderPages();
+
+        return () => {
+            isCancelled = true;
+            renderTasks.forEach(task => task.cancel());
+        };
+    }, [pdfDoc, numPages, scale, t]);
+
+    useEffect(() => {
+        if (!containerRef.current || numPages === 0) return;
+
+        const observer = new IntersectionObserver(
+            entries => {
+                const visiblePage = entries
+                    .filter(entry => entry.isIntersecting)
+                    .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+                const pageNumber = Number(visiblePage?.target.getAttribute('data-page-number'));
+
+                if (Number.isInteger(pageNumber)) {
+                    setCurrentPage(pageNumber);
+                }
+            },
+            {
+                root: containerRef.current,
+                threshold: [0.25, 0.5, 0.75],
+            }
+        );
+
+        canvasRefs.current.forEach(canvas => observer.observe(canvas));
+
+        return () => observer.disconnect();
+    }, [numPages]);
+
+    const scrollToPage = (pageNumber: number) => {
+        const canvas = canvasRefs.current.get(pageNumber);
+        canvas?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        setCurrentPage(pageNumber);
+    };
 
     const goToPrevPage = () => {
         if (currentPage > 1) {
-            setCurrentPage(currentPage - 1);
+            scrollToPage(currentPage - 1);
         }
     };
 
     const goToNextPage = () => {
         if (currentPage < numPages) {
-            setCurrentPage(currentPage + 1);
+            scrollToPage(currentPage + 1);
         }
     };
 
@@ -157,7 +229,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
     }
 
     return (
-        <div className="h-full flex flex-col bg-(--bg-app)">
+        <div className="h-full flex flex-col bg-(--bg-app)" data-font-zoom-scope="editor">
             {/* Toolbar */}
             <div className="flex items-center justify-between px-4 py-2 border-b border-(--border-subtle) bg-(--bg-surface)">
                 <div className="flex items-center gap-2">
@@ -220,18 +292,34 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ filePath }) => {
                 </div>
             </div>
 
-            {/* PDF Canvas */}
+            {/* PDF Pages */}
             <div 
                 ref={containerRef}
-                className="flex-1 overflow-auto flex items-start justify-center p-5 bg-(--bg-app)"
+                className="flex-1 overflow-auto bg-(--bg-app)"
             >
-                <canvas
-                    ref={canvasRef}
-                    role="img"
-                    aria-label={t('pdf.pageCanvas', { page: currentPage, total: numPages })}
-                    className="shadow-(--shadow-xl)"
-                    style={{ maxWidth: '100%', height: 'auto' }}
-                />
+                <div className="flex flex-col items-center gap-5 p-5">
+                    {Array.from({ length: numPages }, (_, index) => {
+                        const pageNumber = index + 1;
+
+                        return (
+                            <canvas
+                                key={pageNumber}
+                                ref={canvas => {
+                                    if (canvas) {
+                                        canvasRefs.current.set(pageNumber, canvas);
+                                    } else {
+                                        canvasRefs.current.delete(pageNumber);
+                                    }
+                                }}
+                                data-page-number={pageNumber}
+                                role="img"
+                                aria-label={t('pdf.pageCanvas', { page: pageNumber, total: numPages })}
+                                className="shadow-(--shadow-xl)"
+                                style={{ maxWidth: '100%', height: 'auto' }}
+                            />
+                        );
+                    })}
+                </div>
             </div>
         </div>
     );

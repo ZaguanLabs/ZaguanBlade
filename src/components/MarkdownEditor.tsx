@@ -150,7 +150,11 @@ export const MarkdownEditor = forwardRef<CodeEditorHandle, MarkdownEditorProps>(
                         )}
                     </>
                 ) : (
-                    <ScrollArea className="h-full px-8 py-6 pb-[35vh] bg-(--editor-bg)" style={{ scrollPaddingBottom: '35vh' }}>
+                    <ScrollArea
+                        className="h-full px-8 py-6 pb-[35vh] bg-(--editor-bg)"
+                        data-font-zoom-scope="editor"
+                        style={{ scrollPaddingBottom: '35vh', '--markdown-font-size': 'var(--editor-content-font-size, 14px)' } as React.CSSProperties}
+                    >
                         <div className="max-w-4xl mx-auto">
                             <MarkdownRenderer content={previewContent} />
                         </div>

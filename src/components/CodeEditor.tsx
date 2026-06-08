@@ -722,7 +722,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
     }, [filename, showMenu, t]);
 
     return (
-        <div className="code-editor-scroll h-full w-full relative" onContextMenu={handleContextMenu}>
+        <div className="code-editor-scroll h-full w-full relative" data-font-zoom-scope="editor" onContextMenu={handleContextMenu}>
             <div ref={editorRef} className="h-full w-full overflow-hidden text-base" />
 
             {inspectorData && filename && (

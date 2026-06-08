@@ -894,7 +894,12 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         && researchProgress.stage.toLowerCase() !== 'considering_next_steps';
 
     return (
-        <div className="flex flex-col h-full bg-(--bg-app) text-(--fg-primary) font-sans tracking-tight" onContextMenu={handleContextMenu}>
+        <div
+            className="flex flex-col h-full bg-(--bg-app) text-(--fg-primary) font-sans tracking-tight"
+            data-font-zoom-scope="chat"
+            style={{ '--markdown-font-size': 'var(--chat-content-font-size, 13px)' } as React.CSSProperties}
+            onContextMenu={handleContextMenu}
+        >
             {/* Tab Bar */}
             <ChatTabBar
                 activeTab={activeTab}

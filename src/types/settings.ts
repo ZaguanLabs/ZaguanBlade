@@ -5,6 +5,8 @@ export interface RemoteAiConfig {
     theme: string;
     markdown_view: string;
     language: string;
+    editor_font_size: number;
+    chat_font_size: number;
 }
 
 export interface LocalAiConfig {

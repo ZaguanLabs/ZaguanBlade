@@ -30,6 +30,10 @@ pub struct ApiConfig {
     pub markdown_view: String,
     #[serde(default)]
     pub language: String,
+    #[serde(default = "default_editor_font_size")]
+    pub editor_font_size: u8,
+    #[serde(default = "default_chat_font_size")]
+    pub chat_font_size: u8,
     #[serde(default)]
     pub telegram_bot_token: String,
 }
@@ -48,6 +52,10 @@ pub struct RemoteAiConfig {
     pub markdown_view: String,
     #[serde(default)]
     pub language: String,
+    #[serde(default = "default_editor_font_size")]
+    pub editor_font_size: u8,
+    #[serde(default = "default_chat_font_size")]
+    pub chat_font_size: u8,
     #[serde(default)]
     pub telegram_bot_token: String,
 }
@@ -77,6 +85,8 @@ impl ApiConfig {
             theme: self.theme.clone(),
             markdown_view: self.markdown_view.clone(),
             language: self.language.clone(),
+            editor_font_size: clamp_font_size(self.editor_font_size, default_editor_font_size()),
+            chat_font_size: clamp_font_size(self.chat_font_size, default_chat_font_size()),
             telegram_bot_token: self.telegram_bot_token.clone(),
         }
     }
@@ -99,6 +109,8 @@ impl ApiConfig {
         self.theme = remote.theme.clone();
         self.markdown_view = remote.markdown_view.clone();
         self.language = remote.language.clone();
+        self.editor_font_size = clamp_font_size(remote.editor_font_size, default_editor_font_size());
+        self.chat_font_size = clamp_font_size(remote.chat_font_size, default_chat_font_size());
         self.telegram_bot_token = remote.telegram_bot_token.clone();
     }
 
@@ -133,6 +145,21 @@ pub fn normalize_openai_compat_url(url: &str) -> String {
 fn default_openai_compat_url() -> String {
     // Use base URL (no version); callers append /v1 paths
     "http://localhost:8080".to_string()
+}
+
+fn default_editor_font_size() -> u8 {
+    14
+}
+
+fn default_chat_font_size() -> u8 {
+    13
+}
+
+fn clamp_font_size(value: u8, fallback: u8) -> u8 {
+    if value == 0 {
+        return fallback;
+    }
+    value.clamp(10, 22)
 }
 
 pub fn default_global_config_dir() -> PathBuf {

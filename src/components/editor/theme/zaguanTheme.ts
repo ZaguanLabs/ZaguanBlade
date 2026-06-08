@@ -65,7 +65,7 @@ const zaguanEditorThemeSpec = {
     "&": {
         backgroundColor: colors.bg,
         color: colors.fg,
-        fontSize: "14px",
+        fontSize: "var(--editor-content-font-size, 14px)",
         fontFamily: EDITOR_MONO_STACK,
     },
     
@@ -117,7 +117,7 @@ const zaguanEditorThemeSpec = {
         padding: "0 6px 0 6px",
         minWidth: "32px",
         fontFamily: EDITOR_MONO_STACK,
-        fontSize: "12px",
+        fontSize: "calc(var(--editor-content-font-size, 14px) - 2px)",
     },
     
     ".cm-lineNumbers .cm-gutterElement.cm-activeLineGutter": {

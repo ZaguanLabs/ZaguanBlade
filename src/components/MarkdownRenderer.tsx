@@ -40,13 +40,13 @@ const customTheme = {
         background: 'var(--markdown-block-bg)',
         margin: 0,
         padding: '1rem',
-        fontSize: '12px',
+        fontSize: '0.92em',
         lineHeight: '1.5',
     },
     'code[class*="language-"]': {
         ...oneDark['code[class*="language-"]'],
         background: 'transparent',
-        fontSize: '12px',
+        fontSize: '0.92em',
         lineHeight: '1.5',
     },
 };
@@ -172,7 +172,7 @@ const PlainCodeBlock = React.memo<CodeBlockProps>(({ language, value }) => {
             </div>
 
             <div className="overflow-x-auto px-4 py-3">
-                <pre className="m-0 whitespace-pre-wrap wrap-break-word bg-transparent p-0 text-[12px] leading-6 text-(--markdown-body)">
+                <pre className="m-0 whitespace-pre-wrap wrap-break-word bg-transparent p-0 text-[0.92em] leading-relaxed text-(--markdown-body)">
                     <code style={codeTagStyle}>{value}</code>
                 </pre>
             </div>
@@ -184,7 +184,7 @@ PlainCodeBlock.displayName = 'PlainCodeBlock';
 // Simple inline code - no need for heavy memoization
 const InlineCode: React.FC<{ children: React.ReactNode }> = ({ children }) => (
     <code
-        className="inline-block px-1.5 py-0.5 rounded text-[11px] font-mono align-baseline"
+        className="inline-block px-1.5 py-0.5 rounded text-[0.92em] font-mono align-baseline"
         style={{
             backgroundColor: 'var(--markdown-inline-code-bg)',
             color: 'var(--markdown-inline-code-fg)',
@@ -413,7 +413,7 @@ const StreamingListTail: React.FC<{ content: string }> = ({ content }) => {
     return (
         <ListTag className={listClassName}>
             {items.map((item, index) => (
-                <li key={`streaming-list-item-${index}`} className="pl-1 text-[12px] font-medium leading-relaxed text-(--markdown-body)">
+                <li key={`streaming-list-item-${index}`} className="pl-1 text-[1em] font-medium leading-relaxed text-(--markdown-body)">
                     {renderMarkdownBody(item, lightweightMarkdownComponents)}
                 </li>
             ))}
@@ -437,7 +437,7 @@ const StreamingTableTail: React.FC<{ content: string }> = ({ content }) => {
     return (
         <div className="my-3 overflow-hidden rounded-[calc(var(--panel-radius)*0.75)] border border-(--markdown-border)">
             <div className="overflow-x-auto">
-                <table className="w-full text-[12px]">
+                <table className="w-full text-[1em]">
                     <thead className="border-b border-(--markdown-border)" style={{ backgroundColor: 'var(--markdown-block-header-bg)' }}>
                         <tr>
                             {headers.map((header, index) => (
@@ -514,7 +514,7 @@ const markdownComponents = {
     // Paragraphs
     p({ children }: { children?: React.ReactNode }) {
         return (
-            <p className="text-[12px] font-medium text-(--markdown-body) leading-relaxed my-2 first:mt-0 last:mb-0">
+            <p className="text-[1em] font-medium text-(--markdown-body) leading-relaxed my-2 first:mt-0 last:mb-0">
                 {children}
             </p>
         );
@@ -523,28 +523,28 @@ const markdownComponents = {
     // Headings
     h1({ children }: { children?: React.ReactNode }) {
         return (
-            <h1 className="text-[15px] font-semibold text-(--markdown-heading) mt-4 mb-2 first:mt-0 border-b border-(--markdown-border) pb-1">
+            <h1 className="text-[1.25em] font-semibold text-(--markdown-heading) mt-4 mb-2 first:mt-0 border-b border-(--markdown-border) pb-1">
                 {children}
             </h1>
         );
     },
     h2({ children }: { children?: React.ReactNode }) {
         return (
-            <h2 className="text-[14px] font-semibold text-(--markdown-heading) mt-4 mb-2 first:mt-0 border-b border-(--markdown-border) pb-1">
+            <h2 className="text-[1.15em] font-semibold text-(--markdown-heading) mt-4 mb-2 first:mt-0 border-b border-(--markdown-border) pb-1">
                 {children}
             </h2>
         );
     },
     h3({ children }: { children?: React.ReactNode }) {
         return (
-            <h3 className="text-[13px] font-semibold text-(--markdown-heading) mt-3 mb-1.5 first:mt-0">
+            <h3 className="text-[1.08em] font-semibold text-(--markdown-heading) mt-3 mb-1.5 first:mt-0">
                 {children}
             </h3>
         );
     },
     h4({ children }: { children?: React.ReactNode }) {
         return (
-            <h4 className="text-[12px] font-semibold text-(--markdown-heading) mt-2 mb-1 first:mt-0">
+            <h4 className="text-[1em] font-semibold text-(--markdown-heading) mt-2 mb-1 first:mt-0">
                 {children}
             </h4>
         );
@@ -567,7 +567,7 @@ const markdownComponents = {
     },
     li({ children }: { children?: React.ReactNode }) {
         return (
-            <li className="text-[12px] font-medium text-(--markdown-body) leading-relaxed pl-1">
+            <li className="text-[1em] font-medium text-(--markdown-body) leading-relaxed pl-1">
                 {children}
             </li>
         );
@@ -615,7 +615,7 @@ const markdownComponents = {
     table({ children }: { children?: React.ReactNode }) {
         return (
             <div className="my-3 overflow-x-auto rounded-[calc(var(--panel-radius)*0.75)] border border-(--markdown-border)">
-                <table className="w-full text-[12px]">
+                <table className="w-full text-[1em]">
                     {children}
                 </table>
             </div>
@@ -694,7 +694,7 @@ function renderMarkdownBody(content: string, components: typeof markdownComponen
 
 const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, className = '' }) => {
     return (
-        <div className={`markdown-content select-text ${className}`}>
+        <div className={`markdown-content select-text ${className}`} style={{ fontSize: 'var(--markdown-font-size, var(--editor-content-font-size, 14px))' }}>
             {renderMarkdownBody(content, markdownComponents)}
         </div>
     );
@@ -715,7 +715,7 @@ const StreamingMarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ c
     const { stableBlocks, liveTail, liveTailInFence } = nextSegmentation;
 
     return (
-        <div className={`markdown-content select-text ${className}`}>
+        <div className={`markdown-content select-text ${className}`} style={{ fontSize: 'var(--markdown-font-size, var(--editor-content-font-size, 14px))' }}>
             {stableBlocks.map((block, index) => (
                 <React.Fragment key={`stable-${index}`}>
                     {renderMarkdownBody(block, markdownComponents)}

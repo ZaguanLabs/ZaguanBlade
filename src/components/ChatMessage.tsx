@@ -27,7 +27,7 @@ const LARGE_USER_MESSAGE_LINE_THRESHOLD = 220;
 
 const PlainTextMessage = React.memo<{ content: string }>(({ content }) => (
     <div className="select-text">
-        <pre className="m-0 whitespace-pre-wrap wrap-break-word bg-transparent font-sans text-[13px] leading-6 text-(--fg-primary)">
+        <pre className="m-0 whitespace-pre-wrap wrap-break-word bg-transparent font-sans text-(--fg-primary)" style={{ fontSize: 'var(--chat-content-font-size, 13px)', lineHeight: 1.65 }}>
             {content}
         </pre>
     </div>

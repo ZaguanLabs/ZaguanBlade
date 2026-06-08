@@ -12,6 +12,7 @@ import zbladeLogoUrl from '../assets/zblade-in-app-logo.png';
 import { availableThemes, normalizeThemeId } from '../themes';
 import { formatUnknownBackendError } from '../utils/backendErrors';
 import { ScrollArea } from './ui/ScrollArea';
+import { DEFAULT_CHAT_FONT_SIZE, DEFAULT_EDITOR_FONT_SIZE, MAX_CONTENT_FONT_SIZE, MIN_CONTENT_FONT_SIZE } from '../contexts/DisplaySettingsContext';
 
 type StorageMode = 'local' | 'server';
 
@@ -44,6 +45,8 @@ interface SettingsState {
         theme: string;
         markdownView: string;
         language: AppLanguage;
+        editorFontSize: number;
+        chatFontSize: number;
     };
     account: {
         bladeUrl: string;
@@ -86,6 +89,8 @@ const defaultSettings: SettingsState = {
         theme: 'zaguan-dark',
         markdownView: 'split',
         language: normalizeAppLanguage(i18n.resolvedLanguage || i18n.language),
+        editorFontSize: DEFAULT_EDITOR_FONT_SIZE,
+        chatFontSize: DEFAULT_CHAT_FONT_SIZE,
     },
     account: {
         bladeUrl: '',
@@ -116,6 +121,8 @@ function backendRemoteToFrontend(backend: RemoteAiConfig): Pick<SettingsState, '
             theme: normalizeThemeId(backend.theme),
             markdownView: backend.markdown_view || 'split',
             language: normalizeAppLanguage(backend.language || i18n.resolvedLanguage || i18n.language),
+            editorFontSize: Math.max(MIN_CONTENT_FONT_SIZE, Math.min(MAX_CONTENT_FONT_SIZE, Math.round(backend.editor_font_size || DEFAULT_EDITOR_FONT_SIZE))),
+            chatFontSize: Math.max(MIN_CONTENT_FONT_SIZE, Math.min(MAX_CONTENT_FONT_SIZE, Math.round(backend.chat_font_size || DEFAULT_CHAT_FONT_SIZE))),
         },
         account: {
             bladeUrl: '', // Always empty, internal only
@@ -146,6 +153,8 @@ function frontendRemoteToBackend(frontend: SettingsState): RemoteAiConfig {
         theme: normalizeThemeId(frontend.configuration.theme),
         markdown_view: frontend.configuration.markdownView,
         language: normalizeAppLanguage(frontend.configuration.language),
+        editor_font_size: frontend.configuration.editorFontSize,
+        chat_font_size: frontend.configuration.chatFontSize,
     };
 }
 
@@ -348,6 +357,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                     || remoteSettings.blade_url !== previousRemoteSettings.blade_url;
                 const remoteConfigurationChanged =
                     remoteSettings.markdown_view !== previousRemoteSettings.markdown_view
+                    || remoteSettings.editor_font_size !== previousRemoteSettings.editor_font_size
+                    || remoteSettings.chat_font_size !== previousRemoteSettings.chat_font_size
                     || languageChanged;
 
                 if (remoteSettingsChanged) {
@@ -587,6 +598,13 @@ function getThemeI18nLabel(t: ReturnType<typeof useTranslation>['t'], theme: { i
     return t(`settings.configurationSection.themes.${theme.id}.label`, theme.label);
 }
 
+function clampContentFontSize(value: number, fallback: number) {
+    if (!Number.isFinite(value)) {
+        return fallback;
+    }
+    return Math.max(MIN_CONTENT_FONT_SIZE, Math.min(MAX_CONTENT_FONT_SIZE, Math.round(value)));
+}
+
 const ThemeGrid: React.FC<{
     value: string;
     onChange: (themeId: string) => void;
@@ -635,6 +653,12 @@ const ConfigurationSettings: React.FC<ConfigurationSettingsProps> = ({
 }) => {
     const { t } = useTranslation();
     const languageSelectId = useId();
+    const editorFontSizeInputId = useId();
+    const chatFontSizeInputId = useId();
+    const handleFontSizeChange = (key: 'editorFontSize' | 'chatFontSize', value: number) => {
+        const fallback = key === 'editorFontSize' ? DEFAULT_EDITOR_FONT_SIZE : DEFAULT_CHAT_FONT_SIZE;
+        onChange({ [key]: clampContentFontSize(value, fallback) });
+    };
 
     return (
         <div className="space-y-6">
@@ -661,6 +685,72 @@ const ConfigurationSettings: React.FC<ConfigurationSettingsProps> = ({
                 <div className="flex items-center gap-2 text-[11px] text-(--fg-tertiary)">
                     <span className="h-2 w-2 rounded-full bg-(--accent-ai)" aria-hidden="true" />
                     <span>{t('settings.configurationSection.themeScopeHelp')}</span>
+                </div>
+            </div>
+
+            <div className="border border-(--border-default) rounded-[calc(var(--panel-radius)+4px)] p-5 space-y-5 bg-[color-mix(in_srgb,var(--bg-panel)_88%,var(--bg-editor))] shadow-(--panel-shadow)">
+                <div>
+                    <div className="text-sm font-medium text-(--fg-primary)">{t('settings.configurationSection.textSizeTitle')}</div>
+                    <div className="text-xs text-(--fg-tertiary) mt-1">
+                        {t('settings.configurationSection.textSizeDescription')}
+                    </div>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-2.5">
+                        <div className="flex items-center justify-between gap-3">
+                            <label htmlFor={editorFontSizeInputId} className="text-xs font-medium uppercase tracking-[0.16em] text-(--fg-secondary)">
+                                {t('settings.configurationSection.editorFontSize')}
+                            </label>
+                            <input
+                                type="number"
+                                min={MIN_CONTENT_FONT_SIZE}
+                                max={MAX_CONTENT_FONT_SIZE}
+                                value={settings.editorFontSize}
+                                onChange={(event) => handleFontSizeChange('editorFontSize', Number(event.target.value))}
+                                className="w-16 rounded-[calc(var(--panel-radius)*0.45)] border border-(--border-default) bg-(--bg-surface) px-2 py-1 text-right text-xs font-mono text-(--fg-primary) outline-none focus:border-(--accent-ai)"
+                            />
+                        </div>
+                        <input
+                            id={editorFontSizeInputId}
+                            type="range"
+                            min={MIN_CONTENT_FONT_SIZE}
+                            max={MAX_CONTENT_FONT_SIZE}
+                            value={settings.editorFontSize}
+                            onChange={(event) => handleFontSizeChange('editorFontSize', Number(event.target.value))}
+                            className="w-full accent-[var(--accent-ai)]"
+                        />
+                    </div>
+
+                    <div className="space-y-2.5">
+                        <div className="flex items-center justify-between gap-3">
+                            <label htmlFor={chatFontSizeInputId} className="text-xs font-medium uppercase tracking-[0.16em] text-(--fg-secondary)">
+                                {t('settings.configurationSection.chatFontSize')}
+                            </label>
+                            <input
+                                type="number"
+                                min={MIN_CONTENT_FONT_SIZE}
+                                max={MAX_CONTENT_FONT_SIZE}
+                                value={settings.chatFontSize}
+                                onChange={(event) => handleFontSizeChange('chatFontSize', Number(event.target.value))}
+                                className="w-16 rounded-[calc(var(--panel-radius)*0.45)] border border-(--border-default) bg-(--bg-surface) px-2 py-1 text-right text-xs font-mono text-(--fg-primary) outline-none focus:border-(--accent-ai)"
+                            />
+                        </div>
+                        <input
+                            id={chatFontSizeInputId}
+                            type="range"
+                            min={MIN_CONTENT_FONT_SIZE}
+                            max={MAX_CONTENT_FONT_SIZE}
+                            value={settings.chatFontSize}
+                            onChange={(event) => handleFontSizeChange('chatFontSize', Number(event.target.value))}
+                            className="w-full accent-[var(--accent-ai)]"
+                        />
+                    </div>
+                </div>
+
+                <div className="flex items-center gap-2 text-[11px] text-(--fg-tertiary)">
+                    <span className="h-2 w-2 rounded-full bg-(--accent-ai)" aria-hidden="true" />
+                    <span>{t('settings.configurationSection.textSizeScopeHelp')}</span>
                 </div>
             </div>
 

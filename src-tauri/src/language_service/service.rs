@@ -3373,8 +3373,11 @@ fn extract_unquoted_keys(line: &str) -> Vec<(String, usize)> {
     };
     let prefix = line[..colon_index].trim_end();
     let token_start = prefix
-        .rfind(|ch: char| !ch.is_alphanumeric() && ch != '_' && ch != '-')
-        .map(|idx| idx + 1)
+        .char_indices()
+        .rev()
+        .find_map(|(idx, ch)| {
+            (!ch.is_alphanumeric() && ch != '_' && ch != '-').then_some(idx + ch.len_utf8())
+        })
         .unwrap_or(0);
     let value = prefix[token_start..].trim();
     if value.len() >= 3 && value.chars().any(|ch| ch.is_alphabetic()) {
@@ -3963,6 +3966,13 @@ mod tests {
             .unwrap()
             .iter()
             .any(|result| result.anchor.kind == "css_token"));
+    }
+
+    #[test]
+    fn semantic_anchor_extraction_handles_multibyte_delimiters() {
+        let anchors = extract_semantic_anchors("notes.md", "    The correct focus for €1M:\n");
+
+        assert!(!anchors.iter().any(|anchor| anchor.value == "1M"));
     }
 
     #[test]

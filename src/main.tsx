@@ -9,6 +9,7 @@ import { LanguageProvider } from './contexts/LanguageContext';
 import { StartupBootstrapProvider, useStartupBootstrap } from './contexts/StartupBootstrapContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { ChatPanelFlagProvider } from './contexts/ChatPanelFlagContext';
+import { DisplaySettingsProvider } from './contexts/DisplaySettingsContext';
 import './index.css';
 import './i18n'; // Initialize i18n
 import { parseBooleanFlag, readDebugFlag } from './utils/debugFlags';
@@ -174,13 +175,15 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         <ErrorBoundary>
             <LanguageProvider>
                 <ThemeProvider>
-                    <ChatPanelFlagProvider>
-                        <ContextMenuProvider>
-                            <DebugFlagBootstrap>
-                                <AppWrapper />
-                            </DebugFlagBootstrap>
-                        </ContextMenuProvider>
-                    </ChatPanelFlagProvider>
+                    <DisplaySettingsProvider>
+                        <ChatPanelFlagProvider>
+                            <ContextMenuProvider>
+                                <DebugFlagBootstrap>
+                                    <AppWrapper />
+                                </DebugFlagBootstrap>
+                            </ContextMenuProvider>
+                        </ChatPanelFlagProvider>
+                    </DisplaySettingsProvider>
                 </ThemeProvider>
             </LanguageProvider>
         </ErrorBoundary>
