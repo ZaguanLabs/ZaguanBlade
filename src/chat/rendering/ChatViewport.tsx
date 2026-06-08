@@ -155,7 +155,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
     return (
         <div className="relative min-h-0 flex-1">
             <div ref={scrollRef} onScroll={handleScroll} onWheel={handleSmoothWheel} className="h-full overflow-y-auto overscroll-contain [overflow-anchor:none] scrollbar-thin scrollbar-thumb-(--bg-surface-hover) scrollbar-track-transparent">
-                <div className="mx-auto flex w-full max-w-none flex-col gap-0.5 px-0.5 py-4 md:px-1">
+                <div className="mx-auto flex w-full max-w-none flex-col gap-1 px-0.5 py-4 md:px-1">
                     {messages.length === 0 && (
                         compactEmptyStatesV1 ? (
                             <div className="mx-3 mt-3 border-b border-(--separator-subtle) px-1 pb-4 text-left">

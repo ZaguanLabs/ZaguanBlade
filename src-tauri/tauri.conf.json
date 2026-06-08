@@ -18,7 +18,7 @@
         "resizable": true,
         "decorations": false,
         "center": true,
-        "visible": true,
+        "visible": false,
         "transparent": false,
         "backgroundColor": [10, 10, 10, 255]
       }

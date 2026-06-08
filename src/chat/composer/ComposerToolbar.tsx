@@ -46,7 +46,7 @@ export const ComposerToolbar: React.FC<{
     onStop,
 }) => (
     <>
-        <div className="flex items-center justify-between gap-2 border-b border-(--border-subtle)/60 px-2 py-1.5">
+        <div className="flex items-center justify-between gap-2 border-b border-(--border-subtle)/60 px-2 py-1">
             <div className="flex items-center gap-1.5">
                 <ScreenshotPickerLauncher
                     disabled={disabled}
@@ -86,7 +86,7 @@ export const ComposerToolbar: React.FC<{
             onClick={loading && !canSend ? onStop : onSubmit}
             disabled={disabled || (!canSend && !loading)}
             aria-label={loading && !canSend ? 'Stop response' : 'Send message'}
-            className={`absolute bottom-8 right-4 z-20 inline-flex h-9 w-9 items-center justify-center rounded-[calc(var(--panel-radius)*0.55)] border transition-colors ${loading && !canSend
+            className={`absolute bottom-10 right-5 z-20 inline-flex h-7 w-7 items-center justify-center rounded-full border transition-colors ${loading && !canSend
                 ? 'border-[color-mix(in_srgb,var(--state-danger)_34%,transparent)] bg-[color-mix(in_srgb,var(--state-danger)_12%,transparent)] text-(--state-danger)'
                 : 'border-(--border-subtle) bg-(--bg-surface) text-(--fg-tertiary) hover:text-(--fg-primary)'
                 }`}

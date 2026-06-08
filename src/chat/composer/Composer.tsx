@@ -262,8 +262,7 @@ export const Composer: React.FC<ComposerProps> = ({
     return (
         <>
             <div className="shrink-0 border-t border-(--border-subtle) bg-(--bg-panel)">
-                <div className="px-2 pb-2 pt-2">
-                    <div className={`relative rounded-[calc(var(--panel-radius)*0.9)] border bg-(--bg-surface)/85 shadow-(--shadow-md) ${chatMode === 'planning' ? 'border-[color-mix(in_srgb,var(--accent-planning)_42%,transparent)]' : 'border-(--border-subtle)'}`}>
+                <div className="relative px-2 pb-1 pt-1">
                     <ComposerToolbar
                         loading={loading}
                         disabled={disabled}
@@ -325,7 +324,6 @@ export const Composer: React.FC<ComposerProps> = ({
                             <span>{t('chat.composer.enterToSend')}</span>
                             <span>{t('chat.composer.shiftEnterForNewline')}</span>
                         </div>
-                    </div>
                     </div>
                 </div>
             </div>

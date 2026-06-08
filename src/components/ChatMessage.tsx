@@ -250,7 +250,7 @@ const ReferencedPathsDisplay: React.FC<{
     }
 
     return (
-        <div className="mb-2 overflow-hidden rounded-[calc(var(--panel-radius)*0.75)] border border-(--accent-mention)/15 bg-[color-mix(in_srgb,var(--accent-mention)_6%,transparent)]">
+        <div className="overflow-hidden rounded-[calc(var(--panel-radius)*0.75)] border border-(--accent-mention)/15 bg-[color-mix(in_srgb,var(--accent-mention)_6%,transparent)]">
             <div className="flex items-center gap-2 border-b border-(--accent-mention)/10 px-3 py-1.5 text-[10px] text-(--accent-mention)/90">
                 <span className="font-semibold uppercase tracking-[0.16em]">{t('chat.referencedPaths')}</span>
                 <span className="text-(--accent-mention)/60">{mentions.length}</span>
@@ -335,7 +335,7 @@ const CompactWorkLog: React.FC<{
     const hiddenCount = entries.length - visibleEntries.length;
 
     return (
-        <div className="mb-2 rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-surface)/45 px-2.5 py-2">
+        <div className="rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-surface)/45 px-2.5 py-2">
             <button
                 type="button"
                 className="flex w-full items-center justify-between gap-3 text-left"
@@ -415,7 +415,7 @@ const ActivityGroupDisplay: React.FC<{
     registerActivityTarget?: (targetKey: string, element: HTMLDivElement | null) => void;
 }> = ({ items, pendingActions, pendingApprovalRequest, onApproveCommand, onSkipCommand, onApproveApprovalRequest, onDenyApprovalRequest, onApproveSingleCommand, onSkipSingleCommand, onUndoTool, onStopCommand, onOpenFile, workspaceRoot, registerActivityTarget }) => {
     return (
-        <div className="mb-2 space-y-1.5">
+        <div className="space-y-1.5">
             {items.map((item) => {
                 if (item.kind === 'tool_call') {
                     const toolCall = item.toolCall;
@@ -763,7 +763,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
 
     return (
         <div
-            className={`group px-1.5 ${isContinued ? 'pt-0 pb-0.5' : 'pt-1.5 pb-1.5'} ${isTool ? 'opacity-70' : ''}`}
+            className={`group px-1.5 ${isTool ? 'opacity-70' : ''}`}
             onContextMenu={handleContextMenu}
         >
             <div className={`relative w-full rounded-[calc(var(--panel-radius)*0.9)] border px-3 py-2.5 transition-colors ${
@@ -914,9 +914,9 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                     );
                                 } else if (block.type === 'text') {
                                 return (
-                                    <div key={block.id || `text-${idx}`} className="mb-2 select-text">
+                                    <div key={block.id || `text-${idx}`} className="select-text">
                                         {previousSegment?.kind === 'activity_group' && (
-                                            <div className="mb-3 h-px w-full bg-(--border-default)" style={assistantDividerStyle} />
+                                            <div className="mb-1.5 h-px w-full bg-(--border-default)" style={assistantDividerStyle} />
                                         )}
                                         {renderTextContent(block.content)}
                                     </div>
@@ -948,7 +948,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 const orphanedCmds = message.commandExecutions.filter(c => !blockIds.has(c.id));
                                 if (orphanedCmds.length === 0) return null;
                                 return (
-                                    <div className="mt-3 space-y-2">
+                                    <div className="mt-1.5 space-y-1.5">
                                         {orphanedCmds.map((cmd, idx) => (
                                             <CommandOutputDisplay
                                                 key={`${cmd.timestamp}-${idx}`}
@@ -997,12 +997,12 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                     />
                                 )}
                                 {initialText && (
-                                    <div className="mb-2 select-text">
+                                    <div className="select-text">
                                         {renderTextContent(initialText)}
                                     </div>
                                 )}
                                 {hasToolCalls && shouldShowDetailedWork && (
-                                    <div className="mb-3 space-y-2">
+                                    <div className="space-y-1.5">
                                         {toolCalls
                                             .map((call, idx) => {
                                                 const matchingPendingAction = pendingActions?.find((action) => action.id === call.id);
@@ -1067,12 +1067,12 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 )}
                                 {finalText && (
                                     <div className="select-text">
-                                        {hasToolCalls && <div className="mb-3 h-px w-full bg-(--border-default)" style={assistantDividerStyle} />}
+                                        {hasToolCalls && <div className="mb-1.5 h-px w-full bg-(--border-default)" style={assistantDividerStyle} />}
                                         {renderTextContent(finalText)}
                                     </div>
                                 )}
                                 {shouldShowDetailedWork && message.commandExecutions && message.commandExecutions.length > 0 && (
-                                    <div className="mt-3 space-y-2">
+                                    <div className="mt-1.5 space-y-1.5">
                                         {message.commandExecutions.map((cmd, idx) => (
                                             <CommandOutputDisplay
                                                 key={`${cmd.timestamp}-${idx}`}
@@ -1094,7 +1094,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
 
                 {hasChunkCounter && (
                     <div
-                        className="mt-3 inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[10px] font-mono"
+                        className="mt-1.5 inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[10px] font-mono"
                         style={assistantChunkCounterStyle}
                     >
                         <span>{stream!.seq} chunks</span>

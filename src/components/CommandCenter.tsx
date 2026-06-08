@@ -744,10 +744,6 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
         <>
             <div className="shrink-0 border-t border-(--border-subtle) bg-(--bg-app)">
                 <div className="px-2 pb-2 pt-2">
-                    <div className={`relative rounded-[calc(var(--panel-radius)*0.9)] border shadow-(--shadow-md) transition-colors ${chatMode === 'planning'
-                        ? 'border-(--accent-planning)/35 bg-(--bg-surface)/85'
-                        : 'border-(--border-subtle) bg-(--bg-surface)/85'
-                        }`}>
                     <div className={`relative z-70 border-b px-2 py-1.5 transition-colors ${chatMode === 'planning'
                         ? 'border-(--accent-planning)/25'
                         : 'border-(--border-subtle)/50'
@@ -953,7 +949,6 @@ const CommandCenterComponent: React.FC<CommandCenterProps> = ({
                             <span>{chatMode === 'planning' ? t('chat.composer.planningReadonly') : t('chat.composer.enterToSend')}</span>
                             <span>{chatMode === 'planning' ? t('chat.composer.planningNoEdits') : t('chat.composer.shiftEnterNewline')}</span>
                         </div>
-                    </div>
                 </div>
             </div>
             </div>

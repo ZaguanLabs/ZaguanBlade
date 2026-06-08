@@ -1,6 +1,7 @@
 import React, { Suspense, useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
 import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import App from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ContextMenuProvider } from './components/ui/ContextMenu';
@@ -14,6 +15,7 @@ import { parseBooleanFlag, readDebugFlag } from './utils/debugFlags';
 import { startDebugPerfReporter } from './utils/debugPerf';
 
 let hasHiddenLoadingScreen = false;
+let hasShownWindow = false;
 let hasTriggeredPostUiStartup = false;
 
 window.__ZBLADE_DEBUG_FLAGS__ = {
@@ -55,6 +57,16 @@ function hideLoadingScreen() {
 
 async function revealWindow(signalPostUiStartup: boolean) {
     hideLoadingScreen();
+
+    if (!hasShownWindow) {
+        hasShownWindow = true;
+        try {
+            await getCurrentWindow().show();
+        } catch (err) {
+            hasShownWindow = false;
+            console.error('[WINDOW] Failed to show main window:', err);
+        }
+    }
 
     if (signalPostUiStartup && !hasTriggeredPostUiStartup) {
         hasTriggeredPostUiStartup = true;
