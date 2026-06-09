@@ -73,6 +73,9 @@ pub async fn graceful_shutdown_with_state(
         println!("[Backend] State saved successfully. Exiting.");
     }
 
+    crate::commands::chat::graceful_close_active_chat_session(state.inner()).await;
+    state.ws_connection.disconnect().await;
+
     app_handle.exit(0);
     Ok(())
 }

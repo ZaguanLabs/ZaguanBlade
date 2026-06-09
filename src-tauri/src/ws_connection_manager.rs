@@ -9,6 +9,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, Mutex, RwLock};
 
+const DISCONNECT_FLUSH_WINDOW: Duration = Duration::from_millis(500);
+
 /// Connection state
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConnectionState {
@@ -33,6 +35,7 @@ pub struct WsConnectionManager {
     event_subscribers: Mutex<Vec<mpsc::UnboundedSender<BladeWsEvent>>>,
     session_id: RwLock<Option<String>>,
     auth_state: RwLock<Option<AuthState>>,
+    storage_mode: RwLock<Option<String>>,
 }
 
 impl WsConnectionManager {
@@ -46,6 +49,7 @@ impl WsConnectionManager {
             event_subscribers: Mutex::new(Vec::new()),
             session_id: RwLock::new(None),
             auth_state: RwLock::new(None),
+            storage_mode: RwLock::new(None),
         }
     }
 
@@ -105,6 +109,25 @@ impl WsConnectionManager {
             *state = ConnectionState::Connecting;
         }
 
+        // Ensure any previous client is closed before opening a new connection.
+        // This prevents orphaned websocket tasks when reconnecting repeatedly.
+        let previous_session_id = self.get_session_id().await;
+        let previous_client = {
+            let mut client_lock = self.client.lock().await;
+            client_lock.take()
+        };
+        if let Some(client) = previous_client {
+            if let Err(error) = client
+                .close_with_session_disconnect(previous_session_id, DISCONNECT_FLUSH_WINDOW)
+                .await
+            {
+                eprintln!(
+                    "[WS MANAGER] Failed to send disconnect before reconnect: {}",
+                    error
+                );
+            }
+        }
+
         {
             let mut auth_state = self.auth_state.write().await;
             *auth_state = None;
@@ -115,14 +138,9 @@ impl WsConnectionManager {
             *session_id = None;
         }
 
-        // Ensure any previous client is closed before opening a new connection.
-        // This prevents orphaned websocket tasks when reconnecting repeatedly.
-        let previous_client = {
-            let mut client_lock = self.client.lock().await;
-            client_lock.take()
-        };
-        if let Some(client) = previous_client {
-            client.close().await;
+        {
+            let mut storage_mode = self.storage_mode.write().await;
+            *storage_mode = None;
         }
 
         let blade_url = self.blade_url.read().await.clone();
@@ -220,6 +238,10 @@ impl WsConnectionManager {
                         *session_id = None;
                     }
                     {
+                        let mut storage_mode = self.storage_mode.write().await;
+                        *storage_mode = None;
+                    }
+                    {
                         let mut client_lock = self.client.lock().await;
                         client_lock.take();
                     }
@@ -241,6 +263,10 @@ impl WsConnectionManager {
         {
             let mut session_id = self.session_id.write().await;
             *session_id = None;
+        }
+        {
+            let mut storage_mode = self.storage_mode.write().await;
+            *storage_mode = None;
         }
         {
             let mut client_lock = self.client.lock().await;
@@ -430,6 +456,10 @@ impl WsConnectionManager {
         images: Option<Vec<crate::protocol::ChatImage>>,
         workspace: Option<WorkspaceInfo>,
     ) -> Result<String, String> {
+        {
+            let mut current_storage_mode = self.storage_mode.write().await;
+            *current_storage_mode = None;
+        }
         let client_lock = self.client.lock().await;
         let client = client_lock.as_ref().ok_or("Not connected")?;
         client
@@ -454,8 +484,12 @@ impl WsConnectionManager {
         tag: Option<String>,
         tags: Option<Vec<String>>,
     ) -> Result<String, String> {
-        let client_lock = self.client.lock().await;
-        let client = client_lock.as_ref().ok_or("Not connected")?;
+        {
+            let mut current_storage_mode = self.storage_mode.write().await;
+            *current_storage_mode = storage_mode.clone();
+        }
+
+        let client = self.get_client().await?;
         client
             .send_message_with_storage_mode(
                 session_id,
@@ -554,7 +588,13 @@ impl WsConnectionManager {
             client_lock.take()
         };
         if let Some(client) = client_to_close {
-            client.close().await;
+            let session_id = self.get_session_id().await;
+            if let Err(error) = client
+                .close_with_session_disconnect(session_id, DISCONNECT_FLUSH_WINDOW)
+                .await
+            {
+                eprintln!("[WS MANAGER] Failed to send disconnect: {}", error);
+            }
         }
 
         // Clear subscribers
@@ -569,6 +609,9 @@ impl WsConnectionManager {
         // Clear session
         let mut session = self.session_id.write().await;
         *session = None;
+
+        let mut storage_mode = self.storage_mode.write().await;
+        *storage_mode = None;
 
         eprintln!("[WS MANAGER] Disconnected");
     }

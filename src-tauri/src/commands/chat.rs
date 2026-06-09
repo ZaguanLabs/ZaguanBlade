@@ -4,6 +4,51 @@ use crate::conversation::ConversationHistory;
 use crate::conversation_store;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State, Window};
 
+const DISCONNECT_FLUSH_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
+const SHUTDOWN_DISCONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(900);
+
+pub(crate) async fn graceful_close_active_chat_session(state: &AppState) {
+    let (close_target, was_active) = {
+        let mut mgr = state.chat_manager.lock().unwrap();
+        let close_target = mgr.stop_signal_target();
+        let was_active = mgr.begin_stop();
+        if was_active {
+            mgr.abort_stream_task();
+        }
+        (close_target, was_active)
+    };
+
+    let Some((ws_client, request_id, session_id)) = close_target else {
+        return;
+    };
+
+    if was_active && (request_id.is_some() || session_id.is_some()) {
+        if let Err(error) = ws_client
+            .send_cancel_request(request_id.clone(), session_id.clone())
+            .await
+        {
+            eprintln!(
+                "[SHUTDOWN] Failed to send cancel_request before disconnect: {}",
+                error
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    match tokio::time::timeout(
+        SHUTDOWN_DISCONNECT_TIMEOUT,
+        ws_client.close_with_session_disconnect(session_id, DISCONNECT_FLUSH_WINDOW),
+    )
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => eprintln!("[SHUTDOWN] Failed to send disconnect: {}", error),
+        Err(_) => {
+            eprintln!("[SHUTDOWN] Timed out while sending disconnect; closing without waiting")
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn send_message<R: Runtime>(
     message: String,
@@ -104,6 +149,8 @@ pub async fn load_conversation(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
+    graceful_close_active_chat_session(state.inner()).await;
+
     let blocking_id = id.clone();
     let stored = tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
@@ -139,6 +186,8 @@ pub async fn new_conversation(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<String, String> {
+    graceful_close_active_chat_session(state.inner()).await;
+
     // Save current conversation if it has messages
     let stored_to_save = {
         let conversation = state.conversation.lock().unwrap();
@@ -266,7 +315,15 @@ pub fn stop_generation(state: State<'_, AppState>, app_handle: tauri::AppHandle)
                 );
             }
 
-            ws_client.close().await;
+            if let Err(error) = ws_client
+                .close_with_session_disconnect(session_id.clone(), DISCONNECT_FLUSH_WINDOW)
+                .await
+            {
+                eprintln!(
+                    "[STOP] Failed to send disconnect after cancel_request: {}",
+                    error
+                );
+            }
 
             let state = app_for_stop.state::<AppState>();
             let mut mgr = state.chat_manager.lock().unwrap();

@@ -24,6 +24,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
+const DISCONNECT_FLUSH_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
+
 fn merge_tool_call_deltas(buf: &mut Vec<ToolCall>, deltas: &[ToolCallDelta]) {
     for d in deltas {
         // DEBUG: Log what we're receiving
@@ -870,7 +872,15 @@ impl ChatManager {
             // eprintln!("[CHAT MGR] Closing previous WebSocket connection");
             let old_client_clone = old_client.clone();
             tokio::spawn(async move {
-                old_client_clone.close().await;
+                if let Err(error) = old_client_clone
+                    .close_with_session_disconnect(None, DISCONNECT_FLUSH_WINDOW)
+                    .await
+                {
+                    eprintln!(
+                        "[CHAT MGR] Failed to send disconnect before replacing WebSocket: {}",
+                        error
+                    );
+                }
             });
         }
 

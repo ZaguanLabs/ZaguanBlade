@@ -34,6 +34,7 @@ struct WsConnection {
     tx: mpsc::UnboundedSender<WsMessage>,
     session_id: Option<String>,
     active_request_id: Option<String>,
+    storage_mode: Option<String>,
 }
 
 enum WsMessage {
@@ -326,6 +327,11 @@ struct CancelRequestPayload {
 }
 
 #[derive(Debug, Serialize)]
+struct DisconnectPayload {
+    session_id: String,
+}
+
+#[derive(Debug, Serialize)]
 struct ConversationContextPayload {
     session_id: String,
     messages: Vec<serde_json::Value>,
@@ -450,6 +456,7 @@ impl BladeWsClient {
                 tx: msg_tx.clone(),
                 session_id: None,
                 active_request_id: None,
+                storage_mode: None,
             });
         }
 
@@ -727,7 +734,7 @@ impl BladeWsClient {
             tag,
             tags,
             api_key: self.api_key.clone(),
-            storage_mode,
+            storage_mode: storage_mode.clone(),
             mode,
             planning_mode,
             local_conversation_state,
@@ -759,6 +766,7 @@ impl BladeWsClient {
             .send(WsMessage::Send(json))
             .map_err(|e| format!("Failed to send message: {}", e))?;
         conn.active_request_id = Some(request_id);
+        conn.storage_mode = storage_mode;
 
         Ok(())
     }
@@ -1040,6 +1048,66 @@ impl BladeWsClient {
     pub async fn get_active_request_id(&self) -> Option<String> {
         let conn = self.connection.lock().await;
         conn.as_ref().and_then(|c| c.active_request_id.clone())
+    }
+
+    fn is_server_backed_storage_mode(storage_mode: Option<&str>) -> bool {
+        !matches!(storage_mode, Some(mode) if mode.eq_ignore_ascii_case("local"))
+    }
+
+    fn disconnect_message_json(session_id: String) -> Result<String, String> {
+        let msg = WsBaseMessage {
+            id: format!("disconnect-{}", uuid::Uuid::new_v4()),
+            msg_type: "disconnect".to_string(),
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            payload: Some(
+                serde_json::to_value(DisconnectPayload { session_id })
+                    .map_err(|e| format!("JSON serialization error: {}", e))?,
+            ),
+        };
+
+        serde_json::to_string(&msg).map_err(|e| format!("JSON serialization error: {}", e))
+    }
+
+    pub async fn send_disconnect(&self, session_id: String) -> Result<(), String> {
+        let (tx, should_send) = {
+            let conn = self.connection.lock().await;
+            let conn = conn.as_ref().ok_or("Not connected")?;
+            (
+                conn.tx.clone(),
+                Self::is_server_backed_storage_mode(conn.storage_mode.as_deref()),
+            )
+        };
+
+        if !should_send {
+            return Ok(());
+        }
+
+        let json = Self::disconnect_message_json(session_id)?;
+        tx.send(WsMessage::Send(json))
+            .map_err(|e| format!("Failed to send disconnect: {}", e))
+    }
+
+    /// Send the Blade disconnect lifecycle message when possible, then close the socket.
+    pub async fn close_with_session_disconnect(
+        &self,
+        session_id_hint: Option<String>,
+        flush_window: std::time::Duration,
+    ) -> Result<(), String> {
+        let session_id = match session_id_hint {
+            Some(session_id) => Some(session_id),
+            None => self.get_session_id().await,
+        };
+
+        let mut result = Ok(());
+        if let Some(session_id) = session_id {
+            result = self.send_disconnect(session_id).await;
+            if result.is_ok() && !flush_window.is_zero() {
+                tokio::time::sleep(flush_window).await;
+            }
+        }
+
+        self.close().await;
+        result
     }
 
     /// Close the WebSocket connection
@@ -1778,6 +1846,26 @@ mod tests {
         assert_eq!(value["request_id"], "chat-123");
         assert_eq!(value["session_id"], "sess-456");
         assert_eq!(value["reason"], "user_stop");
+    }
+
+    #[test]
+    fn disconnect_message_payload_includes_session_id() {
+        let json = BladeWsClient::disconnect_message_json("sess-456".to_string()).unwrap();
+        let value: Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(value["type"], "disconnect");
+        assert!(value["id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("disconnect-")));
+        assert_eq!(value["payload"]["session_id"], "sess-456");
+    }
+
+    #[test]
+    fn local_storage_mode_is_not_server_backed() {
+        assert!(!BladeWsClient::is_server_backed_storage_mode(Some("local")));
+        assert!(!BladeWsClient::is_server_backed_storage_mode(Some("LOCAL")));
+        assert!(BladeWsClient::is_server_backed_storage_mode(Some("server")));
+        assert!(BladeWsClient::is_server_backed_storage_mode(None));
     }
 
     #[test]
