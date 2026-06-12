@@ -247,24 +247,6 @@ Built with Tauri v2 (not Electron):
 
 ---
 
-## Using Blade Without a Subscription
-
-You can use Zaguán Blade without a subscription by connecting local AI models. In that mode, Blade works as an open source local AI editor with file, editor, terminal, and project tooling.
-
-Local AI is the best way to try Blade before subscribing, and it is useful for private experimentation and lighter development tasks.
-
-For setup instructions and Local AI guidance, see **[zblade.dev/docs](https://zblade.dev/docs/)**.
-
-## Using Blade With a Subscription
-
-A Zaguán subscription connects Blade to the hosted **Zaguán Coder Daemon**.
-
-Most advanced AI workflows and power features require the hosted backend. This includes the intended full experience for deeper codebase investigation, managed agentic workflows, stronger model use, and future commercial workflows.
-
-👉 **[Get a subscription at ZaguanAI.com](https://zaguanai.com/pricing)**
-
----
-
 ## Installation
 
 ### Pre-built Binaries
@@ -305,58 +287,20 @@ For detailed instructions, see **[Build Guide](docs/BUILD_FROM_SOURCE.md)**.
    - Add your Zaguán API key for the hosted Zaguán Coder Daemon experience
 5. **Start chatting** with the AI in the right panel
 
-The AI can:
-- Read and edit files
-- Run terminal commands (with approval)
-- Search your codebase
-- Explain code
-- Refactor and debug
-- Create new files and directories
+Blade can read and edit files, run approved terminal commands, search your codebase, explain code, refactor, debug, and create new files or directories.
 
-Local model capability varies. Most power features require a Zaguán subscription.
+Local model capability varies. Most power features require a Zaguán subscription. See **[zblade.dev/docs](https://zblade.dev/docs/)** for setup and usage guidance.
 
 ---
 
-## Key Features in Detail
+## Capability Summary
 
-### AI Chat with Full Context
-- AI sees your active file, cursor position, and open files
-- Automatic context assembly based on relevance
-- Multi-turn conversations with tool execution
-- Streaming responses
-
-### Agentic Tool Execution
-- **File operations**: Read, write, edit, delete, move, copy
-- **Terminal commands**: Run with approval, background execution
-- **Search**: Grep, file search, symbol search
-- **Git**: Status, diff, commit, branch operations
-- **Web search**: Research capabilities through hosted Zaguán workflows where available
-
-### Uncommitted Changes System
-- All AI changes tracked automatically
-- View diffs for each change
-- Accept or reject per file
-- Batch accept/reject all changes
-- Full history with snapshots
-
-### Integrated Terminal
-- Multiple terminal instances
-- Persistent across sessions
-- AI can read terminal output
-- Command approval workflow
-
-### Symbol Indexing
-- Tree-sitter based parsing
-- SQLite full-text search
-- Fast symbol lookup
-- Supports: Rust, TypeScript, JavaScript, Python, TSX, JSX
-
-### Git Integration
-- Visual diff viewer
-- Commit history
-- Branch management
-- Stage/unstage files
-- Integrated with AI workflow
+- **AI chat** with active-file, cursor, open-file, and workspace context
+- **Tool execution** for file operations, approved terminal commands, search, Git, and hosted web-backed research where available
+- **Change review** with tracked uncommitted changes, diffs, accept/reject controls, and history snapshots
+- **Integrated terminal** with multiple sessions, persistence, and command approval workflows
+- **Symbol indexing** for Rust, TypeScript, JavaScript, Python, TSX, and JSX
+- **Git integration** for diffs, history, branches, staging, and AI-assisted workflows
 
 ---
 
