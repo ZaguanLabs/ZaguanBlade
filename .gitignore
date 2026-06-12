@@ -63,6 +63,7 @@ src-tauri/Cargo.lock
 *.dll
 
 # Temporary files
+.tmp/
 tmp/
 temp_next/
 

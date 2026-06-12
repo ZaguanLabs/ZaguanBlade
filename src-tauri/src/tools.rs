@@ -860,6 +860,18 @@ mod tests {
     }
 
     #[test]
+    fn read_file_returns_disk_content() {
+        let workspace = tempdir().expect("tempdir");
+        let file_path = workspace.path().join("current.txt");
+        fs::write(&file_path, "disk content\n").expect("write test file");
+
+        let result = execute_tool(workspace.path(), "read_file", r#"{"path":"current.txt"}"#);
+
+        assert!(result.success, "read_file should succeed");
+        assert!(result.content.contains("disk content"));
+    }
+
+    #[test]
     fn read_many_files_includes_metrics_in_summary() {
         let workspace = tempdir().expect("tempdir");
         let file_path = workspace.path().join("example.txt");
@@ -1508,62 +1520,28 @@ fn read_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -
     };
 
     match fs::read_to_string(&abs) {
-        Ok(s) => {
-            let content = if s.is_empty() {
-                format!(
-                    "=== File: {} (empty) ===\n// This file exists but contains no content.",
-                    abs.to_string_lossy()
-                )
-            } else {
-                format!("=== File: {} ===\n{}", abs.to_string_lossy(), s)
-            };
-            ToolResult::ok(content)
-        }
+        Ok(s) => ToolResult::ok(format_read_file_content(&abs, &s)),
         Err(e) => ToolResult::err(e.to_string()),
+    }
+}
+
+fn format_read_file_content(abs: &Path, content: &str) -> String {
+    if content.is_empty() {
+        format!(
+            "=== File: {} (empty) ===\n// This file exists but contains no content.",
+            abs.to_string_lossy()
+        )
+    } else {
+        format!("=== File: {} ===\n{}", abs.to_string_lossy(), content)
     }
 }
 
 fn read_file_with_app<R: tauri::Runtime>(
     workspace_root: &Path,
     args: &HashMap<String, serde_json::Value>,
-    app_handle: Option<&tauri::AppHandle<R>>,
+    _app_handle: Option<&tauri::AppHandle<R>>,
 ) -> ToolResult {
-    let Some(handle) = app_handle else {
-        return read_file(workspace_root, args);
-    };
-
-    let Some(path) = get_str_arg(args, &["path", "file_path", "filepath", "filename"]) else {
-        return ToolResult::err("missing required arg: path (or file_path)");
-    };
-
-    let abs = match validate_path_under_workspace(workspace_root, Path::new(&path)) {
-        Ok(p) => p,
-        Err(e) => return ToolResult::err(e),
-    };
-
-    let content_result = match language_service_from_app_handle(Some(handle)) {
-        Ok(service) => service
-            .get_file_content(&abs.to_string_lossy())
-            .map_err(|e| e.to_string()),
-        Err(_) => {
-            return read_file(workspace_root, args);
-        }
-    };
-
-    match content_result {
-        Ok(s) => {
-            let content = if s.is_empty() {
-                format!(
-                    "=== File: {} (empty) ===\n// This file exists but contains no content.",
-                    abs.to_string_lossy()
-                )
-            } else {
-                format!("=== File: {} ===\n{}", abs.to_string_lossy(), s)
-            };
-            ToolResult::ok(content)
-        }
-        Err(e) => ToolResult::err(e),
-    }
+    read_file(workspace_root, args)
 }
 
 fn read_many_files(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {

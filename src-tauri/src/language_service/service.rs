@@ -2318,7 +2318,9 @@ impl LanguageService {
     fn load_buffer_snapshot(&self, file_path: &str) -> Result<Arc<BufferSnapshot>, LanguageError> {
         let key = self.snapshot_key(file_path);
         if let Some(snapshot) = self.buffer_snapshots.get(&key) {
-            return Ok(snapshot);
+            if snapshot.is_live() {
+                return Ok(snapshot);
+            }
         }
 
         let full_path = self.resolve_path(file_path);
@@ -5876,6 +5878,41 @@ func helper() {}
                 "{ \"name\": \"demo\", \"private\": true }"
             )
             .is_ok());
+    }
+
+    #[test]
+    fn test_disk_snapshot_reads_refresh_from_disk() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(temp_dir.path().join("copied.md"), "").unwrap();
+        assert_eq!(service.get_file_content("copied.md").unwrap(), "");
+
+        fs::write(
+            temp_dir.path().join("copied.md"),
+            "# Copied Document\n\nThe file now has content.\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            service.get_file_content("copied.md").unwrap(),
+            "# Copied Document\n\nThe file now has content.\n"
+        );
+    }
+
+    #[test]
+    fn test_live_snapshot_still_overrides_disk_snapshot() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(temp_dir.path().join("open.md"), "saved content\n").unwrap();
+        service
+            .did_open("open.md", "unsaved editor content\n")
+            .unwrap();
+        fs::write(temp_dir.path().join("open.md"), "new disk content\n").unwrap();
+
+        assert_eq!(
+            service.get_file_content("open.md").unwrap(),
+            "unsaved editor content\n"
+        );
     }
 
     #[test]

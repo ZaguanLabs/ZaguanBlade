@@ -67,6 +67,7 @@ pub struct TerminalManager {
     pub ptys: Arc<Mutex<HashMap<String, PtyState>>>,
     pub pending_writes: Arc<Mutex<HashMap<String, Vec<PendingTerminalWrite>>>>,
     pub external_killers: Arc<Mutex<HashMap<String, Box<dyn ChildKiller + Send + Sync>>>>,
+    pub external_writers: Arc<Mutex<HashMap<String, Box<dyn Write + Send>>>>,
 }
 
 impl TerminalManager {
@@ -75,6 +76,7 @@ impl TerminalManager {
             ptys: Arc::new(Mutex::new(HashMap::new())),
             pending_writes: Arc::new(Mutex::new(HashMap::new())),
             external_killers: Arc::new(Mutex::new(HashMap::new())),
+            external_writers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -1117,6 +1119,14 @@ pub fn write_to_terminal(
     let mut ptys = state.ptys.lock().map_err(|e| e.to_string())?;
     let Some(pty) = ptys.get_mut(&id) else {
         drop(ptys);
+        let mut external_writers = state.external_writers.lock().map_err(|e| e.to_string())?;
+        if let Some(writer) = external_writers.get_mut(&id) {
+            writer
+                .write_all(data.as_bytes())
+                .map_err(|e| e.to_string())?;
+            return writer.flush().map_err(|e| e.to_string());
+        }
+        drop(external_writers);
         queue_pending_write(id, data, hidden, &state.pending_writes);
         return Ok(());
     };
@@ -1161,6 +1171,11 @@ pub fn kill_terminal(id: String, state: tauri::State<'_, TerminalManager>) -> Re
         .map_err(|e| e.to_string())?
         .remove(&id)
     {
+        state
+            .external_writers
+            .lock()
+            .map_err(|e| e.to_string())?
+            .remove(&id);
         return killer.kill().map_err(|e| e.to_string());
     }
     let mut ptys = state.ptys.lock().map_err(|e| e.to_string())?;
@@ -1270,6 +1285,8 @@ pub async fn execute_terminal_command(
     let working_dir = cwd.or_else(|| workspace_default_cwd(&state));
     let executing_commands = state.executing_commands.clone();
     let external_killers = terminal_manager.external_killers.clone();
+    let external_writers = terminal_manager.external_writers.clone();
+    let pending_writes = terminal_manager.pending_writes.clone();
 
     tokio::task::spawn_blocking(move || {
         let pty_system = NativePtySystem::default();
@@ -1291,7 +1308,15 @@ pub async fn execute_terminal_command(
         let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
         let child_killer = child.clone_killer();
         let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+        let mut writer = pair.master.take_writer().map_err(|e| e.to_string())?;
         drop(pair.slave);
+
+        for pending_data in take_pending_writes(&terminal_id, &pending_writes) {
+            writer
+                .write_all(pending_data.data.as_bytes())
+                .map_err(|e| e.to_string())?;
+        }
+        writer.flush().map_err(|e| e.to_string())?;
 
         let cancel_flag = Arc::new(AtomicBool::new(false));
         {
@@ -1301,6 +1326,10 @@ pub async fn execute_terminal_command(
         {
             let mut killers = external_killers.lock().map_err(|e| e.to_string())?;
             killers.insert(terminal_id.clone(), child_killer);
+        }
+        {
+            let mut writers = external_writers.lock().map_err(|e| e.to_string())?;
+            writers.insert(terminal_id.clone(), writer);
         }
 
         thread::spawn(move || {
@@ -1389,6 +1418,9 @@ pub async fn execute_terminal_command(
                     Err(_) => 1,
                 };
                 let _ = reader_handle.join();
+                if let Ok(mut writers) = external_writers.lock() {
+                    writers.remove(&terminal_id);
+                }
                 if let Ok(mut killers) = external_killers.lock() {
                     killers.remove(&terminal_id);
                 }
@@ -1417,6 +1449,9 @@ pub async fn execute_terminal_command(
 
             if let Ok(mut killers) = external_killers.lock() {
                 killers.remove(&terminal_id);
+            }
+            if let Ok(mut writers) = external_writers.lock() {
+                writers.remove(&terminal_id);
             }
             if let Ok(mut executing) = executing_commands.lock() {
                 executing.remove(&call_id);

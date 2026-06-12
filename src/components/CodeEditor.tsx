@@ -65,15 +65,23 @@ const dispatchPreservingScroll = (view: EditorView, spec: TransactionSpec) => {
     runPreservingScroll(view, () => view.dispatch(spec));
 };
 
+type EditorMainSelection = { anchor: number; head?: number };
+
+const getClampedMainSelection = (view: EditorView, contentLength: number): EditorMainSelection => {
+    const { main } = view.state.selection;
+    return {
+        anchor: Math.min(main.anchor, contentLength),
+        head: Math.min(main.head, contentLength),
+    };
+};
+
 const replaceEditorDocument = (view: EditorView, content: string, unifiedDiff?: string, preserveScroll = false) => {
     const diffState = createDiffStateFromUnifiedDiff(unifiedDiff);
-    const { main } = view.state.selection;
-    const safeAnchor = Math.min(main.anchor, content.length);
-    const safeHead = Math.min(main.head, content.length);
+    const selection = getClampedMainSelection(view, content.length);
 
     const spec = {
         changes: { from: 0, to: view.state.doc.length, insert: content },
-        selection: { anchor: safeAnchor, head: safeHead },
+        selection,
         effects: [
             setBaseContent.of(content),
             setDiffState.of(diffState),
@@ -198,12 +206,17 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
         };
     }, []);
 
-    const createEditorState = useCallback((targetContent: string, targetFilename?: string | null) => {
+    const createEditorState = useCallback((
+        targetContent: string,
+        targetFilename?: string | null,
+        initialSelection?: EditorMainSelection,
+    ) => {
         const targetIsMarkdown = targetFilename?.endsWith('.md') || targetFilename?.endsWith('.markdown') || false;
         const targetShouldWrap = lineWrapRef.current ?? targetIsMarkdown;
 
         return EditorState.create({
             doc: targetContent,
+            selection: initialSelection,
             extensions: [
                 // Core editor features
                 lineNumbers(),
@@ -377,7 +390,10 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
         if (input.resetHistory) {
             const targetFilename = input.path ?? filenameRef.current;
             const resetEditorState = () => {
-                view.setState(createEditorState(input.content, targetFilename));
+                const initialSelection = input.preserveScroll
+                    ? getClampedMainSelection(view, input.content.length)
+                    : undefined;
+                view.setState(createEditorState(input.content, targetFilename, initialSelection));
                 view.dispatch({
                     effects: [
                         setBaseContent.of(input.content),

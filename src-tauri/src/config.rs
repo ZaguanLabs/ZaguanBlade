@@ -109,7 +109,8 @@ impl ApiConfig {
         self.theme = remote.theme.clone();
         self.markdown_view = remote.markdown_view.clone();
         self.language = remote.language.clone();
-        self.editor_font_size = clamp_font_size(remote.editor_font_size, default_editor_font_size());
+        self.editor_font_size =
+            clamp_font_size(remote.editor_font_size, default_editor_font_size());
         self.chat_font_size = clamp_font_size(remote.chat_font_size, default_chat_font_size());
         self.telegram_bot_token = remote.telegram_bot_token.clone();
     }
