@@ -20,6 +20,7 @@ interface ExplorerPanelProps {
 export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, activeFile }) => {
     const { t } = useTranslation();
     const [roots, setRoots] = useState<FileEntry[]>([]);
+    const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [refreshKey, setRefreshKey] = useState(0);
     const [outlineHeight, setOutlineHeight] = useState(300); // Fixed height for outline for now
@@ -27,6 +28,15 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
     const loadRoot = React.useCallback(async () => {
         if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
         try {
+            const currentWorkspace = await invoke<string | null>('get_current_workspace');
+            setWorkspaceRoot(currentWorkspace);
+
+            if (!currentWorkspace) {
+                setRoots([]);
+                setError(null);
+                return;
+            }
+
             // List workspace root
             await BladeDispatcher.file({
                 type: 'List',
@@ -56,6 +66,7 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
     useEffect(() => {
         // Listen for refresh requests from backend
         let unlistenFn: (() => void) | undefined;
+        let unlistenWorkspaceFn: (() => void) | undefined;
         let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
         const setupListener = async () => {
@@ -68,11 +79,18 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
                     debounceTimer = null;
                 }, 500);
             });
+
+            unlistenWorkspaceFn = await listen<{ workspace_path: string }>('workspace-changed', (event) => {
+                setWorkspaceRoot(event.payload.workspace_path);
+                setRefreshKey(prev => prev + 1);
+                loadRoot();
+            });
         };
         setupListener();
 
         return () => {
             if (unlistenFn) unlistenFn();
+            if (unlistenWorkspaceFn) unlistenWorkspaceFn();
             if (debounceTimer) clearTimeout(debounceTimer);
         };
     }, [loadRoot]);
@@ -101,7 +119,7 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
                 </div>
 
                 <div className="flex-1 overflow-y-auto pt-2 scrollbar-thin scrollbar-thumb-(--bg-surface-hover)">
-                    {roots.length === 0 ? (
+                    {!workspaceRoot ? (
                         <div className="p-4 flex flex-col gap-2">
                             <p className="text-xs text-(--fg-tertiary) italic text-center">{t('fileTree.noWorkspace')}.</p>
                             <div className="flex gap-1">
@@ -125,6 +143,7 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
                                 onFileSelect={(path) => onFileSelect(path)}
                                 activeFile={activeFile}
                                 roots={roots}
+                                workspaceRoot={workspaceRoot}
                                 refreshKey={refreshKey}
                             />
                         </ErrorBoundary>

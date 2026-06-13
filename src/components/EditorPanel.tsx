@@ -293,6 +293,11 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     const previousActiveFileRef = useRef(activeFile);
     const authoritativeReloadRef = useRef(false);
     const latestFileReadIntentIdRef = useRef<string | null>(null);
+    const pendingLocalSaveRef = useRef<{
+        path: string;
+        content: string;
+        clearTimer: ReturnType<typeof setTimeout> | null;
+    } | null>(null);
 
     const pathsMatch = (a: string, b: string): boolean => {
         if (a === b) return true;
@@ -509,6 +514,11 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 void EditorFacade.closeDocument(activeFile);
                 syncedDocumentPathRef.current = null;
             }
+
+            if (pendingLocalSaveRef.current?.clearTimer) {
+                clearTimeout(pendingLocalSaveRef.current.clearTimer);
+                pendingLocalSaveRef.current = null;
+            }
         };
     }, [activeFile]);
 
@@ -524,6 +534,15 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 
         const scheduleExternalReload = () => {
             if (isDirty) {
+                return;
+            }
+
+            const pendingLocalSave = pendingLocalSaveRef.current;
+            if (
+                pendingLocalSave
+                && pathsMatch(pendingLocalSave.path, watchedFile)
+                && pendingLocalSave.content === getActiveEditorContent()
+            ) {
                 return;
             }
 
@@ -598,14 +617,15 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     authoritativeReloadRef.current = false;
                     awaitingInitialSyncRef.current = false;
                     const editorHandle = editorRef.current;
-                    const preserveScroll = editorHandle?.getContent() === fileEvent.payload.data;
-                    editorHandle?.replaceDocument({
-                        path: fileEvent.payload.path,
-                        content: fileEvent.payload.data,
-                        resetHistory: true,
-                        reason: isAuthoritativeReload ? 'revert' : 'reload',
-                        preserveScroll,
-                    });
+                    const editorAlreadyHasContent = editorHandle?.getContent() === fileEvent.payload.data;
+                    if (!editorAlreadyHasContent) {
+                        editorHandle?.replaceDocument({
+                            path: fileEvent.payload.path,
+                            content: fileEvent.payload.data,
+                            resetHistory: true,
+                            reason: isAuthoritativeReload ? 'revert' : 'reload',
+                        });
+                    }
                     setContent(fileEvent.payload.data);
                     liveContentRef.current = fileEvent.payload.data;
                     baseContentRef.current = fileEvent.payload.data;
@@ -679,7 +699,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             }
         }
         loadFile();
-    }, [activeFile, isDirty, reloadTrigger, t]);
+    }, [activeFile, reloadTrigger, t]);
 
     useEffect(() => {
         if (!activeFile || isPdfFile) {
@@ -725,6 +745,17 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         if (activeFile) {
             const currentContent = editorRef.current?.getContent() ?? text;
             try {
+                if (pendingLocalSaveRef.current?.clearTimer) {
+                    clearTimeout(pendingLocalSaveRef.current.clearTimer);
+                }
+                pendingLocalSaveRef.current = {
+                    path: activeFile,
+                    content: currentContent,
+                    clearTimer: setTimeout(() => {
+                        pendingLocalSaveRef.current = null;
+                    }, 1500),
+                };
+
                 await BladeDispatcher.file({
                     type: 'Write',
                     payload: { path: activeFile, content: currentContent }
@@ -739,6 +770,10 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 console.debug("Save intent dispatched:", activeFile);
                 // ToDo: Toast notification
             } catch (e) {
+                if (pendingLocalSaveRef.current?.clearTimer) {
+                    clearTimeout(pendingLocalSaveRef.current.clearTimer);
+                }
+                pendingLocalSaveRef.current = null;
                 console.error("Save failed:", e);
             }
         }
