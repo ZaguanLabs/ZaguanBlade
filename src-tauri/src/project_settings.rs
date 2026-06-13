@@ -86,6 +86,8 @@ pub struct ContextSettings {
     pub max_tokens: u32,
     #[serde(default)]
     pub compression: CompressionSettings,
+    #[serde(default = "default_false")]
+    pub project_index_legacy_enabled: bool,
 }
 
 impl Default for ContextSettings {
@@ -93,6 +95,7 @@ impl Default for ContextSettings {
         Self {
             max_tokens: 8000,
             compression: CompressionSettings::default(),
+            project_index_legacy_enabled: false,
         }
     }
 }
@@ -323,6 +326,7 @@ mod tests {
         assert_eq!(settings.context.max_tokens, 8000);
         assert!(settings.context.compression.enabled);
         assert_eq!(settings.context.compression.model, CompressionModel::Remote);
+        assert!(!settings.context.project_index_legacy_enabled);
         assert!(!settings.privacy.telemetry);
         assert!(!settings.auto_approve_run_commands);
     }
@@ -338,6 +342,10 @@ mod tests {
         assert_eq!(
             restored.auto_approve_run_commands,
             settings.auto_approve_run_commands
+        );
+        assert_eq!(
+            restored.context.project_index_legacy_enabled,
+            settings.context.project_index_legacy_enabled
         );
     }
 

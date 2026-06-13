@@ -5,6 +5,7 @@ use crate::indexer::minimal_index::generate_project_index_min;
 use crate::indexer::preview::get_or_load_preview;
 use crate::indexer::types::{detect_language, ProjectIndex};
 use crate::indexer::watcher::IndexWatcher;
+use crate::project_settings::load_project_settings_or_default;
 use chrono::Utc;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -86,6 +87,15 @@ impl IndexerManager {
     fn refresh_project_context_files_sync(
         &self,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let settings = load_project_settings_or_default(&self.workspace_root);
+        if !settings.context.project_index_legacy_enabled {
+            eprintln!(
+                "[Indexer] Skipping legacy project index Markdown writes; enable context.project_index_legacy_enabled to generate them"
+            );
+            return Ok(());
+        }
+
+        eprintln!("[Indexer] Generating legacy project index Markdown files");
         self.write_project_index_sync()?;
         self.write_project_index_min_sync()?;
         Ok(())
@@ -200,5 +210,56 @@ impl IndexerManager {
 
     pub fn matches_workspace(&self, workspace_root: &Path) -> bool {
         self.workspace_root == workspace_root
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project_settings::{save_project_settings, ProjectSettings};
+
+    fn test_manager(workspace_root: &Path) -> IndexerManager {
+        IndexerManager {
+            workspace_root: workspace_root.to_path_buf(),
+            index: Arc::new(RwLock::new(ProjectIndex::new(workspace_root.to_path_buf()))),
+            _watcher: Arc::new(None),
+        }
+    }
+
+    #[test]
+    fn refresh_project_context_files_skips_legacy_markdown_by_default() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let manager = test_manager(temp_dir.path());
+
+        manager.refresh_project_context_files_sync().unwrap();
+
+        assert!(!temp_dir
+            .path()
+            .join(".zblade/context/project_index.md")
+            .exists());
+        assert!(!temp_dir
+            .path()
+            .join(".zblade/context/project_index_min.md")
+            .exists());
+    }
+
+    #[test]
+    fn refresh_project_context_files_writes_legacy_markdown_when_enabled() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut settings = ProjectSettings::default();
+        settings.context.project_index_legacy_enabled = true;
+        save_project_settings(temp_dir.path(), &settings).unwrap();
+        let manager = test_manager(temp_dir.path());
+
+        manager.refresh_project_context_files_sync().unwrap();
+
+        assert!(temp_dir
+            .path()
+            .join(".zblade/context/project_index.md")
+            .exists());
+        assert!(temp_dir
+            .path()
+            .join(".zblade/context/project_index_min.md")
+            .exists());
     }
 }
