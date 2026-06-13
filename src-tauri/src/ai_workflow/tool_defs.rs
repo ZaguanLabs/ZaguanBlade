@@ -42,7 +42,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "fast_context",
             "function": {
                 "name": "fast_context",
-                "description": "Plan broad or uncertain code tasks before reading many files. Returns ranked primary files, enriched symbol and semantic-anchor metadata, related files, index health, confidence, suggested read ranges, and next steps.",
+                "description": "Plan broad or uncertain code tasks before reading many files. Returns targeted symbol-aware context: ranked primary files, enriched symbol and semantic-anchor metadata, related files, index health, confidence, suggested read ranges, and next steps. Legacy project-index Markdown is excluded unless explicitly requested for fallback compatibility.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -54,7 +54,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
                         "include_tests": { "type": "boolean", "description": "Whether to include likely tests" },
                         "include_docs": { "type": "boolean", "description": "Whether to include related docs" },
                         "include_memory": { "type": "boolean", "description": "Whether to include local project memories" },
-                        "include_project_index_min": { "type": "boolean", "description": "Whether to include project_index_min when available" }
+                        "include_project_index_min": { "type": "boolean", "description": "Legacy fallback only. When true, include project_index_min Markdown if available. Defaults to false." }
                     },
                     "required": ["query"],
                     "additionalProperties": false

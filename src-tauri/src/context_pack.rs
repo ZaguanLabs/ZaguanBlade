@@ -49,7 +49,7 @@ pub fn build_context_pack(
     let include_tests = request.include_tests.unwrap_or(true);
     let include_docs = request.include_docs.unwrap_or(true);
     let include_memory = request.include_memory.unwrap_or(true);
-    let include_project_index_min = request.include_project_index_min.unwrap_or(true);
+    let include_project_index_min = request.include_project_index_min.unwrap_or(false);
     let normalized_active_file =
         active_file.and_then(|path| normalize_workspace_path(workspace_root, path));
     let normalized_open_files = normalize_workspace_paths(workspace_root, open_files);
@@ -1232,7 +1232,7 @@ mod tests {
     }
 
     #[test]
-    fn context_pack_currently_includes_project_index_min_by_default_when_present() {
+    fn context_pack_skips_project_index_min_by_default_when_present() {
         let temp_dir = tempfile::tempdir().unwrap();
         let context_dir = temp_dir.path().join(".zblade/context");
         std::fs::create_dir_all(&context_dir).unwrap();
@@ -1252,6 +1252,42 @@ mod tests {
             include_docs: Some(false),
             include_memory: Some(false),
             include_project_index_min: None,
+        };
+        let open_files: Vec<String> = Vec::new();
+        let payload = build_context_pack(temp_dir.path(), None, &open_files, &request);
+        let project_context = payload.project_context.unwrap();
+
+        assert!(project_context.project_index_min.is_none());
+        assert!(project_context.project_index_min_available);
+        assert!(!project_context.project_index_min_requested);
+        assert!(!project_context.project_index_min_included);
+        assert_eq!(
+            project_context.project_index_min_reason.as_deref(),
+            Some("not_requested")
+        );
+    }
+
+    #[test]
+    fn context_pack_includes_project_index_min_when_explicitly_requested() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let context_dir = temp_dir.path().join(".zblade/context");
+        std::fs::create_dir_all(&context_dir).unwrap();
+        std::fs::write(
+            context_dir.join("project_index_min.md"),
+            "legacy context snapshot",
+        )
+        .unwrap();
+
+        let request = ContextPackRequest {
+            id: "ctx-explicit".to_string(),
+            query: "context".to_string(),
+            queries: Vec::new(),
+            intent: None,
+            max_results: None,
+            include_tests: Some(false),
+            include_docs: Some(false),
+            include_memory: Some(false),
+            include_project_index_min: Some(true),
         };
         let open_files: Vec<String> = Vec::new();
         let payload = build_context_pack(temp_dir.path(), None, &open_files, &request);
