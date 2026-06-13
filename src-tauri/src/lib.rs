@@ -116,10 +116,50 @@ pub fn run() {
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                use tauri::Manager;
+                use tauri::{Emitter, Manager};
                 let state = handle.state::<AppState>();
                 let config_path = crate::config::default_api_config_path();
                 let config = crate::config::load_api_config(&config_path);
+
+                let default_ollama_url = crate::config::default_ollama_url();
+                let should_detect_local_ollama = {
+                    let config = state.config.lock().unwrap();
+                    !config.ollama_enabled
+                        && (config.ollama_url.trim().is_empty()
+                            || config.ollama_url.trim_end_matches('/')
+                                == default_ollama_url.trim_end_matches('/'))
+                };
+
+                if should_detect_local_ollama
+                    && crate::models::ollama::test_connection(&default_ollama_url)
+                        .await
+                        .is_ok()
+                {
+                    let updated_config = {
+                        let mut config = state.config.lock().unwrap();
+                        config.ollama_enabled = true;
+                        config.ollama_url = default_ollama_url.clone();
+                        config.clone()
+                    };
+
+                    crate::models::ollama::clear_cache();
+                    let save_path = config_path.clone();
+                    if let Err(e) = tokio::task::spawn_blocking(move || {
+                        crate::config::save_api_config(&save_path, &updated_config)
+                    })
+                    .await
+                    .map_err(|e| format!("auto-save Ollama settings task failed: {}", e))
+                    .and_then(|result| result)
+                    {
+                        eprintln!("[CONFIG] Failed to persist detected Ollama settings: {}", e);
+                    } else {
+                        eprintln!(
+                            "[CONFIG] Detected local Ollama at {}; enabled local AI settings",
+                            default_ollama_url
+                        );
+                        let _ = handle.emit("local-ai-settings-changed", ());
+                    }
+                }
 
                 if !config.telegram_bot_token.is_empty() {
                     // Start polling

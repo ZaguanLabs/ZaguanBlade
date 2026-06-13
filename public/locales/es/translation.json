@@ -207,6 +207,7 @@
     "noWorkspace": "No hay ningún espacio de trabajo abierto",
     "newFile": "Nuevo archivo",
     "newFolder": "Nueva carpeta",
+    "openProject": "Abrir proyecto",
     "openFolder": "Abrir carpeta",
     "rename": "Renombrar",
     "delete": "Eliminar",

@@ -13,7 +13,7 @@ import { BladeDispatcher } from '../services/blade';
 import { subscribeBladeEvents } from '../services/bladeEvents';
 import { EditorFacade } from '../services/editorFacade';
 import { FileEvent } from '../types/blade';
-import { ArrowRight, Server, Cloud } from 'lucide-react';
+import { ArrowRight, Server, Cloud, FolderOpen } from 'lucide-react';
 import zbladeLogoUrl from '../assets/zblade-in-app-logo.png';
 import { FileChangeBar } from './editor/FileChangeBar';
 import { Breadcrumb } from './editor/Breadcrumb';
@@ -47,7 +47,8 @@ const WelcomePage: React.FC<{
     hasRemoteApiKey?: boolean | null;
     workspaceRoot?: string | null;
     onOpenSettings?: () => void;
-}> = ({ hasRemoteApiKey = null, workspaceRoot = null, onOpenSettings }) => {
+    onOpenProject?: () => void;
+}> = ({ hasRemoteApiKey = null, workspaceRoot = null, onOpenSettings, onOpenProject }) => {
     const { t } = useTranslation();
     const [hasApiKey, setHasApiKey] = useState<boolean>(false);
     const [isLoading, setIsLoading] = useState(hasRemoteApiKey === null);
@@ -120,6 +121,15 @@ const WelcomePage: React.FC<{
                             <>
                                 <button
                                     type="button"
+                                    onClick={onOpenProject}
+                                    className="flex w-full items-center justify-center gap-2 rounded-(--radius-control) border border-(--focus-ring) bg-(--bg-surface) px-3 py-2 text-sm font-medium text-(--fg-primary) transition-colors hover:bg-(--bg-surface-hover)"
+                                >
+                                    <FolderOpen className="h-4 w-4" aria-hidden="true" />
+                                    {t('fileTree.openProject')}
+                                </button>
+
+                                <button
+                                    type="button"
                                     onClick={() => openSettingsSection('localai')}
                                     className="flex w-full items-center justify-center gap-2 rounded-(--radius-control) bg-(--accent-mention) px-3 py-2 text-sm font-medium text-(--fg-bright) transition-opacity hover:opacity-90"
                                 >
@@ -181,6 +191,15 @@ const WelcomePage: React.FC<{
                         <>
                             <button
                                 type="button"
+                                onClick={onOpenProject}
+                                className="flex items-center justify-center gap-2 w-full py-3 px-4 bg-(--bg-surface) hover:bg-(--bg-surface-hover) border border-(--border-focus) text-(--fg-primary) rounded-[calc(var(--panel-radius)*0.65)] font-medium transition-all"
+                            >
+                                <FolderOpen className="w-4 h-4" aria-hidden="true" />
+                                {t('fileTree.openProject')}
+                            </button>
+
+                            <button
+                                type="button"
                                 onClick={() => openSettingsSection('localai')}
                                 className="flex items-center justify-center gap-2 w-full py-3 px-4 bg-(--accent-mention) text-(--fg-bright) rounded-[calc(var(--panel-radius)*0.65)] font-medium transition-opacity shadow-(--shadow-md) hover:opacity-90"
                             >
@@ -234,6 +253,7 @@ interface EditorPanelProps {
     onContentStateChange?: (state: EditorContentState) => void;
     onRegisterContentSnapshot?: (getSnapshot: (() => EditorContentState) | null) => void;
     onOpenSettings?: () => void;
+    onOpenProject?: () => void;
 }
 
 export const EditorPanel: React.FC<EditorPanelProps> = ({
@@ -247,6 +267,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     onContentStateChange,
     onRegisterContentSnapshot,
     onOpenSettings,
+    onOpenProject,
 }) => {
     recordDebugPerf('EditorPanel.render');
     const { t } = useTranslation();
@@ -745,7 +766,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     const activeEditorContent = immediateTabContent ?? content;
 
     if (!activeFile) {
-        return <WelcomePage hasRemoteApiKey={hasRemoteApiKey} workspaceRoot={workspaceRoot} onOpenSettings={onOpenSettings} />;
+        return <WelcomePage hasRemoteApiKey={hasRemoteApiKey} workspaceRoot={workspaceRoot} onOpenSettings={onOpenSettings} onOpenProject={onOpenProject} />;
     }
 
     return (

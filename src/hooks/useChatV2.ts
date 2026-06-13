@@ -1062,6 +1062,22 @@ export function useChatV2(options: UseChatV2Options = {}) {
             return;
         }
 
+        const unlistenPromise = listen('local-ai-settings-changed', () => {
+            void refreshModels().catch((error) => {
+                console.error('[useChatV2] Failed to refresh models after local AI settings changed:', error);
+            });
+        });
+
+        return () => {
+            unlistenPromise.then((unlisten) => unlisten());
+        };
+    }, [refreshModels]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
+            return;
+        }
+
         if (!messageBufferRef.current) {
             messageBufferRef.current = new MessageBuffer(
                 (id, seq, chunk, _isFinal, type) => {

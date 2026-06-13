@@ -207,6 +207,7 @@
     "noWorkspace": "No workspace open",
     "newFile": "New File",
     "newFolder": "New Folder",
+    "openProject": "Open Project",
     "openFolder": "Open Folder",
     "rename": "Rename",
     "delete": "Delete",

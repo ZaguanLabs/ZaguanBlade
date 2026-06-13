@@ -184,6 +184,12 @@ fn apply_zblade_workflow_guidance(prompt: Option<String>) -> String {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
     {
+        Some(prompt)
+            if prompt.contains("You are an AI coding assistant in Zaguán Blade")
+                || prompt.contains("You are Zaguán Blade, a senior pair programmer") =>
+        {
+            prompt
+        }
         Some(prompt) if prompt.contains("ZBlade workflow guidance:") => prompt,
         Some(prompt) => format!("{}\n\n{}", prompt, guidance),
         None => guidance.to_string(),
@@ -206,10 +212,14 @@ fn load_local_system_prompt(
             prompt
                 .replace("{{WORKSPACE_ROOT}}", workspace_root)
                 .replace("{{ACTIVE_FILE}}", active_file_value)
+                .replace("{{SELECTION_OR_CURSOR}}", "Unavailable")
                 .replace("{{OS}}", os_value)
                 .replace("{{SHELL}}", shell_value)
+                .replace("{{CURRENT_DATE}}", date_value)
                 .replace("{{DATE}}", date_value)
                 .replace("{{TIME}}", time_value)
+                .replace("{{AVAILABLE_TOOLS}}", "Provided by Zaguán Blade at runtime")
+                .replace("{{USER_PREFERENCES}}", "Unavailable")
         })
         .filter(|prompt| !prompt.trim().is_empty());
 
@@ -3491,7 +3501,7 @@ mod tests {
     }
 
     #[test]
-    fn local_system_prompt_falls_back_to_zblade_workflow_guidance() {
+    fn local_system_prompt_falls_back_to_bundled_default() {
         let prompt = load_local_system_prompt(
             "test-model-without-local-prompt",
             "/workspace/project",
@@ -3503,9 +3513,33 @@ mod tests {
         )
         .expect("fallback prompt");
 
-        assert!(prompt.contains("fast_context"));
-        assert!(prompt.contains("edit_impact"));
+        assert!(prompt.contains("You are an AI coding assistant in Zaguán Blade"));
+        assert!(prompt.contains("glm-4.7-flash"));
+        assert!(prompt.contains("symbol_search"));
+        assert!(!prompt.contains("ZBlade workflow guidance:"));
+        assert!(!prompt.contains("{{WORKSPACE_ROOT}}"));
         assert!(!prompt.trim_start().starts_with(GEMMA4_THINK_TOKEN));
+    }
+
+    #[test]
+    fn local_system_prompt_uses_cloud_default_for_cloud_models() {
+        let prompt = load_local_system_prompt(
+            "nemotron-3-ultra:cloud",
+            "/workspace/project",
+            "src/main.rs",
+            "linux",
+            "zsh",
+            "2026-06-13",
+            "10:00:00 +0200",
+        )
+        .expect("fallback prompt");
+
+        assert!(prompt.contains("You are Zaguán Blade, a senior pair programmer"));
+        assert!(prompt.contains("Workspace root: /workspace/project"));
+        assert!(prompt.contains("Active file: src/main.rs"));
+        assert!(prompt.contains("Current date: 2026-06-13"));
+        assert!(!prompt.contains("{{CURRENT_DATE}}"));
+        assert!(!prompt.contains("ZBlade workflow guidance:"));
     }
 
     #[test]

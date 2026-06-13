@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useId, useLayoutEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { Minus, Square, X, Maximize2, ChevronDown, FileText } from 'lucide-react';
+import { Minus, Square, X, Maximize2, ChevronDown, FileText, FolderOpen } from 'lucide-react';
 import zbladeAppIcon from '../assets/zblade-app-icon.png';
 import { getFileIcon } from '../lib/fileIcons';
 import { useContextMenu } from './ui/ContextMenu';
@@ -29,6 +29,7 @@ interface AppBarProps {
     onTabCloseAll?: () => void;
     onTabCloseOthers?: (id: string) => void;
     tabStripMaxWidth?: number;
+    onOpenProject?: () => void;
 }
 
 export const AppBar: React.FC<AppBarProps> = ({
@@ -43,6 +44,7 @@ export const AppBar: React.FC<AppBarProps> = ({
     onTabCloseAll,
     onTabCloseOthers,
     tabStripMaxWidth,
+    onOpenProject,
 }) => {
     const [isMaximized, setIsMaximized] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
@@ -303,10 +305,16 @@ export const AppBar: React.FC<AppBarProps> = ({
                                 <button
                                     type="button"
                                     role="menuitem"
-                                    disabled
-                                    className="w-full flex cursor-not-allowed items-center justify-between px-3 py-1.5 text-[12px] text-(--fg-tertiary) opacity-55"
+                                    onClick={() => {
+                                        setFileMenuOpen(false);
+                                        onOpenProject?.();
+                                    }}
+                                    className="w-full flex items-center justify-between gap-3 px-3 py-1.5 text-[12px] text-(--fg-primary) transition-colors hover:bg-(--row-hover)"
                                 >
-                                    <span>{t('fileTree.openFolder')}...</span>
+                                    <span className="flex items-center gap-2">
+                                        <FolderOpen className="h-3.5 w-3.5 text-(--fg-tertiary)" aria-hidden="true" />
+                                        {t('fileTree.openProject')}
+                                    </span>
                                 </button>
                                 <div role="separator" className="my-1.5 mx-2 h-px bg-(--separator-subtle)" />
                                 <button

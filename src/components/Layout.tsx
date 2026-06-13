@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { open } from '@tauri-apps/plugin-dialog';
 import { EditorPanel, type EditorContentState } from './EditorPanel';
 import { TerminalPane, TerminalPaneHandle } from './TerminalPane';
 import { AppBar } from './AppBar';
@@ -533,6 +534,36 @@ const AppLayoutInner: React.FC = () => {
             'code'
         );
     }, [chat]);
+
+    const handleOpenProject = useCallback(async () => {
+        try {
+            const selected = await open({
+                directory: true,
+                multiple: false,
+                title: t('fileTree.openProject'),
+            });
+            if (!selected || Array.isArray(selected)) {
+                return;
+            }
+
+            await invoke('open_workspace', { path: selected });
+            setWorkspacePath(selected);
+            setProjectId(await invoke<string | null>('get_project_id', { workspacePath: selected }));
+            setShowStorageSetup(false);
+            setTabs([]);
+            setActiveTabId(null);
+            editorBufferRegistryRef.current = {};
+            pendingTabContentStateRef.current = null;
+            if (pendingTabContentTimerRef.current) {
+                clearTimeout(pendingTabContentTimerRef.current);
+                pendingTabContentTimerRef.current = null;
+            }
+            setActiveSidebar('explorer');
+            setIsSidebarOpen(true);
+        } catch (error) {
+            console.error('[Layout] Failed to open project:', error);
+        }
+    }, [setActiveTabId, setTabs, t]);
 
     const flushPendingTabContentState = useCallback((tabId?: string | null) => {
         const pending = pendingTabContentStateRef.current;
@@ -1110,6 +1141,7 @@ const AppLayoutInner: React.FC = () => {
                 onTabCloseAll={handleTabCloseAll}
                 onTabCloseOthers={handleTabCloseOthers}
                 tabStripMaxWidth={editorColumnWidth}
+                onOpenProject={handleOpenProject}
             />
 
             <div
@@ -1275,6 +1307,7 @@ const AppLayoutInner: React.FC = () => {
                                         onContentStateChange={handleActiveTabContentStateChange}
                                         onRegisterContentSnapshot={handleRegisterContentSnapshot}
                                         onOpenSettings={() => setIsSettingsOpen(true)}
+                                        onOpenProject={handleOpenProject}
                                     />
                                 </div>
                             )}
@@ -1286,6 +1319,7 @@ const AppLayoutInner: React.FC = () => {
                                         workspaceRoot={workspacePath}
                                         hasRemoteApiKey={bootstrapHasApiKey}
                                         onOpenSettings={() => setIsSettingsOpen(true)}
+                                        onOpenProject={handleOpenProject}
                                     />
                                 </div>
                             )}
