@@ -787,6 +787,8 @@ pub struct ContextFileResult {
     pub score: u32,
     pub reason: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub why: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub suggested_ranges: Vec<ContextRange>,
 }
 
@@ -796,6 +798,8 @@ pub struct ContextFileEnrichment {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub symbol_summaries: Vec<ContextSymbolSummary>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub matched_symbols: Vec<ContextSymbolSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub semantic_anchors: Vec<ContextSemanticAnchorSummary>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub related_files: Vec<ContextRelatedFile>,
@@ -803,6 +807,8 @@ pub struct ContextFileEnrichment {
     pub suggested_ranges: Vec<ContextRange>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub confidence: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub why: Vec<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub next_step: String,
 }

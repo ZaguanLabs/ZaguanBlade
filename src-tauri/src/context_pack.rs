@@ -555,11 +555,21 @@ fn collect_primary_files_for_queries(
             );
             let reason = symbol_reason(&result.symbol, intent);
             let suggested_ranges = vec![range_for_symbol(&result.symbol)];
+            let why = primary_file_why(
+                query,
+                &result.symbol,
+                intent,
+                active_file,
+                open_files,
+                result.score,
+                score,
+            );
 
             by_path
                 .entry(path.clone())
                 .and_modify(|existing| {
                     existing.score = existing.score.saturating_add(4).min(100);
+                    merge_unique_reasons(&mut existing.why, &why, 8);
                     if score > existing.score {
                         existing.score = score;
                         existing.reason = reason.clone();
@@ -570,6 +580,7 @@ fn collect_primary_files_for_queries(
                     path,
                     score,
                     reason,
+                    why,
                     suggested_ranges,
                 });
         }
@@ -618,6 +629,10 @@ fn collect_fallback_path_matches_for_queries(
             path: rel,
             score: (45 + matches as u32 * 8).min(70),
             reason: "File path matches terms from the request.".to_string(),
+            why: vec![
+                format!("file path matched {} query token(s)", matches),
+                "symbol index did not produce a stronger source-file match".to_string(),
+            ],
             suggested_ranges: vec![ContextRange {
                 start_line: 1,
                 end_line: 160,
@@ -653,12 +668,18 @@ fn enrich_context_file(
         .iter()
         .filter(|symbol| is_context_key_symbol(symbol))
         .take(12)
-        .map(|symbol| ContextSymbolSummary {
-            name: symbol.name.clone(),
-            qualified_name: symbol.qualified_name.clone(),
-            kind: symbol.symbol_type.to_string(),
-            line: symbol.range.start.line.saturating_add(1),
+        .map(symbol_to_context_summary)
+        .collect::<Vec<_>>();
+    let matched_symbols = symbols
+        .iter()
+        .filter(|symbol| {
+            let symbol_range = range_for_symbol(symbol);
+            item.suggested_ranges
+                .iter()
+                .any(|range| ranges_overlap(&symbol_range, range))
         })
+        .take(6)
+        .map(symbol_to_context_summary)
         .collect::<Vec<_>>();
 
     let semantic_anchors = collect_context_semantic_anchors(service, &item.path, &symbols)?;
@@ -687,6 +708,14 @@ fn enrich_context_file(
         "low"
     }
     .to_string();
+    let why = enrichment_why(
+        item,
+        symbol_summaries.len(),
+        matched_symbols.len(),
+        semantic_anchors.len(),
+        related_files.len(),
+        &confidence,
+    );
     let next_step = if let Some(range) = suggested_ranges.first() {
         format!(
             "Read {} lines {}-{} first, then follow related_files if the edit surface is unclear.",
@@ -702,12 +731,44 @@ fn enrich_context_file(
     Ok(ContextFileEnrichment {
         path: item.path.clone(),
         symbol_summaries,
+        matched_symbols,
         semantic_anchors,
         related_files,
         suggested_ranges,
         confidence,
+        why,
         next_step,
     })
+}
+
+fn ranges_overlap(left: &ContextRange, right: &ContextRange) -> bool {
+    left.start_line <= right.end_line && right.start_line <= left.end_line
+}
+
+fn enrichment_why(
+    item: &ContextFileResult,
+    symbol_count: usize,
+    matched_symbol_count: usize,
+    semantic_anchor_count: usize,
+    related_file_count: usize,
+    confidence: &str,
+) -> Vec<String> {
+    let mut why = item.why.clone();
+    merge_unique_reasons(
+        &mut why,
+        &[
+            format!("{} key symbol(s) indexed in this file", symbol_count),
+            format!(
+                "{} matched symbol(s) overlap suggested ranges",
+                matched_symbol_count
+            ),
+            format!("{} semantic anchor(s) found", semantic_anchor_count),
+            format!("{} related file(s) found", related_file_count),
+            format!("enrichment confidence is {}", confidence),
+        ],
+        12,
+    );
+    why
 }
 
 fn collect_context_semantic_anchors(
@@ -985,6 +1046,10 @@ fn collect_related_tests(
                         62
                     },
                     reason: format!("Likely test near or named after {}.", item.path),
+                    why: vec![
+                        format!("test candidate matched source stem `{}`", stem),
+                        format!("test candidate is associated with `{}`", item.path),
+                    ],
                     suggested_ranges: Vec::new(),
                 });
                 if tests.len() >= limit {
@@ -1030,6 +1095,10 @@ fn collect_related_docs(
             path: rel,
             score: (50 + matches as u32 * 6).min(72),
             reason: "Documentation path matches terms from the request.".to_string(),
+            why: vec![format!(
+                "documentation path matched {} query token(s)",
+                matches
+            )],
             suggested_ranges: Vec::new(),
         });
     }
@@ -1092,6 +1161,66 @@ fn symbol_reason(symbol: &Symbol, intent: Option<&str>) -> String {
             kind, name
         ),
         _ => format!("Matched indexed {} `{}`.", kind, name),
+    }
+}
+
+fn primary_file_why(
+    query: &str,
+    symbol: &Symbol,
+    intent: Option<&str>,
+    active_file: Option<&str>,
+    open_files: &[String],
+    raw_score: f32,
+    final_score: u32,
+) -> Vec<String> {
+    let mut why = Vec::new();
+    why.push(format!(
+        "query `{}` matched indexed {} `{}`",
+        truncate_chars(query, 80),
+        symbol.symbol_type,
+        symbol_display_name(symbol)
+    ));
+    why.push(format!(
+        "symbol search score {:.2} became file score {}",
+        raw_score, final_score
+    ));
+    if let Some(intent) = intent {
+        why.push(format!("intent `{}` influenced ranking", intent));
+    }
+    if active_file.is_some_and(|path| path == symbol.file_path) {
+        why.push("active file boost applied".to_string());
+    }
+    if open_files.iter().any(|path| path == &symbol.file_path) {
+        why.push("open file boost applied".to_string());
+    }
+    why
+}
+
+fn symbol_display_name(symbol: &Symbol) -> &str {
+    if symbol.qualified_name.is_empty() {
+        symbol.name.as_str()
+    } else {
+        symbol.qualified_name.as_str()
+    }
+}
+
+fn symbol_to_context_summary(symbol: &Symbol) -> ContextSymbolSummary {
+    ContextSymbolSummary {
+        name: symbol.name.clone(),
+        qualified_name: symbol.qualified_name.clone(),
+        kind: symbol.symbol_type.to_string(),
+        line: symbol.range.start.line.saturating_add(1),
+    }
+}
+
+fn merge_unique_reasons(target: &mut Vec<String>, incoming: &[String], limit: usize) {
+    for reason in incoming {
+        if target.len() >= limit {
+            break;
+        }
+        if !target.iter().any(|existing| existing == reason) {
+            target.push(reason.clone());
+        }
     }
 }
 
@@ -1273,6 +1402,7 @@ mod tests {
             path: "service.ts".to_string(),
             score: 88,
             reason: "test".to_string(),
+            why: vec!["test reason".to_string()],
             suggested_ranges: vec![ContextRange {
                 start_line: 1,
                 end_line: 20,
@@ -1286,6 +1416,14 @@ mod tests {
             .symbol_summaries
             .iter()
             .any(|symbol| symbol.name == "buildContextPack"));
+        assert!(enrichment
+            .matched_symbols
+            .iter()
+            .any(|symbol| symbol.name == "buildContextPack"));
+        assert!(enrichment
+            .why
+            .iter()
+            .any(|reason| reason.contains("key symbol")));
         assert!(enrichment
             .semantic_anchors
             .iter()
@@ -1317,6 +1455,7 @@ mod tests {
             path: "main.ts".to_string(),
             score: 82,
             reason: "test".to_string(),
+            why: Vec::new(),
             suggested_ranges: Vec::new(),
         };
         let enrichment = enrich_context_file(&service, &item).unwrap();
@@ -1333,15 +1472,18 @@ mod tests {
             path: "service.ts".to_string(),
             score: 90,
             reason: "test".to_string(),
+            why: Vec::new(),
             suggested_ranges: Vec::new(),
         }];
         let enriched = vec![ContextFileEnrichment {
             path: "service.ts".to_string(),
             symbol_summaries: Vec::new(),
+            matched_symbols: Vec::new(),
             semantic_anchors: Vec::new(),
             related_files: Vec::new(),
             suggested_ranges: Vec::new(),
             confidence: "medium".to_string(),
+            why: Vec::new(),
             next_step: String::new(),
         }];
 
