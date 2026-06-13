@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useId, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useId, useLayoutEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Minus, Square, X, Maximize2, ChevronDown, FileText } from 'lucide-react';
@@ -228,19 +228,26 @@ export const AppBar: React.FC<AppBarProps> = ({
         ]);
     }, [onTabCloseAll, onTabCloseOthers, onTabMoveToBeginning, onTabMoveToEnd, showMenu, tabs.length]);
 
-    useEffect(() => {
-        if (activeTabId && activeTabRef.current) {
-            activeTabRef.current.scrollIntoView({
-                behavior: 'smooth',
-                block: 'nearest',
-                inline: 'nearest',
-            });
+    useLayoutEffect(() => {
+        const scrollContainer = scrollRef.current;
+        const activeTab = activeTabRef.current;
+        if (activeTabId && scrollContainer && activeTab) {
+            const visibleStart = scrollContainer.scrollLeft;
+            const visibleEnd = visibleStart + scrollContainer.clientWidth;
+            const activeStart = activeTab.offsetLeft;
+            const activeEnd = activeStart + activeTab.offsetWidth;
+
+            if (activeStart < visibleStart || activeEnd > visibleEnd) {
+                const maxScrollLeft = Math.max(0, scrollContainer.scrollWidth - scrollContainer.clientWidth);
+                scrollContainer.scrollLeft = Math.min(activeStart, maxScrollLeft);
+            }
+
             if (focusActiveTabAfterKeyboardRef.current) {
-                activeTabRef.current.focus();
+                activeTab.focus();
                 focusActiveTabAfterKeyboardRef.current = false;
             }
         }
-    }, [activeTabId]);
+    }, [activeTabId, tabs.length, tabStripMaxWidth]);
 
     const hasTabs = tabs.length > 0;
     const appBarBrandText = projectName ? `Zaguán Blade - ${projectName}` : 'Zaguán Blade';
