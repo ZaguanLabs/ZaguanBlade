@@ -1054,6 +1054,10 @@ impl BladeWsClient {
         !matches!(storage_mode, Some(mode) if mode.eq_ignore_ascii_case("local"))
     }
 
+    pub fn is_already_closed_error(error: &str) -> bool {
+        error.contains("channel closed") || error == "Not connected"
+    }
+
     fn disconnect_message_json(session_id: String) -> Result<String, String> {
         let msg = WsBaseMessage {
             id: format!("disconnect-{}", uuid::Uuid::new_v4()),
@@ -1099,9 +1103,17 @@ impl BladeWsClient {
         };
 
         let mut result = Ok(());
+        let mut sent_disconnect = false;
         if let Some(session_id) = session_id {
             result = self.send_disconnect(session_id).await;
-            if result.is_ok() && !flush_window.is_zero() {
+            if let Err(error) = &result {
+                if Self::is_already_closed_error(error) {
+                    result = Ok(());
+                }
+            } else {
+                sent_disconnect = true;
+            }
+            if sent_disconnect && !flush_window.is_zero() {
                 tokio::time::sleep(flush_window).await;
             }
         }
@@ -1858,6 +1870,17 @@ mod tests {
             .as_str()
             .is_some_and(|id| id.starts_with("disconnect-")));
         assert_eq!(value["payload"]["session_id"], "sess-456");
+    }
+
+    #[test]
+    fn already_closed_errors_are_detected() {
+        assert!(BladeWsClient::is_already_closed_error(
+            "Failed to send disconnect: channel closed"
+        ));
+        assert!(BladeWsClient::is_already_closed_error("Not connected"));
+        assert!(!BladeWsClient::is_already_closed_error(
+            "Failed to send disconnect: permission denied"
+        ));
     }
 
     #[test]

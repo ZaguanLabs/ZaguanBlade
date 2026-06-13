@@ -27,10 +27,12 @@ pub(crate) async fn graceful_close_active_chat_session(state: &AppState) {
             .send_cancel_request(request_id.clone(), session_id.clone())
             .await
         {
-            eprintln!(
-                "[SHUTDOWN] Failed to send cancel_request before disconnect: {}",
-                error
-            );
+            if !crate::blade_ws_client::BladeWsClient::is_already_closed_error(&error) {
+                eprintln!(
+                    "[SHUTDOWN] Failed to send cancel_request before disconnect: {}",
+                    error
+                );
+            }
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
@@ -307,12 +309,12 @@ pub fn stop_generation(state: State<'_, AppState>, app_handle: tauri::AppHandle)
             if sent_cancel {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             } else {
-                eprintln!(
-                    "[STOP] Failed to send cancel_request to zcoderd: {}",
-                    last_error.unwrap_or_else(|| {
-                        "no request or session ID available for remote cancel".to_string()
-                    })
-                );
+                let error = last_error.unwrap_or_else(|| {
+                    "no request or session ID available for remote cancel".to_string()
+                });
+                if !crate::blade_ws_client::BladeWsClient::is_already_closed_error(&error) {
+                    eprintln!("[STOP] Failed to send cancel_request to zcoderd: {}", error);
+                }
             }
 
             if let Err(error) = ws_client

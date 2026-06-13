@@ -1193,17 +1193,21 @@ impl ChatManager {
                                 }
                             }
                             crate::blade_ws_client::BladeWsEvent::Disconnected => {
-                                // eprintln!("[CHAT MGR] Disconnected - session will be restored from database on reconnect");
-                                if authenticated && (saw_chat_done || saw_content) {
-                                    let _ = tx.send(ChatEvent::Done {
-                                        finish_reason: "stop".to_string(),
-                                    });
-                                } else {
-                                    let _ = tx.send(ChatEvent::Error(
-                                        "Server disconnected - reconnecting will restore session"
-                                            .to_string(),
-                                    ));
+                                eprintln!(
+                                    "[CHAT MGR] Server disconnected during chat stream; session will be restored from database on reconnect"
+                                );
+                                if saw_chat_done {
+                                    break;
                                 }
+
+                                let message = if authenticated || saw_content {
+                                    "Server disconnected while generating. Reconnect to zcoderd and retry when it is available."
+                                } else {
+                                    "Server disconnected before a response was received. Reconnect to zcoderd and retry when it is available."
+                                };
+                                let _ = tx.send_provider_event(ProviderEvent::Disconnected {
+                                    message: message.to_string(),
+                                });
                                 break;
                             }
                             crate::blade_ws_client::BladeWsEvent::Progress {
@@ -2630,6 +2634,7 @@ impl ChatManager {
         let mut batched_chunk = String::new();
         let mut done = false;
         let mut error_msg: Option<String> = None;
+        let mut server_disconnected = false;
 
         // Helper macro to flush current batch
         macro_rules! flush_batch {
@@ -2964,6 +2969,60 @@ impl ChatManager {
                     self.last_finish_reason = Some(finish_reason);
                     done = true;
                 }
+                ProviderEvent::Disconnected { message } => {
+                    flush_batch!();
+                    server_disconnected = true;
+                    self.last_finish_reason = Some("server_disconnected".to_string());
+
+                    if let Some(last) = conversation.last_assistant_mut() {
+                        if last.progress.is_some() {
+                            last.progress = None;
+                            self.pending_results.push_back(DrainResult::Progress {
+                                message: "Disconnected".to_string(),
+                                stage: "disconnected".to_string(),
+                                percent: 100,
+                            });
+                        }
+
+                        let has_visible_content = !last.content.trim().is_empty()
+                            || last
+                                .reasoning
+                                .as_ref()
+                                .map(|reasoning| !reasoning.trim().is_empty())
+                                .unwrap_or(false)
+                            || last
+                                .tool_calls
+                                .as_ref()
+                                .map(|calls| !calls.is_empty())
+                                .unwrap_or(false);
+                        if !has_visible_content {
+                            last.content.push_str(&message);
+                            let mid = last.id.clone().unwrap_or_default();
+                            self.pending_results
+                                .push_back(DrainResult::Update(mid, message));
+                        }
+
+                        let mut updated_tools = false;
+                        if let Some(calls) = last.tool_calls.as_mut() {
+                            for call in calls {
+                                if call.status.as_deref() == Some("executing") {
+                                    call.status = Some("failed".to_string());
+                                    call.result = Some(
+                                        "Server disconnected before this tool could run."
+                                            .to_string(),
+                                    );
+                                    updated_tools = true;
+                                }
+                            }
+                        }
+                        if updated_tools {
+                            self.pending_results
+                                .push_back(DrainResult::ToolStatusUpdate(last.clone()));
+                        }
+                    }
+
+                    done = true;
+                }
                 ProviderEvent::Error(e) => {
                     flush_batch!();
                     // Ensure progress is cleared on error
@@ -3031,11 +3090,17 @@ impl ChatManager {
                 None
             };
             self.accumulated_tool_calls.clear();
+            let tool_calls = if server_disconnected {
+                None
+            } else {
+                tool_calls
+            };
 
             // If there are no tool calls, this is a true end-of-turn.
             // Only then should we clear rx and emit MessageCompleted (frontend uses this to reset loading).
             let should_complete_turn = tool_calls.is_none() && error_msg.is_none();
             let should_defer_completion = should_complete_turn
+                && !server_disconnected
                 && matches!(self.active_provider, ProviderId::Zaguan)
                 && !self.pending_done_without_tools;
 

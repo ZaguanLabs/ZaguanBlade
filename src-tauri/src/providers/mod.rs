@@ -50,6 +50,9 @@ pub enum ProviderEvent {
     Done {
         finish_reason: String,
     },
+    Disconnected {
+        message: String,
+    },
     Error(String),
     ContextLengthExceeded {
         message: String,
@@ -170,6 +173,9 @@ impl From<ProviderEvent> for ChatEvent {
             ProviderEvent::ToolActivity(payload) => ChatEvent::ToolActivity(payload),
             ProviderEvent::ApprovalRequest(payload) => ChatEvent::ApprovalRequest(payload),
             ProviderEvent::Done { finish_reason } => ChatEvent::Done { finish_reason },
+            ProviderEvent::Disconnected { .. } => ChatEvent::Done {
+                finish_reason: "server_disconnected".to_string(),
+            },
             ProviderEvent::Error(message) => ChatEvent::Error(message),
             ProviderEvent::ContextLengthExceeded {
                 message,
