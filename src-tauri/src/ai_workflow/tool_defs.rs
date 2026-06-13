@@ -42,7 +42,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "fast_context",
             "function": {
                 "name": "fast_context",
-                "description": "Plan broad or uncertain code tasks before reading many files. Returns targeted symbol-aware context: ranked primary files, enriched symbol and semantic-anchor metadata, related files, index health, confidence, suggested read ranges, and next steps. Legacy project-index Markdown is excluded unless explicitly requested for fallback compatibility.",
+                "description": "Plan broad or uncertain code tasks before reading many files. Returns targeted symbol-aware context: structured project context, ranked primary files, enriched symbol and semantic-anchor metadata, indexed Markdown sections, related files, optional impact hints, index health, confidence, suggested read ranges, and next steps. Legacy project-index Markdown is excluded unless explicitly requested for fallback compatibility.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -309,7 +309,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "get_project_index_overview",
             "function": {
                 "name": "get_project_index_overview",
-                "description": "Read a compact capped overview window from .zblade/context/project_index.md for first-turn orientation. Prefer this before broad repo-wide grep/search when no active file context is available.",
+                "description": "Legacy fallback only. Read a compact capped overview window from .zblade/context/project_index.md when explicitly investigating generated project-index Markdown. Prefer fast_context for first-turn orientation and targeted code context.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -328,7 +328,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "get_project_index_chunk",
             "function": {
                 "name": "get_project_index_chunk",
-                "description": "Read a deterministic paged chunk from .zblade/context/project_index.md. Use this only when deeper paging is needed after get_project_index_overview.",
+                "description": "Legacy fallback only. Read a deterministic paged chunk from .zblade/context/project_index.md when explicit compatibility paging is required. Prefer fast_context for normal orientation.",
                 "strict": false,
                 "parameters": {
                     "type": "object",

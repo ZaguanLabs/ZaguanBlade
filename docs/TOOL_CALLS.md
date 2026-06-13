@@ -423,7 +423,7 @@ These tools are local to `zblade`. They are **not ZLP tools** and do not require
 
 ### `fast_context`
 
-Assemble targeted context for broad, ambiguous, multi-file, or unfamiliar coding tasks before reading many files. Returns ranked primary files, symbol and semantic-anchor evidence, related files, index health, confidence, suggested read ranges, and next steps.
+Assemble targeted context for broad, ambiguous, multi-file, or unfamiliar coding tasks before reading many files. Returns structured project context, ranked primary files, symbol and semantic-anchor evidence, indexed Markdown sections, related files, optional impact hints, index health, confidence, suggested read ranges, and next steps.
 
 Legacy project-index Markdown is not included by default. Use `include_project_index_min: true` only as an explicit fallback during the project-index migration.
 
@@ -540,7 +540,7 @@ These are legacy fallback tools during the project-index migration. Prefer `fast
 
 ### `get_project_index_overview`
 
-Read a compact overview window from the local project index.
+Legacy fallback only. Read a compact overview window from the local project index when explicitly investigating generated project-index Markdown.
 
 **Parameters:**
 
@@ -552,7 +552,7 @@ Read a compact overview window from the local project index.
 
 ### `get_project_index_chunk`
 
-Read a deterministic paged chunk from the local project index.
+Legacy fallback only. Read a deterministic paged chunk from the local project index when explicit compatibility paging is required.
 
 **Parameters:**
 
