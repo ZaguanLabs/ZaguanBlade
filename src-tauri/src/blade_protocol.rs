@@ -708,6 +708,14 @@ pub struct ContextProjectInfo {
     pub project_index_available: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_index_path: Option<String>,
+    #[serde(default)]
+    pub project_index_min_requested: bool,
+    #[serde(default)]
+    pub project_index_min_included: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_index_min_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_source: Option<String>,
 }
 
 /// Confidence level for context pack results
