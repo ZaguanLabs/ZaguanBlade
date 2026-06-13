@@ -23,6 +23,83 @@ We should implement these six items:
 
 Everything else from the inspiration repo is out of scope for this plan unless one of these items needs a small supporting utility.
 
+## Release Priority Filter
+
+Use this filter before starting implementation. `v0.8.2` is the next release and should stay conservative. Do not pull larger Kortex/context changes into that release unless they become required to fix a release-blocking defect.
+
+### Must-Have For v0.8.2
+
+These are the only hard blockers for the imminent `v0.8.2` release.
+
+1. Release validation for the current `0.8.2` app.
+   - Run the normal build and smoke-test path against the already-bumped version metadata.
+   - Verify startup, chat streaming, editor dirty state, file review/revert, terminal launch, and packaging-critical flows.
+   - This is the only true must-have from this plan if the release is near.
+
+2. Keep the `vscodium-rust` report and this Adopt plan.
+   - These are already committed and pushed.
+   - They provide the selection filter for future work without changing runtime behavior.
+
+3. Critical bug fixes found during release testing.
+   - Fix only defects that would make `v0.8.2` unsafe or embarrassing to ship.
+   - Prioritize app startup, chat streaming, editor dirty state, file review/revert, terminal stability, and any packaging/signing issue.
+   - Avoid opportunistic feature work under this bucket.
+
+### Nice-To-Have For v0.8.2
+
+These may be considered only if the release window has room and the implementation can be verified cleanly. They are not blockers.
+
+1. Terminal search.
+   - Why: high user value and expected IDE ergonomics.
+   - What goes in: `@xterm/addon-search`, a compact find widget, scoped `Ctrl/Cmd+F`, next/previous, close, and basic search options.
+   - Why it enhances us: it adds a missing ergonomic layer to an already strong terminal implementation.
+   - Risk: new addon dependency plus terminal focus handling.
+   - Release rule: include only if terminal copy/paste, resize, and command input remain unchanged.
+
+2. Terminal spawn diagnostics.
+   - Why: helps diagnose terminals that start but produce no output.
+   - What goes in: Blade-event-based tracking of `Spawned`, first `Output`, and `Exit`, with a mild local status after a timeout.
+   - Why it enhances us: it improves observability without changing our event pipeline.
+   - Risk: noisy messaging for intentionally quiet commands.
+   - Release rule: no frontend polling, and diagnostics must clear on first output or exit.
+
+3. Tiny deferred-init utility with one low-risk caller.
+   - Why: starts startup-load discipline without a broad refactor.
+   - What goes in: `scheduleDeferredInit` plus one harmless listener/debug-only task moved behind it.
+   - Why it enhances us: it complements existing lazy panel boundaries and gives us measurable startup markers.
+   - Risk: deferring the wrong listener can miss early events.
+   - Release rule: do not move workspace restore, editor state, chat state, save/shutdown protection, or aggressive warmup logic in `v0.8.2`.
+
+### v0.9.0 Candidates
+
+These are larger product or architecture changes. They should be planned for `v0.9.0` instead of being squeezed into `v0.8.2`.
+
+1. Per-turn multi-file agent review.
+   - Why: highest product-trust win after broad AI edits.
+   - What goes in: turn-level grouping, review banner, per-file diff modal, keep/revert actions, group keep/revert, stale detection, and id-based backend commands.
+   - Why it enhances us: it builds on our existing uncommitted-change tracker and editor review transitions instead of replacing them.
+   - Why not `v0.8.2`: incorrect grouping or revert behavior can affect user files, so it deserves careful tests and rollout.
+
+2. Fast-context project map plus query spans.
+   - Why: highest-yield Kortex-inspired backend idea.
+   - What goes in: typed project map, ranked exact spans, scores, reasons, hashes, freshness, caps, warnings, and request flags.
+   - Why it enhances us: it packages our stronger SQLite symbol index into a compact model-facing overview plus exact evidence.
+   - Why not `v0.8.2`: it touches core context behavior and must be benchmarked/tested against stale and capped indexes.
+
+3. Prefix-cache-friendly context ordering.
+   - Why: improves deterministic prompt assembly and may improve provider prompt caching.
+   - What goes in: stable/volatile context sections, section fingerprints, section budgets, debug metadata, and guarded prompt wording.
+   - Why it enhances us: it makes our existing fast context easier to cache, inspect, and reason about.
+   - Why not `v0.8.2`: prompt ordering changes model behavior and needs flagged comparison before becoming default.
+
+4. Active-file context panel.
+   - Why: makes symbol/index/context intelligence visible before the user asks the agent.
+   - What goes in: lazy text-first panel showing file identity, symbols, current symbol, related files, memories/rules, and index health.
+   - Why it enhances us: it turns hidden backend context into an inspectable workbench surface.
+   - Why not `v0.8.2`: it needs backend payload discipline and frontend placement decisions; graph visualization is explicitly not part of the first pass.
+
+Release recommendation: ship `v0.8.2` as a safe release. If anything from this plan is added before release, prefer terminal search/diagnostics. Make `v0.9.0` the agent review plus smarter fast-context release.
+
 ## Current Baseline
 
 ZaguanBlade already has stronger foundations than the inspiration repo in several important areas:
