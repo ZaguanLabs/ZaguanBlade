@@ -360,13 +360,12 @@ fn collect_git_status_snapshot_cli(root: &str) -> Result<GitStatusSnapshot, Stri
 
     let mut summary = parse_git_status(&stdout);
     summary.has_remote = git_has_remote(root);
-    summary.can_push = summary.branch.is_some()
-        && summary.has_remote
-        && if summary.has_upstream {
-            summary.ahead > 0
-        } else {
-            git_has_commits(root)
-        };
+    let has_commits = git_has_commits(root);
+    let upstream_ref_exists = summary.has_upstream && git_upstream_ref_exists(root);
+    if summary.has_upstream && !upstream_ref_exists {
+        summary.has_upstream = false;
+    }
+    summary.can_push = compute_can_push(&summary, has_commits, upstream_ref_exists);
 
     Ok(GitStatusSnapshot {
         summary,
@@ -456,6 +455,26 @@ fn git_has_remote(root: &str) -> bool {
 
 fn git_has_commits(root: &str) -> bool {
     run_git(root, &["rev-parse", "--verify", "HEAD"][..]).is_ok()
+}
+
+fn git_upstream_ref_exists(root: &str) -> bool {
+    run_git(root, &["rev-parse", "--verify", "@{upstream}"][..]).is_ok()
+}
+
+fn compute_can_push(
+    summary: &GitStatusSummary,
+    has_commits: bool,
+    upstream_ref_exists: bool,
+) -> bool {
+    if summary.branch.is_none() || !summary.has_remote || !has_commits {
+        return false;
+    }
+
+    if summary.has_upstream {
+        summary.ahead > 0 || !upstream_ref_exists
+    } else {
+        true
+    }
 }
 
 fn default_push_remote(root: &str, branch: &str) -> Option<String> {
@@ -961,6 +980,23 @@ fn parse_git_status_files(output: &str) -> Vec<GitFileStatus> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    fn run_git_for_test(root: &Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .expect("run git command");
+
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[test]
     fn porcelain_status_parser_matches_cli_changed_files() {
@@ -1019,6 +1055,61 @@ mod tests {
         assert!(!preflight.is_detached);
         assert_eq!(preflight.staged_count, 1);
         assert!(preflight.error_message.is_none());
+    }
+
+    #[test]
+    fn status_allows_publish_after_initial_commit_to_empty_remote() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let remote = temp.path().join("remote.git");
+        let worktree = temp.path().join("worktree");
+
+        let init_output = std::process::Command::new("git")
+            .arg("init")
+            .arg("--bare")
+            .arg(&remote)
+            .output()
+            .expect("init bare remote");
+        assert!(
+            init_output.status.success(),
+            "git init --bare failed: {}",
+            String::from_utf8_lossy(&init_output.stderr)
+        );
+
+        let clone_output = std::process::Command::new("git")
+            .arg("clone")
+            .arg(&remote)
+            .arg(&worktree)
+            .output()
+            .expect("clone bare remote");
+        assert!(
+            clone_output.status.success(),
+            "git clone failed: {}",
+            String::from_utf8_lossy(&clone_output.stderr)
+        );
+
+        std::fs::write(worktree.join("README.md"), "hello\n").expect("write README");
+        run_git_for_test(&worktree, &["add", "README.md"]);
+        run_git_for_test(
+            &worktree,
+            &[
+                "-c",
+                "user.name=Test User",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "init",
+            ],
+        );
+
+        let snapshot = collect_git_status_snapshot_cli(worktree.to_str().expect("utf-8 worktree"))
+            .expect("collect git status");
+
+        assert!(snapshot.summary.is_repo);
+        assert!(snapshot.summary.has_remote);
+        assert!(!snapshot.summary.has_upstream);
+        assert_eq!(snapshot.summary.ahead, 0);
+        assert!(snapshot.summary.can_push);
     }
 
     #[test]
