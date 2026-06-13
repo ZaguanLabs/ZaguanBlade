@@ -1,5 +1,8 @@
 @import "./styles/theme.css";
 @import "tailwindcss";
+@import "streamdown/styles.css";
+
+@source "../node_modules/streamdown/dist/*.js";
 
 @theme {
     --color-app-bg: var(--bg-app);

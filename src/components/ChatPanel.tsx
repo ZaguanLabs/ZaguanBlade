@@ -417,11 +417,18 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     const lastMessageRole = lastMessage?.role;
     const lastMessageContent = lastMessage?.content ?? '';
     const lastMessageReasoning = lastMessage?.reasoning ?? '';
+    const lastMessageContentLength = lastMessageContent.length;
+    const lastMessageReasoningLength = lastMessageReasoning.length;
     const lastMessageBlockCount = lastMessage?.blocks?.length ?? 0;
-    const lastUserMessageId = useMemo(
-        () => [...messages].reverse().find((message) => message.role === 'User')?.id,
-        [messages],
-    );
+    const lastUserMessageId = useMemo(() => {
+        for (let index = messages.length - 1; index >= 0; index -= 1) {
+            const message = messages[index];
+            if (message.role === 'User') {
+                return message.id;
+            }
+        }
+        return undefined;
+    }, [messages]);
     const shouldShowPendingResponseIndicator = (loading || !!toolActivity) && !waitingForApproval && lastMessage?.role !== 'Assistant';
     const chatRows = useMemo(
         () => {
@@ -517,11 +524,11 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     );
     const activeStepRowKey = useMemo(() => {
         if (toolActivity?.toolCallId) {
-            const matchingRow = [...chatRows].reverse().find((row) =>
-                row.message.tool_calls?.some((toolCall) => toolCall.id === toolActivity.toolCallId),
-            );
-            if (matchingRow) {
-                return matchingRow.key;
+            for (let index = chatRows.length - 1; index >= 0; index -= 1) {
+                const row = chatRows[index];
+                if (row.message.tool_calls?.some((toolCall) => toolCall.id === toolActivity.toolCallId)) {
+                    return row.key;
+                }
             }
         }
 
@@ -530,18 +537,23 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
             return activeRow.key;
         }
 
-        const lastAssistantRow = [...chatRows].reverse().find((row) => row.message.role === 'Assistant');
-        return lastAssistantRow?.key ?? null;
+        for (let index = chatRows.length - 1; index >= 0; index -= 1) {
+            const row = chatRows[index];
+            if (row.message.role === 'Assistant') {
+                return row.key;
+            }
+        }
+        return null;
     }, [chatRows, toolActivity?.toolCallId]);
     const streamingSignature = useMemo(() => {
         if (!lastMessage) return '';
         return [
             lastMessageId ?? messageCount,
-            lastMessageContent,
-            lastMessageReasoning,
+            lastMessageContentLength,
+            lastMessageReasoningLength,
             lastMessageBlockCount,
         ].join('|');
-    }, [lastMessage, lastMessageBlockCount, lastMessageContent, lastMessageId, lastMessageReasoning, messageCount]);
+    }, [lastMessage, lastMessageBlockCount, lastMessageContentLength, lastMessageId, lastMessageReasoningLength, messageCount]);
 
     const scrollToBottom = useCallback(() => {
         const container = scrollContainerRef.current;

@@ -920,12 +920,14 @@ export function useChatV2(options: UseChatV2Options = {}) {
     }, [flushPendingUpdates]);
 
     const scheduleFlush = useCallback(() => {
-        if (flushFrameRef.current === null) {
-            flushFrameRef.current = window.requestAnimationFrame(() => {
-                flushFrameRef.current = null;
-                flushPendingUpdates();
-            });
+        if (flushFrameRef.current !== null) {
+            return;
         }
+
+        flushFrameRef.current = window.requestAnimationFrame(() => {
+            flushFrameRef.current = null;
+            flushPendingUpdates();
+        });
     }, [flushPendingUpdates]);
 
     const queueMessageUpdate = useCallback((

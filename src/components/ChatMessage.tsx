@@ -24,6 +24,7 @@ const REVERTIBLE_TOOLS = new Set([
 
 const LARGE_USER_MESSAGE_CHAR_THRESHOLD = 12000;
 const LARGE_USER_MESSAGE_LINE_THRESHOLD = 220;
+const REASONING_SCROLL_SYNC_INTERVAL_MS = 100;
 
 const PlainTextMessage = React.memo<{ content: string }>(({ content }) => (
     <div className="select-text">
@@ -47,6 +48,21 @@ function shouldUsePlainTextForLargeUserMessage(content: string): boolean {
     return lineCount >= LARGE_USER_MESSAGE_LINE_THRESHOLD;
 }
 
+function normalizeReasoningDisplayContent(content: string): string {
+    if (!content) {
+        return '';
+    }
+
+    if (content.search(/\[\/?THINKING\]/i) === -1) {
+        return content;
+    }
+
+    return content
+        .replace(/\[THINKING\]/gi, '')
+        .replace(/\[\/THINKING\]/gi, '')
+        .trim();
+}
+
 const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent?: boolean }> = ({ content, isActive, hasContent }) => {
     const { t } = useTranslation();
     const [isExpanded, setIsExpanded] = useState(true); // Start expanded
@@ -54,14 +70,22 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
     const contentRef = useRef<HTMLDivElement>(null);
     const wasActiveRef = useRef(isActive);
     const hadContentRef = useRef(hasContent);
+    const reasoningScrollFrameRef = useRef<number | null>(null);
+    const reasoningScrollTimeoutRef = useRef<number | null>(null);
+    const lastReasoningScrollAtRef = useRef(0);
 
-    // Strip [THINKING] and [/THINKING] tags from content
-    const cleanContent = content
-        .replace(/\[THINKING\]/gi, '')
-        .replace(/\[\/THINKING\]/gi, '')
-        .trim();
+    const displayContent = useMemo(() => normalizeReasoningDisplayContent(content), [content]);
 
-    const displayContent = cleanContent || content;
+    const cancelReasoningScrollSync = useCallback(() => {
+        if (reasoningScrollFrameRef.current !== null) {
+            cancelAnimationFrame(reasoningScrollFrameRef.current);
+            reasoningScrollFrameRef.current = null;
+        }
+        if (reasoningScrollTimeoutRef.current !== null) {
+            window.clearTimeout(reasoningScrollTimeoutRef.current);
+            reasoningScrollTimeoutRef.current = null;
+        }
+    }, []);
 
     // Auto-expand while reasoning is active, auto-collapse when reasoning ends
     useEffect(() => {
@@ -77,29 +101,44 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
         hadContentRef.current = hasContent;
     }, [isActive, hasContent, isExpanded, userToggled]);
 
-    // Auto-scroll to bottom while streaming (throttled to avoid layout thrash)
-    const reasoningScrollFrameRef = useRef<number | null>(null);
+    // Auto-scroll to bottom while streaming, capped to avoid repeated layout work.
     useEffect(() => {
-        if (!isExpanded || !isActive || !contentRef.current) return;
-
-        if (reasoningScrollFrameRef.current !== null) {
+        if (!isExpanded || !isActive || !contentRef.current) {
+            cancelReasoningScrollSync();
             return;
         }
 
-        reasoningScrollFrameRef.current = requestAnimationFrame(() => {
-            reasoningScrollFrameRef.current = null;
-            if (contentRef.current) {
-                contentRef.current.scrollTop = contentRef.current.scrollHeight;
-            }
-        });
+        if (reasoningScrollFrameRef.current !== null || reasoningScrollTimeoutRef.current !== null) {
+            return;
+        }
 
-        return () => {
-            if (reasoningScrollFrameRef.current !== null) {
-                cancelAnimationFrame(reasoningScrollFrameRef.current);
-                reasoningScrollFrameRef.current = null;
-            }
+        const runScroll = () => {
+            reasoningScrollFrameRef.current = null;
+            const element = contentRef.current;
+            if (!element) return;
+
+            element.scrollTop = element.scrollHeight;
+            lastReasoningScrollAtRef.current = Date.now();
         };
-    }, [displayContent, isExpanded, isActive]);
+
+        const scheduleScrollFrame = () => {
+            reasoningScrollFrameRef.current = requestAnimationFrame(runScroll);
+        };
+
+        const elapsedSinceScroll = Date.now() - lastReasoningScrollAtRef.current;
+        const delayMs = Math.max(0, REASONING_SCROLL_SYNC_INTERVAL_MS - elapsedSinceScroll);
+        if (delayMs === 0) {
+            scheduleScrollFrame();
+            return;
+        }
+
+        reasoningScrollTimeoutRef.current = window.setTimeout(() => {
+            reasoningScrollTimeoutRef.current = null;
+            scheduleScrollFrame();
+        }, delayMs);
+    }, [cancelReasoningScrollSync, displayContent, isExpanded, isActive]);
+
+    useEffect(() => cancelReasoningScrollSync, [cancelReasoningScrollSync]);
 
     // DEBUG: Show raw content even if empty after cleaning, to see what's being suppressed
     if (!displayContent) return null;
