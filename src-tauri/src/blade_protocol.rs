@@ -716,6 +716,52 @@ pub struct ContextProjectInfo {
     pub project_index_min_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_root: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexed_files: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supported_files: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale_files: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub missing_files: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orphaned_files: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub languages: Vec<ProjectLanguageSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub top_directories: Vec<ProjectDirectorySummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub likely_entry_points: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index_health_status: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProjectLanguageSummary {
+    pub name: String,
+    pub files: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProjectDirectorySummary {
+    pub path: String,
+    pub files: usize,
 }
 
 /// Confidence level for context pack results

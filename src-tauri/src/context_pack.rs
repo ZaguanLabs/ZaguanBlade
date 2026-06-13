@@ -1,13 +1,15 @@
-use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::blade_protocol::{
     ContextFileEnrichment, ContextFileResult, ContextMemoryItem, ContextPackConfidence,
     ContextPackError, ContextPackPayload, ContextProjectInfo, ContextRange, ContextRelatedFile,
-    ContextSemanticAnchorSummary, ContextSymbolSummary, ContextWorkspace,
+    ContextSemanticAnchorSummary, ContextSymbolSummary, ContextWorkspace, ProjectDirectorySummary,
+    ProjectLanguageSummary,
 };
-use crate::language_service::LanguageService;
+use crate::indexer::types::{detect_language, is_code_file};
+use crate::language_service::{IndexHealthSnapshot, IndexHealthStatus, LanguageService};
 use crate::local_artifacts::LocalArtifactStore;
 use crate::project_settings::get_zblade_dir;
 use crate::symbol_index::SymbolStore;
@@ -58,7 +60,6 @@ pub fn build_context_pack(
         normalized_active_file.clone(),
         normalized_open_files.clone(),
     );
-    let project_context = build_project_context(workspace_root, include_project_index_min);
 
     let service = match language_service_for_workspace(workspace_root) {
         Ok(service) => service,
@@ -66,11 +67,26 @@ pub fn build_context_pack(
             let mut payload = error_payload("index_unavailable", &error);
             payload.queries_used = queries;
             payload.workspace = Some(workspace);
-            payload.project_context = Some(project_context);
+            payload.project_context = Some(build_project_context(
+                workspace_root,
+                include_project_index_min,
+                normalized_active_file.as_deref(),
+                &normalized_open_files,
+                None,
+            ));
             payload.timing_ms = Some(started_at.elapsed().as_millis() as u64);
             return payload;
         }
     };
+
+    let index_health = service.audit_index_health().ok();
+    let project_context = build_project_context(
+        workspace_root,
+        include_project_index_min,
+        normalized_active_file.as_deref(),
+        &normalized_open_files,
+        index_health.as_ref(),
+    );
 
     let mut primary = collect_primary_files_for_queries(
         &service,
@@ -104,7 +120,6 @@ pub fn build_context_pack(
         Vec::new()
     };
 
-    let index_health = service.audit_index_health().ok();
     let enriched_files = enrich_primary_files(&service, &primary, max_results);
     let related_files = collect_related_files_from_enrichments(&enriched_files, max_results);
 
@@ -271,6 +286,9 @@ fn build_workspace_payload(
 fn build_project_context(
     workspace_root: &Path,
     include_project_index_min: bool,
+    active_file: Option<&str>,
+    open_files: &[String],
+    index_health: Option<&IndexHealthSnapshot>,
 ) -> ContextProjectInfo {
     let context_dir = get_zblade_dir(workspace_root).join("context");
     let project_index_min_path = context_dir.join("project_index_min.md");
@@ -291,6 +309,11 @@ fn build_project_context(
         project_index_min_available,
         project_index_min_included,
     );
+    let (source, confidence, reason) = structured_project_source(index_health);
+    let source_files = collect_project_source_files(workspace_root, 5_000);
+    let languages = project_language_summaries(&source_files);
+    let top_directories = project_directory_summaries(&source_files);
+    let likely_entry_points = likely_entry_points(&source_files);
 
     ContextProjectInfo {
         project_index_min,
@@ -301,15 +324,34 @@ fn build_project_context(
         project_index_min_requested: include_project_index_min,
         project_index_min_included,
         project_index_min_reason: Some(project_index_min_reason.to_string()),
-        context_source: Some("legacy_project_index_metadata".to_string()),
+        context_source: Some(source.to_string()),
+        source: Some(source.to_string()),
+        confidence: Some(confidence.to_string()),
+        reason: Some(reason.to_string()),
+        root_name: workspace_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_string),
+        workspace_root: Some(workspace_root.to_string_lossy().to_string()),
+        active_file: active_file.map(str::to_string),
+        open_files: open_files.to_vec(),
+        indexed_files: index_health.map(|health| health.indexed_files),
+        supported_files: index_health
+            .map(|health| health.supported_files)
+            .or(Some(source_files.len())),
+        stale_files: index_health.map(|health| health.stale_files),
+        missing_files: index_health.map(|health| health.missing_files),
+        orphaned_files: index_health.map(|health| health.orphaned_files),
+        symbol_count: index_health.map(|health| health.symbol_count),
+        languages,
+        top_directories,
+        likely_entry_points,
+        index_health_status: index_health
+            .map(|health| format!("{:?}", health.status).to_ascii_lowercase()),
     }
 }
 
-fn project_index_min_reason(
-    requested: bool,
-    available: bool,
-    included: bool,
-) -> &'static str {
+fn project_index_min_reason(requested: bool, available: bool, included: bool) -> &'static str {
     if included {
         "included"
     } else if !requested {
@@ -318,6 +360,166 @@ fn project_index_min_reason(
         "missing"
     } else {
         "empty_or_unreadable"
+    }
+}
+
+fn structured_project_source(
+    index_health: Option<&IndexHealthSnapshot>,
+) -> (&'static str, &'static str, &'static str) {
+    match index_health {
+        Some(health) => {
+            let confidence = match health.status {
+                IndexHealthStatus::Fresh => "high",
+                IndexHealthStatus::Partial
+                | IndexHealthStatus::Stale
+                | IndexHealthStatus::Indexing => "medium",
+                IndexHealthStatus::Unknown
+                | IndexHealthStatus::Checking
+                | IndexHealthStatus::Error => "low",
+            };
+            (
+                "structured_index",
+                confidence,
+                "symbol_index_health_available",
+            )
+        }
+        None => ("workspace_scan_fallback", "low", "symbol_index_unavailable"),
+    }
+}
+
+fn collect_project_source_files(workspace_root: &Path, limit: usize) -> Vec<String> {
+    let mut files = Vec::new();
+
+    for entry in walkdir::WalkDir::new(workspace_root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| {
+            let relative = relative_path(workspace_root, entry.path());
+            !should_skip_path(&relative)
+        })
+        .filter_map(Result::ok)
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let relative = relative_path(workspace_root, entry.path());
+        let relative_path = PathBuf::from(&relative);
+        if !is_code_file(&relative_path) {
+            continue;
+        }
+        files.push(relative);
+        if files.len() >= limit {
+            break;
+        }
+    }
+
+    files.sort();
+    files
+}
+
+fn project_language_summaries(files: &[String]) -> Vec<ProjectLanguageSummary> {
+    let mut counts = BTreeMap::<String, usize>::new();
+    for file in files {
+        let language = detect_language(&PathBuf::from(file));
+        if language == "text" {
+            continue;
+        }
+        *counts
+            .entry(display_language_name(&language).to_string())
+            .or_insert(0) += 1;
+    }
+
+    let mut summaries = counts
+        .into_iter()
+        .map(|(name, files)| ProjectLanguageSummary { name, files })
+        .collect::<Vec<_>>();
+    summaries.sort_by(|a, b| b.files.cmp(&a.files).then_with(|| a.name.cmp(&b.name)));
+    summaries.truncate(8);
+    summaries
+}
+
+fn project_directory_summaries(files: &[String]) -> Vec<ProjectDirectorySummary> {
+    let mut counts = BTreeMap::<String, usize>::new();
+    for file in files {
+        let directory = project_summary_directory(file);
+        *counts.entry(directory).or_insert(0) += 1;
+    }
+
+    let mut summaries = counts
+        .into_iter()
+        .map(|(path, files)| ProjectDirectorySummary { path, files })
+        .collect::<Vec<_>>();
+    summaries.sort_by(|a, b| b.files.cmp(&a.files).then_with(|| a.path.cmp(&b.path)));
+    summaries.truncate(10);
+    summaries
+}
+
+fn likely_entry_points(files: &[String]) -> Vec<String> {
+    const ENTRYPOINTS: &[&str] = &[
+        "src-tauri/src/main.rs",
+        "src/main.tsx",
+        "src/main.ts",
+        "src/main.jsx",
+        "src/main.js",
+        "src/index.tsx",
+        "src/index.ts",
+        "src/index.jsx",
+        "src/index.js",
+        "src/App.tsx",
+        "src/lib.rs",
+        "main.rs",
+        "lib.rs",
+        "app/page.tsx",
+        "pages/index.tsx",
+    ];
+    let file_set = files.iter().map(String::as_str).collect::<HashSet<_>>();
+    ENTRYPOINTS
+        .iter()
+        .filter(|path| file_set.contains(**path))
+        .map(|path| (*path).to_string())
+        .take(8)
+        .collect()
+}
+
+fn project_summary_directory(path: &str) -> String {
+    let mut parts = path.split('/').filter(|part| !part.is_empty());
+    let Some(first) = parts.next() else {
+        return ".".to_string();
+    };
+    let Some(second) = parts.next() else {
+        return ".".to_string();
+    };
+    format!("{first}/{second}")
+}
+
+fn display_language_name(language: &str) -> &str {
+    match language {
+        "rust" => "Rust",
+        "python" => "Python",
+        "javascript" => "JavaScript",
+        "typescript" => "TypeScript",
+        "go" => "Go",
+        "java" => "Java",
+        "cpp" => "C++",
+        "csharp" => "C#",
+        "ruby" => "Ruby",
+        "php" => "PHP",
+        "swift" => "Swift",
+        "kotlin" => "Kotlin",
+        "scala" => "Scala",
+        "vue" => "Vue",
+        "svelte" => "Svelte",
+        "sql" => "SQL",
+        "bash" => "Bash",
+        "yaml" => "YAML",
+        "toml" => "TOML",
+        "json" => "JSON",
+        "html" => "HTML",
+        "css" => "CSS",
+        "scss" => "SCSS",
+        "less" => "Less",
+        "markdown" => "Markdown",
+        other => other,
     }
 }
 
@@ -1161,7 +1363,7 @@ mod tests {
         .unwrap();
         std::fs::write(context_dir.join("project_index.md"), "full project context").unwrap();
 
-        let project_context = build_project_context(temp_dir.path(), true);
+        let project_context = build_project_context(temp_dir.path(), true, None, &[], None);
 
         assert_eq!(
             project_context.project_index_min.as_deref(),
@@ -1177,14 +1379,23 @@ mod tests {
         );
         assert_eq!(
             project_context.context_source.as_deref(),
-            Some("legacy_project_index_metadata")
+            Some("workspace_scan_fallback")
+        );
+        assert_eq!(
+            project_context.source.as_deref(),
+            Some("workspace_scan_fallback")
+        );
+        assert_eq!(project_context.confidence.as_deref(), Some("low"));
+        assert_eq!(
+            project_context.reason.as_deref(),
+            Some("symbol_index_unavailable")
         );
         assert_eq!(
             project_context.project_index_path.as_deref(),
             Some(".zblade/context/project_index.md")
         );
 
-        let project_context = build_project_context(temp_dir.path(), false);
+        let project_context = build_project_context(temp_dir.path(), false, None, &[], None);
         assert!(project_context.project_index_min.is_none());
         assert!(project_context.project_index_min_available);
         assert!(!project_context.project_index_min_requested);
@@ -1198,7 +1409,7 @@ mod tests {
     #[test]
     fn project_context_reports_missing_project_index_files() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let project_context = build_project_context(temp_dir.path(), true);
+        let project_context = build_project_context(temp_dir.path(), true, None, &[], None);
 
         assert!(project_context.project_index_min.is_none());
         assert!(!project_context.project_index_min_available);
@@ -1219,7 +1430,7 @@ mod tests {
         std::fs::create_dir_all(&context_dir).unwrap();
         std::fs::write(context_dir.join("project_index_min.md"), "   \n").unwrap();
 
-        let project_context = build_project_context(temp_dir.path(), true);
+        let project_context = build_project_context(temp_dir.path(), true, None, &[], None);
 
         assert!(project_context.project_index_min.is_none());
         assert!(project_context.project_index_min_available);
@@ -1229,6 +1440,125 @@ mod tests {
             project_context.project_index_min_reason.as_deref(),
             Some("empty_or_unreadable")
         );
+    }
+
+    #[test]
+    fn project_context_reports_structured_workspace_shape_from_index_health() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp_dir.path().join("src/components")).unwrap();
+        std::fs::create_dir_all(temp_dir.path().join("src-tauri/src")).unwrap();
+        std::fs::write(
+            temp_dir.path().join("src/main.tsx"),
+            "export function main() {}",
+        )
+        .unwrap();
+        std::fs::write(
+            temp_dir.path().join("src/components/App.tsx"),
+            "export function App() {}",
+        )
+        .unwrap();
+        std::fs::write(
+            temp_dir.path().join("src-tauri/src/main.rs"),
+            "fn main() {}",
+        )
+        .unwrap();
+        std::fs::write(
+            temp_dir.path().join("README.md"),
+            "# ignored by source scan",
+        )
+        .unwrap();
+
+        let health = IndexHealthSnapshot {
+            status: IndexHealthStatus::Fresh,
+            indexed_files: 3,
+            supported_files: 3,
+            stale_files: 0,
+            missing_files: 0,
+            orphaned_files: 0,
+            queued_files: 0,
+            active_workers: 0,
+            symbol_count: 12,
+            last_full_scan_ms: Some(4),
+            last_incremental_update_ms: None,
+            current_file: None,
+            message: "ready".to_string(),
+        };
+        let open_files = vec!["src/main.tsx".to_string()];
+
+        let project_context = build_project_context(
+            temp_dir.path(),
+            false,
+            Some("src/main.tsx"),
+            &open_files,
+            Some(&health),
+        );
+
+        assert_eq!(project_context.source.as_deref(), Some("structured_index"));
+        assert_eq!(project_context.confidence.as_deref(), Some("high"));
+        assert_eq!(
+            project_context.reason.as_deref(),
+            Some("symbol_index_health_available")
+        );
+        assert_eq!(project_context.active_file.as_deref(), Some("src/main.tsx"));
+        assert_eq!(project_context.open_files, open_files);
+        assert_eq!(project_context.indexed_files, Some(3));
+        assert_eq!(project_context.supported_files, Some(3));
+        assert_eq!(project_context.symbol_count, Some(12));
+        assert_eq!(
+            project_context.index_health_status.as_deref(),
+            Some("fresh")
+        );
+        assert!(project_context
+            .languages
+            .iter()
+            .any(|item| item.name == "TypeScript" && item.files == 2));
+        assert!(project_context
+            .languages
+            .iter()
+            .any(|item| item.name == "Rust" && item.files == 1));
+        assert!(project_context
+            .top_directories
+            .iter()
+            .any(|item| item.path == "src/components" && item.files == 1));
+        assert!(project_context
+            .top_directories
+            .iter()
+            .any(|item| item.path == "src-tauri/src" && item.files == 1));
+        assert!(project_context
+            .likely_entry_points
+            .contains(&"src/main.tsx".to_string()));
+        assert!(project_context
+            .likely_entry_points
+            .contains(&"src-tauri/src/main.rs".to_string()));
+    }
+
+    #[test]
+    fn project_context_degrades_to_workspace_scan_without_index_health() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+        std::fs::write(temp_dir.path().join("src/lib.rs"), "pub fn run() {}").unwrap();
+
+        let project_context = build_project_context(temp_dir.path(), false, None, &[], None);
+
+        assert_eq!(
+            project_context.source.as_deref(),
+            Some("workspace_scan_fallback")
+        );
+        assert_eq!(project_context.confidence.as_deref(), Some("low"));
+        assert_eq!(
+            project_context.reason.as_deref(),
+            Some("symbol_index_unavailable")
+        );
+        assert_eq!(project_context.supported_files, Some(1));
+        assert_eq!(project_context.indexed_files, None);
+        assert_eq!(project_context.symbol_count, None);
+        assert!(project_context
+            .languages
+            .iter()
+            .any(|item| item.name == "Rust" && item.files == 1));
+        assert!(project_context
+            .likely_entry_points
+            .contains(&"src/lib.rs".to_string()));
     }
 
     #[test]
