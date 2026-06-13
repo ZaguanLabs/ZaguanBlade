@@ -306,44 +306,6 @@ pub fn get_tool_definitions() -> Vec<Value> {
         }),
         serde_json::json!({
             "type": "function",
-            "name": "get_project_index_overview",
-            "function": {
-                "name": "get_project_index_overview",
-                "description": "Legacy fallback only. Read a compact capped overview window from .zblade/context/project_index.md when explicitly investigating generated project-index Markdown. Prefer fast_context for first-turn orientation and targeted code context.",
-                "strict": false,
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": { "type": "string", "description": "Optional workspace root path" },
-                        "max_chars": { "type": "integer", "description": "Optional output cap (default 6000, max 12000)" },
-                        "offset": { "type": "integer", "description": "Optional character offset (default 0)" }
-                    },
-                    "required": [],
-                    "additionalProperties": false
-                }
-            }
-        }),
-        serde_json::json!({
-            "type": "function",
-            "name": "get_project_index_chunk",
-            "function": {
-                "name": "get_project_index_chunk",
-                "description": "Legacy fallback only. Read a deterministic paged chunk from .zblade/context/project_index.md when explicit compatibility paging is required. Prefer fast_context for normal orientation.",
-                "strict": false,
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": { "type": "string", "description": "Optional workspace root path" },
-                        "offset": { "type": "integer", "description": "Optional character offset (default 0)" },
-                        "max_chars": { "type": "integer", "description": "Optional output cap (default 4000, max 8000)" }
-                    },
-                    "required": [],
-                    "additionalProperties": false
-                }
-            }
-        }),
-        serde_json::json!({
-            "type": "function",
             "name": "read_file",
             "function": {
                 "name": "read_file",
@@ -622,6 +584,19 @@ mod tests {
         assert!(names.contains(&"read_many_files"));
         assert!(names.contains(&"batch"));
         assert!(names.contains(&"codebase_investigator"));
+    }
+
+    #[test]
+    fn excludes_legacy_project_index_tools_from_model_definitions() {
+        let defs = get_tool_definitions();
+        let names = defs
+            .iter()
+            .filter_map(|value| value.get("name").and_then(|v| v.as_str()))
+            .collect::<Vec<&str>>();
+
+        assert!(!names.contains(&"get_project_index_overview"));
+        assert!(!names.contains(&"get_project_index_chunk"));
+        assert!(names.contains(&"fast_context"));
     }
 
     #[test]

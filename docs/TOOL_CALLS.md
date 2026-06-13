@@ -536,7 +536,7 @@ Return incoming and outgoing graph edges for a symbol.
 
 ## Project Index Tools
 
-These are legacy fallback tools during the project-index migration. Prefer `fast_context` for first-pass orientation and targeted symbol-aware context. Use these only when explicitly investigating the generated `.zblade/context/project_index.md` artifact or when compatibility requires it.
+These are legacy fallback tools during the project-index migration. They remain locally executable for compatibility, but they are no longer advertised in normal model-facing tool schemas. Prefer `fast_context` for first-pass orientation and targeted symbol-aware context. Use these only when explicitly investigating the generated `.zblade/context/project_index.md` artifact or when compatibility requires it.
 
 ### `get_project_index_overview`
 
