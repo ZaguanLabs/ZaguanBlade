@@ -110,7 +110,12 @@ pub fn build_context_pack(
 
     let combined_query = queries.join(" ");
     let related_docs = if include_docs {
-        collect_related_docs(workspace_root, &combined_query, max_results.min(6))
+        collect_related_docs(
+            &service,
+            workspace_root,
+            &combined_query,
+            max_results.min(6),
+        )
     } else {
         Vec::new()
     };
@@ -1372,6 +1377,93 @@ fn collect_related_tests(
 }
 
 fn collect_related_docs(
+    service: &LanguageService,
+    workspace_root: &Path,
+    query: &str,
+    limit: usize,
+) -> Vec<ContextFileResult> {
+    let indexed = collect_indexed_doc_sections(service, query, limit);
+    if !indexed.is_empty() {
+        return indexed;
+    }
+
+    collect_related_docs_by_path(workspace_root, query, limit)
+}
+
+fn collect_indexed_doc_sections(
+    service: &LanguageService,
+    query: &str,
+    limit: usize,
+) -> Vec<ContextFileResult> {
+    let Ok(results) =
+        service.search_symbols_filtered(query, None, Some(vec![SymbolType::Heading]), limit * 4)
+    else {
+        return Vec::new();
+    };
+    let mut docs = Vec::new();
+    let mut seen = HashSet::new();
+
+    for result in results {
+        let symbol = result.symbol;
+        if !is_doc_path(&symbol.file_path) || !seen.insert(symbol.id.clone()) {
+            continue;
+        }
+        let range = doc_section_range(service, &symbol);
+        docs.push(ContextFileResult {
+            path: symbol.file_path.clone(),
+            score: (62.0 + result.score * 30.0).round().clamp(0.0, 92.0) as u32,
+            reason: format!(
+                "Indexed Markdown section `{}` matches the request.",
+                symbol.name
+            ),
+            why: vec![
+                "matched indexed Markdown heading".to_string(),
+                format!("section heading `{}`", symbol.name),
+                format!("symbol index score {:.2}", result.score),
+            ],
+            suggested_ranges: vec![range],
+        });
+        if docs.len() >= limit {
+            break;
+        }
+    }
+
+    docs.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
+    docs
+}
+
+fn doc_section_range(service: &LanguageService, heading: &Symbol) -> ContextRange {
+    let start_line = heading.range.start.line.saturating_add(1);
+    let heading_level = markdown_heading_level(heading).unwrap_or(6);
+    let end_line = service
+        .get_file_symbols(&heading.file_path)
+        .ok()
+        .and_then(|symbols| {
+            symbols
+                .into_iter()
+                .filter(|symbol| symbol.symbol_type == SymbolType::Heading)
+                .filter(|symbol| symbol.range.start.line > heading.range.start.line)
+                .filter(|symbol| markdown_heading_level(symbol).unwrap_or(6) <= heading_level)
+                .map(|symbol| symbol.range.start.line.saturating_add(1).saturating_sub(1))
+                .min()
+        })
+        .unwrap_or_else(|| start_line.saturating_add(80));
+
+    ContextRange {
+        start_line,
+        end_line: end_line.max(start_line).min(start_line.saturating_add(120)),
+    }
+}
+
+fn markdown_heading_level(symbol: &Symbol) -> Option<usize> {
+    symbol
+        .signature
+        .as_deref()
+        .and_then(|signature| signature.strip_prefix('h'))
+        .and_then(|level| level.parse::<usize>().ok())
+}
+
+fn collect_related_docs_by_path(
     workspace_root: &Path,
     query: &str,
     limit: usize,
@@ -1887,6 +1979,46 @@ mod tests {
         let payload = build_context_pack(temp_dir.path(), None, &open_files, &request);
 
         assert!(payload.impact.is_none());
+    }
+
+    #[test]
+    fn context_pack_returns_indexed_markdown_sections_as_related_docs() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let service = test_language_service(temp_dir.path());
+        std::fs::create_dir_all(temp_dir.path().join("docs")).unwrap();
+        std::fs::write(
+            temp_dir.path().join("docs/architecture.md"),
+            "# Architecture\n\nIntro\n\n## Fast Context Architecture\n\nUse symbols first.\n\n## Other Notes\n\nLater.\n",
+        )
+        .unwrap();
+        service.index_file("docs/architecture.md").unwrap();
+
+        let request = ContextPackRequest {
+            id: "ctx-doc-sections".to_string(),
+            query: "fast context architecture".to_string(),
+            queries: Vec::new(),
+            intent: Some("docs".to_string()),
+            max_results: Some(4),
+            include_tests: Some(false),
+            include_docs: Some(true),
+            include_memory: Some(false),
+            include_project_index_min: Some(false),
+        };
+        let open_files: Vec<String> = Vec::new();
+        let payload = build_context_pack(temp_dir.path(), None, &open_files, &request);
+
+        let doc = payload
+            .related_docs
+            .iter()
+            .find(|doc| doc.path == "docs/architecture.md")
+            .expect("indexed markdown doc should be returned");
+        assert!(doc.reason.contains("Fast Context Architecture"));
+        assert_eq!(doc.suggested_ranges[0].start_line, 5);
+        assert_eq!(doc.suggested_ranges[0].end_line, 8);
+        assert!(doc
+            .why
+            .iter()
+            .any(|reason| reason == "matched indexed Markdown heading"));
     }
 
     #[test]
