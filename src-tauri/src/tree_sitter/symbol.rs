@@ -366,7 +366,9 @@ impl SymbolExtractor {
 
     fn node_to_symbol(&self, node: &Node, source: &str, language: Language) -> Option<Symbol> {
         match language {
-            Language::TypeScript | Language::Tsx => self.typescript_node_to_symbol(node, source),
+            Language::TypeScript | Language::Tsx | Language::Astro => {
+                self.typescript_node_to_symbol(node, source)
+            }
             Language::JavaScript | Language::Jsx => self.javascript_node_to_symbol(node, source),
             Language::Python => self.python_node_to_symbol(node, source),
             Language::Rust => self.rust_node_to_symbol(node, source),
@@ -895,7 +897,11 @@ impl SymbolExtractor {
 
     fn extract_signature(&self, node: &Node, source: &str, language: Language) -> Option<String> {
         match language {
-            Language::TypeScript | Language::Tsx | Language::JavaScript | Language::Jsx => {
+            Language::TypeScript
+            | Language::Tsx
+            | Language::Astro
+            | Language::JavaScript
+            | Language::Jsx => {
                 // For functions, extract parameters
                 if let Some(params) = node.child_by_field_name("parameters") {
                     let params_text = params.utf8_text(source.as_bytes()).ok()?;
@@ -999,16 +1005,18 @@ fn extract_structural_relationships_from_node(
     seen: &mut HashSet<(String, String, SymbolRelationshipType, u32)>,
 ) {
     match language {
-        Language::TypeScript | Language::Tsx | Language::JavaScript | Language::Jsx => {
-            extract_typescript_structural_relationships(
-                node,
-                source,
-                file_path,
-                symbols,
-                relationships,
-                seen,
-            )
-        }
+        Language::TypeScript
+        | Language::Tsx
+        | Language::Astro
+        | Language::JavaScript
+        | Language::Jsx => extract_typescript_structural_relationships(
+            node,
+            source,
+            file_path,
+            symbols,
+            relationships,
+            seen,
+        ),
         Language::Python => extract_python_structural_relationships(
             node,
             source,
@@ -1402,7 +1410,11 @@ fn extract_relationship_target_name(
     language: Language,
 ) -> Option<String> {
     match language {
-        Language::TypeScript | Language::Tsx | Language::JavaScript | Language::Jsx => {
+        Language::TypeScript
+        | Language::Tsx
+        | Language::Astro
+        | Language::JavaScript
+        | Language::Jsx => {
             if node.kind() != "call_expression" {
                 return None;
             }

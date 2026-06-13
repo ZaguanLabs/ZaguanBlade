@@ -24,6 +24,7 @@ fn is_parallel_read_only_tool(tool_name: &str) -> bool {
         "get_editor_state"
             | "symbol_search"
             | "symbol_resolve"
+            | "symbol_related"
             | "symbol_outline"
             | "read_file"
             | "read_file_range"

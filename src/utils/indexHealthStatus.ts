@@ -26,12 +26,7 @@ export function shouldShowIndexStatusCue(indexHealth: IndexHealthSnapshot | null
         return false;
     }
 
-    if (indexHealth.status === 'checking' || indexHealth.status === 'indexing' || indexHealth.status === 'error') {
-        return true;
-    }
-
-    return (indexHealth.status === 'partial' || indexHealth.status === 'stale')
-        && (getPendingFileCount(indexHealth) > 0 || indexHealth.orphaned_files > 0);
+    return indexHealth.status === 'checking' || indexHealth.status === 'indexing';
 }
 
 export function formatIndexStatusLabel(indexHealth: IndexHealthSnapshot): string {

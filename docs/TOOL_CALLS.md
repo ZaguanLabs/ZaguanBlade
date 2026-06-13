@@ -459,6 +459,27 @@ Resolve one symbol by ID, or by file plus name.
 
 **Rule:** provide either `symbol_id`, or a `path` with a symbol name selector.
 
+### `symbol_related`
+
+Return evidence-backed symbols related to one seed symbol. Relatedness includes direct graph edges, same-module exports, importers of the seed symbol's module, and consumers of sibling exports from that module.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `symbol_id` | string | Conditionally | Stable symbol ID |
+| `path` | string | Conditionally | File path when resolving by file-scoped lookup |
+| `qualified_name` | string | No | Exact qualified name |
+| `name` | string | No | Simple symbol name |
+| `limit` | integer | No | Max related symbols. Defaults to `24`, capped at `100`. |
+
+**Accepted aliases:**
+
+- `symbol_id`: `id`
+- `path`: `file`, `file_path`
+
+**Rule:** provide either `symbol_id`, or a `path` with a symbol name selector.
+
 ### `symbol_outline`
 
 Return the hierarchical symbol outline for one file.
@@ -687,6 +708,7 @@ That is not always identical to what every model sees in advertised tool schemas
 - `insert_at_cursor`
 - `symbol_search`
 - `symbol_resolve`
+- `symbol_related`
 - `symbol_outline`
 - `symbol_graph`
 - `get_project_index_overview`

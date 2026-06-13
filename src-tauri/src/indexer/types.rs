@@ -156,9 +156,9 @@ impl DirectoryTree {
 }
 
 pub static CODE_EXTENSIONS: &[&str] = &[
-    "go", "rs", "py", "js", "ts", "tsx", "jsx", "java", "c", "cpp", "h", "hpp", "cs", "rb", "php",
-    "swift", "kt", "scala", "vue", "svelte", "sql", "sh", "bash", "zsh", "yaml", "yml", "toml",
-    "json", "xml", "html", "css", "scss", "less", "md",
+    "go", "rs", "py", "js", "ts", "tsx", "jsx", "astro", "java", "c", "cpp", "h", "hpp", "cs",
+    "rb", "php", "swift", "kt", "scala", "vue", "svelte", "sql", "sh", "bash", "zsh", "yaml",
+    "yml", "toml", "json", "xml", "html", "css", "scss", "less", "md",
 ];
 
 pub static SKIP_DIRS: &[&str] = &[
@@ -195,6 +195,7 @@ pub fn detect_language(path: &PathBuf) -> String {
             "ts" => "typescript",
             "tsx" => "typescript",
             "jsx" => "javascript",
+            "astro" => "astro",
             "go" => "go",
             "java" => "java",
             "c" => "c",

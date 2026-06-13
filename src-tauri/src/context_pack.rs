@@ -602,6 +602,31 @@ fn collect_context_related_files(
                 return Ok(related);
             }
         }
+
+        for related_symbol in service
+            .get_related_symbols(symbol, 8)
+            .map_err(|error| error.to_string())?
+        {
+            if !matches!(
+                related_symbol.relationship.as_str(),
+                "module_importer" | "sibling_export_consumer" | "same_module_export"
+            ) {
+                continue;
+            }
+            let related_path = related_symbol.symbol.file_path;
+            if related_path == file_path || !seen.insert(related_path.clone()) {
+                continue;
+            }
+            related.push(ContextRelatedFile {
+                path: related_path.clone(),
+                relationship: related_symbol.relationship,
+                reason: related_symbol.reason,
+                score: related_symbol.score.min(72),
+            });
+            if related.len() >= 12 {
+                return Ok(related);
+            }
+        }
     }
 
     Ok(related)

@@ -122,6 +122,27 @@ pub fn get_tool_definitions() -> Vec<Value> {
         }),
         serde_json::json!({
             "type": "function",
+            "name": "symbol_related",
+            "function": {
+                "name": "symbol_related",
+                "description": "Return evidence-backed symbols related to a seed symbol, including direct graph edges, same-module exports, module importers, and consumers of sibling exports from the same module.",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "symbol_id": { "type": "string", "description": "Stable symbol ID for related-symbol expansion" },
+                        "path": { "type": "string", "description": "File path when resolving by name" },
+                        "qualified_name": { "type": "string", "description": "Optional exact qualified name" },
+                        "name": { "type": "string", "description": "Optional simple symbol name" },
+                        "limit": { "type": "integer", "description": "Optional max related symbols" }
+                    },
+                    "required": [],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
             "name": "symbol_outline",
             "function": {
                 "name": "symbol_outline",

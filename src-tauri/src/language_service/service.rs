@@ -3,6 +3,7 @@
 //! Combines tree-sitter parsing and symbol indexing
 //! into a single coherent API for ZLP.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -136,6 +137,13 @@ struct CachedFile {
     _snapshot: Arc<BufferSnapshot>,
     /// Extracted symbols
     symbols: Vec<Symbol>,
+}
+
+struct SymbolExtraction<'a> {
+    symbols: Vec<Symbol>,
+    relationships: Vec<SymbolRelationship>,
+    content: Cow<'a, str>,
+    language: Language,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1086,6 +1094,56 @@ impl LanguageService {
     // Symbol Operations (Tree-sitter + Index)
     // =========================================================================
 
+    fn extract_file_symbols_and_relationships<'a>(
+        &self,
+        file_path: &str,
+        content: &'a str,
+        language: Language,
+    ) -> Result<SymbolExtraction<'a>, LanguageError> {
+        if matches!(language, Language::Markdown) {
+            return Ok(SymbolExtraction {
+                symbols: extract_markdown_header_symbols(file_path, content),
+                relationships: Vec::new(),
+                content: Cow::Borrowed(content),
+                language,
+            });
+        }
+
+        let (extraction_content, extraction_language) = if matches!(language, Language::Astro) {
+            (Cow::Owned(astro_script_projection(content)), Language::Tsx)
+        } else {
+            (Cow::Borrowed(content), language)
+        };
+
+        let tree =
+            parse_with_thread_local_parser(extraction_content.as_ref(), extraction_language)?;
+        let mut symbols = extract_symbols(
+            &tree,
+            extraction_content.as_ref(),
+            extraction_language,
+            file_path,
+        );
+        if matches!(language, Language::Astro) {
+            if let Some(component_symbol) = astro_component_symbol(file_path, content) {
+                symbols.push(component_symbol);
+            }
+        }
+        let relationships = extract_symbol_relationships(
+            &tree,
+            extraction_content.as_ref(),
+            extraction_language,
+            file_path,
+            &symbols,
+        );
+
+        Ok(SymbolExtraction {
+            symbols,
+            relationships,
+            content: extraction_content,
+            language: extraction_language,
+        })
+    }
+
     /// Index a single file
     pub fn index_file(&self, file_path: &str) -> Result<Vec<Symbol>, LanguageError> {
         let disk_metadata = file_index_metadata(&self.resolve_path(file_path)).ok();
@@ -1121,33 +1179,28 @@ impl LanguageService {
                 LanguageError::NotSupported(format!("Unknown language for: {}", file_path))
             })?;
 
-        // Extract symbols
-        let (extracted_symbols, mut relationships) = if matches!(language, Language::Markdown) {
-            (
-                extract_markdown_header_symbols(file_path, &content),
-                Vec::new(),
-            )
-        } else {
-            let tree = parse_with_thread_local_parser(&content, language)?;
-            let extracted_symbols = extract_symbols(&tree, &content, language, file_path);
-            let relationships = extract_symbol_relationships(
-                &tree,
-                &content,
-                language,
-                file_path,
-                &extracted_symbols,
-            );
-            (extracted_symbols, relationships)
-        };
+        let SymbolExtraction {
+            symbols: extracted_symbols,
+            mut relationships,
+            content: extraction_content,
+            language: extraction_language,
+        } = self.extract_file_symbols_and_relationships(file_path, &content, language)?;
         let symbols = self.with_file_root_symbol(file_path, &content, extracted_symbols);
         self.canonicalize_import_relationships(file_path, &mut relationships);
         self.append_module_export_relationships(
             file_path,
-            &content,
-            language,
+            extraction_content.as_ref(),
+            extraction_language,
             &symbols,
             &mut relationships,
         );
+        if matches!(language, Language::Astro) {
+            self.append_astro_component_export_relationship(
+                file_path,
+                &symbols,
+                &mut relationships,
+            );
+        }
 
         // Delete old symbols and insert new ones
         let semantic_anchors = extract_semantic_anchors(file_path, &content);
@@ -1594,6 +1647,162 @@ impl LanguageService {
         Ok(references)
     }
 
+    pub fn get_related_symbols(
+        &self,
+        symbol: &Symbol,
+        limit: usize,
+    ) -> Result<Vec<RelatedSymbol>, LanguageError> {
+        self.ensure_file_fresh(&symbol.file_path)?;
+        let seed = self
+            .symbol_store
+            .get_symbol(&symbol.id)?
+            .unwrap_or_else(|| symbol.clone());
+        let expanded_limit = limit.saturating_mul(4).max(limit).max(16);
+        let per_relationship_limit = limit.max(8);
+        let mut related = Vec::new();
+        let mut seen = HashSet::new();
+
+        for relationship in [
+            SymbolRelationshipType::Call,
+            SymbolRelationshipType::Import,
+            SymbolRelationshipType::Export,
+            SymbolRelationshipType::Extends,
+            SymbolRelationshipType::Implements,
+            SymbolRelationshipType::Contains,
+        ] {
+            let graph = self.get_symbol_graph(&seed, relationship, per_relationship_limit)?;
+
+            for reference in graph.incoming {
+                let reason = format!(
+                    "{} has an incoming {} relationship to {}.",
+                    reference.source_symbol.name, relationship, seed.name
+                );
+                Self::push_related_symbol(
+                    &seed,
+                    reference.source_symbol,
+                    format!("incoming_{}", relationship),
+                    reason,
+                    direct_relationship_score(relationship),
+                    1,
+                    &mut related,
+                    &mut seen,
+                );
+            }
+
+            for reference in graph.outgoing {
+                if let Some(target_symbol) = reference.target_symbol {
+                    let reason = format!(
+                        "{} has an outgoing {} relationship to {}.",
+                        seed.name, relationship, target_symbol.name
+                    );
+                    Self::push_related_symbol(
+                        &seed,
+                        target_symbol,
+                        format!("outgoing_{}", relationship),
+                        reason,
+                        direct_relationship_score(relationship).saturating_sub(4),
+                        1,
+                        &mut related,
+                        &mut seen,
+                    );
+                } else if relationship == SymbolRelationshipType::Import {
+                    if let Some(module_symbol) = self
+                        .get_file_module_symbol(&reference.target_name)
+                        .ok()
+                        .flatten()
+                    {
+                        let reason =
+                            format!("{} imports module {}.", seed.name, reference.target_name);
+                        Self::push_related_symbol(
+                            &seed,
+                            module_symbol,
+                            "outgoing_import".to_string(),
+                            reason,
+                            72,
+                            1,
+                            &mut related,
+                            &mut seen,
+                        );
+                    }
+                }
+            }
+        }
+
+        let module_exports = self.get_module_export_references(&seed.file_path)?;
+        let sibling_exports = module_exports
+            .into_iter()
+            .filter_map(|reference| reference.target_symbol)
+            .filter(|candidate| candidate.id != seed.id)
+            .collect::<Vec<_>>();
+
+        for sibling in &sibling_exports {
+            let reason = format!(
+                "{} is exported from the same module as {}.",
+                sibling.name, seed.name
+            );
+            Self::push_related_symbol(
+                &seed,
+                sibling.clone(),
+                "same_module_export".to_string(),
+                reason,
+                68,
+                1,
+                &mut related,
+                &mut seen,
+            );
+        }
+
+        for reference in self.symbol_store.find_references_to_target(
+            &seed.file_path,
+            SymbolRelationshipType::Import,
+            expanded_limit,
+        )? {
+            let reason = format!("Imports the module that defines {}.", seed.name);
+            Self::push_related_symbol(
+                &seed,
+                reference.source_symbol,
+                "module_importer".to_string(),
+                reason,
+                58,
+                2,
+                &mut related,
+                &mut seen,
+            );
+        }
+
+        for sibling in sibling_exports.iter().take(12) {
+            for reference in self.find_references_to_symbol(sibling, 8)? {
+                if reference.source_symbol.file_path == seed.file_path {
+                    continue;
+                }
+                let reason = format!(
+                    "Uses sibling export {} from the same module as {}.",
+                    sibling.name, seed.name
+                );
+                Self::push_related_symbol(
+                    &seed,
+                    reference.source_symbol,
+                    "sibling_export_consumer".to_string(),
+                    reason,
+                    62,
+                    2,
+                    &mut related,
+                    &mut seen,
+                );
+            }
+        }
+
+        related.sort_by(|a, b| {
+            b.score
+                .cmp(&a.score)
+                .then_with(|| a.distance.cmp(&b.distance))
+                .then_with(|| a.symbol.file_path.cmp(&b.symbol.file_path))
+                .then_with(|| a.symbol.name.cmp(&b.symbol.name))
+        });
+        related.truncate(limit);
+        Ok(related)
+    }
+
     /// Get all symbols in a file
     pub fn get_file_symbols(&self, file_path: &str) -> Result<Vec<Symbol>, LanguageError> {
         self.ensure_file_fresh(file_path)?;
@@ -1738,13 +1947,14 @@ impl LanguageService {
         if base_path.extension().is_some() {
             candidates.push(base_path.to_path_buf());
         } else {
-            for extension in ["ts", "tsx", "js", "jsx", "py", "rs", "go"] {
+            for extension in ["ts", "tsx", "astro", "js", "jsx", "py", "rs", "go"] {
                 candidates.push(base_path.with_extension(extension));
             }
 
             for index_name in [
                 "index.ts",
                 "index.tsx",
+                "index.astro",
                 "index.js",
                 "index.jsx",
                 "main.go",
@@ -2237,33 +2447,28 @@ impl LanguageService {
                 LanguageError::NotSupported(format!("Unknown language for: {}", file_path))
             })?;
 
-        // Extract symbols
-        let (extracted_symbols, mut relationships) = if matches!(language, Language::Markdown) {
-            (
-                extract_markdown_header_symbols(file_path, snapshot.content()),
-                Vec::new(),
-            )
-        } else {
-            let tree = parse_with_thread_local_parser(snapshot.content(), language)?;
-            let extracted_symbols = extract_symbols(&tree, snapshot.content(), language, file_path);
-            let relationships = extract_symbol_relationships(
-                &tree,
-                snapshot.content(),
-                language,
-                file_path,
-                &extracted_symbols,
-            );
-            (extracted_symbols, relationships)
-        };
+        let SymbolExtraction {
+            symbols: extracted_symbols,
+            mut relationships,
+            content: extraction_content,
+            language: extraction_language,
+        } = self.extract_file_symbols_and_relationships(file_path, snapshot.content(), language)?;
         let symbols = self.with_file_root_symbol(file_path, snapshot.content(), extracted_symbols);
         self.canonicalize_import_relationships(file_path, &mut relationships);
         self.append_module_export_relationships(
             file_path,
-            snapshot.content(),
-            language,
+            extraction_content.as_ref(),
+            extraction_language,
             &symbols,
             &mut relationships,
         );
+        if matches!(language, Language::Astro) {
+            self.append_astro_component_export_relationship(
+                file_path,
+                &symbols,
+                &mut relationships,
+            );
+        }
 
         // Delete old symbols and insert new ones
         self.symbol_store.delete_file_symbols(file_path)?;
@@ -3128,6 +3333,34 @@ impl LanguageService {
         }
     }
 
+    fn append_astro_component_export_relationship(
+        &self,
+        file_path: &str,
+        symbols: &[Symbol],
+        relationships: &mut Vec<SymbolRelationship>,
+    ) {
+        let root_id = Self::synthetic_file_root_id(file_path);
+        let Some(root_symbol) = symbols.iter().find(|symbol| symbol.id == root_id) else {
+            return;
+        };
+        let Some(component_symbol) = symbols.iter().find(|symbol| {
+            symbol.file_path == file_path
+                && symbol.symbol_type == SymbolType::Function
+                && symbol.signature.as_deref() == Some("Astro component")
+        }) else {
+            return;
+        };
+
+        relationships.push(SymbolRelationship {
+            source_symbol_id: root_symbol.id.clone(),
+            source_file_path: file_path.to_string(),
+            target_name: "default".to_string(),
+            target_symbol_id: Some(component_symbol.id.clone()),
+            relationship_type: SymbolRelationshipType::Export,
+            line: component_symbol.range.start.line,
+        });
+    }
+
     fn filter_visible_search_results(&self, results: Vec<SearchResult>) -> Vec<SearchResult> {
         results
             .into_iter()
@@ -3157,6 +3390,37 @@ impl LanguageService {
         }
 
         Some(symbol)
+    }
+
+    fn push_related_symbol(
+        seed: &Symbol,
+        candidate: Symbol,
+        relationship: String,
+        reason: String,
+        score: u32,
+        distance: u8,
+        related: &mut Vec<RelatedSymbol>,
+        seen: &mut HashSet<String>,
+    ) {
+        if candidate.id == seed.id || Self::is_synthetic_file_root_symbol(&candidate) {
+            return;
+        }
+
+        let mut symbol = candidate;
+        let root_id = Self::synthetic_file_root_id(&symbol.file_path);
+        if symbol.parent_id.as_deref() == Some(root_id.as_str()) {
+            symbol.parent_id = None;
+        }
+
+        if seen.insert(symbol.id.clone()) {
+            related.push(RelatedSymbol {
+                symbol,
+                relationship,
+                reason,
+                score,
+                distance,
+            });
+        }
     }
 
     fn with_file_root_symbol(
@@ -3223,7 +3487,11 @@ impl LanguageService {
     fn direct_export_name(content: &str, language: Language, symbol: &Symbol) -> Option<String> {
         let line = symbol_line_text(content, symbol.byte_offset).trim_start();
         match language {
-            Language::TypeScript | Language::Tsx | Language::JavaScript | Language::Jsx => {
+            Language::TypeScript
+            | Language::Tsx
+            | Language::Astro
+            | Language::JavaScript
+            | Language::Jsx => {
                 if line.starts_with("export default ") {
                     Some("default".to_string())
                 } else if line.starts_with("export ") {
@@ -3249,6 +3517,15 @@ pub struct SymbolGraph {
     pub outgoing: Vec<SymbolReference>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelatedSymbol {
+    pub symbol: Symbol,
+    pub relationship: String,
+    pub reason: String,
+    pub score: u32,
+    pub distance: u8,
+}
+
 /// Statistics about indexing operations
 #[derive(Debug, Clone, Default)]
 pub struct IndexStats {
@@ -3259,6 +3536,93 @@ pub struct IndexStats {
 }
 
 /// Compute a simple hash of content for change detection
+fn astro_component_symbol(file_path: &str, content: &str) -> Option<Symbol> {
+    let name = Path::new(file_path)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())?
+        .to_string();
+    let (end_line, end_character) = file_end_position(content);
+
+    Some(Symbol {
+        id: format!("{}::{}#{}", file_path, name, SymbolType::Function),
+        name: name.clone(),
+        qualified_name: name,
+        symbol_type: SymbolType::Function,
+        file_path: file_path.to_string(),
+        range: Range {
+            start: Position::new(0, 0),
+            end: Position::new(end_line, end_character),
+        },
+        byte_offset: 0,
+        byte_length: content.len(),
+        parent_id: None,
+        docstring: None,
+        signature: Some("Astro component".to_string()),
+        content_hash: compute_hash(content),
+    })
+}
+
+fn astro_script_projection(content: &str) -> String {
+    let mut projected = content
+        .bytes()
+        .map(|byte| if byte == b'\n' { b'\n' } else { b' ' })
+        .collect::<Vec<_>>();
+
+    if let Some((start, end)) = astro_frontmatter_body_range(content) {
+        projected[start..end].copy_from_slice(&content.as_bytes()[start..end]);
+    }
+
+    for (start, end) in astro_script_body_ranges(content) {
+        projected[start..end].copy_from_slice(&content.as_bytes()[start..end]);
+    }
+
+    String::from_utf8(projected).unwrap_or_default()
+}
+
+fn astro_frontmatter_body_range(content: &str) -> Option<(usize, usize)> {
+    let first_line = content.lines().next()?;
+    if first_line.trim() != "---" {
+        return None;
+    }
+
+    let body_start = content.find('\n').map(|index| index + 1)?;
+    let mut offset = body_start;
+    for line in content[body_start..].split_inclusive('\n') {
+        let line_without_newline = line.trim_end_matches(['\r', '\n']);
+        if line_without_newline.trim() == "---" {
+            return Some((body_start, offset));
+        }
+        offset += line.len();
+    }
+
+    None
+}
+
+fn astro_script_body_ranges(content: &str) -> Vec<(usize, usize)> {
+    let lower = content.to_ascii_lowercase();
+    let mut ranges = Vec::new();
+    let mut search_start = 0usize;
+
+    while let Some(relative_start) = lower[search_start..].find("<script") {
+        let tag_start = search_start + relative_start;
+        let Some(relative_tag_end) = lower[tag_start..].find('>') else {
+            break;
+        };
+        let body_start = tag_start + relative_tag_end + 1;
+        let Some(relative_body_end) = lower[body_start..].find("</script>") else {
+            break;
+        };
+        let body_end = body_start + relative_body_end;
+        if body_start < body_end {
+            ranges.push((body_start, body_end));
+        }
+        search_start = body_end.saturating_add("</script>".len());
+    }
+
+    ranges
+}
+
 fn extract_semantic_anchors(file_path: &str, content: &str) -> Vec<SemanticAnchor> {
     let mut anchors = Vec::new();
     let mut seen = HashSet::new();
@@ -3732,6 +4096,16 @@ fn go_is_exported_name(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn direct_relationship_score(relationship_type: SymbolRelationshipType) -> u32 {
+    match relationship_type {
+        SymbolRelationshipType::Call => 92,
+        SymbolRelationshipType::Extends | SymbolRelationshipType::Implements => 88,
+        SymbolRelationshipType::Contains => 82,
+        SymbolRelationshipType::Export => 78,
+        SymbolRelationshipType::Import => 74,
+    }
+}
+
 fn file_end_position(content: &str) -> (u32, u32) {
     if content.is_empty() {
         return (0, 0);
@@ -3822,6 +4196,43 @@ mod tests {
     }
 
     #[test]
+    fn test_index_astro_file_symbols() {
+        let (service, temp_dir) = create_test_service();
+        fs::create_dir_all(temp_dir.path().join("src/pages")).unwrap();
+
+        fs::write(
+            temp_dir.path().join("src/pages/Home.astro"),
+            r#"---
+import Layout from "../components/Layout.astro";
+
+export function loadPosts() {
+    return [];
+}
+---
+<Layout>
+    <script>
+    function hydrateHero() {
+        console.log("ready");
+    }
+    </script>
+</Layout>
+"#,
+        )
+        .unwrap();
+
+        let symbols = service.index_file("src/pages/Home.astro").unwrap();
+
+        assert!(symbols.iter().any(|symbol| symbol.name == "Home"
+            && symbol.signature.as_deref() == Some("Astro component")));
+        assert!(symbols.iter().any(|symbol| symbol.name == "loadPosts"));
+        assert!(symbols.iter().any(|symbol| symbol.name == "hydrateHero"));
+        assert!(symbols
+            .iter()
+            .any(|symbol| symbol.symbol_type == SymbolType::Import
+                && symbol.name == "../components/Layout.astro"));
+    }
+
+    #[test]
     fn test_search_symbols() {
         let (service, temp_dir) = create_test_service();
 
@@ -3850,6 +4261,57 @@ mod tests {
 
         // Should find authenticate and authorize
         assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn related_symbols_include_sibling_export_consumers() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("math.ts"),
+            r#"
+            export function add() {
+                return 1;
+            }
+
+            export function subtract() {
+                return 0;
+            }
+        "#,
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("invoice.ts"),
+            r#"
+            import { subtract } from "./math";
+
+            export function total() {
+                return subtract();
+            }
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("math.ts").unwrap();
+        service.index_file("invoice.ts").unwrap();
+        let add = service
+            .search_symbols_filtered("add", Some("math.ts"), None, 10)
+            .unwrap()
+            .into_iter()
+            .find(|result| result.symbol.name == "add")
+            .unwrap()
+            .symbol;
+
+        let related = service.get_related_symbols(&add, 20).unwrap();
+
+        assert!(related.iter().any(
+            |item| item.relationship == "same_module_export" && item.symbol.name == "subtract"
+        ));
+        assert!(related
+            .iter()
+            .any(|item| item.relationship == "sibling_export_consumer"
+                && item.symbol.file_path == "invoice.ts"
+                && item.symbol.name == "total"));
     }
 
     #[test]

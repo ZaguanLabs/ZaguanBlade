@@ -21,22 +21,28 @@ function makeHealth(overrides: Partial<IndexHealthSnapshot> & { status: IndexHea
     };
 }
 
-test('shows cue for stale and partial symbol index health with pending work', () => {
+test('does not show cue for stale or partial symbol index health with pending work', () => {
     assert.equal(shouldShowIndexStatusCue(makeHealth({
         status: 'stale',
         stale_files: 2,
         queued_files: 2,
-    })), true);
+    })), false);
     assert.equal(shouldShowIndexStatusCue(makeHealth({
         status: 'partial',
         missing_files: 3,
         queued_files: 3,
-    })), true);
+    })), false);
 });
 
 test('does not show cue for fresh or non-pending partial symbol index health', () => {
     assert.equal(shouldShowIndexStatusCue(makeHealth({ status: 'fresh' })), false);
     assert.equal(shouldShowIndexStatusCue(makeHealth({ status: 'partial' })), false);
+});
+
+test('shows cue only while checking or actively indexing', () => {
+    assert.equal(shouldShowIndexStatusCue(makeHealth({ status: 'checking' })), true);
+    assert.equal(shouldShowIndexStatusCue(makeHealth({ status: 'indexing' })), true);
+    assert.equal(shouldShowIndexStatusCue(makeHealth({ status: 'error' })), false);
 });
 
 test('formats active indexing progress from remaining queued files', () => {

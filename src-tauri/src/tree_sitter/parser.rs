@@ -11,6 +11,7 @@ use tree_sitter::{Parser, Tree};
 pub enum Language {
     TypeScript,
     Tsx,
+    Astro,
     JavaScript,
     Jsx,
     Python,
@@ -26,6 +27,7 @@ impl Language {
         match ext.to_lowercase().as_str() {
             "ts" => Some(Language::TypeScript),
             "tsx" => Some(Language::Tsx),
+            "astro" => Some(Language::Astro),
             "js" => Some(Language::JavaScript),
             "jsx" => Some(Language::Jsx),
             "mjs" | "cjs" => Some(Language::JavaScript),
@@ -42,6 +44,7 @@ impl Language {
         match self {
             Language::TypeScript => "TypeScript",
             Language::Tsx => "TSX",
+            Language::Astro => "Astro",
             Language::JavaScript => "JavaScript",
             Language::Jsx => "JSX",
             Language::Python => "Python",
@@ -196,6 +199,7 @@ mod tests {
     fn test_language_detection() {
         assert_eq!(Language::from_path("main.ts"), Some(Language::TypeScript));
         assert_eq!(Language::from_path("app.tsx"), Some(Language::Tsx));
+        assert_eq!(Language::from_path("page.astro"), Some(Language::Astro));
         assert_eq!(Language::from_path("script.js"), Some(Language::JavaScript));
         assert_eq!(Language::from_path("component.jsx"), Some(Language::Jsx));
         assert_eq!(Language::from_path("main.py"), Some(Language::Python));

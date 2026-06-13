@@ -797,7 +797,7 @@ impl ContextAssembler {
         if base_path.extension().is_some() {
             candidates.push(base_path.to_path_buf());
         } else {
-            for extension in ["ts", "tsx", "js", "jsx", "py", "rs"] {
+            for extension in ["ts", "tsx", "astro", "js", "jsx", "py", "rs"] {
                 candidates.push(base_path.with_extension(extension));
             }
 

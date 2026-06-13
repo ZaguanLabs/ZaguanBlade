@@ -165,6 +165,7 @@ fn is_batch_read_only_tool(tool_name: &str) -> bool {
         | "symbol_search"
         | "semantic_anchor_search"
         | "symbol_resolve"
+        | "symbol_related"
         | "symbol_references"
         | "edit_impact"
         | "symbol_graph"
@@ -1378,6 +1379,7 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
         "symbol_search" => symbol_search_tool(workspace_root, &args, app_handle),
         "semantic_anchor_search" => semantic_anchor_search_tool(workspace_root, &args, app_handle),
         "symbol_resolve" => symbol_resolve_tool(workspace_root, &args, app_handle),
+        "symbol_related" => symbol_related_tool(workspace_root, &args, app_handle),
         "symbol_references" => symbol_references_tool(workspace_root, &args, app_handle),
         "edit_impact" => edit_impact_tool(workspace_root, &args, app_handle),
         "symbol_graph" => symbol_graph_tool(workspace_root, &args, app_handle),
@@ -2753,6 +2755,16 @@ fn symbol_reference_to_json(reference: &crate::symbol_index::SymbolReference) ->
     })
 }
 
+fn related_symbol_to_json(related: &crate::language_service::RelatedSymbol) -> serde_json::Value {
+    serde_json::json!({
+        "symbol": symbol_to_json(&related.symbol),
+        "relationship": related.relationship,
+        "reason": related.reason,
+        "score": related.score,
+        "distance": related.distance,
+    })
+}
+
 fn relationship_type_values() -> Vec<crate::tree_sitter::SymbolRelationshipType> {
     vec![
         crate::tree_sitter::SymbolRelationshipType::Call,
@@ -3201,6 +3213,41 @@ fn symbol_outline_tool<R: tauri::Runtime>(
             "returned_symbols": total_symbols.min(max_symbols),
             "truncated": total_symbols > max_symbols,
             "include_outline": include_outline
+        }
+    });
+    ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
+}
+
+fn symbol_related_tool<R: tauri::Runtime>(
+    workspace_root: &Path,
+    args: &HashMap<String, serde_json::Value>,
+    app_handle: Option<&tauri::AppHandle<R>>,
+) -> ToolResult {
+    let service = match language_service_from_app_handle(app_handle) {
+        Ok(service) => service,
+        Err(err) => return ToolResult::err(err),
+    };
+    let symbol = match resolve_symbol_from_graph_args(workspace_root, &service, args) {
+        Ok(Some(symbol)) => symbol,
+        Ok(None) => return ToolResult::err("symbol not found".to_string()),
+        Err(err) => return ToolResult::err(err),
+    };
+    let limit = parse_bounded_usize_arg(args, "limit", 24, 100);
+    let started = Instant::now();
+    let related = match service.get_related_symbols(&symbol, limit) {
+        Ok(related) => related,
+        Err(err) => return ToolResult::err(err.to_string()),
+    };
+    let payload = serde_json::json!({
+        "seed": symbol_to_json(&symbol),
+        "related": related.iter().map(related_symbol_to_json).collect::<Vec<_>>(),
+        "_meta": {
+            "tool": "symbol_related",
+            "count": related.len(),
+            "timing_ms": started.elapsed().as_millis(),
+            "source": "language_service",
+            "index_health": service.index_health_snapshot(),
+            "truncated": related.len() >= limit,
         }
     });
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
