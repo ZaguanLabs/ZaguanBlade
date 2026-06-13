@@ -69,6 +69,7 @@ temp_next/
 
 # Internal documentation
 /docs/internal/
+/docs/live/
 
 # Internal streaming experiments
 /streaming/
