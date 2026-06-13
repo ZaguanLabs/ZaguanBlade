@@ -680,6 +680,8 @@ pub struct ContextPackPayload {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub related_files: Vec<ContextRelatedFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub impact: Option<ContextImpactSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index_health: Option<IndexHealthSnapshot>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub recommended_next_step: String,
@@ -837,6 +839,47 @@ pub struct ContextRelatedFile {
     pub reason: String,
     #[serde(default)]
     pub score: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ContextImpactSummary {
+    #[serde(default)]
+    pub enabled: bool,
+    pub reason: String,
+    pub risk: String,
+    pub confidence: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_symbols: Vec<ContextImpactTargetSymbol>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub impacted_files: Vec<ContextImpactFile>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub likely_tests: Vec<ContextFileResult>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recommended_next_steps: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ContextImpactTargetSymbol {
+    pub name: String,
+    pub qualified_name: String,
+    pub kind: String,
+    pub path: String,
+    pub line: u32,
+    #[serde(default)]
+    pub incoming_count: usize,
+    #[serde(default)]
+    pub outgoing_count: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ContextImpactFile {
+    pub path: String,
+    #[serde(default)]
+    pub score: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reasons: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub suggested_ranges: Vec<ContextRange>,
 }
 
 /// A line range suggestion for reading a file

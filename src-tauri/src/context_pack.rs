@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::blade_protocol::{
-    ContextFileEnrichment, ContextFileResult, ContextMemoryItem, ContextPackConfidence,
-    ContextPackError, ContextPackPayload, ContextProjectInfo, ContextRange, ContextRelatedFile,
+    ContextFileEnrichment, ContextFileResult, ContextImpactFile, ContextImpactSummary,
+    ContextImpactTargetSymbol, ContextMemoryItem, ContextPackConfidence, ContextPackError,
+    ContextPackPayload, ContextProjectInfo, ContextRange, ContextRelatedFile,
     ContextSemanticAnchorSummary, ContextSymbolSummary, ContextWorkspace, ProjectDirectorySummary,
     ProjectLanguageSummary,
 };
@@ -124,6 +125,16 @@ pub fn build_context_pack(
     let related_files = collect_related_files_from_enrichments(&enriched_files, max_results);
 
     let confidence = context_pack_confidence(&primary, &enriched_files, index_health.as_ref());
+    let impact = build_context_impact(
+        workspace_root,
+        &service,
+        &queries,
+        request.intent.as_deref(),
+        &primary,
+        &enriched_files,
+        index_health.as_ref(),
+        max_results,
+    );
 
     let summary = if let Some(first) = primary.first() {
         format!(
@@ -174,6 +185,7 @@ pub fn build_context_pack(
         hypothesized_flow,
         enriched_files,
         related_files,
+        impact,
         index_health,
         recommended_next_step,
         error: None,
@@ -195,6 +207,7 @@ pub fn error_payload(code: &str, message: &str) -> ContextPackPayload {
         hypothesized_flow: Vec::new(),
         enriched_files: Vec::new(),
         related_files: Vec::new(),
+        impact: None,
         index_health: None,
         recommended_next_step: String::new(),
         error: Some(ContextPackError {
@@ -921,6 +934,302 @@ fn collect_context_related_files(
     Ok(related)
 }
 
+fn build_context_impact(
+    workspace_root: &Path,
+    service: &LanguageService,
+    queries: &[String],
+    intent: Option<&str>,
+    primary: &[ContextFileResult],
+    enriched_files: &[ContextFileEnrichment],
+    index_health: Option<&IndexHealthSnapshot>,
+    max_results: usize,
+) -> Option<ContextImpactSummary> {
+    let trigger_reason = impact_trigger_reason(queries, intent, primary.first())?;
+    let target_symbols =
+        collect_context_impact_target_symbols(service, primary, enriched_files, max_results.min(4));
+    if target_symbols.is_empty() {
+        return None;
+    }
+
+    let relationship_types = [
+        SymbolRelationshipType::Call,
+        SymbolRelationshipType::Import,
+        SymbolRelationshipType::Export,
+        SymbolRelationshipType::Extends,
+        SymbolRelationshipType::Implements,
+    ];
+    let mut impacted = BTreeMap::<String, (u32, Vec<String>, Vec<ContextRange>)>::new();
+    let mut target_payloads = Vec::new();
+    let mut reference_count = 0usize;
+    let graph_limit = max_results.clamp(4, 10);
+
+    for symbol in &target_symbols {
+        let entry = impacted
+            .entry(symbol.file_path.clone())
+            .or_insert_with(|| (90, Vec::new(), Vec::new()));
+        merge_unique_reasons(
+            &mut entry.1,
+            &[format!("direct edit target `{}`", symbol.name)],
+            6,
+        );
+        entry.2.push(range_for_symbol(symbol));
+
+        let mut incoming_count = 0usize;
+        let mut outgoing_count = 0usize;
+
+        for relationship_type in relationship_types {
+            let Ok(graph) = service.get_symbol_graph(symbol, relationship_type, graph_limit) else {
+                continue;
+            };
+
+            for reference in graph.incoming {
+                reference_count += 1;
+                incoming_count += 1;
+                let relationship_name = reference.relationship_type.to_string();
+                let entry = impacted
+                    .entry(reference.source_symbol.file_path.clone())
+                    .or_insert_with(|| (0, Vec::new(), Vec::new()));
+                entry.0 = entry.0.max(if reference.target_symbol_id.is_some() {
+                    78
+                } else {
+                    62
+                });
+                merge_unique_reasons(
+                    &mut entry.1,
+                    &[format!(
+                        "incoming {} reference to `{}`",
+                        relationship_name, symbol.name
+                    )],
+                    6,
+                );
+                entry.2.push(ContextRange {
+                    start_line: reference.line.saturating_add(1).saturating_sub(8).max(1),
+                    end_line: reference.line.saturating_add(1).saturating_add(24),
+                });
+            }
+
+            for reference in graph.outgoing {
+                reference_count += 1;
+                outgoing_count += 1;
+                let Some(related_path) = reference
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.file_path.clone())
+                    .or_else(|| {
+                        (reference.relationship_type == SymbolRelationshipType::Import)
+                            .then(|| reference.target_name.clone())
+                    })
+                else {
+                    continue;
+                };
+                if related_path == symbol.file_path {
+                    continue;
+                }
+                let relationship_name = reference.relationship_type.to_string();
+                let entry = impacted
+                    .entry(related_path)
+                    .or_insert_with(|| (0, Vec::new(), Vec::new()));
+                entry.0 = entry.0.max(if reference.target_symbol_id.is_some() {
+                    70
+                } else {
+                    56
+                });
+                merge_unique_reasons(
+                    &mut entry.1,
+                    &[format!(
+                        "outgoing {} dependency from `{}`",
+                        relationship_name, symbol.name
+                    )],
+                    6,
+                );
+            }
+        }
+
+        target_payloads.push(ContextImpactTargetSymbol {
+            name: symbol.name.clone(),
+            qualified_name: symbol.qualified_name.clone(),
+            kind: symbol.symbol_type.to_string(),
+            path: symbol.file_path.clone(),
+            line: symbol.range.start.line.saturating_add(1),
+            incoming_count,
+            outgoing_count,
+        });
+    }
+
+    let mut impacted_files = impacted
+        .into_iter()
+        .map(|(path, (score, reasons, ranges))| ContextImpactFile {
+            path,
+            score,
+            reasons,
+            suggested_ranges: merge_context_ranges(ranges.into_iter())
+                .into_iter()
+                .take(4)
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+    impacted_files.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
+    impacted_files.truncate(max_results.min(8));
+
+    let impacted_as_results = impacted_files
+        .iter()
+        .map(|file| ContextFileResult {
+            path: file.path.clone(),
+            score: file.score,
+            reason: file
+                .reasons
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "Potentially impacted file.".to_string()),
+            why: file.reasons.clone(),
+            suggested_ranges: file.suggested_ranges.clone(),
+        })
+        .collect::<Vec<_>>();
+    let likely_tests =
+        collect_related_tests(workspace_root, &impacted_as_results, max_results.min(6));
+    let index_fresh =
+        index_health.is_some_and(|health| matches!(health.status, IndexHealthStatus::Fresh));
+    let risk = context_impact_risk(impacted_files.len(), reference_count, likely_tests.len());
+    let confidence =
+        context_impact_confidence(index_fresh, target_payloads.len(), impacted_files.len());
+
+    Some(ContextImpactSummary {
+        enabled: true,
+        reason: trigger_reason,
+        risk,
+        confidence,
+        target_symbols: target_payloads,
+        impacted_files,
+        likely_tests,
+        recommended_next_steps: vec![
+            "Read suggested_ranges for high-score impacted files before editing.".to_string(),
+            "Run or inspect likely_tests after making the change.".to_string(),
+            "Use edit_impact for deeper blast-radius analysis if risk is medium or high."
+                .to_string(),
+        ],
+    })
+}
+
+fn impact_trigger_reason(
+    queries: &[String],
+    intent: Option<&str>,
+    first_primary: Option<&ContextFileResult>,
+) -> Option<String> {
+    if matches!(intent, Some("docs" | "explain" | "question")) {
+        return None;
+    }
+    if let Some(intent @ ("bug_fix" | "feature" | "refactor")) = intent {
+        return Some(format!("intent_{}", intent));
+    }
+    let combined = queries.join(" ").to_ascii_lowercase();
+    let edit_verbs = [
+        "fix", "change", "update", "remove", "rename", "refactor", "replace", "add", "edit",
+        "delete",
+    ];
+    if let Some(verb) = edit_verbs
+        .iter()
+        .find(|verb| combined.split_whitespace().any(|token| token == **verb))
+    {
+        return Some(format!("query_edit_verb_{}", verb));
+    }
+    first_primary
+        .filter(|item| item.score >= 82)
+        .map(|_| "high_confidence_primary_file".to_string())
+}
+
+fn collect_context_impact_target_symbols(
+    service: &LanguageService,
+    primary: &[ContextFileResult],
+    enriched_files: &[ContextFileEnrichment],
+    limit: usize,
+) -> Vec<Symbol> {
+    let mut targets = Vec::new();
+    let mut seen = HashSet::new();
+
+    for item in primary.iter().take(4) {
+        let matched_names = enriched_files
+            .iter()
+            .find(|enrichment| enrichment.path == item.path)
+            .map(|enrichment| {
+                enrichment
+                    .matched_symbols
+                    .iter()
+                    .map(|symbol| symbol.name.as_str())
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default();
+        let Ok(symbols) = service.get_file_symbols(&item.path) else {
+            continue;
+        };
+        for symbol in symbols {
+            if !is_context_impact_target_symbol(&symbol) {
+                continue;
+            }
+            let range = range_for_symbol(&symbol);
+            let range_match = item
+                .suggested_ranges
+                .iter()
+                .any(|suggested| ranges_overlap(&range, suggested));
+            let name_match = matched_names.contains(symbol.name.as_str());
+            if !range_match && !name_match {
+                continue;
+            }
+            if seen.insert(symbol.id.clone()) {
+                targets.push(symbol);
+            }
+            if targets.len() >= limit {
+                return targets;
+            }
+        }
+    }
+
+    targets
+}
+
+fn is_context_impact_target_symbol(symbol: &Symbol) -> bool {
+    matches!(
+        symbol.symbol_type,
+        SymbolType::Function
+            | SymbolType::Method
+            | SymbolType::Class
+            | SymbolType::Struct
+            | SymbolType::Interface
+            | SymbolType::Type
+            | SymbolType::Enum
+            | SymbolType::Trait
+            | SymbolType::Impl
+            | SymbolType::Module
+    )
+}
+
+fn context_impact_risk(
+    impacted_file_count: usize,
+    reference_count: usize,
+    test_count: usize,
+) -> String {
+    if impacted_file_count >= 8 || reference_count >= 16 {
+        "high".to_string()
+    } else if impacted_file_count >= 3 || reference_count >= 4 || test_count == 0 {
+        "medium".to_string()
+    } else {
+        "low".to_string()
+    }
+}
+
+fn context_impact_confidence(
+    index_fresh: bool,
+    symbol_count: usize,
+    impacted_file_count: usize,
+) -> String {
+    if index_fresh && symbol_count > 0 && impacted_file_count > 0 {
+        "high".to_string()
+    } else if symbol_count > 0 || impacted_file_count > 0 {
+        "medium".to_string()
+    } else {
+        "low".to_string()
+    }
+}
+
 fn collect_related_files_from_enrichments(
     enriched_files: &[ContextFileEnrichment],
     limit: usize,
@@ -1491,6 +1800,147 @@ mod tests {
             context_pack_confidence(&primary, &enriched, None),
             ContextPackConfidence::Medium
         ));
+    }
+
+    #[test]
+    fn context_pack_refactor_task_includes_bounded_impact_summary() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let service = test_language_service(temp_dir.path());
+        std::fs::write(
+            temp_dir.path().join("helper.ts"),
+            "export function helperName() { return 'ok'; }",
+        )
+        .unwrap();
+        std::fs::write(
+            temp_dir.path().join("main.ts"),
+            r#"
+            import { helperName } from "./helper";
+            export function runMain() { return helperName(); }
+            "#,
+        )
+        .unwrap();
+        std::fs::write(
+            temp_dir.path().join("helper.test.ts"),
+            "import { helperName } from './helper'; test('helper', () => helperName());",
+        )
+        .unwrap();
+        service.index_file("helper.ts").unwrap();
+        service.index_file("main.ts").unwrap();
+        service.index_file("helper.test.ts").unwrap();
+
+        let request = ContextPackRequest {
+            id: "ctx-impact".to_string(),
+            query: "refactor helperName".to_string(),
+            queries: Vec::new(),
+            intent: Some("refactor".to_string()),
+            max_results: Some(6),
+            include_tests: Some(true),
+            include_docs: Some(false),
+            include_memory: Some(false),
+            include_project_index_min: Some(false),
+        };
+        let open_files: Vec<String> = Vec::new();
+        let payload = build_context_pack(temp_dir.path(), None, &open_files, &request);
+        let impact = payload.impact.expect("refactor task should include impact");
+
+        assert!(impact.enabled);
+        assert_eq!(impact.reason, "intent_refactor");
+        assert!(!impact.target_symbols.is_empty());
+        assert!(impact
+            .target_symbols
+            .iter()
+            .any(|symbol| symbol.name == "helperName"));
+        assert!(impact
+            .impacted_files
+            .iter()
+            .any(|file| file.path == "helper.ts"));
+        assert!(impact.impacted_files.len() <= 6);
+        assert!(impact
+            .recommended_next_steps
+            .iter()
+            .any(|step| step.contains("edit_impact")));
+    }
+
+    #[test]
+    fn context_pack_docs_intent_does_not_include_impact() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let service = test_language_service(temp_dir.path());
+        std::fs::write(
+            temp_dir.path().join("helper.ts"),
+            "export function helperName() { return 'ok'; }",
+        )
+        .unwrap();
+        service.index_file("helper.ts").unwrap();
+
+        let request = ContextPackRequest {
+            id: "ctx-docs".to_string(),
+            query: "explain helperName".to_string(),
+            queries: Vec::new(),
+            intent: Some("docs".to_string()),
+            max_results: Some(4),
+            include_tests: Some(false),
+            include_docs: Some(false),
+            include_memory: Some(false),
+            include_project_index_min: Some(false),
+        };
+        let open_files: Vec<String> = Vec::new();
+        let payload = build_context_pack(temp_dir.path(), None, &open_files, &request);
+
+        assert!(payload.impact.is_none());
+    }
+
+    #[test]
+    fn context_impact_confidence_drops_when_index_health_is_stale() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let service = test_language_service(temp_dir.path());
+        std::fs::write(
+            temp_dir.path().join("helper.ts"),
+            "export function helperName() { return 'ok'; }",
+        )
+        .unwrap();
+        service.index_file("helper.ts").unwrap();
+
+        let primary = vec![ContextFileResult {
+            path: "helper.ts".to_string(),
+            score: 90,
+            reason: "test".to_string(),
+            why: Vec::new(),
+            suggested_ranges: vec![ContextRange {
+                start_line: 1,
+                end_line: 1,
+            }],
+        }];
+        let enriched_files = vec![enrich_context_file(&service, &primary[0]).unwrap()];
+        let health = IndexHealthSnapshot {
+            status: IndexHealthStatus::Stale,
+            indexed_files: 1,
+            supported_files: 1,
+            stale_files: 1,
+            missing_files: 0,
+            orphaned_files: 0,
+            queued_files: 1,
+            active_workers: 0,
+            symbol_count: 1,
+            last_full_scan_ms: Some(1),
+            last_incremental_update_ms: None,
+            current_file: None,
+            message: "stale".to_string(),
+        };
+        let queries = vec!["refactor helperName".to_string()];
+
+        let impact = build_context_impact(
+            temp_dir.path(),
+            &service,
+            &queries,
+            Some("refactor"),
+            &primary,
+            &enriched_files,
+            Some(&health),
+            4,
+        )
+        .expect("refactor task should include impact");
+
+        assert_eq!(impact.confidence, "medium");
     }
 
     #[test]
