@@ -939,6 +939,24 @@ pub async fn handle_send_message<R: Runtime>(
                     action,
                     tool_call_id,
                 );
+            } else if let DrainResult::CognitiveInterrupt(payload) = result {
+                blade_event_scheduler::emit_blade_event(
+                    &app_handle,
+                    None,
+                    blade_protocol::BladeEvent::Chat(
+                        blade_protocol::ChatEvent::CognitiveInterrupt {
+                            state: payload.state,
+                            level: payload.level,
+                            frame: payload.frame,
+                            reason: payload.reason,
+                            next_action_type: payload.next_action_type,
+                            summary: payload.summary,
+                            tool_name: payload.tool_name,
+                            cleared_by_tool: payload.cleared_by_tool,
+                            failure_count: payload.failure_count,
+                        },
+                    ),
+                );
             } else if let DrainResult::ApprovalRequest(payload) = result {
                 window
                     .emit(

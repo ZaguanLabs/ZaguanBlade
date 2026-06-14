@@ -390,6 +390,24 @@ pub enum ChatEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         tool_call_id: Option<String>,
     },
+    CognitiveInterrupt {
+        state: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        level: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        frame: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        next_action_type: Option<String>,
+        summary: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tool_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cleared_by_tool: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        failure_count: Option<u64>,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

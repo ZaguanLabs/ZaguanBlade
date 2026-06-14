@@ -10,7 +10,7 @@ import { MessageBuffer } from '../utils/eventBuffer';
 import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertToolCallBlockPreservingOrder, moveExistingContentAfterTools, upsertSplitTextBlocks } from '../utils/messageBlocks';
 import { EventNames, type ApprovalRequestPayload, type ChatDonePayload, type ChatErrorPayload, type ContextLengthExceededPayload, type MessageTooLargePayload, type RequestConfirmationPayload, type StructuredAction, type ToolExecutionCompletedPayload, type TodoItem } from '../types/events';
 import type { ChatMention } from '../types/blade';
-import type { ChatImage, ChatMessage, ChatMode, ComposerMention, CommandExecution, HookApprovalRequest, ImageAttachment, MessageBlock, ModelInfo, QueuedRequest, StreamingState, ToolActivityState, ToolCall } from '../types/chat';
+import type { ChatImage, ChatMessage, ChatMode, CognitiveInterruptState, ComposerMention, CommandExecution, HookApprovalRequest, ImageAttachment, MessageBlock, ModelInfo, QueuedRequest, StreamingState, ToolActivityState, ToolCall } from '../types/chat';
 import type { ChatActivity } from '../utils/chatTimeline';
 import { buildContextLengthSystemMessage, buildMessageTooLargeSystemMessage, formatChatErrorPayload } from '../utils/localizedEvents';
 
@@ -19,6 +19,7 @@ const MESSAGE_COMPLETION_GRACE_MS = 1200;
 const MAX_CHAT_ACTIVITY_HISTORY = 200;
 const STREAM_DEBUG_ENABLED = false;
 const MODEL_CACHE_STORAGE_KEY = 'zblade.chat.models.v1';
+const COGNITIVE_INTERRUPT_CLEAR_DELAY_MS = 2500;
 
 interface UseChatV2Options {
     autoApproveRunCommands?: boolean;
@@ -147,6 +148,20 @@ function streamDebugLog(tag: string, payload: Record<string, unknown>): void {
     const message = `${tag} ${JSON.stringify(payload)}`;
     console.debug(message);
     void invoke('log_frontend', { message }).catch(() => undefined);
+}
+
+function cognitiveInterruptStatus(state: string): ToolCall['status'] {
+    if (state === 'cleared') {
+        return 'complete';
+    }
+    return 'executing';
+}
+
+function cognitiveInterruptActivityDetail(interrupt: CognitiveInterruptState): string {
+    if (interrupt.state === 'blocked' && interrupt.tool_name) {
+        return `${interrupt.tool_name} paused until diagnostic evidence is gathered`;
+    }
+    return interrupt.summary;
 }
 
 function findTextBeforeFirstActivity(blocks: MessageBlock[]): string | undefined {
@@ -299,6 +314,7 @@ type ChatState = {
     pendingApprovalRequest: HookApprovalRequest | null;
     waitingForApproval: boolean;
     toolActivity: ToolActivityState | null;
+    cognitiveInterrupt: CognitiveInterruptState | null;
     chatActivities: ChatActivity[];
     activeTodos: TodoItem[];
     messageQueue: QueuedRequest[];
@@ -316,6 +332,7 @@ type ChatAction =
     | { type: 'pending-approval-request/set'; request: HookApprovalRequest | null }
     | { type: 'waiting-for-approval/set'; waiting: boolean }
     | { type: 'tool-activity/set'; activity: ToolActivityState | null }
+    | { type: 'cognitive-interrupt/set'; interrupt: CognitiveInterruptState | null }
     | { type: 'chat-activity/upsert'; activity: ChatActivity }
     | { type: 'chat-activity/clear' }
     | { type: 'todos/set'; todos: TodoItem[] }
@@ -335,6 +352,7 @@ const initialState: ChatState = {
     pendingApprovalRequest: null,
     waitingForApproval: false,
     toolActivity: null,
+    cognitiveInterrupt: null,
     chatActivities: [],
     activeTodos: [],
     messageQueue: [],
@@ -367,6 +385,10 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
                 return state;
             }
             return { ...state, toolActivity: action.activity };
+        case 'cognitive-interrupt/set':
+            return state.cognitiveInterrupt === action.interrupt
+                ? state
+                : { ...state, cognitiveInterrupt: action.interrupt };
         case 'chat-activity/upsert': {
             const existingIndex = state.chatActivities.findIndex((activity) => activity.id === action.activity.id);
             if (existingIndex >= 0) {
@@ -531,6 +553,7 @@ export function useChatV2(options: UseChatV2Options = {}) {
     const chatModeRef = useRef(state.chatMode);
     const activeTodosRef = useRef<TodoItem[]>(state.activeTodos);
     const toolActivityRef = useRef<ToolActivityState | null>(state.toolActivity);
+    const cognitiveInterruptRef = useRef<CognitiveInterruptState | null>(state.cognitiveInterrupt);
     const hasExplicitModelRef = useRef(false);
     const blocksRef = useRef<Map<string, MessageBlock[]>>(new Map());
     const messageBufferRef = useRef<MessageBuffer | null>(null);
@@ -713,6 +736,10 @@ export function useChatV2(options: UseChatV2Options = {}) {
     useEffect(() => {
         toolActivityRef.current = state.toolActivity;
     }, [state.toolActivity]);
+
+    useEffect(() => {
+        cognitiveInterruptRef.current = state.cognitiveInterrupt;
+    }, [state.cognitiveInterrupt]);
 
     const buildEditorContext = useCallback((snapshot: {
         activeFile: string | null;
@@ -1887,6 +1914,38 @@ export function useChatV2(options: UseChatV2Options = {}) {
                         }, 2000);
                         pendingTimeoutsRef.current.push(timer);
                     }
+                    return;
+                }
+
+                if (chatEvent.type === 'CognitiveInterrupt') {
+                    const interrupt = chatEvent.payload as CognitiveInterruptState;
+                    const now = Date.now();
+                    const activityId = `cognitive-interrupt:${interrupt.frame || 'default'}`;
+
+                    dispatch({
+                        type: 'chat-activity/upsert',
+                        activity: {
+                            id: activityId,
+                            kind: 'cognitive_interrupt',
+                            interrupt,
+                            detail: cognitiveInterruptActivityDetail(interrupt),
+                            status: cognitiveInterruptStatus(interrupt.state),
+                            startedAt: now,
+                            updatedAt: now,
+                        },
+                    });
+
+                    dispatch({ type: 'cognitive-interrupt/set', interrupt });
+
+                    if (interrupt.state === 'cleared') {
+                        const timer = window.setTimeout(() => {
+                            if (cognitiveInterruptRef.current === interrupt) {
+                                dispatch({ type: 'cognitive-interrupt/set', interrupt: null });
+                            }
+                        }, COGNITIVE_INTERRUPT_CLEAR_DELAY_MS);
+                        pendingTimeoutsRef.current.push(timer);
+                    }
+                    return;
                 }
             });
         };
@@ -2050,6 +2109,7 @@ export function useChatV2(options: UseChatV2Options = {}) {
         resetStreamingState();
         dispatch({ type: 'messages/replace', messages: messages.slice(0, messageIndex) });
         dispatch({ type: 'chat-activity/clear' });
+        dispatch({ type: 'cognitive-interrupt/set', interrupt: null });
         dispatch({ type: 'todos/set', todos: [] });
         dispatch({ type: 'queue/clear' });
         dispatch({ type: 'pending-actions/set', actions: null });
@@ -2073,6 +2133,7 @@ export function useChatV2(options: UseChatV2Options = {}) {
         toolChunkCountsRef.current.clear();
         setToolActivity(null);
         blockedQueuedRequestRef.current = null;
+        dispatch({ type: 'cognitive-interrupt/set', interrupt: null });
         dispatch({ type: 'pending-actions/set', actions: null });
         dispatch({ type: 'pending-approval-request/set', request: null });
         dispatch({ type: 'waiting-for-approval/set', waiting: false });
@@ -2177,6 +2238,7 @@ export function useChatV2(options: UseChatV2Options = {}) {
             firstDispatchRef.current = true;
             dispatch({ type: 'messages/replace', messages: [] });
             dispatch({ type: 'chat-activity/clear' });
+            dispatch({ type: 'cognitive-interrupt/set', interrupt: null });
             dispatch({ type: 'todos/set', todos: [] });
             dispatch({ type: 'queue/clear' });
             dispatch({ type: 'pending-actions/set', actions: null });
@@ -2200,6 +2262,7 @@ export function useChatV2(options: UseChatV2Options = {}) {
         firstDispatchRef.current = true;
         replaceMessagesPreservingImagePreviews(messages);
         dispatch({ type: 'chat-activity/clear' });
+        dispatch({ type: 'cognitive-interrupt/set', interrupt: null });
         dispatch({ type: 'todos/set', todos: [] });
         dispatch({ type: 'queue/clear' });
         dispatch({ type: 'pending-actions/set', actions: null });
@@ -2248,6 +2311,7 @@ export function useChatV2(options: UseChatV2Options = {}) {
         setConversation,
         loadConversation,
         toolActivity: state.toolActivity,
+        cognitiveInterrupt: state.cognitiveInterrupt,
         chatActivities: state.chatActivities,
         activeTodos: state.activeTodos,
         setActiveTodos,

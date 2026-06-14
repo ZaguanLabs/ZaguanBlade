@@ -119,6 +119,7 @@ pub enum ChatEvent {
         percent: i32,
     },
     ToolActivity(ToolActivityPayload),
+    CognitiveInterrupt(CognitiveInterruptPayload),
     ApprovalRequest(ApprovalRequest),
     Done {
         finish_reason: String,
@@ -147,6 +148,26 @@ pub struct ToolActivityPayload {
     pub action: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CognitiveInterruptPayload {
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_action_type: Option<String>,
+    pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cleared_by_tool: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_count: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

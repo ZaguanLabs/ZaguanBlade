@@ -5,7 +5,9 @@ use crate::chat_manager::ChatManager;
 use crate::config::ApiConfig;
 use crate::conversation::ConversationHistory;
 use crate::models::registry::ModelInfo;
-use crate::protocol::{ApprovalRequest, ChatEvent, TodoItem, ToolActivityPayload, ToolCall};
+use crate::protocol::{
+    ApprovalRequest, ChatEvent, CognitiveInterruptPayload, TodoItem, ToolActivityPayload, ToolCall,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderId {
@@ -46,6 +48,7 @@ pub enum ProviderEvent {
         percent: i32,
     },
     ToolActivity(ToolActivityPayload),
+    CognitiveInterrupt(CognitiveInterruptPayload),
     ApprovalRequest(ApprovalRequest),
     Done {
         finish_reason: String,
@@ -105,6 +108,7 @@ impl From<ChatEvent> for ProviderEvent {
                 percent,
             },
             ChatEvent::ToolActivity(payload) => Self::ToolActivity(payload),
+            ChatEvent::CognitiveInterrupt(payload) => Self::CognitiveInterrupt(payload),
             ChatEvent::ApprovalRequest(payload) => Self::ApprovalRequest(payload),
             ChatEvent::Done { finish_reason } => Self::Done { finish_reason },
             ChatEvent::Error(message) => Self::Error(message),
@@ -171,6 +175,7 @@ impl From<ProviderEvent> for ChatEvent {
                 percent,
             },
             ProviderEvent::ToolActivity(payload) => ChatEvent::ToolActivity(payload),
+            ProviderEvent::CognitiveInterrupt(payload) => ChatEvent::CognitiveInterrupt(payload),
             ProviderEvent::ApprovalRequest(payload) => ChatEvent::ApprovalRequest(payload),
             ProviderEvent::Done { finish_reason } => ChatEvent::Done { finish_reason },
             ProviderEvent::Disconnected { .. } => ChatEvent::Done {

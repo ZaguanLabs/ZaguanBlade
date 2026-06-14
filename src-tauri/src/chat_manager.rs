@@ -278,6 +278,7 @@ pub enum DrainResult {
         action: String,
         tool_call_id: Option<String>,
     },
+    CognitiveInterrupt(crate::protocol::CognitiveInterruptPayload),
     ApprovalRequest(crate::protocol::ApprovalRequest),
     TodoUpdated(Vec<crate::protocol::TodoItem>),
     MessageCompleted(String), // Message ID for completed message
@@ -1259,6 +1260,9 @@ impl ChatManager {
                                     action,
                                     tool_call_id: None,
                                 });
+                            }
+                            crate::blade_ws_client::BladeWsEvent::CognitiveInterrupt(payload) => {
+                                let _ = tx.send(ChatEvent::CognitiveInterrupt(payload));
                             }
                             crate::blade_ws_client::BladeWsEvent::ToolProgress {
                                 tool_call_id,
@@ -2783,6 +2787,11 @@ impl ChatManager {
                         action: payload.action,
                         tool_call_id: payload.tool_call_id,
                     });
+                }
+                ProviderEvent::CognitiveInterrupt(payload) => {
+                    flush_batch!();
+                    self.pending_results
+                        .push_back(DrainResult::CognitiveInterrupt(payload));
                 }
                 ProviderEvent::ApprovalRequest(payload) => {
                     flush_batch!();

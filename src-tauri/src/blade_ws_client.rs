@@ -1,5 +1,6 @@
 use crate::blade_protocol::ContextPackPayload;
 use crate::environment::EnvironmentInfo;
+use crate::protocol::CognitiveInterruptPayload;
 use futures_util::{SinkExt, StreamExt};
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -22,7 +23,7 @@ lazy_static! {
     ];
 }
 
-/// WebSocket-based Blade Protocol v2 client
+/// WebSocket-based Blade Protocol v3 client
 #[derive(Clone)]
 pub struct BladeWsClient {
     base_url: String,
@@ -157,6 +158,7 @@ pub enum BladeWsEvent {
         file_path: String,
         action: String,
     },
+    CognitiveInterrupt(CognitiveInterruptPayload),
     /// Tool progress - streaming partial arguments as tool call is being generated
     ToolProgress {
         tool_call_id: String,
@@ -546,7 +548,7 @@ impl BladeWsClient {
                         version: env!("CARGO_PKG_VERSION").to_string(),
                         client_name: "zblade".to_string(),
                         client_version: env!("CARGO_PKG_VERSION").to_string(),
-                        protocol_version: 2,
+                        protocol_version: 3,
                         capabilities: Some(serde_json::Value::Object(capabilities)),
                         environment: Some(environment),
                     })
@@ -1544,6 +1546,19 @@ impl BladeWsClient {
                     action,
                 });
             }
+            "cognitive_interrupt" => {
+                match serde_json::from_value::<CognitiveInterruptPayload>(msg.payload.clone()) {
+                    Ok(payload) => {
+                        let _ = tx.send(BladeWsEvent::CognitiveInterrupt(payload));
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "[BLADE WS] Failed to parse cognitive_interrupt payload: {}",
+                            error
+                        );
+                    }
+                }
+            }
             "tool_progress" => {
                 // Tool progress - streaming partial arguments as tool call is being generated
                 let tool_call_id = msg
@@ -1840,6 +1855,49 @@ mod tests {
                 assert_eq!(request_id, "chat-123");
                 assert_eq!(session_id.as_deref(), Some("sess-456"));
                 assert_eq!(reason.as_deref(), Some("user_stop"));
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_cognitive_interrupt_event() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let message = r#"{
+            "type": "cognitive_interrupt",
+            "id": "request-id",
+            "timestamp": 1781450000000,
+            "payload": {
+                "state": "blocked",
+                "level": "hard",
+                "frame": "patch_failure_repair",
+                "reason": "same_failure_after_multiple_corrections",
+                "next_action_type": "diagnostic",
+                "summary": "Corrective action blocked until diagnostic evidence is gathered",
+                "tool_name": "apply_patch",
+                "failure_count": 2,
+                "future_field": "ignored"
+            }
+        }"#;
+
+        BladeWsClient::parse_message(message, &tx).unwrap();
+
+        match rx.try_recv().unwrap() {
+            BladeWsEvent::CognitiveInterrupt(payload) => {
+                assert_eq!(payload.state, "blocked");
+                assert_eq!(payload.level.as_deref(), Some("hard"));
+                assert_eq!(payload.frame.as_deref(), Some("patch_failure_repair"));
+                assert_eq!(
+                    payload.reason.as_deref(),
+                    Some("same_failure_after_multiple_corrections")
+                );
+                assert_eq!(payload.next_action_type.as_deref(), Some("diagnostic"));
+                assert_eq!(
+                    payload.summary,
+                    "Corrective action blocked until diagnostic evidence is gathered"
+                );
+                assert_eq!(payload.tool_name.as_deref(), Some("apply_patch"));
+                assert_eq!(payload.failure_count, Some(2));
             }
             other => panic!("unexpected event: {:?}", other),
         }

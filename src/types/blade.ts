@@ -1,5 +1,5 @@
 // v1.5: Semantic versioning + event transport wrapper
-import type { ChatMode } from './chat';
+import type { ChatMode, CognitiveInterruptState } from './chat';
 
 export type Version = {
     major: number;
@@ -152,6 +152,7 @@ export type ChatEvent =
     | { type: "MessageCompleted"; payload: { id: string } } // v1.1: explicit end-of-stream
     | { type: "ToolUpdate"; payload: { message_id: string; tool_call_id: string; status: string; result: string | null; tool_call?: any } }
     | { type: "ToolActivity"; payload: { tool_name: string; file_path: string; action: string; tool_call_id?: string } }
+    | { type: "CognitiveInterrupt"; payload: CognitiveInterruptState }
     | { type: "GenerationSignal"; payload: { is_generating: boolean } };
 
 export type EditorEvent =
@@ -344,6 +345,5 @@ export type LanguageSymbol = {
     docstring: string | null;
     signature: string | null;
 }
-
 
 

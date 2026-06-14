@@ -1,3 +1,4 @@
+use crate::protocol::CognitiveInterruptPayload;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -30,6 +31,7 @@ pub enum BladeEvent {
         stage: String,
         percent: i32,
     },
+    CognitiveInterrupt(CognitiveInterruptPayload),
     Compression {
         triggered: bool,
         reason: String,
@@ -275,6 +277,13 @@ impl BladeClient {
 
         // Determine event type from the data structure
         // The event type is sent separately in SSE, but we can infer from data
+        if event_type == Some("cognitive_interrupt") {
+            let payload = serde_json::from_value::<CognitiveInterruptPayload>(value)
+                .map_err(|e| format!("Failed to parse cognitive_interrupt event: {}", e))?;
+            let _ = tx.send(BladeEvent::CognitiveInterrupt(payload));
+            return Ok(());
+        }
+
         if let Some(session_id) = value.get("session_id").and_then(|v| v.as_str()) {
             if let Some(model) = value.get("model").and_then(|v| v.as_str()) {
                 eprintln!("[BLADE CLIENT] Sending Session event");

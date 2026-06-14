@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import type { ChatMessage as ChatMessageType, ChatMode, ComposerMention, HookApprovalRequest, ImageAttachment, ModelInfo, QueuedRequest, ToolActivityState } from '../../types/chat';
+import type { ChatMessage as ChatMessageType, ChatMode, CognitiveInterruptState, ComposerMention, HookApprovalRequest, ImageAttachment, ModelInfo, QueuedRequest, ToolActivityState } from '../../types/chat';
 import type { StructuredAction, TodoItem } from '../../types/events';
 import type { UncommittedChange } from '../../types/uncommitted';
 import type { ChatActivity } from '../../utils/chatTimeline';
@@ -12,6 +12,7 @@ import { ChatHeader } from './ChatHeader';
 import { ChatViewport } from './ChatViewport';
 import { QueueStrip } from './QueueStrip';
 import { TaskStrip } from './TaskStrip';
+import { CognitiveInterruptStrip } from './CognitiveInterruptStrip';
 
 interface ResearchProgress {
     message: string;
@@ -49,6 +50,7 @@ interface ChatPanelProps {
     onAcceptAllChanges: () => void;
     onRejectAllChanges: () => void;
     toolActivity?: ToolActivityState | null;
+    cognitiveInterrupt?: CognitiveInterruptState | null;
     chatActivities?: ChatActivity[];
     activeTodos: TodoItem[];
     queuedRequests: QueuedRequest[];
@@ -85,6 +87,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     onAcceptAllChanges,
     onRejectAllChanges,
     toolActivity,
+    cognitiveInterrupt,
     chatActivities,
     activeTodos,
     queuedRequests,
@@ -164,6 +167,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                 onAcceptAll={onAcceptAllChanges}
                 onRejectAll={onRejectAllChanges}
             />
+            <CognitiveInterruptStrip interrupt={cognitiveInterrupt ?? null} />
             <TaskStrip todos={activeTodos} />
             <QueueStrip requests={queuedRequests} onEditRequest={handleEditQueuedRequest} onDeleteRequest={deleteQueuedRequest} />
             <Composer
