@@ -244,6 +244,16 @@
     "paste": "Paste",
     "selectAll": "Select All",
     "findInTerminal": "Find",
+    "findPlaceholder": "Find in terminal",
+    "findNoMatches": "No matches",
+    "findPrevious": "Previous match",
+    "findNext": "Next match",
+    "findMatchCase": "Match case",
+    "findWholeWord": "Whole word",
+    "findRegex": "Use regular expression",
+    "findClose": "Close find",
+    "diagnosticsNoOutput": "Terminal started, waiting for output...",
+    "diagnosticsStillWaiting": "Still waiting for terminal output. The process may be running silently.",
     "sendToChat": "Send to Chat"
   },
   "tabs": {

@@ -244,6 +244,16 @@
     "paste": "Pegar",
     "selectAll": "Seleccionar todo",
     "findInTerminal": "Buscar",
+    "findPlaceholder": "Buscar en la terminal",
+    "findNoMatches": "Sin coincidencias",
+    "findPrevious": "Coincidencia anterior",
+    "findNext": "Coincidencia siguiente",
+    "findMatchCase": "Distinguir mayusculas",
+    "findWholeWord": "Palabra completa",
+    "findRegex": "Usar expresion regular",
+    "findClose": "Cerrar busqueda",
+    "diagnosticsNoOutput": "Terminal iniciada, esperando salida...",
+    "diagnosticsStillWaiting": "La terminal sigue sin salida. Puede que el proceso se este ejecutando en silencio.",
     "sendToChat": "Enviar al chat"
   },
   "tabs": {

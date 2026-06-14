@@ -36,6 +36,7 @@ interface FileExplorerProps {
 }
 
 const TREE_ROOT_ID = '__workspace_tree_root__';
+type LoadedTreeChild = { id: string; data: NodeData };
 
 const getIcon = (name: string | undefined, isDir: boolean, expanded: boolean) => {
     if (!name) return <FileBox className="w-3.5 h-3.5 text-(--fg-tertiary)" aria-hidden="true" />;
@@ -72,7 +73,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
     // Use Ref for cache to persist data across renders.
     const itemCache = React.useRef(new Map<string, NodeData>());
     // Track pending requests to deduplicate File(List) calls for the same path
-    const pendingRequests = React.useRef(new Map<string | null, Promise<string[]>>());
+    const pendingRequests = React.useRef(new Map<string | null, Promise<LoadedTreeChild[]>>());
     const { showMenu } = useContextMenu();
 
     // State for inline new item creation
@@ -110,19 +111,26 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
     }, [workspaceRoot]);
 
     const cacheEntry = useCallback((entry: FileEntry) => {
-        itemCache.current.set(entry.path, {
+        const nodeData = {
             id: entry.path,
             name: entry.name,
             is_dir: entry.is_dir,
             data: entry
-        });
+        };
+        itemCache.current.set(entry.path, nodeData);
+        return nodeData;
     }, []);
+
+    const getWorkspaceRootData = useCallback((rootPath: string): NodeData => ({
+        id: rootPath,
+        name: getBaseName(rootPath) || rootPath,
+        is_dir: true
+    }), []);
 
     const getFallbackItemData = useCallback((itemId: string): NodeData => {
         const rootEntry = roots.find(entry => entry.path === itemId);
         if (rootEntry) {
-            cacheEntry(rootEntry);
-            return itemCache.current.get(itemId)!;
+            return cacheEntry(rootEntry);
         }
 
         return {
@@ -185,16 +193,12 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
     // Sync roots to cache
     React.useEffect(() => {
         if (workspaceRoot) {
-            itemCache.current.set(workspaceRoot, {
-                id: workspaceRoot,
-                name: getBaseName(workspaceRoot) || workspaceRoot,
-                is_dir: true
-            });
+            itemCache.current.set(workspaceRoot, getWorkspaceRootData(workspaceRoot));
         }
         roots.forEach(r => {
             cacheEntry(r);
         });
-    }, [cacheEntry, roots, workspaceRoot]);
+    }, [cacheEntry, getWorkspaceRootData, roots, workspaceRoot]);
 
     // Track the last expanded activeFile to prevent repeated expansions for the same file
     // Declared here (before useTree) so it can be reset when refreshKey changes
@@ -216,6 +220,19 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
         }
         return false;
     }, [workspaceRoot]);
+
+    const invalidateItemData = useCallback((tree: any, path: string) => {
+        try {
+            const item = tree.getItemInstance(path);
+            if (item && typeof item.invalidateItemData === 'function') {
+                item.invalidateItemData(true);
+                return true;
+            }
+        } catch (err) {
+            console.warn('[Explorer] Failed to invalidate item data:', path, err);
+        }
+        return false;
+    }, []);
 
 
 
@@ -595,26 +612,28 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                     return { id: TREE_ROOT_ID, name: 'root', is_dir: true };
                 }
                 if (itemId === workspaceRoot) {
-                    return {
-                        id: workspaceRoot,
-                        name: getBaseName(workspaceRoot) || workspaceRoot,
-                        is_dir: true
-                    };
+                    return getWorkspaceRootData(workspaceRoot);
                 }
                 return itemCache.current.get(itemId) || getFallbackItemData(itemId);
             },
-            getChildren: (itemId) => {
+            getChildrenWithData: (itemId) => {
                 if (itemId === TREE_ROOT_ID) {
-                    return workspaceRoot ? [workspaceRoot] : [];
+                    if (!workspaceRoot) {
+                        return [];
+                    }
+
+                    const data = getWorkspaceRootData(workspaceRoot);
+                    itemCache.current.set(workspaceRoot, data);
+                    return [{ id: workspaceRoot, data }];
                 }
 
                 const path = itemId === workspaceRoot ? null : itemId;
 
                 if (itemId === workspaceRoot) {
-                    roots.forEach(r => {
-                        cacheEntry(r);
-                    });
-                    return roots.map(r => r.path);
+                    return roots.map(entry => ({
+                        id: entry.path,
+                        data: cacheEntry(entry)
+                    }));
                 }
 
                 // Check if there's already a pending request for this path
@@ -626,10 +645,10 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                 const requestPromise = (async () => {
                     try {
                         const entries = await invoke<FileEntry[]>('list_files', { path });
-                        entries.forEach((entry) => {
-                            cacheEntry(entry);
-                        });
-                        return entries.map((entry) => entry.path);
+                        return entries.map((entry) => ({
+                            id: entry.path,
+                            data: cacheEntry(entry)
+                        }));
                     } catch (err) {
                         console.error('[Explorer] Failed to list files:', err);
                         return [];
@@ -688,12 +707,11 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
 
     // Listen for file system events to update tree dynamically
     React.useEffect(() => {
-        const invalidatePaths = (pathsToInvalidate: string[]) => {
+        const invalidateParentFolders = (pathsToInvalidate: string[]) => {
             const currentTree = treeRef.current;
             const workspaceRoot = getWorkspaceRoot();
             pathsToInvalidate.forEach(path => {
                 const parentPath = path.substring(0, path.lastIndexOf('/'));
-                itemCache.current.delete(path);
                 pendingRequests.current.delete(parentPath);
 
                 if (parentPath && parentPath !== workspaceRoot) {
@@ -707,13 +725,41 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
         };
 
         const unsubscribeCreated = subscribeBladeNestedEventType('File', 'Created', (payload) => {
-            invalidatePaths([payload.path]);
+            cacheEntry({
+                name: getBaseName(payload.path) || payload.path,
+                path: payload.path,
+                is_dir: payload.is_dir,
+                children: null
+            });
+            invalidateItemData(treeRef.current, payload.path);
+            invalidateParentFolders([payload.path]);
         });
         const unsubscribeDeleted = subscribeBladeNestedEventType('File', 'Deleted', (payload) => {
-            invalidatePaths([payload.path]);
+            itemCache.current.delete(payload.path);
+            invalidateParentFolders([payload.path]);
         });
         const unsubscribeRenamed = subscribeBladeNestedEventType('File', 'Renamed', (payload) => {
-            invalidatePaths([payload.old_path, payload.new_path]);
+            const previous = itemCache.current.get(payload.old_path);
+            itemCache.current.delete(payload.old_path);
+
+            if (previous) {
+                const name = getBaseName(payload.new_path) || payload.new_path;
+                itemCache.current.set(payload.new_path, {
+                    ...previous,
+                    id: payload.new_path,
+                    name,
+                    data: previous.data
+                        ? {
+                            ...previous.data,
+                            path: payload.new_path,
+                            name
+                        }
+                        : undefined
+                });
+                invalidateItemData(treeRef.current, payload.new_path);
+            }
+
+            invalidateParentFolders([payload.old_path, payload.new_path]);
         });
 
         return () => {
@@ -721,7 +767,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
             unsubscribeDeleted();
             unsubscribeRenamed();
         };
-    }, [getWorkspaceRoot, invalidateFolderChildren]);
+    }, [cacheEntry, getWorkspaceRoot, invalidateFolderChildren, invalidateItemData]);
 
     // Auto-expand and select active file in the tree
     // NOTE: We intentionally exclude 'tree' from dependencies to prevent infinite loops.

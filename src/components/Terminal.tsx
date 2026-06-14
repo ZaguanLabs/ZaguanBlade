@@ -1,8 +1,9 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import { useTranslation } from 'react-i18next';
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { SearchAddon, type ISearchOptions } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -14,6 +15,7 @@ import { useContextMenu, ContextMenuItem } from "./ui/ContextMenu";
 import { Copy, ClipboardPaste, Trash2, MessageSquare } from "lucide-react";
 import { BLADE_TERMINAL_ID } from "../constants/terminal";
 import { recordDebugPerf } from "../utils/debugPerf";
+import { TerminalFindWidget, type TerminalSearchOptions } from "./terminal/TerminalFindWidget";
 
 function stripAnsiEscapes(data: string): string {
     return data.replace(/\u001b\[[0-?]*[ -\/]*[@-~]/g, '').replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '');
@@ -136,16 +138,94 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
     const terminalRef = useRef<HTMLDivElement>(null);
     const xtermRef = useRef<XTerm | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
+    const searchAddonRef = useRef<SearchAddon | null>(null);
     const terminalBufferRef = useRef<TerminalBuffer | null>(null);
     const fitIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const resizeFrameRef = useRef<number | null>(null);
+    const spawnDiagnosticTimersRef = useRef<{
+        initial: ReturnType<typeof setTimeout> | null;
+        stalled: ReturnType<typeof setTimeout> | null;
+    }>({ initial: null, stalled: null });
+    const hasTerminalOutputRef = useRef(false);
+    const spawnDiagnosticWrittenRef = useRef(false);
+    const spawnDiagnosticMessageRef = useRef(t('terminal.diagnosticsNoOutput'));
+    const spawnStillWaitingMessageRef = useRef(t('terminal.diagnosticsStillWaiting'));
     const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null);
     const initialCwdRef = useRef(cwd);
     const initialCommandRef = useRef(command);
     const initialDisplayCommandRef = useRef(displayCommand);
     const initialInteractiveRef = useRef(interactive);
     const initialExternalProcessRef = useRef(externalProcess);
+    const [findOpen, setFindOpen] = useState(false);
+    const [findQuery, setFindQuery] = useState('');
+    const [findMatched, setFindMatched] = useState<boolean | null>(null);
+    const [findOptions, setFindOptions] = useState<TerminalSearchOptions>({
+        caseSensitive: false,
+        wholeWord: false,
+        regex: false,
+    });
     const { showMenu } = useContextMenu();
+
+    const buildSearchOptions = useCallback((options: TerminalSearchOptions, incremental = false): ISearchOptions => ({
+        caseSensitive: options.caseSensitive,
+        wholeWord: options.wholeWord,
+        regex: options.regex,
+        incremental,
+    }), []);
+
+    const runFind = useCallback((
+        direction: 'next' | 'previous',
+        query = findQuery,
+        options = findOptions,
+        incremental = false,
+    ) => {
+        const term = xtermRef.current;
+        const searchAddon = searchAddonRef.current;
+        if (!term || !searchAddon) {
+            return;
+        }
+
+        if (!query) {
+            term.clearSelection();
+            searchAddon.clearDecorations();
+            setFindMatched(null);
+            return;
+        }
+
+        try {
+            const searchOptions = buildSearchOptions(options, incremental);
+            const found = direction === 'previous'
+                ? searchAddon.findPrevious(query, searchOptions)
+                : searchAddon.findNext(query, searchOptions);
+            setFindMatched(found);
+        } catch (error) {
+            console.debug('[Terminal] Search failed:', error);
+            setFindMatched(false);
+        }
+    }, [buildSearchOptions, findOptions, findQuery]);
+
+    const closeFind = useCallback(() => {
+        searchAddonRef.current?.clearDecorations();
+        xtermRef.current?.clearSelection();
+        setFindOpen(false);
+        setFindMatched(null);
+        requestAnimationFrame(() => {
+            xtermRef.current?.focus();
+        });
+    }, []);
+
+    useEffect(() => {
+        if (!findOpen) {
+            return;
+        }
+
+        runFind('next', findQuery, findOptions, true);
+    }, [findOpen, findOptions, findQuery, runFind]);
+
+    useEffect(() => {
+        spawnDiagnosticMessageRef.current = t('terminal.diagnosticsNoOutput');
+        spawnStillWaitingMessageRef.current = t('terminal.diagnosticsStillWaiting');
+    }, [t]);
 
     // Context menu handler
     const handleContextMenu = useCallback((e: React.MouseEvent) => {
@@ -237,7 +317,9 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
         });
 
         const fitAddon = new FitAddon();
+        const searchAddon = new SearchAddon();
         term.loadAddon(fitAddon);
+        term.loadAddon(searchAddon);
         term.loadAddon(new WebLinksAddon());
 
         // Note: Removed WebGL addon due to stability issues in Linux production builds (WebKitGTK).
@@ -255,6 +337,21 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
             const isCtrlShift = ev.ctrlKey && ev.shiftKey && !ev.altKey && !ev.metaKey;
             const isCmdShift = ev.metaKey && ev.shiftKey && !ev.altKey && !ev.ctrlKey;
             const isPasteShortcut = (isCtrlShift || isCmdShift) && ev.code === 'KeyV';
+            const isFindShortcut = ((ev.ctrlKey && !ev.metaKey) || (ev.metaKey && !ev.ctrlKey))
+                && !ev.shiftKey
+                && !ev.altKey
+                && ev.code === 'KeyF';
+
+            if (isFindShortcut) {
+                if (ev.type === 'keydown') {
+                    const selection = term.getSelection();
+                    if (selection && !selection.includes('\n') && !selection.includes('\r')) {
+                        setFindQuery(selection);
+                    }
+                    setFindOpen(true);
+                }
+                return false;
+            }
 
             // Handle paste shortcut on keydown only, and swallow corresponding keyup.
             // Some environments still route the shortcut through keyup/default path,
@@ -390,7 +487,19 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
 
         xtermRef.current = term;
         fitAddonRef.current = fitAddon;
+        searchAddonRef.current = searchAddon;
         let disposed = false;
+
+        const clearSpawnDiagnosticTimers = () => {
+            if (spawnDiagnosticTimersRef.current.initial) {
+                clearTimeout(spawnDiagnosticTimersRef.current.initial);
+                spawnDiagnosticTimersRef.current.initial = null;
+            }
+            if (spawnDiagnosticTimersRef.current.stalled) {
+                clearTimeout(spawnDiagnosticTimersRef.current.stalled);
+                spawnDiagnosticTimersRef.current.stalled = null;
+            }
+        };
 
         if (!terminalBufferRef.current) {
             terminalBufferRef.current = new TerminalBuffer(
@@ -405,6 +514,10 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
 
         const unsubscribeOutput = subscribeBladeNestedEventType('Terminal', 'Output', (payload) => {
             const { id: termId, seq, data } = payload;
+            if (termId === id) {
+                hasTerminalOutputRef.current = true;
+                clearSpawnDiagnosticTimers();
+            }
             if (terminalBufferRef.current) {
                 terminalBufferRef.current.addOutput(termId, seq, data);
             }
@@ -412,10 +525,35 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
         const unsubscribeSpawned = subscribeBladeNestedEventType('Terminal', 'Spawned', (payload) => {
             const { id: termId, owner } = payload;
             console.debug(`[v1.1 Terminal] Spawned: id=${termId}, owner=${owner.type}`);
+            if (termId !== id || initialExternalProcessRef.current) {
+                return;
+            }
+
+            hasTerminalOutputRef.current = false;
+            spawnDiagnosticWrittenRef.current = false;
+            clearSpawnDiagnosticTimers();
+
+            spawnDiagnosticTimersRef.current.initial = setTimeout(() => {
+                if (disposed || hasTerminalOutputRef.current || !xtermRef.current) {
+                    return;
+                }
+
+                spawnDiagnosticWrittenRef.current = true;
+                xtermRef.current.write(`\r\n\x1b[2m${spawnDiagnosticMessageRef.current}\x1b[0m\r\n`);
+            }, 2500);
+
+            spawnDiagnosticTimersRef.current.stalled = setTimeout(() => {
+                if (disposed || hasTerminalOutputRef.current || !xtermRef.current || !spawnDiagnosticWrittenRef.current) {
+                    return;
+                }
+
+                xtermRef.current.write(`\x1b[2m${spawnStillWaitingMessageRef.current}\x1b[0m\r\n`);
+            }, 8000);
         });
         const unsubscribeExit = subscribeBladeNestedEventType('Terminal', 'Exit', (payload) => {
             const { id: termId, code } = payload;
             if (termId === id && xtermRef.current) {
+                clearSpawnDiagnosticTimers();
                 xtermRef.current.write(`\r\n\x1b[33mProcess exited with code ${code}\x1b[0m\r\n`);
             }
         });
@@ -512,6 +650,7 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
             unsubscribeOutput();
             unsubscribeSpawned();
             unsubscribeExit();
+            clearSpawnDiagnosticTimers();
             if (unlistenDisplayCommand) {
                 unlistenDisplayCommand();
             }
@@ -528,6 +667,7 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
             terminalBufferRef.current?.clear(id);
             xtermRef.current = null;
             fitAddonRef.current = null;
+            searchAddonRef.current = null;
         };
     }, [id]);
 
@@ -538,11 +678,27 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
 
     return (
         <div
-            ref={terminalRef}
-            className="terminal-host w-full h-full bg-(--term-bg)"
-            style={{ overflow: "hidden" }}
+            className="relative w-full h-full bg-(--term-bg)"
             onContextMenu={handleContextMenu}
-        />
+        >
+            <div
+                ref={terminalRef}
+                className="terminal-host w-full h-full"
+                style={{ overflow: "hidden" }}
+            />
+            {findOpen && (
+                <TerminalFindWidget
+                    query={findQuery}
+                    options={findOptions}
+                    matched={findMatched}
+                    onQueryChange={setFindQuery}
+                    onOptionsChange={setFindOptions}
+                    onNext={() => runFind('next')}
+                    onPrevious={() => runFind('previous')}
+                    onClose={closeFind}
+                />
+            )}
+        </div>
     );
 
 }

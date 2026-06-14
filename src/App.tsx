@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import { AppLayout } from './components/Layout';
 import { initNotifications, notifyFileChanges } from './utils/notifications';
 import { useCoreStateSync } from './hooks/useCoreStateSync';
+import { scheduleDeferredInit } from './utils/deferredInit';
 
 function readDebugFlag(name: string): boolean {
     if (typeof window === 'undefined') {
@@ -42,6 +43,7 @@ function AppWithCoreStateSync() {
     const { isRecovering, coreState, featureFlags, error } = useCoreStateSync();
     void isRecovering;
     void featureFlags;
+    useFileChangeNotifications();
 
     useEffect(() => {
         if (coreState) {
@@ -57,40 +59,24 @@ function AppWithCoreStateSync() {
         }
     }, [coreState, error]);
 
-    useEffect(() => {
-        // Initialize notification system
-        initNotifications();
-
-        // Listen for file changes from backend
-        const setupListener = async () => {
-            const unlisten = await listen<{ count: number; paths: string[] }>(
-                'file-changes-detected',
-                async (event) => {
-                    const fileNames = event.payload.paths.map(
-                        (p) => p.split('/').pop() || p
-                    );
-                    await notifyFileChanges(event.payload.count, fileNames);
-                }
-            );
-
-            return unlisten;
-        };
-
-        const unlistenPromise = setupListener();
-
-        return () => {
-            unlistenPromise.then((unlisten) => unlisten());
-        };
-    }, []);
-
     return <AppLayout />;
 }
 
 function AppWithoutCoreStateSync() {
+    useFileChangeNotifications();
+
+    return <AppLayout />;
+}
+
+function useFileChangeNotifications() {
     useEffect(() => {
         initNotifications();
 
-        const setupListener = async () => {
+        let disposed = false;
+        let unlistenFileChanges: (() => void) | undefined;
+        const controller = new AbortController();
+
+        const handle = scheduleDeferredInit(async () => {
             const unlisten = await listen<{ count: number; paths: string[] }>(
                 'file-changes-detected',
                 async (event) => {
@@ -101,17 +87,24 @@ function AppWithoutCoreStateSync() {
                 }
             );
 
-            return unlisten;
-        };
-
-        const unlistenPromise = setupListener();
+            if (disposed || controller.signal.aborted) {
+                unlisten();
+                return;
+            }
+            unlistenFileChanges = unlisten;
+        }, {
+            label: 'file-change-notifications',
+            priority: 'idle',
+            signal: controller.signal,
+        });
 
         return () => {
-            unlistenPromise.then((unlisten) => unlisten());
+            disposed = true;
+            controller.abort();
+            handle.cancel();
+            unlistenFileChanges?.();
         };
     }, []);
-
-    return <AppLayout />;
 }
 
 export default function App() {
