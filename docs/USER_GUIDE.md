@@ -1,284 +1,230 @@
 # Zaguán Blade User Guide
 
-Welcome to **Zaguán Blade**, the AI-Native code editor designed to collaborate with you.
+Zaguán Blade is an open source desktop code editor for AI-assisted engineering work. It can run with local AI providers, and it can connect to the hosted Zaguán Coder Daemon for the full subscription-backed workflow.
 
-This guide will help you get set up and understand how to work alongside your new AI pair programmer.
+## 1. What Blade Does
 
----
+Blade is built around an inspect, change, and validate loop:
 
-## 1. The Concept
-
-Zaguán Blade is not just a text editor with a chat sidebar. It is designed from the ground up to allow an AI agent to "live" inside your editor.
-
-*   **It sees what you see:** The AI has access to your active files, cursor position, and project structure.
-*   **It acts:** The AI can run terminal commands, edit files, and browse the web to find answers.
-*   **It collaborates:** Instead of just pasting code chunks, the AI proposes changes directly in your file using "Diff Blocks" which you can review, accept, or reject.
-
----
+- It can use editor state, open files, cursor position, selected paths, project structure, symbol indexes, terminal output, and uncommitted changes as context.
+- It can propose or apply file edits, run approved commands, inspect the workspace, and help validate changes.
+- AI edits are tracked so you can review, accept, reject, or undo the resulting file changes.
 
 ## 2. Getting Started
 
-### Prerequisites: The API Key
+### Local AI
 
-**Important:** Zaguán Blade is a commercial AI product. To unlock its intelligence, you need an active subscription.
+You can use Blade without a Zaguán subscription by enabling a local provider:
 
-1.  Go to **[ZaguanAI.com](https://zaguanai.com/pricing)** and subscribe.
-2.  Navigate to your account dashboard to copy your **Zaguán API Key**.
+1. Open **Settings**.
+2. Go to **Local AI**.
+3. Enable one or more providers:
+   - **Ollama (Local)** at `http://localhost:11434`
+   - **Ollama Cloud** with an Ollama API key
+   - **OpenAI-compatible Server** for llama.cpp, LocalAI, vLLM, and similar servers
+4. Click **Test Connection**.
+5. Click **Refresh Models**.
+6. Save settings and pick the model from the chat model picker.
 
-*Without a valid API Key, Zaguán Blade functions as a standard, high-performance text editor.*
+Local model quality and tool-calling reliability depend on the model and server. Local providers do not have built-in web fetch or research.
 
-### Configuration
+### Zaguán Subscription
 
-1.  Launch Zaguán Blade.
-2.  Click the **Gear Icon** (Settings) in the bottom-left corner of the Activity Bar.
-3.  Go to the **Account** tab.
-4.  Paste your **API Key**.
-5.  (Optional) Use the **Test ZLP Connection** button to verify connectivity.
+A Zaguán subscription connects Blade to the hosted Zaguán Coder Daemon.
 
-### First-Time Project Setup
+1. Subscribe at [ZaguanAI.com](https://zaguanai.com/pricing).
+2. Open **Settings → Account**.
+3. Paste your Zaguán API key.
+4. Save settings.
 
-When you open a project for the first time, Zaguán Blade will prompt you to choose a **Storage Mode** for your conversation history:
+Hosted models appear in the model picker when the key is valid. Subscription-backed workflows can use stronger hosted models, managed orchestration, richer context handling, and hosted research features where available.
 
-*   **Local Storage** (Recommended): Conversations are stored in a `.zblade/` folder within your project. Your code never leaves your machine.
-*   **Server Storage**: Conversations are stored on Zaguán servers for faster context retrieval and cross-device sync.
+### First Project Setup
 
-You can change this setting later in **Settings → Storage**.
+When you open a project for the first time, Blade asks where to store conversation history:
 
----
+- **Local Storage** stores conversations and local artifacts under `.zblade/` in the project.
+- **Server Storage** stores conversations on Zaguán servers for faster retrieval and sync.
 
-## 3. The Interface
+Storage mode controls conversation persistence. Model selection controls where AI inference runs.
 
-The interface is streamlined to focus on code and conversation.
+Blade also keeps project settings, indexes, cache files, and history artifacts under `.zblade/`. The app ensures `.zblade` is ignored by the workspace Git repository.
 
-*   **Title Bar**:
-    *   **File Menu**: Access New File, Open Folder, Save, Save As, and Exit.
-    *   **Window Controls**: Minimize, Maximize/Restore, and Close buttons.
+## 3. Interface
 
-*   **Activity Bar** (Left Edge):
-    *   **Files**: Your project file explorer.
-    *   **Git**: View changed files, stage/unstage, commit, and push.
-    *   **History**: Browse file history.
-    *   **Settings**: Configure editor preferences and your account.
+### App Bar
 
-*   **Center Stage (The Editor)**:
-    *   A high-performance editor based on CodeMirror 6.
-    *   Supports syntax highlighting for major languages.
-    *   **Diff Blocks**: When the AI proposes code, changes appear inline with green (added) and red (removed) highlighting.
+The app bar contains the file menu, window controls, fullscreen handling, and project/app actions.
 
-*   **Right Panel (The AI Assistant)**:
-    *   **Chat**: Your main communication channel with the Agent.
-    *   **Model Selector**: Choose which AI model to use for responses.
-    *   **Command Center**: The input box where you type instructions. Use `@` to access special commands.
+### Activity Bar
 
-*   **Bottom Panel (Terminal)**:
-    *   Integrated terminal for running build commands, git operations, or anything else.
-    *   The AI can see and interact with this terminal when executing commands.
+- **Explorer**: browse and manage files.
+- **Git**: inspect changes, stage/unstage, commit, push, pull, fetch, and generate commit messages with AI.
+- **File History**: view snapshots for the active file and revert when needed.
+- **Settings**: configure account, local AI, storage, context, remote control, appearance, language, and app details.
 
----
+### Editor
+
+The editor is based on CodeMirror 6 and supports syntax highlighting for Rust, TypeScript, JavaScript, Python, Go, C/C++, HTML, CSS, JSON, YAML, PHP, Markdown, and related formats.
+
+Markdown files can switch between edit and view modes with `Ctrl+E`.
+
+### Chat Panel
+
+The chat panel includes:
+
+- **Code / Plan mode** toggle.
+- Model picker with hosted, Ollama, and Local Server sections.
+- Image/screenshot attachment controls when the selected model supports images.
+- `@` suggestions for workspace paths and hosted commands such as `@web` and `@research`.
+- Queued request handling while the assistant is already responding.
+- Inline command approval cards and tool progress.
+
+### Terminal
+
+Blade includes integrated terminals with copy, paste, search, split, clear, and shell selection controls. AI-triggered `run_command` requests require approval unless project YOLO mode is enabled.
 
 ## 4. Keyboard Shortcuts
 
-### Global Shortcuts
+### App and Tabs
 
 | Shortcut | Action |
 |----------|--------|
-| `F11` | Toggle fullscreen mode |
+| `F11` | Toggle fullscreen |
 | `Ctrl+W` | Close current tab |
 | `Ctrl+Tab` | Cycle to next tab |
 | `Ctrl+Shift+Tab` | Cycle to previous tab |
-| `Escape` | Close modals/popups |
+| `Escape` | Close open modal, picker, or menu |
 
-### File Operations
-
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+N` | New File |
-| `Ctrl+O` | Open Folder |
-| `Ctrl+S` | Save current file |
-| `Ctrl+Shift+S` | Save As |
-| `Alt+F4` | Exit application |
-
-### Editor Shortcuts
+### Files and Editor
 
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl+S` | Save file |
+| `Ctrl+N` | New file in the explorer |
+| `Ctrl+Shift+N` | New folder in the explorer |
+| `Ctrl+O` | Open folder from the file menu |
+| `Ctrl+S` | Save active file |
+| `Ctrl+Shift+S` | Save as |
 | `Ctrl+Z` | Undo |
 | `Ctrl+Shift+Z` | Redo |
 | `Ctrl+F` | Find in file |
-| `Ctrl+X` | Cut selection |
-| `Ctrl+C` | Copy selection |
-| `Ctrl+V` | Paste |
-| `F2` | Rename symbol |
-| `Ctrl+E` | Toggle Edit/View mode (Markdown files) |
+| `Ctrl+X` / `Ctrl+C` / `Ctrl+V` | Cut, copy, paste |
+| `F2` | Rename symbol from the editor context menu |
+| `Ctrl+E` | Toggle Markdown edit/view mode |
 
-### Terminal Shortcuts
-
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+Shift+C` | Copy selection |
-| `Ctrl+Shift+V` | Paste |
-
-### Chat Input
+### Chat Composer
 
 | Shortcut | Action |
 |----------|--------|
 | `Enter` | Send message |
-| `Shift+Enter` | New line (without sending) |
-| `Arrow Up/Down` | Navigate command suggestions |
-| `Tab` or `Enter` | Select command from autocomplete |
-| `Escape` | Close command autocomplete |
+| `Shift+Enter` | Insert newline |
+| `@` | Open command/path suggestions |
+| `Tab` or `Enter` | Accept active suggestion |
+| `Escape` | Close suggestions |
+| `Arrow Up` / `Arrow Down` | Navigate message history when the cursor is at the start/end of the composer |
 
----
+### Terminal
 
-## 5. @ Commands
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Shift+C` | Copy terminal selection |
+| `Ctrl+Shift+V` | Paste into terminal |
+| `Ctrl+F` | Find in terminal |
 
-Type `@` in the chat input to access special commands:
+## 5. Working With AI
 
-| Command | Description |
-|---------|-------------|
-| `@web <url>` | Fetches content from a URL and uses it as context for the AI |
-| `@research <topic>` | Performs deep research on a topic and displays results in a new tab |
+Use **Plan** mode when you want investigation and a concrete plan before implementation. Use **Code** mode when you want the assistant to implement and validate changes.
 
----
+Useful request patterns:
 
-## 6. Working with the AI
+- "Explain the active file."
+- "Find where this symbol is used."
+- "Plan the safest way to refactor this component."
+- "Run the relevant tests and fix the failure."
+- "Use `@src/path/to/file.ts` as context."
 
-### Context is Key
+When Blade has local indexes available, the assistant can use symbol search, file ranges, semantic anchors, impact analysis, and workspace structure rather than reading the whole project.
 
-The AI automatically knows about the file you are currently looking at. You don't need to copy-paste code into the chat.
+## 6. Reviewing AI Changes
 
-*   **Ask questions**: "Explain this function", "Refactor this to be more performant", "Find the bug in this logic".
-*   **Tasking**: "Create a new component for X", "Update the CSS to match this design", "Run the tests and fix the failure".
+AI file changes are written to disk with a history snapshot and tracked as uncommitted Blade changes.
 
-### Reviewing Changes
+- **Accept** keeps the current file contents.
+- **Reject** restores the snapshot captured before the AI change.
+- **Accept All** and **Reject All** operate on the current pending change set.
+- File tabs show when AI edits are pending or unread.
 
-When the AI writes code, it doesn't just overwrite your work. It proposes **Edits**.
-
-1.  The AI will indicate it is writing code.
-2.  You will see **Green** (added) and **Red** (removed) lines appear directly in your editor.
-3.  **Review**: Read the changes.
-4.  **Accept/Reject**:
-    *   Click `Accept` (Checkmark) to permanently apply the changes.
-    *   Click `Reject` (X) to discard them.
-    *   You can also "Accept All" or "Reject All" via the floating action bar if there are multiple changes.
-
----
+The Git panel remains the source of truth for repository-level commits and staging.
 
 ## 7. Settings
 
-Access settings via the **Gear Icon** in the Activity Bar.
+### Configuration
 
-### Account Tab
+- Theme
+- Editor and chat text size
+- Interface language
+- **YOLO mode**, which auto-approves `run_command` requests for the current project only
 
-*   **API Key**: Your Zaguán subscription key for AI features.
-*   **Manage Subscription**: Link to your account dashboard.
+### Account
 
-### Storage Tab
+- Zaguán API key
+- Links to subscription management or pricing
 
-*   **Storage Mode**: Choose between Local or Server storage for conversations.
-    *   **Local**: Conversations stored in `.zblade/` folder. Maximum privacy.
-    *   **Server**: Conversations stored on Zaguán servers. Faster context retrieval.
-*   **Sync Metadata** (Local mode only): Sync conversation titles and tags to server (no code).
-*   **Enable Cache**: Cache recent context for faster access.
-*   **Max Cache Size**: Configure cache size (10-500 MB).
+### Local AI
 
-### Context Tab (Per-Project)
+- Ollama local URL
+- Ollama Cloud API key
+- OpenAI-compatible server URL
+- Test connection and refresh model actions
 
-*   **Max Context Tokens**: Control how much context is sent to the AI (2K-32K tokens). Higher values provide more context but increase latency.
-*   **Enable Compression**: Use AI to intelligently compress context.
-    *   **Remote**: Uses cloud model for compression (faster).
-    *   **Local**: Uses local model for compression (private).
-*   **Allow .gitignored Files**: Include files matched by `.gitignore` in AI context. Disabled by default for security.
+### Storage
 
----
+- Local or server conversation storage
+- Metadata sync for local storage
+- Context cache toggle and cache size
 
-## 8. Project Instructions
+### Context
 
-Zaguán Blade creates a `.zblade/` folder in your project with an `instructions.md` file. Edit this file to provide project-specific instructions to the AI:
+Available when a workspace is open:
 
-```markdown
-# Project Instructions
+- Max context tokens from 2K to 32K
+- Context compression toggle
+- Remote or local compression model
+- Whether files matched by `.gitignore` may be included in AI context
 
-## Project Overview
-<!-- Describe your project briefly -->
+### Remote
 
-## Coding Guidelines
-<!-- Add any specific coding conventions or patterns to follow -->
+Remote control setup for connecting to Blade while it is running on your computer.
 
-## Important Files
-<!-- List key files the AI should be aware of -->
-```
+### About
 
-The AI reads this file to understand your project's conventions and requirements.
+Version, runtime, engine, mode, website, GitHub, and support links.
 
----
+## 8. Screenshots and Images
 
-## 9. Editor Features
+Use the **Add** button in the composer toolbar to:
 
-### Context Menu (Right-Click)
+- Capture a window.
+- Select a window and crop a region.
+- Upload an image from disk.
+- Paste images directly into the composer.
 
-Right-click in the editor to access:
+After capture, Blade shows a preview and annotation editor before attaching the image.
 
-*   **Cut / Copy / Paste**: Standard clipboard operations.
-*   **Undo / Redo**: Edit history navigation.
-*   **Find**: Open search panel.
-*   **Rename Symbol**: Rename the symbol under cursor.
-*   **Show Call Graph**: Visualize function call relationships.
+Image attachments require a model that supports images. They are disabled when only local models are available and for known unsupported models such as GLM.
 
-### File Explorer Context Menu
+### Linux and X11 Notes
 
-Right-click on files/folders in the explorer:
+On X11 desktops, capture is limited to windows visible on the current workspace. Covered windows can capture as black unless a compositor such as `picom` is running. Bring the target window forward before capture. Wayland, macOS, and composited desktops generally avoid these X11 limitations.
 
-*   **New File / New Folder**: Create items in the selected directory.
-*   **Rename**: Rename the selected item.
-*   **Delete**: Delete the selected item.
-*   **Cut / Copy / Paste**: Move or copy files.
-*   **Open in Terminal**: Open terminal at the selected location.
+## 9. Privacy and Data
 
-### Markdown Support
+- Blade does not enable usage telemetry in the current settings implementation.
+- Local AI keeps inference on your configured local or LAN provider.
+- Local storage stores conversation artifacts under the project `.zblade/` directory.
+- Hosted Zaguán models and server storage require sending the relevant prompt, context, and conversation data to Zaguán services.
+- `.gitignored` files are excluded from AI context by default and can be enabled per project in **Settings → Context**.
 
-*   Markdown files (`.md`) automatically enable line wrapping.
-*   Use `Ctrl+E` to toggle between Edit and View modes.
+## 10. Support
 
----
-
-## 10. Screenshot Capture
-
-You can attach screenshots to your chat messages to give the AI visual context. Access capture options from the **Feature Menu** (grid icon) in the Command Center.
-
-### Capture Modes
-
-*   **Capture Window**: Select a window from the picker and attach a full screenshot of it.
-*   **Capture Region**: Select a window, then drag to crop a specific region from it.
-
-### Platform Notes (Linux / X11)
-
-On X11-based desktops (e.g., Openbox, i3, Fluxbox), window capture has the following limitations:
-
-*   **Current workspace only**: The window picker only shows windows on your active workspace. Windows on other virtual desktops cannot be captured because X11 does not render off-screen windows.
-*   **Window must be visible**: The target window must be visible and not fully obscured by another window. If a window is covered, the capture may return a black image. **Click the window to bring it to the front before capturing.**
-*   **Compositors help**: If you run a compositor such as `picom` or `compton`, these limitations are largely eliminated — compositors maintain off-screen buffers for all windows, enabling capture of obscured or unfocused windows.
-
-These limitations do not apply to **Wayland** desktops (GNOME, KDE Plasma 6) or **macOS**, which use compositing by default.
-
----
-
-## 11. Privacy & Data
-
-*   **No Telemetry**: Zaguán Blade does not collect usage telemetry.
-*   **Local Storage Mode**: When using local storage, your code and conversations never leave your machine.
-*   **Server Storage Mode**: Conversations are encrypted on Zaguán servers.
-
----
-
-## 12. Support & Feedback
-
-This is an **Alpha Release**. We define "Alpha" as "Feature incomplete, but good enough to be useful."
-
-You *will* encounter bugs. When you do:
-
-*   **Report Bugs**: Please file an issue on our [GitHub Issue Tracker](https://github.com/ZaguanLabs/ZaguanBlade/issues).
-*   **Feature Requests**: We'd love to hear what you want to see next.
-
-Thank you for being part of the future of coding.
+Zaguán Blade is still evolving. Report bugs and feature requests on the [GitHub issue tracker](https://github.com/ZaguanLabs/ZaguanBlade/issues).

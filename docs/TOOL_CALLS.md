@@ -1,22 +1,18 @@
 # Zaguán Blade Tool Calls Reference
 
-This document lists the tool calls that are actually executable in the local `zblade` runtime.
+This document describes the tool calls that the current Blade desktop runtime can handle locally.
 
-It intentionally excludes:
+Authoritative code paths:
 
-- **ZLP-related tooling**
-- **Anything handled server-side by `zcoderd`**
-- **Schema-only entries that are not currently executed by `zblade`**
+- Model-facing schemas: `src-tauri/src/ai_workflow/tool_defs.rs`
+- Local executor: `src-tauri/src/tools.rs`
+- `run_command` approval and execution: `src-tauri/src/ai_workflow.rs`
 
-The authoritative implementation lives in `src-tauri/src/tools.rs`.
+Model-facing schemas are not identical to every compatibility alias in the executor. Some tools remain executable for legacy or fallback compatibility even when they are not advertised to normal model turns.
 
----
+## Server-Side Tools
 
-## Scope
-
-These tools are the ones `zblade` can execute locally in its own tool executor.
-
-Excluded server-side tools include:
+These are handled by Zaguán Coder Daemon and should not be executed by Blade's local executor:
 
 - `ask_followup_question`
 - `attempt_completion`
@@ -24,716 +20,530 @@ Excluded server-side tools include:
 - `generate_image`
 - `todo_write`
 
-Also excluded from this document:
+If Blade receives one of these for local execution, it reports a protocol error.
 
-- `symbol_references` because it is present in tool schema definitions but is **not currently dispatched by the local executor**.
+## Tool Result Limits
 
----
+Local tool output is truncated for large results before it is sent back to the model:
 
-## File Tools
+- Maximum result size: 50 KB
+- Maximum result lines: 2,000
+- Truncation keeps a head and tail preview
+
+`read_many_files`, `grep_search`, and several index tools also return their own count, truncation, health, or timing metadata.
+
+## Editor Context Tools
+
+### `get_editor_state`
+
+Returns current editor context: active file, open files, active tab index, cursor position, and selection range when available.
+
+Parameters: none.
+
+### `open_file`
+
+Request that the UI open a file.
+
+Parameters:
+
+| Name | Type | Required | Notes |
+|------|------|----------|-------|
+| `path` | string | Yes | Workspace path |
+| `line` | integer | No | Optional target line |
+| `column` | integer | No | Optional target column |
+
+### `goto_line`
+
+Request that the UI navigate to a line in the active file.
+
+Parameters:
+
+| Name | Type | Required |
+|------|------|----------|
+| `line` | integer | Yes |
+| `column` | integer | No |
+
+### `get_selection`
+
+Returns current selection metadata from editor state when available.
+
+Parameters: none.
+
+### `replace_selection`
+
+Request replacement of the current editor selection.
+
+Parameters:
+
+| Name | Type | Required |
+|------|------|----------|
+| `text` | string | Yes |
+
+### `insert_at_cursor`
+
+Request insertion at the current editor cursor.
+
+Parameters:
+
+| Name | Type | Required |
+|------|------|----------|
+| `text` | string | Yes |
+
+## File Read Tools
 
 ### `read_file`
 
-Read the full contents of a file.
+Reads a full file.
 
-**Parameters:**
+Parameters:
 
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `path` | string | Yes | File path |
-
-**Accepted aliases for `path`:** `file_path`, `filepath`, `filename`
-
-**Example:**
-
-```json
-{
-  "path": "src/main.rs"
-}
-```
+| Name | Type | Required | Aliases |
+|------|------|----------|---------|
+| `path` | string | Yes | `file_path`, `filepath`, `filename` |
 
 ### `read_file_range`
 
-Read a specific line range from a file, with optional surrounding context.
+Reads a 1-indexed line range with optional surrounding context.
 
-**Parameters:**
+Parameters:
 
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `path` | string | Yes | File path |
-| `start_line` | integer | No | Start line, 1-indexed. Defaults to `1`. |
-| `end_line` | integer | No | End line, 1-indexed. Defaults to end of file. |
-| `context_lines` | integer | No | Extra lines before and after the requested range. Defaults to `0`. |
+| Name | Type | Required | Notes |
+|------|------|----------|-------|
+| `path` | string | Yes | aliases: `file_path`, `filepath`, `filename` |
+| `start_line` | integer | No | Defaults to `1` |
+| `end_line` | integer | No | Defaults to end of file |
+| `context_lines` | integer | No | Defaults to `0` |
 
-**Accepted aliases for `path`:** `file_path`, `filepath`, `filename`
+### `read_many_files`
 
-**Example:**
+Reads many files matched by glob patterns and returns JSON with per-file content and summary metadata.
 
-```json
-{
-  "path": "src/lib.rs",
-  "start_line": 50,
-  "end_line": 100,
-  "context_lines": 3
-}
-```
+Parameters:
+
+| Name | Type | Required | Notes |
+|------|------|----------|-------|
+| `paths` | string[] | Yes | aliases: `globs`, `patterns`; single aliases: `path`, `pattern`, `glob` |
+| `exclude` | string[] | No | alias: `excludes` |
+| `max_files` | integer | No | default `100`, cap `500` |
+| `max_bytes_per_file` | integer | No | cap `512 KB` |
+| `include_line_numbers` | boolean | No | defaults to `true` |
+
+## File Write and Edit Tools
+
+Writes and edits create history snapshots and update Blade's uncommitted-change tracking when executed inside the app.
 
 ### `write_file`
 
-Write content to a file. Parent directories are created if needed.
+Writes content to a file, creating parent directories when needed.
 
-### `create_file`
+Aliases: `write_file_validated`, `create_file`, `write_to_file`.
 
-Alias of `write_file`.
+Parameters:
 
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `path` | string | Yes | Target file path |
-| `content` | string | Yes | File contents |
-
-**Accepted aliases:**
-
-- `path`: `file_path`, `filepath`, `filename`
-- `content`: `contents`, `text`, `data`
-
-**Example:**
-
-```json
-{
-  "path": "src/new_module.rs",
-  "content": "pub fn hello() {\n    println!(\"Hello!\");\n}\n"
-}
-```
+| Name | Type | Required | Aliases |
+|------|------|----------|---------|
+| `path` | string | Yes | `file_path`, `filepath`, `filename` |
+| `content` | string | Yes | `contents`, `text`, `data` |
 
 ### `edit_file`
 
-Legacy single search/replace edit tool.
+Legacy single search/replace edit.
 
-**Parameters:**
+Parameters:
 
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `path` | string | Yes | File path |
-| `old_content` | string | Yes | Text to find |
-| `new_content` | string | Yes | Replacement text |
-
-**Accepted aliases:**
-
-- `path`: `file_path`, `filepath`, `filename`
-- `old_content`: `old`, `from`
-- `new_content`: `new`, `to`
+| Name | Type | Required | Aliases |
+|------|------|----------|---------|
+| `path` | string | Yes | `file_path`, `filepath`, `filename` |
+| `old_content` | string | Yes | `old`, `from` |
+| `new_content` | string | Yes | `new`, `to` |
 
 ### `apply_patch`
 
-Preferred patch/edit tool for search/replace edits.
+Preferred exact search/replace edit tool.
 
-### `apply_edit`
+Aliases: `apply_edit`, `apply_patch_validated`, `replace_file_content`, `multi_replace_file_content`.
 
-Alias of `apply_patch`.
+Single-patch parameters:
 
-Supports both a single replacement and an atomic multi-patch mode.
+| Name | Type | Required | Aliases |
+|------|------|----------|---------|
+| `path` | string | Yes | `file_path`, `filepath`, `filename` |
+| `old_text` | string | Yes | `old_content`, `old`, `from` |
+| `new_text` | string | Yes | `new_content`, `new`, `to` |
+| `start_line` | integer | No | Optional disambiguation hint |
+| `end_line` | integer | No | Optional disambiguation hint |
 
-**Single-patch parameters:**
+Multi-patch parameters:
 
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `path` | string | Yes | File path |
-| `old_text` | string | Yes | Exact text to replace |
-| `new_text` | string | Yes | Replacement text |
+| Name | Type | Required | Notes |
+|------|------|----------|-------|
+| `path` | string | Yes | Target file |
+| `patches` | array | Yes | Atomic list of `{ old_text, new_text, start_line?, end_line? }` |
 
-**Multi-patch parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `path` | string | Yes | File path |
-| `patches` | array | Yes | Array of patch objects |
-
-Each patch object supports:
-
-- `old_text` — required
-- `new_text` — required
-- `start_line` — optional hint
-- `end_line` — optional hint
-
-**Accepted aliases in single-patch mode:**
-
-- `path`: `file_path`, `filepath`, `filename`
-- `old_text`: `old_content`, `old`, `from`
-- `new_text`: `new_content`, `new`, `to`
-
-**Important behavior:**
+Behavior:
 
 - Matching is exact.
-- If the match is ambiguous, the edit fails.
-- Multi-patch application is atomic: if one patch fails validation, none are applied.
+- Ambiguous matches fail.
+- Multi-patch mode is atomic: if one patch fails, no changes are written.
 
-### `delete_file`
+### Semantic Patch Mode
 
-Delete a file, or a directory when `recursive: true` is provided.
+`apply_patch` also accepts a structured `semantic_patch` object, or `patch` object, handled by the semantic patch applier. This can update a primary file and additional generated changes atomically through the language service.
 
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `path` | string | Yes | Path to delete |
-| `recursive` | boolean | No | Required when deleting a directory |
-
-### `move_file`
-
-Move or rename a file.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `source` | string | Yes | Source path |
-| `destination` | string | Yes | Destination path |
-
-### `copy_file`
-
-Copy a file or recursively copy a directory.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `source` | string | Yes | Source path |
-| `destination` | string | Yes | Destination path |
+## Filesystem Tools
 
 ### `create_directory`
 
-Create a directory and any missing parent directories.
+Creates a directory and missing parents.
 
-**Parameters:**
+Parameters: `path` string, required.
 
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `path` | string | Yes | Directory path |
+### `delete_file`
+
+Deletes a file. Deletes a directory only when `recursive: true`.
+
+Parameters:
+
+| Name | Type | Required |
+|------|------|----------|
+| `path` | string | Yes |
+| `recursive` | boolean | No |
+
+### `move_file`
+
+Moves or renames a file.
+
+Parameters:
+
+| Name | Type | Required |
+|------|------|----------|
+| `source` | string | Yes |
+| `destination` | string | Yes |
+
+### `copy_file`
+
+Copies a file or recursively copies a directory.
+
+Parameters:
+
+| Name | Type | Required |
+|------|------|----------|
+| `source` | string | Yes |
+| `destination` | string | Yes |
 
 ### `get_file_info`
 
-Return basic filesystem metadata.
+Returns JSON metadata: path, size, `is_directory`, `is_file`, modified timestamp, and readonly flag.
 
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `path` | string | Yes | Path to inspect |
-
-**Returns:** JSON including `path`, `size`, `is_directory`, `is_file`, `modified`, and `readonly`.
-
----
+Parameters: `path` string, required.
 
 ## Directory and Search Tools
 
 ### `list_dir`
 
-List directory contents using a compact tree-like view.
+Lists immediate directory contents as JSON.
 
-### `list_directory`
+Alias: `list_directory`.
 
-Alias of `list_dir`.
+Parameters:
 
-This is implemented by forwarding to `get_workspace_structure` with a default shallow depth.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `path` | string | No | Directory path. Defaults to `.`. |
-
-**Notes:**
-
-- `list_dir` / `list_directory` exists mainly as a compatibility entry point.
-- The underlying structured traversal behavior is defined by `get_workspace_structure`.
-- Prefer `get_workspace_structure` when you need explicit traversal controls.
+| Name | Type | Required | Notes |
+|------|------|----------|-------|
+| `path` | string | No | Defaults to `.` |
 
 ### `get_workspace_structure`
 
-Return a tree view of the workspace or a subdirectory.
+Returns a compact tree-like directory view.
 
-**Parameters:**
+Parameters:
 
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `path` | string | No | Starting path. Defaults to `.`. |
-| `depth` | integer | No | Max traversal depth. Defaults to `2`. |
-| `limit` | integer | No | Max returned entries. Defaults to `50`, capped at `200`. |
+| Name | Type | Required | Notes |
+|------|------|----------|-------|
+| `path` | string | No | aliases: `dir`, `directory`; defaults to `.` |
+| `depth` | integer | No | default `2` |
+| `limit` | integer | No | default `50`, cap `200` |
 
-**Accepted aliases for `path`:** `dir`, `directory`
+Behavior:
 
-**Behavior notes:**
-
-- Hidden files are skipped.
-- Common heavy/generated directories are skipped.
-- Gitignored paths are filtered when project settings enable that behavior.
+- Hidden files and directories are skipped.
+- Heavy/generated directories such as `node_modules`, `.git`, `target`, `dist`, and `.zblade` are skipped.
+- Gitignored paths are filtered unless project settings allow them.
 
 ### `find_files`
 
-Find files by substring match on filename.
+Finds files by substring match on entry name.
 
-**Parameters:**
+Parameters:
 
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `pattern` | string | Yes | Substring to match in entry names |
-| `path` | string | No | Search root inside the workspace |
-| `max_depth` | integer | No | Optional max traversal depth |
+| Name | Type | Required |
+|------|------|----------|
+| `pattern` | string | Yes |
+| `path` | string | No |
+| `max_depth` | integer | No |
 
 ### `find_files_glob`
 
-Find files with a glob pattern.
+Finds files with a glob pattern.
 
-### `glob`
+Alias: `glob`.
 
-Alias of `find_files_glob`.
+Parameters:
 
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `pattern` | string | Yes | Glob pattern |
-| `path` | string | No | Optional base path |
-| `case_sensitive` | boolean | No | Whether matching is case-sensitive |
-
-**Accepted aliases:**
-
-- `pattern`: `glob`
+| Name | Type | Required | Aliases |
+|------|------|----------|---------|
+| `pattern` | string | Yes | `glob` |
+| `path` | string | No | Base path |
+| `case_sensitive` | boolean | No | Defaults to `false` |
 
 ### `grep_search`
 
-Search file contents with a regular expression.
+Searches file contents with a regular expression.
 
-### `rg`
+Alias: `rg`.
 
-Alias of `grep_search`.
+Parameters:
 
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `pattern` | string | Yes | Regex pattern |
-| `path` | string | No | Search root. Defaults to `.`. |
-| `include_dependencies` | boolean | No | Include dependency directories like `node_modules` and `vendor` |
-| `timeout_ms` | integer | No | Timeout used when timeout enforcement is enabled |
-
-**Accepted aliases:**
-
-- `pattern`: `query`, `regex`
-- `path`: `dir`, `directory`
-
-**Behavior notes:**
-
-- Returns matches in `path:line:text` form on success.
-- If timeout enforcement is enabled and the search times out, it returns structured JSON with partial results and a hint.
+| Name | Type | Required | Notes |
+|------|------|----------|-------|
+| `pattern` | string | Yes | aliases: `query`; regular expression |
+| `path` | string | No | Defaults to `.` |
+| `include_dependencies` | boolean | No | Include directories such as `node_modules` and `vendor` |
+| `timeout_ms` | integer | No | default `8000`, min `500`, max `30000` when timeout enforcement is enabled |
+| `max_results` | integer | No | alias: `limit`; capped at `20` |
 
 ### `codebase_search`
 
-Search the codebase with regex and return matches with surrounding context.
+Legacy regex search that returns matching lines with nearby context.
 
-**Parameters:**
+Parameters:
 
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `query` | string | Yes | Regex pattern |
+| Name | Type | Required | Notes |
+|------|------|----------|-------|
+| `query` | string | Yes | Regular expression |
 | `file_pattern` | string | No | Comma-separated filename patterns |
-| `max_results` | integer | No | Max number of matches to return. Defaults to `50`. |
+| `max_results` | integer | No | Defaults to `50` |
 
----
+## Code Intelligence Tools
 
-## Editor and UI Interaction Tools
-
-### `get_editor_state`
-
-Return the current local editor context.
-
-**Parameters:** None.
-
-**Returns:** JSON including:
-
-- `active_file`
-- `open_files`
-- `active_tab_index`
-- `cursor_line`
-- `cursor_column`
-- `selection_start_line`
-- `selection_end_line`
-
-The returned text may also include human-readable helper guidance for the active file and cursor location.
-
-### `open_file`
-
-Emit an editor action that opens a file, optionally at a line.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `path` | string | Yes | File to open |
-| `line` | integer | No | Line number to jump to |
-
-**Note:** This returns an action payload for the frontend to intercept.
-
-### `goto_line`
-
-Emit an editor action that moves the cursor in the current file.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `line` | integer | Yes | Target line |
-| `column` | integer | No | Optional target column |
-
-### `get_selection`
-
-Request the current selection.
-
-**Parameters:** None.
-
-**Current status:** implemented only as a placeholder action payload. It does **not** currently return the true selected text.
-
-### `replace_selection`
-
-Emit an editor action that replaces the current selection.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `content` | string | Yes | Replacement content |
-
-### `insert_at_cursor`
-
-Emit an editor action that inserts content at the current cursor position.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `content` | string | Yes | Text to insert |
-
----
-
-## Local Code-Intelligence Tools
-
-These tools are local to `zblade`. They are **not ZLP tools** and do not require `zcoderd`, but they do depend on `zblade`'s local language service / symbol index being available.
+These tools require the language service and local code index to be available.
 
 ### `fast_context`
 
-Assemble targeted context for broad, ambiguous, multi-file, or unfamiliar coding tasks before reading many files. Returns structured project context, ranked primary files, symbol and semantic-anchor evidence, indexed Markdown sections, related files, optional impact hints, index health, confidence, suggested read ranges, and next steps.
+Plans broad or uncertain code tasks and returns targeted context, ranked files, symbol and semantic-anchor metadata, related files, index health, confidence, suggested ranges, and next steps.
 
-Legacy project-index Markdown is not included by default. Use `include_project_index_min: true` only as an explicit fallback during the project-index migration.
+Parameters:
 
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `query` | string | Yes | User task or investigation query |
-| `queries` | array | No | Additional search queries |
-| `intent` | string | No | Optional task intent such as `bug_fix`, `feature`, `refactor`, or `docs` |
-| `max_results` | integer | No | Max primary files |
-| `include_tests` | boolean | No | Whether to include likely tests |
-| `include_docs` | boolean | No | Whether to include related docs |
-| `include_memory` | boolean | No | Whether to include local project memories |
-| `include_project_index_min` | boolean | No | Legacy fallback only. Defaults to `false`. |
+| Name | Type | Required |
+|------|------|----------|
+| `query` | string | Yes |
+| `queries` | string[] | No |
+| `intent` | string | No |
+| `max_results` | integer | No |
+| `include_tests` | boolean | No |
+| `include_docs` | boolean | No |
+| `include_memory` | boolean | No |
+| `include_project_index_min` | boolean | No |
 
 ### `symbol_search`
 
-Search indexed symbols by name or qualified name.
+Searches indexed symbols by name or qualified name.
 
-**Parameters:**
+Parameters:
 
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `query` | string | Yes | Symbol query |
-| `path` | string | No | Restrict to a file |
-| `kind` | string | No | Symbol kind filter |
-| `limit` | integer | No | Max results. Defaults to `20`, capped at `100`. |
+| Name | Type | Required | Aliases |
+|------|------|----------|---------|
+| `query` | string | Yes | |
+| `path` | string | No | `file`, `file_path` |
+| `kind` | string | No | `symbol_type` |
+| `limit` | integer | No | cap `100` |
 
-**Accepted aliases:**
+### `semantic_anchor_search`
 
-- `path`: `file`, `file_path`
-- `kind`: `symbol_type`
+Searches indexed semantic anchors such as command names, event names, route-like strings, config keys, translation keys, and theme tokens.
+
+Parameters:
+
+| Name | Type | Required | Aliases |
+|------|------|----------|---------|
+| `query` | string | Yes | |
+| `path` | string | No | `file`, `file_path` |
+| `limit` | integer | No | cap `100` |
 
 ### `symbol_resolve`
 
-Resolve one symbol by ID, or by file plus name.
+Resolves a symbol by stable ID or by name within a file.
 
-**Parameters:**
+Parameters:
 
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `symbol_id` | string | Conditionally | Stable symbol ID |
-| `path` | string | Conditionally | Required when resolving by file-scoped lookup |
-| `qualified_name` | string | No | Exact qualified name |
-| `name` | string | No | Simple symbol name |
+| Name | Type | Required | Aliases |
+|------|------|----------|---------|
+| `symbol_id` | string | No | `id` |
+| `path` | string | No | `file`, `file_path` |
+| `qualified_name` | string | No | |
+| `name` | string | No | |
 
-**Accepted aliases:**
-
-- `symbol_id`: `id`
-- `path`: `file`, `file_path`
-
-**Rule:** provide either `symbol_id`, or a `path` with a symbol name selector.
-
-### `symbol_related`
-
-Return evidence-backed symbols related to one seed symbol. Relatedness includes direct graph edges, same-module exports, importers of the seed symbol's module, and consumers of sibling exports from that module.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `symbol_id` | string | Conditionally | Stable symbol ID |
-| `path` | string | Conditionally | File path when resolving by file-scoped lookup |
-| `qualified_name` | string | No | Exact qualified name |
-| `name` | string | No | Simple symbol name |
-| `limit` | integer | No | Max related symbols. Defaults to `24`, capped at `100`. |
-
-**Accepted aliases:**
-
-- `symbol_id`: `id`
-- `path`: `file`, `file_path`
-
-**Rule:** provide either `symbol_id`, or a `path` with a symbol name selector.
+Requires either `symbol_id` or `path` plus `name` or `qualified_name`.
 
 ### `symbol_outline`
 
-Return the hierarchical symbol outline for one file.
+Returns a compact symbol inventory and optional hierarchy for one file.
 
-**Parameters:**
+Parameters:
 
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `path` | string | Yes | File path |
+| Name | Type | Required | Aliases |
+|------|------|----------|---------|
+| `path` | string | Yes | `file`, `file_path` |
+| `max_symbols` | integer | No | `limit`; default `200`, cap `1000` |
+| `include_outline` | boolean | No | defaults to `true` |
 
-**Accepted aliases for `path`:** `file`, `file_path`
+### `symbol_related`
+
+Returns symbols related to a seed symbol.
+
+Parameters:
+
+| Name | Type | Required |
+|------|------|----------|
+| `symbol_id` / `id` | string | No |
+| `path` / `file` / `file_path` | string | No |
+| `qualified_name` | string | No |
+| `name` | string | No |
+| `limit` | integer | No |
+
+### `symbol_references`
+
+Expands incoming and outgoing relationships for one symbol, or important symbols in a file.
+
+Parameters:
+
+| Name | Type | Required |
+|------|------|----------|
+| `symbol_id` / `id` | string | No |
+| `path` / `file` / `file_path` | string | No |
+| `qualified_name` | string | No |
+| `name` | string | No |
+| `relationship` | string | No |
+| `relationships` | string[] | No |
+| `limit` | integer | No |
+| `max_symbols` | integer | No |
+
+Relationship types include `call`, `import`, `export`, `extends`, `implements`, and `contains`.
 
 ### `symbol_graph`
 
-Return incoming and outgoing graph edges for a symbol.
+Returns incoming and outgoing graph edges for one symbol.
 
-**Parameters:**
+Parameters:
 
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `symbol_id` | string | Conditionally | Stable symbol ID |
-| `path` | string | Conditionally | File path when resolving by file/name |
-| `qualified_name` | string | No | Exact qualified name |
-| `name` | string | No | Simple symbol name |
-| `relationship_type` | string | No | Edge type. Defaults to `call`. |
-| `limit` | integer | No | Max edges. Defaults to `20`, capped at `100`. |
+| Name | Type | Required |
+|------|------|----------|
+| `symbol_id` / `id` | string | No |
+| `path` / `file` / `file_path` | string | No |
+| `qualified_name` | string | No |
+| `name` | string | No |
+| `relationship` | string | No |
+| `relationship_type` | string | No |
+| `kind` | string | No |
+| `limit` | integer | No |
 
-**Accepted aliases:**
+### `edit_impact`
 
-- `symbol_id`: `id`
-- `path`: `file`, `file_path`
-- `relationship_type`: `edge_kind`, `kind`
+Analyzes likely impact before editing a file or symbol. Returns impacted files, likely tests, reference counts, risk, confidence, and suggested read ranges.
 
----
+Parameters:
 
-## Project Index Tools
+| Name | Type | Required |
+|------|------|----------|
+| `path` / `file` / `file_path` | string | No |
+| `symbol_id` / `id` | string | No |
+| `qualified_name` | string | No |
+| `name` | string | No |
+| `limit` | integer | No |
+| `max_symbols` | integer | No |
 
-These are legacy fallback tools during the project-index migration. They remain locally executable for compatibility, but they are no longer advertised in normal model-facing tool schemas. Prefer `fast_context` for first-pass orientation and targeted symbol-aware context. Use these only when explicitly investigating the generated `.zblade/context/project_index.md` artifact or when compatibility requires it.
+Requires either a target `path` or a symbol selector.
 
-### `get_project_index_overview`
+## Composite Tools
 
-Legacy fallback only. Read a compact overview window from the local project index when explicitly investigating generated project-index Markdown.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `path` | string | No | Optional workspace sub-root |
-| `max_chars` | integer | No | Character budget. Defaults to `6000`, capped at `12000`. |
-| `offset` | integer | No | Character offset |
-
-### `get_project_index_chunk`
-
-Legacy fallback only. Read a deterministic paged chunk from the local project index when explicit compatibility paging is required.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `path` | string | No | Optional workspace sub-root |
-| `offset` | integer | No | Character offset |
-| `max_chars` | integer | No | Character budget. Defaults to `4000`, capped at `8000`. |
-
----
-
-## Composite Read-Only Tools
-
-These tools are supported by `zblade` locally.
-
-By default, schema exposure may be gated by model family and the `composite_tools_enabled` feature flag, but the local executor does support them.
-
-### `read_many_files`
-
-Read multiple files selected by glob patterns in a single bounded call.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `paths` | array of strings | Yes | Include globs |
-| `exclude` | array of strings | No | Exclude globs |
-| `max_files` | integer | No | Max files. Defaults to `100`, capped at `500`. |
-| `max_bytes_per_file` | integer | No | Per-file byte limit. Defaults to `65536`, capped at `524288`. |
-| `include_line_numbers` | boolean | No | Include line numbers in returned content |
-
-**Accepted aliases for include globs:** `globs`, `patterns`
+Composite tools may be omitted from model-facing schemas for models that are not expected to handle them reliably.
 
 ### `batch`
 
-Execute multiple read-only tool calls concurrently with all-settled behavior.
+Executes multiple read-only tool calls and returns ordered all-settled results.
 
-**Parameters:**
+Parameters:
 
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `calls` | array | Yes | Array of tool call objects |
-| `max_parallel` | integer | No | Defaults to `8`, capped at `16` |
-| `fail_fast` | boolean | No | Stop queued work after first failure |
-| `ordered` | boolean | No | Preserve input order. Defaults to `true`. |
-| `cancel_after_ms` | integer | No | Optional total budget |
+| Name | Type | Required | Notes |
+|------|------|----------|-------|
+| `calls` | array | Yes | Each item contains `tool` or `name`, plus `arguments` or `args` |
+| `fail_fast` | boolean | No | Defaults to `false` |
+| `ordered` | boolean | No | Defaults to `true` |
 
-Each call object supports:
-
-- `tool` or `name`
-- `arguments`
-
-**Important behavior:**
-
-- Only read-only tools are allowed.
-- `batch` itself and `run_command` are explicitly blocked inside `batch`.
+Allowed tools in `batch` are read-only only, including file reads, search, workspace structure, code-intelligence tools, project-index fallback tools, and `codebase_investigator`. `run_command`, nested `batch`, and mutation tools are rejected.
 
 ### `codebase_investigator`
 
-Run a bounded read-only investigation pass and return structured findings.
+Runs a bounded read-only investigation and returns structured findings with evidence references.
 
-**Parameters:**
+Parameters:
 
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `objective` | string | Yes | Investigation goal |
-| `scope` | array of strings | No | Glob scope. Defaults to `**/*`. |
-| `max_turns` | integer | No | Defaults to `8`, capped at `16` |
-| `max_tool_calls` | integer | No | Defaults to `40`, capped at `120` |
-| `output_format` | string | No | `json` or `markdown` |
-| `cancel_after_ms` | integer | No | Optional total budget |
+| Name | Type | Required |
+|------|------|----------|
+| `objective` | string | Yes |
+| `scope` | string[] | No |
+| `max_turns` | integer | No |
+| `max_tool_calls` | integer | No |
+| `output_format` | string | No |
+| `cancel_after_ms` | integer | No |
 
----
+## Project Index Fallback Tools
 
-## Command Execution
+These remain executable for compatibility but are not advertised in normal model-facing schemas. Prefer `fast_context`.
+
+### `get_project_index_overview`
+
+Returns a bounded overview of `.zblade/context/project_index.md`.
+
+Parameters:
+
+| Name | Type | Required |
+|------|------|----------|
+| `path` | string | No |
+| `max_chars` | integer | No | default `6000`, cap `12000` |
+
+### `get_project_index_chunk`
+
+Returns a character window from `.zblade/context/project_index.md`.
+
+Parameters:
+
+| Name | Type | Required |
+|------|------|----------|
+| `path` | string | No |
+| `offset` | integer | No | default `0` |
+| `max_chars` | integer | No | default `4000`, cap `8000` |
+
+## Command Tool
 
 ### `run_command`
 
-Execute a command in the workspace. This requires approval in normal AI workflows.
+Executes a shell command or structured program invocation inside the workspace after approval. This is intercepted by the workflow layer, not dispatched through `tools.rs`.
 
-**Parameters:**
+Parameters:
 
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `command` | string | Conditionally | Legacy shell command line |
-| `program` | string | Conditionally | Executable path/name for structured execution |
-| `args` | array of strings | No | Structured arguments when using `program` |
-| `shell` | boolean | No | Force shell execution when using `program` |
-| `cwd` | string | No | Working directory |
-| `blocking` | boolean | No | Defaults to `true` |
-| `wait_ms_before_async` | integer | No | Startup wait when non-blocking |
+| Name | Type | Required | Aliases / Notes |
+|------|------|----------|-----------------|
+| `command` | string | No | aliases: `Command`, `command_line`, `CommandLine`; uses shell mode |
+| `program` | string | No | aliases: `Program`; structured non-shell mode |
+| `args` | string[] | No | aliases: `Args`; used with `program` |
+| `shell` | boolean | No | aliases: `Shell`; defaults to `false` for `program`, `true` for `command` |
+| `cwd` | string | No | aliases: `Cwd`; must resolve inside the workspace |
+| `blocking` | boolean | No | aliases: `Blocking`; defaults to `true` |
+| `wait_ms_before_async` | integer | No | alias: `WaitMsBeforeAsync` |
 
-**Accepted aliases / alternate casing:**
+Behavior:
 
-- `command`: `Command`, `command_line`, `CommandLine`
-- `program`: `Program`
-- `args`: `Args`
-- `shell`: `Shell`
-- `cwd`: `Cwd`
-- `blocking`: `Blocking`
-- `wait_ms_before_async`: `WaitMsBeforeAsync`
-
-**Rule:** provide either `command` or `program`.
-
-**Behavior notes:**
-
-- If `program` is used, shell execution defaults to `false` unless explicitly enabled.
-- If `command` is used, shell execution is enabled.
-
----
-
-## General Notes
-
-### Result truncation
-
-Large tool results may be truncated.
-
-- **Max size:** `50 KB`
-- **Max lines:** `2000`
-
-When truncation happens, the executor keeps a head/tail summary rather than returning the entire payload.
-
-### Path safety
-
-Paths are generally constrained to the current workspace.
-
-- Relative paths are resolved from the workspace root.
-- Absolute paths must still resolve inside the workspace when validation is enforced.
-
-### Local vs advertised tools
-
-This file documents what `zblade` can execute locally.
-
-That is not always identical to what every model sees in advertised tool schemas:
-
-- Some compatibility aliases are executor-only.
-- Some composite tools are feature-flag and model-family gated for schema exposure.
-- Some schema entries may exist before local execution support is complete.
-
----
-
-## Quick Reference
-
-### Locally executable non-server-side tools
-
-- `read_file`
-- `read_file_range`
-- `write_file`
-- `create_file`
-- `edit_file`
-- `apply_patch`
-- `apply_edit`
-- `delete_file`
-- `move_file`
-- `copy_file`
-- `create_directory`
-- `get_file_info`
-- `list_dir`
-- `list_directory`
-- `get_workspace_structure`
-- `find_files`
-- `find_files_glob`
-- `glob`
-- `grep_search`
-- `rg`
-- `codebase_search`
-- `get_editor_state`
-- `open_file`
-- `goto_line`
-- `get_selection`
-- `replace_selection`
-- `insert_at_cursor`
-- `fast_context`
-- `symbol_search`
-- `symbol_resolve`
-- `symbol_related`
-- `symbol_outline`
-- `symbol_graph`
-- `get_project_index_overview`
-- `get_project_index_chunk`
-- `read_many_files`
-- `batch`
-- `codebase_investigator`
-- `run_command`
+- Requires user approval unless project **YOLO mode** is enabled.
+- Rejects `cwd` outside the workspace.
+- Captures stdout/stderr and exit status.
+- Blocks one known irrelevant scan pattern: Python-file hunts in Rust workspaces with no Python project signals.

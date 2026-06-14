@@ -1,58 +1,79 @@
 # Building Zaguán Blade from Source
 
-This guide provides instructions on how to build Zaguán Blade from source.
+This guide describes the current source build for Zaguán Blade `0.8.2`.
 
 ## Prerequisites
 
-Before you begin, ensure you have the following installed:
+Install these tools before building:
 
-*   **Bun** (v1.3+)
-*   **Node.js** (v20.19+ or v22.12+, only if you run Vite tooling directly without Bun)
-*   **Rust** (v1.75+)
-*   **System Dependencies** (Linux only):
-    *   `libwebkit2gtk-4.1-dev`
-    *   `build-essential`
-    *   `curl`
-    *   `wget`
-    *   `file`
-    *   `libssl-dev`
-    *   `libgtk-3-dev`
-    *   `libayatana-appindicator3-dev`
-    *   `librsvg2-dev`
+- **Bun** `1.3+`
+- **Rust** with Cargo
+- **Node.js** `20.19+` or `22.12+` only if you run Vite tooling directly instead of through Bun
 
-## Installation
+Linux builds also need the Tauri/WebKitGTK system packages. On Debian or Ubuntu:
 
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/ZaguanLabs/ZaguanBlade.git
-    cd ZaguanBlade
-    ```
+```bash
+sudo apt update
+sudo apt install -y \
+  build-essential \
+  curl \
+  wget \
+  file \
+  libssl-dev \
+  libgtk-3-dev \
+  libwebkit2gtk-4.1-dev \
+  libayatana-appindicator3-dev \
+  librsvg2-dev
+```
 
-2.  **Install dependencies:**
-    ```bash
-    bun install
-    ```
+## Install
+
+```bash
+git clone https://github.com/ZaguanLabs/ZaguanBlade.git
+cd ZaguanBlade
+bun install
+```
 
 ## Development
 
-To start the application in development mode with hot-reloading:
+Run the desktop app with the Vite dev server and Tauri shell:
 
 ```bash
 bun run tauri dev
 ```
 
-This command will start the Vite frontend server and launch the Tauri application window.
+The Tauri config starts Vite on `http://localhost:1420` and opens the desktop window.
 
-## Building for Release
+## Frontend-Only Commands
 
-To build the optimized production application:
+These are useful when you only need the React/Vite side:
+
+```bash
+bun run dev
+bun run build
+bun run preview
+bun run lint
+bun run test
+```
+
+## Release Build
 
 ```bash
 bun run tauri build
 ```
 
-The build artifacts (e.g., AppImage, Deb, RPM, MSI, DMG) will be located in `src-tauri/target/release/bundle/`.
+Release bundles are written under `src-tauri/target/release/bundle/`.
+
+The current Tauri bundle targets are:
+
+- Linux: AppImage, `.deb`, `.rpm`
+- Windows: NSIS, MSI
+- macOS: `.app`, DMG
+
+On Linux, the AppImage target is configured with `bundleMediaFramework: false`, so runtime WebKit/media dependencies may still need to be present on the target system.
 
 ## Troubleshooting
 
-If you encounter issues during the build process, ensure your Bun and Rust environments are correctly set up, and if you are invoking Vite directly without Bun, verify that your Node.js version meets Vite 8 requirements.
+- If Vite fails before Tauri launches, verify Bun is installed and that any direct Node.js usage meets the Vite 8 Node requirement.
+- If Rust compilation fails, update your Rust toolchain with `rustup update`.
+- If Linux linking fails, recheck the WebKitGTK and GTK development packages above.
