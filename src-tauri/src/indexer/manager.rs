@@ -89,9 +89,6 @@ impl IndexerManager {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let settings = load_project_settings_or_default(&self.workspace_root);
         if !settings.context.project_index_legacy_enabled {
-            eprintln!(
-                "[Indexer] Skipping legacy project index Markdown writes; enable context.project_index_legacy_enabled to generate them"
-            );
             return Ok(());
         }
 

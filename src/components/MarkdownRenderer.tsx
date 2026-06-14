@@ -11,6 +11,7 @@ import { Copy, Check } from 'lucide-react';
 interface MarkdownRendererProps {
     content: string;
     className?: string;
+    isAnimating?: boolean;
 }
 
 // Stable theme object - defined outside component to prevent recreation
@@ -410,7 +411,7 @@ const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, c
     );
 };
 
-const StreamingMarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, className = '' }) => {
+const StreamingMarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, className = '', isAnimating = true }) => {
     return (
         <div className={`markdown-content select-text ${className}`} style={{ fontSize: 'var(--markdown-font-size, var(--editor-content-font-size, 14px))' }}>
             <Streamdown
@@ -418,7 +419,7 @@ const StreamingMarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ c
                 components={streamdownComponents}
                 controls={streamdownControls}
                 animated={streamdownAnimation}
-                isAnimating
+                isAnimating={isAnimating}
                 lineNumbers={false}
                 parseIncompleteMarkdown
             >
@@ -433,6 +434,6 @@ export const MarkdownRenderer = React.memo(MarkdownRendererComponent, (prevProps
     return prevProps.content === nextProps.content && prevProps.className === nextProps.className;
 });
 export const StreamingMarkdownRenderer = React.memo(StreamingMarkdownRendererComponent, (prevProps, nextProps) => {
-    return prevProps.content === nextProps.content && prevProps.className === nextProps.className;
+    return prevProps.content === nextProps.content && prevProps.className === nextProps.className && prevProps.isAnimating === nextProps.isAnimating;
 });
 export default MarkdownRenderer;

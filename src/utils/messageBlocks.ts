@@ -44,15 +44,17 @@ export function upsertSplitTextBlocks(
 
     const prefixWithoutText = prefix.filter((block) => block.type !== 'text');
     const suffixWithoutText = suffix.filter((block) => block.type !== 'text');
+    const existingPrefixText = [...prefix].reverse().find((block) => block.type === 'text');
+    const existingSuffixText = suffix.find((block) => block.type === 'text');
 
     return [
         ...prefixWithoutText,
         ...(beforeToolsContent.length > 0
-            ? [{ type: 'text' as const, content: beforeToolsContent, id: crypto.randomUUID() }]
+            ? [{ type: 'text' as const, content: beforeToolsContent, id: existingPrefixText?.id ?? crypto.randomUUID() }]
             : []),
         ...activity,
         ...(afterToolsContent.length > 0
-            ? [{ type: 'text' as const, content: afterToolsContent, id: crypto.randomUUID() }]
+            ? [{ type: 'text' as const, content: afterToolsContent, id: existingSuffixText?.id ?? crypto.randomUUID() }]
             : []),
         ...suffixWithoutText,
     ];

@@ -99,6 +99,41 @@ function isWhitespaceOnly(value: string): boolean {
     return value.trim().length === 0;
 }
 
+function findLastBlockIdOfType(blocks: MessageBlock[], type: 'text' | 'reasoning'): string | undefined {
+    for (let index = blocks.length - 1; index >= 0; index -= 1) {
+        const block = blocks[index];
+        if (block.type === type && !isWhitespaceOnly(block.content)) {
+            return block.id;
+        }
+    }
+
+    return undefined;
+}
+
+function markStreamingToolActivity(streaming: StreamingState | undefined): StreamingState | undefined {
+    if (!streaming) {
+        return undefined;
+    }
+
+    return {
+        ...streaming,
+        activeKind: 'tool',
+        activeBlockId: undefined,
+    };
+}
+
+function updateStreamingStateMap(
+    states: Map<string, StreamingState>,
+    messageId: string,
+    streaming: StreamingState | undefined,
+): StreamingState | undefined {
+    if (streaming) {
+        states.set(messageId, streaming);
+    }
+
+    return streaming;
+}
+
 function isRunCommandAction(action: StructuredAction): boolean {
     return action.actionKind === 'command' || action.is_generic_tool === false;
 }
@@ -845,7 +880,9 @@ export function useChatV2(options: UseChatV2Options = {}) {
                     const existingMessage = nextMessages[index];
                     const streamingChanged =
                         (existingMessage.streaming?.seq ?? null) !== (update.streaming?.seq ?? null)
-                        || (existingMessage.streaming?.endTime ?? null) !== (update.streaming?.endTime ?? null);
+                        || (existingMessage.streaming?.endTime ?? null) !== (update.streaming?.endTime ?? null)
+                        || (existingMessage.streaming?.activeKind ?? null) !== (update.streaming?.activeKind ?? null)
+                        || (existingMessage.streaming?.activeBlockId ?? null) !== (update.streaming?.activeBlockId ?? null);
 
                     if (
                         existingMessage.content !== update.content
@@ -1084,10 +1121,11 @@ export function useChatV2(options: UseChatV2Options = {}) {
                     cancelMessageCompletionCleanup(id);
                     const now = Date.now();
                     const previousStreaming = streamingStatesRef.current.get(id);
-                    const streaming: StreamingState = {
+                    let streaming: StreamingState = {
                         seq: Math.max(seq, previousStreaming?.seq ?? 0),
                         startTime: previousStreaming?.startTime ?? now,
                         lastSeqAt: now,
+                        activeKind: type,
                     };
                     streamingStatesRef.current.set(id, streaming);
 
@@ -1217,6 +1255,14 @@ export function useChatV2(options: UseChatV2Options = {}) {
 
                     blocksRef.current.set(id, blocks);
                     const normalizedBlocks = normalizeSplitBlocks(existingMessage, blocks, accumulatedContentRef.current.id === id ? accumulatedContentRef.current.content : '');
+                    streaming = {
+                        ...streaming,
+                        activeBlockId: findLastBlockIdOfType(
+                            normalizedBlocks.blocks,
+                            type === 'reasoning' ? 'reasoning' : 'text',
+                        ),
+                    };
+                    streamingStatesRef.current.set(id, streaming);
                     queueMessageUpdate(
                         id,
                         accumulatedContentRef.current.id === id ? accumulatedContentRef.current.content : '',
@@ -1489,6 +1535,13 @@ export function useChatV2(options: UseChatV2Options = {}) {
                         content_before_tools: normalizedBlocks.contentBeforeTools,
                         content_after_tools: normalizedBlocks.contentAfterTools,
                         commandExecutions: executions,
+                        streaming: message.id
+                            ? updateStreamingStateMap(
+                                streamingStatesRef.current,
+                                message.id,
+                                markStreamingToolActivity(message.streaming),
+                            )
+                            : message.streaming,
                     };
                     return nextMessages;
                 });
@@ -1642,6 +1695,13 @@ export function useChatV2(options: UseChatV2Options = {}) {
                                 content_after_tools: normalizedBlocks.contentAfterTools,
                                 tool_calls: incomingToolCall ? [{ ...(incomingToolCall as ToolCall), status, result: result ?? undefined }] : [],
                                 blocks: normalizedBlocks.blocks,
+                                streaming: accumulatedContent
+                                    ? updateStreamingStateMap(
+                                        streamingStatesRef.current,
+                                        messageId,
+                                        markStreamingToolActivity(streamingStatesRef.current.get(messageId)),
+                                    )
+                                    : undefined,
                             });
                         }
 
@@ -1675,12 +1735,24 @@ export function useChatV2(options: UseChatV2Options = {}) {
                                     content_before_tools: normalizedBlocks.contentBeforeTools,
                                     content_after_tools: normalizedBlocks.contentAfterTools,
                                     blocks: normalizedBlocks.blocks,
+                                    streaming: updateStreamingStateMap(
+                                        streamingStatesRef.current,
+                                        messageId,
+                                        markStreamingToolActivity(message.streaming),
+                                    ),
                                 };
                             }
 
                             if (!incomingToolCall) {
                                 blocksRef.current.set(messageId, nextBlocks);
-                                return message;
+                                return {
+                                    ...message,
+                                    streaming: updateStreamingStateMap(
+                                        streamingStatesRef.current,
+                                        messageId,
+                                        markStreamingToolActivity(message.streaming),
+                                    ),
+                                };
                             }
 
                             const orderedBlocks = insertToolCallBlockPreservingOrder(nextBlocks, toolCallId);
@@ -1718,6 +1790,11 @@ export function useChatV2(options: UseChatV2Options = {}) {
                                     },
                                 ],
                                 blocks: normalizedBlocks.blocks,
+                                streaming: updateStreamingStateMap(
+                                    streamingStatesRef.current,
+                                    messageId,
+                                    markStreamingToolActivity(message.streaming),
+                                ),
                             };
                         });
                     });
@@ -1756,6 +1833,30 @@ export function useChatV2(options: UseChatV2Options = {}) {
                         startedAt: tracked.startedAt,
                         lastChunkAt: tracked.lastChunkAt,
                     });
+                    if (action === 'streaming' && toolCallId) {
+                        updateMessages((messages) => {
+                            let changed = false;
+                            const nextMessages = messages.map((message) => {
+                                if (
+                                    message.id
+                                    && message.streaming
+                                    && message.streaming.activeKind !== 'tool'
+                                    && message.tool_calls?.some((toolCall) => toolCall.id === toolCallId)
+                                ) {
+                                    const streaming = updateStreamingStateMap(
+                                        streamingStatesRef.current,
+                                        message.id,
+                                        markStreamingToolActivity(message.streaming),
+                                    );
+                                    changed = true;
+                                    return { ...message, streaming };
+                                }
+                                return message;
+                            });
+
+                            return changed ? nextMessages : messages;
+                        });
+                    }
                     dispatch({
                         type: 'chat-activity/upsert',
                         activity: {

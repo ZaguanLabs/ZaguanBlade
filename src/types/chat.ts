@@ -55,6 +55,8 @@ export interface StreamingState {
     seq: number;
     startTime: number;
     lastSeqAt: number;
+    activeKind?: 'content' | 'reasoning' | 'tool';
+    activeBlockId?: string;
     endTime?: number;
 }
 

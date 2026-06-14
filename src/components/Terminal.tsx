@@ -261,10 +261,9 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
                     try {
                         const text = await navigator.clipboard.readText();
                         if (text && term) {
-                            BladeDispatcher.terminal({
-                                type: "Input",
-                                payload: { id, data: text }
-                            }).catch(console.error);
+                            term.clearSelection();
+                            term.paste(text);
+                            term.focus();
                         }
                     } catch (err) {
                         console.error('Failed to paste:', err);
@@ -298,7 +297,7 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
         ];
 
         showMenu({ x: e.clientX, y: e.clientY }, items);
-    }, [id, showMenu, t]);
+    }, [showMenu, t]);
 
     useEffect(() => {
         if (!terminalRef.current) return;
@@ -328,6 +327,28 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
         term.open(terminalRef.current);
 
         let pasteShortcutInFlight = false;
+        let suppressNativePasteUntil = 0;
+        const pasteText = (text: string) => {
+            if (!text) {
+                return;
+            }
+
+            term.clearSelection();
+            term.paste(text);
+        };
+        const handleNativePaste = (ev: ClipboardEvent) => {
+            term.clearSelection();
+
+            if (Date.now() < suppressNativePasteUntil) {
+                ev.preventDefault();
+                ev.stopPropagation();
+            }
+        };
+        const terminalElement = term.element;
+        const terminalTextarea = term.textarea;
+
+        terminalElement?.addEventListener('paste', handleNativePaste, true);
+        terminalTextarea?.addEventListener('paste', handleNativePaste, true);
 
         // Fix: On Linux, Alt-Gr composed characters (e.g. ~, @, {, [) fire both
         // a keydown and a composition/input event, causing double input. xterm.js
@@ -357,6 +378,9 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
             // Some environments still route the shortcut through keyup/default path,
             // which can cause a second paste unless both phases are suppressed.
             if (isPasteShortcut) {
+                ev.preventDefault();
+                ev.stopPropagation();
+
                 if (ev.type === 'keyup') {
                     pasteShortcutInFlight = false;
                     return false;
@@ -367,14 +391,11 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
                         return false;
                     }
                     pasteShortcutInFlight = true;
+                    suppressNativePasteUntil = Date.now() + 500;
 
                     navigator.clipboard.readText()
                         .then((text) => {
-                            if (!text) return;
-                            BladeDispatcher.terminal({
-                                type: 'Input',
-                                payload: { id, data: text },
-                            }).catch(console.error);
+                            pasteText(text);
                         })
                         .catch((err) => {
                             console.error('Failed to paste:', err);
@@ -654,6 +675,8 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
             if (unlistenDisplayCommand) {
                 unlistenDisplayCommand();
             }
+            terminalElement?.removeEventListener('paste', handleNativePaste, true);
+            terminalTextarea?.removeEventListener('paste', handleNativePaste, true);
 
             BladeDispatcher.terminal({
                 type: "Kill",

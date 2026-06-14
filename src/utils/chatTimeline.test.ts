@@ -520,6 +520,31 @@ test('upsertSplitTextBlocks reorders late tool insertion so trailing text stays 
     );
 });
 
+test('upsertSplitTextBlocks preserves existing pre-tool text block identity', () => {
+    const blocks = [
+        { type: 'text' as const, content: 'I will inspect this.', id: 'text-before' },
+        { type: 'tool_call' as const, id: 'tool-1' },
+    ];
+
+    const nextBlocks = upsertSplitTextBlocks(blocks, 'I will inspect this carefully.', '');
+    const textBlock = nextBlocks.find((block) => block.type === 'text');
+
+    assert.equal(textBlock?.id, 'text-before');
+});
+
+test('upsertSplitTextBlocks preserves existing post-tool text block identity', () => {
+    const blocks = [
+        { type: 'tool_call' as const, id: 'tool-1' },
+        { type: 'command_execution' as const, id: 'tool-1' },
+        { type: 'text' as const, content: 'Done.', id: 'text-after' },
+    ];
+
+    const nextBlocks = upsertSplitTextBlocks(blocks, '', 'Done. I updated the file.');
+    const textBlock = nextBlocks.find((block) => block.type === 'text');
+
+    assert.equal(textBlock?.id, 'text-after');
+});
+
 test('moveExistingContentAfterTools moves streamed assistant text below a late tool call', () => {
     const blocks = [
         { type: 'text' as const, content: 'Final answer', id: 'text-1' },

@@ -587,7 +587,19 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     const hasReasoning = !!message.reasoning || message.blocks?.some(b => b.type === 'reasoning');
     const stream = message.streaming;
     const hasChunkCounter = isAssistant && !!stream && stream.seq > 0;
-    const shouldUseStreamingMarkdown = isAssistant && isActive;
+    const shouldUseStreamingMarkdown = isAssistant && isActive && !stream?.endTime;
+    const isActiveContentBlock = useCallback((blockId?: string) => (
+        shouldUseStreamingMarkdown
+        && stream?.activeKind === 'content'
+        && !!blockId
+        && stream.activeBlockId === blockId
+    ), [shouldUseStreamingMarkdown, stream?.activeBlockId, stream?.activeKind]);
+    const isActiveReasoningBlock = useCallback((blockId?: string) => (
+        shouldUseStreamingMarkdown
+        && stream?.activeKind === 'reasoning'
+        && !!blockId
+        && stream.activeBlockId === blockId
+    ), [shouldUseStreamingMarkdown, stream?.activeBlockId, stream?.activeKind]);
     const streamAgeMs = stream ? Date.now() - stream.lastSeqAt : 0;
     const streamElapsedSec = stream
         ? ((stream.endTime ?? Date.now()) - stream.startTime) / 1000
@@ -618,13 +630,13 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     }
 
     const hasContent = initialText.length > 0 || finalText.length > 0;
-    const renderTextContent = (content: string) => {
+    const renderTextContent = (content: string, isStreamingText = shouldUseStreamingMarkdown) => {
         if (isUser && shouldUsePlainTextForLargeUserMessage(content)) {
             return <PlainTextMessage content={content} />;
         }
 
-        return shouldUseStreamingMarkdown
-            ? <StreamingMarkdownRenderer content={content} />
+        return isStreamingText
+            ? <StreamingMarkdownRenderer content={content} isAnimating={isStreamingText} />
             : <MarkdownRenderer content={content} />;
     };
     const imageAttachments = (message.images || []).flatMap((image, index) => {
@@ -942,7 +954,12 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 const { block, index: idx } = segment;
                                 if (block.type === 'reasoning') {
                                     // Only the last reasoning block is active
-                                    const isReasoningActive = isActive && idx === lastReasoningIdx;
+                                    const isReasoningActive = isActiveReasoningBlock(block.id) || (
+                                        stream?.activeBlockId === undefined
+                                        && stream?.activeKind === undefined
+                                        && isActive
+                                        && idx === lastReasoningIdx
+                                    );
                                     return (
                                         <ReasoningBlock
                                             key={block.id || `reasoning-${idx}`}
@@ -957,7 +974,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                         {previousSegment?.kind === 'activity_group' && (
                                             <div className="mb-1.5 h-px w-full bg-(--border-default)" style={assistantDividerStyle} />
                                         )}
-                                        {renderTextContent(block.content)}
+                                        {renderTextContent(block.content, isActiveContentBlock(block.id))}
                                     </div>
                                 );
                             } else if (block.type === 'todo') {
@@ -1037,7 +1054,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 )}
                                 {initialText && (
                                     <div className="select-text">
-                                        {renderTextContent(initialText)}
+                                        {renderTextContent(initialText, shouldUseStreamingMarkdown && stream?.activeKind === 'content' && !hasToolCalls)}
                                     </div>
                                 )}
                                 {hasToolCalls && shouldShowDetailedWork && (
@@ -1107,7 +1124,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 {finalText && (
                                     <div className="select-text">
                                         {hasToolCalls && <div className="mb-1.5 h-px w-full bg-(--border-default)" style={assistantDividerStyle} />}
-                                        {renderTextContent(finalText)}
+                                        {renderTextContent(finalText, shouldUseStreamingMarkdown && stream?.activeKind === 'content')}
                                     </div>
                                 )}
                                 {shouldShowDetailedWork && message.commandExecutions && message.commandExecutions.length > 0 && (
@@ -1168,6 +1185,8 @@ export const ChatMessage = React.memo(ChatMessageComponent, (prevProps, nextProp
     if (prevMsg.reasoning !== nextMsg.reasoning) return false;
     if ((prevMsg.streaming?.seq ?? null) !== (nextMsg.streaming?.seq ?? null)) return false;
     if ((prevMsg.streaming?.endTime ?? null) !== (nextMsg.streaming?.endTime ?? null)) return false;
+    if ((prevMsg.streaming?.activeKind ?? null) !== (nextMsg.streaming?.activeKind ?? null)) return false;
+    if ((prevMsg.streaming?.activeBlockId ?? null) !== (nextMsg.streaming?.activeBlockId ?? null)) return false;
     const prevMentionSignature = (prevMsg.mentions || []).map((mention) => `${mention.kind}:${mention.path}:${mention.is_dir}`).join('|');
     const nextMentionSignature = (nextMsg.mentions || []).map((mention) => `${mention.kind}:${mention.path}:${mention.is_dir}`).join('|');
     if (prevMentionSignature !== nextMentionSignature) return false;
