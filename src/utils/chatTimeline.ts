@@ -241,6 +241,25 @@ function findPendingApprovalTargetIndex(
     return -1;
 }
 
+function findActiveAssistantTextStreamIndex(messages: ChatMessageType[]): number {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index];
+        if (message?.role !== 'Assistant') {
+            continue;
+        }
+        const stream = message.streaming;
+        if (
+            stream
+            && !stream.endTime
+            && (stream.activeKind === 'content' || stream.activeKind === 'reasoning')
+        ) {
+            return index;
+        }
+    }
+
+    return -1;
+}
+
 export function deriveMessageRenderSegments(
     message: ChatMessageType,
     pendingActions?: StructuredAction[] | null,
@@ -607,6 +626,7 @@ export function deriveChatRows(
 ): DerivedChatRow[] {
     const pendingActionTargetIndex = findPendingActionTargetIndex(messages, pendingActions);
     const pendingApprovalTargetIndex = findPendingApprovalTargetIndex(messages, pendingApprovalRequest);
+    const activeAssistantTextStreamIndex = loading ? findActiveAssistantTextStreamIndex(messages) : -1;
 
     return messages.map((message, index) => {
         const isLast = index === messages.length - 1;
@@ -621,7 +641,11 @@ export function deriveChatRows(
             key: message.id || `${message.role}-${index}`,
             message,
             isContinued,
-            isActive: isLast && loading,
+            isActive: loading && (
+                activeAssistantTextStreamIndex >= 0
+                    ? index === activeAssistantTextStreamIndex
+                    : isLast
+            ),
             ...(showPendingActions ? { pendingActions } : {}),
             ...(showPendingApprovalRequest ? { pendingApprovalRequest } : {}),
         };

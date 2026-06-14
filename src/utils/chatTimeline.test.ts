@@ -42,6 +42,7 @@ function makeAssistantMessage(overrides: Partial<ChatMessage> & Pick<ChatMessage
         content_before_tools: overrides.content_before_tools,
         content_after_tools: overrides.content_after_tools,
         reasoning: overrides.reasoning,
+        streaming: overrides.streaming,
     };
 }
 
@@ -74,6 +75,51 @@ test('deriveChatRows attaches pending actions to the assistant message owning th
 
     assert.equal(rows[1]?.pendingActions?.[0]?.id, 'call-1');
     assert.equal(rows[2]?.pendingActions, undefined);
+    assert.equal(rows[2]?.isActive, true);
+});
+
+test('deriveChatRows keeps active streamed assistant text even when a later tool row exists', () => {
+    const messages: ChatMessage[] = [
+        { id: 'user-1', role: 'User', content: 'inspect the project' },
+        makeAssistantMessage({
+            id: 'assistant-1',
+            content: 'I found the issue',
+            streaming: {
+                seq: 12,
+                startTime: 1000,
+                lastSeqAt: 1400,
+                activeKind: 'content',
+                activeBlockId: 'text-1',
+            },
+        }),
+        { id: 'tool-1', role: 'Tool', content: 'large tool payload', tool_call_id: 'call-1' },
+    ];
+
+    const rows = deriveChatRows(messages, true, null);
+
+    assert.equal(rows[1]?.isActive, true);
+    assert.equal(rows[2]?.isActive, false);
+});
+
+test('deriveChatRows does not treat tool activity as assistant text streaming', () => {
+    const messages: ChatMessage[] = [
+        { id: 'user-1', role: 'User', content: 'run tests' },
+        makeAssistantMessage({
+            id: 'assistant-1',
+            content: '',
+            streaming: {
+                seq: 4,
+                startTime: 1000,
+                lastSeqAt: 1200,
+                activeKind: 'tool',
+            },
+        }),
+        { id: 'tool-1', role: 'Tool', content: 'test output', tool_call_id: 'call-1' },
+    ];
+
+    const rows = deriveChatRows(messages, true, null);
+
+    assert.equal(rows[1]?.isActive, false);
     assert.equal(rows[2]?.isActive, true);
 });
 

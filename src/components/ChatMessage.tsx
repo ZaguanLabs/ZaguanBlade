@@ -587,19 +587,33 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     const hasReasoning = !!message.reasoning || message.blocks?.some(b => b.type === 'reasoning');
     const stream = message.streaming;
     const hasChunkCounter = isAssistant && !!stream && stream.seq > 0;
-    const shouldUseStreamingMarkdown = isAssistant && isActive && !stream?.endTime;
+    const hasLiveTextStream = isAssistant
+        && !!stream
+        && !stream.endTime
+        && (stream.activeKind === 'content' || stream.activeKind === 'reasoning');
+    const hasStreamedTextBlock = isAssistant
+        && !!stream
+        && (stream.activeKind === 'content' || stream.activeKind === 'reasoning');
+    const shouldUseStreamingMarkdown = hasStreamedTextBlock;
+    const showAssistantLiveState = isAssistant && (isActive || hasLiveTextStream);
     const isActiveContentBlock = useCallback((blockId?: string) => (
         shouldUseStreamingMarkdown
         && stream?.activeKind === 'content'
         && !!blockId
         && stream.activeBlockId === blockId
     ), [shouldUseStreamingMarkdown, stream?.activeBlockId, stream?.activeKind]);
+    const isLiveContentBlock = useCallback((blockId?: string) => (
+        hasLiveTextStream
+        && stream?.activeKind === 'content'
+        && !!blockId
+        && stream.activeBlockId === blockId
+    ), [hasLiveTextStream, stream?.activeBlockId, stream?.activeKind]);
     const isActiveReasoningBlock = useCallback((blockId?: string) => (
-        shouldUseStreamingMarkdown
+        hasLiveTextStream
         && stream?.activeKind === 'reasoning'
         && !!blockId
         && stream.activeBlockId === blockId
-    ), [shouldUseStreamingMarkdown, stream?.activeBlockId, stream?.activeKind]);
+    ), [hasLiveTextStream, stream?.activeBlockId, stream?.activeKind]);
     const streamAgeMs = stream ? Date.now() - stream.lastSeqAt : 0;
     const streamElapsedSec = stream
         ? ((stream.endTime ?? Date.now()) - stream.startTime) / 1000
@@ -630,13 +644,17 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     }
 
     const hasContent = initialText.length > 0 || finalText.length > 0;
-    const renderTextContent = (content: string, isStreamingText = shouldUseStreamingMarkdown) => {
+    const renderTextContent = (
+        content: string,
+        useStreamingRenderer = shouldUseStreamingMarkdown,
+        isAnimating = useStreamingRenderer && hasLiveTextStream,
+    ) => {
         if (isUser && shouldUsePlainTextForLargeUserMessage(content)) {
             return <PlainTextMessage content={content} />;
         }
 
-        return isStreamingText
-            ? <StreamingMarkdownRenderer content={content} isAnimating={isStreamingText} />
+        return useStreamingRenderer
+            ? <StreamingMarkdownRenderer content={content} isAnimating={isAnimating} />
             : <MarkdownRenderer content={content} />;
     };
     const imageAttachments = (message.images || []).flatMap((image, index) => {
@@ -845,7 +863,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 }`} style={isUser ? userLabelStyle : assistantLabelStyle}>
                                     {isUser ? t('chatMessage.you') : (isAssistant ? t('chatMessage.assistant') : message.role)}
                                 </span>
-                                {isActive && isAssistant && (
+                                {showAssistantLiveState && (
                                     <span role="status" aria-live="polite" className="inline-flex items-center gap-1 rounded-[calc(var(--panel-radius)*0.35)] border px-1.5 py-0.5 text-[9px] font-medium text-(--accent-ai)" style={assistantLiveStyle}>
                                         <Loader2 aria-hidden="true" className="h-2.5 w-2.5 animate-spin" />
                                         {t('chatMessage.live')}
@@ -974,7 +992,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                         {previousSegment?.kind === 'activity_group' && (
                                             <div className="mb-1.5 h-px w-full bg-(--border-default)" style={assistantDividerStyle} />
                                         )}
-                                        {renderTextContent(block.content, isActiveContentBlock(block.id))}
+                                        {renderTextContent(block.content, isActiveContentBlock(block.id), isLiveContentBlock(block.id))}
                                     </div>
                                 );
                             } else if (block.type === 'todo') {
@@ -1054,7 +1072,11 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 )}
                                 {initialText && (
                                     <div className="select-text">
-                                        {renderTextContent(initialText, shouldUseStreamingMarkdown && stream?.activeKind === 'content' && !hasToolCalls)}
+                                        {renderTextContent(
+                                            initialText,
+                                            shouldUseStreamingMarkdown && stream?.activeKind === 'content' && !hasToolCalls,
+                                            hasLiveTextStream && stream?.activeKind === 'content' && !hasToolCalls,
+                                        )}
                                     </div>
                                 )}
                                 {hasToolCalls && shouldShowDetailedWork && (
@@ -1124,7 +1146,11 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 {finalText && (
                                     <div className="select-text">
                                         {hasToolCalls && <div className="mb-1.5 h-px w-full bg-(--border-default)" style={assistantDividerStyle} />}
-                                        {renderTextContent(finalText, shouldUseStreamingMarkdown && stream?.activeKind === 'content')}
+                                        {renderTextContent(
+                                            finalText,
+                                            shouldUseStreamingMarkdown && stream?.activeKind === 'content',
+                                            hasLiveTextStream && stream?.activeKind === 'content',
+                                        )}
                                     </div>
                                 )}
                                 {shouldShowDetailedWork && message.commandExecutions && message.commandExecutions.length > 0 && (
@@ -1158,7 +1184,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                         <span>
                             {stream!.endTime
                                 ? `${streamElapsedSec.toFixed(1)}s`
-                                : (isActive && streamAgeMs > 5000 ? 'waiting...' : 'streaming...')}
+                                : (showAssistantLiveState && streamAgeMs > 5000 ? 'waiting...' : 'streaming...')}
                         </span>
                     </div>
                 )}
