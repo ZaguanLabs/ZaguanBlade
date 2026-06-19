@@ -426,7 +426,7 @@ const StreamingMarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ c
     const isReasoning = profile === 'reasoning';
     const effectiveIsAnimating = isReasoning ? false : isAnimating;
     const effectiveControls = isReasoning ? reasoningStreamdownControls : streamdownControls;
-    const effectiveAnimation = isReasoning ? false : streamdownAnimation;
+    const effectiveAnimation = effectiveIsAnimating && !isReasoning ? streamdownAnimation : false;
     const remend = isReasoning ? reasoningRemendOptions : undefined;
 
     return (

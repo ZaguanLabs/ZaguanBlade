@@ -749,8 +749,10 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                         editorHandle?.replaceDocument({
                             path: fileEvent.payload.path,
                             content: fileEvent.payload.data,
-                            resetHistory: true,
+                            resetHistory: false,
                             reason: isAuthoritativeReload ? 'revert' : 'reload',
+                            preserveScroll: true,
+                            forceEffects: true,
                         });
                     }
                     setContent(fileEvent.payload.data);

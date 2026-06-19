@@ -632,6 +632,7 @@ export function useChatV2(options: UseChatV2Options = {}) {
         const timerId = window.setTimeout(() => {
             messageCompletionCleanupTimersRef.current.delete(id);
             messageBufferRef.current?.clear(id);
+            streamingStatesRef.current.delete(id);
             if (accumulatedContentRef.current.id === id) {
                 accumulatedContentRef.current = { id: '', content: '' };
             }
@@ -641,9 +642,24 @@ export function useChatV2(options: UseChatV2Options = {}) {
             toolActivityRef.current = null;
             lastToolActivityDispatchAtRef.current = Date.now();
             dispatch({ type: 'tool-activity/set', activity: null });
+            setMessages((messages) => {
+                let changed = false;
+                const nextMessages = messages.map((message) => {
+                    if (message.id !== id || !message.streaming) {
+                        return message;
+                    }
+
+                    changed = true;
+                    return {
+                        ...message,
+                        streaming: undefined,
+                    };
+                });
+                return changed ? nextMessages : messages;
+            });
         }, MESSAGE_COMPLETION_GRACE_MS);
         messageCompletionCleanupTimersRef.current.set(id, timerId);
-    }, [cancelMessageCompletionCleanup]);
+    }, [cancelMessageCompletionCleanup, setMessages]);
 
     const setToolActivity = useCallback((activity: ToolActivityState | null) => {
         const previous = toolActivityRef.current;

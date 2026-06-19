@@ -1,7 +1,7 @@
 "use client";
 import React, { useEffect, useRef, forwardRef, useImperativeHandle, useCallback } from "react";
 import { useTranslation } from 'react-i18next';
-import { EditorState, Compartment, Prec, type Extension, type TransactionSpec } from "@codemirror/state";
+import { Annotation, EditorState, Compartment, Prec, type Extension, type TransactionSpec } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightActiveLine, drawSelection, dropCursor, rectangularSelection, crosshairCursor, placeholder, highlightSpecialChars } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { bracketMatching, indentOnInput, foldGutter, foldKeymap } from "@codemirror/language";
@@ -68,6 +68,8 @@ const dispatchPreservingScroll = (view: EditorView, spec: TransactionSpec) => {
 
 type EditorMainSelection = { anchor: number; head?: number };
 
+const externalDocumentUpdate = Annotation.define<boolean>();
+
 const getClampedMainSelection = (view: EditorView, contentLength: number): EditorMainSelection => {
     const { main } = view.state.selection;
     return {
@@ -83,6 +85,7 @@ const replaceEditorDocument = (view: EditorView, content: string, unifiedDiff?: 
     const spec = {
         changes: { from: 0, to: view.state.doc.length, insert: content },
         selection,
+        annotations: externalDocumentUpdate.of(true),
         effects: [
             setBaseContent.of(content),
             setDiffState.of(diffState),
@@ -295,7 +298,10 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
                     ...completionKeymap,
                 ])),
                 EditorView.updateListener.of((update) => {
-                    if (update.docChanged) {
+                    if (
+                        update.docChanged
+                        && !update.transactions.some(transaction => transaction.annotation(externalDocumentUpdate))
+                    ) {
                         onDocumentChangeRef.current?.();
                     }
 

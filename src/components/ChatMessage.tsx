@@ -592,10 +592,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
         && !!stream
         && !stream.endTime
         && (stream.activeKind === 'content' || stream.activeKind === 'reasoning');
-    const hasStreamedTextBlock = isAssistant
-        && !!stream
-        && (stream.activeKind === 'content' || stream.activeKind === 'reasoning');
-    const shouldUseStreamingMarkdown = hasStreamedTextBlock;
+    const shouldUseStreamingMarkdown = hasLiveTextStream;
     const showAssistantLiveState = isAssistant && (isActive || hasLiveTextStream);
     const isActiveContentBlock = useCallback((blockId?: string) => (
         shouldUseStreamingMarkdown
