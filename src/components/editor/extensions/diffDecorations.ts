@@ -20,6 +20,7 @@ export interface DiffState {
 
 const SIMPLIFIED_DIFF_SOURCE_LENGTH = 1_000_000;
 const SIMPLIFIED_DIFF_LINE_COUNT = 2_500;
+const MAX_INLINE_DIFF_DECORATED_LINES = 800;
 let cachedUnifiedDiffSource: string | undefined;
 let cachedUnifiedDiffState: DiffState | null = null;
 
@@ -372,38 +373,6 @@ function pairRemovedAdded(diffLines: DiffLine[]): Map<number, { removed: DiffLin
     return pairs;
 }
 
-const DIFF_DECORATION_VIEWPORT_MARGIN = 2_000;
-
-const isPositionNearVisibleRanges = (
-    pos: number,
-    ranges: readonly { from: number; to: number }[],
-): boolean => ranges.some(range =>
-    pos >= Math.max(0, range.from - DIFF_DECORATION_VIEWPORT_MARGIN)
-    && pos <= range.to + DIFF_DECORATION_VIEWPORT_MARGIN
-);
-
-const isLineNearVisibleRanges = (
-    line: { from: number; to: number },
-    ranges: readonly { from: number; to: number }[],
-): boolean => ranges.some(range =>
-    line.to >= Math.max(0, range.from - DIFF_DECORATION_VIEWPORT_MARGIN)
-    && line.from <= range.to + DIFF_DECORATION_VIEWPORT_MARGIN
-);
-
-const getVisibleLineRanges = (
-    doc: { length: number; lineAt(pos: number): { number: number } },
-    ranges: readonly { from: number; to: number }[],
-): { from: number; to: number }[] => ranges.map(range => {
-    const from = doc.lineAt(Math.max(0, range.from - DIFF_DECORATION_VIEWPORT_MARGIN)).number;
-    const to = doc.lineAt(Math.min(doc.length, range.to + DIFF_DECORATION_VIEWPORT_MARGIN)).number;
-    return { from, to };
-});
-
-const isLineNumberNearVisibleRanges = (
-    lineNumber: number,
-    ranges: readonly { from: number; to: number }[],
-): boolean => ranges.some(range => lineNumber >= range.from && lineNumber <= range.to);
-
 function buildDiffDecorations(state: { doc: { length: number; lines: number; line(lineNumber: number): { from: number; to: number } }; field<T>(field: StateField<T>, require?: boolean): T }): DecorationSet {
     const diffState = state.field(diffStateField, false);
     if (!diffState) {
@@ -412,10 +381,10 @@ function buildDiffDecorations(state: { doc: { length: number; lines: number; lin
 
     const builder = new RangeSetBuilder<Decoration>();
     const doc = state.doc;
-    const visibleRanges = [{ from: 0, to: doc.length }];
-    const visibleLineRanges = [{ from: 1, to: doc.lines }];
     const diffLines = diffState.lines;
     const simplified = diffState.renderMode === 'simplified';
+    const addedLineCount = diffLines.reduce((count, line) => count + (line.type === 'added' ? 1 : 0), 0);
+    const renderInlineAddedDecorations = addedLineCount <= MAX_INLINE_DIFF_DECORATED_LINES;
 
     const pairs = simplified ? new Map<number, { removed: DiffLine; added: DiffLine }>() : pairRemovedAdded(diffLines);
     const pairedAddedIndices = new Set<number>();
@@ -434,13 +403,11 @@ function buildDiffDecorations(state: { doc: { length: number; lines: number; lin
             const dl = diffLines[i];
 
             if (dl.type === 'added' && dl.newLineNum != null && dl.newLineNum <= doc.lines) {
-                if (!isLineNumberNearVisibleRanges(dl.newLineNum, visibleLineRanges)) {
+                if (!renderInlineAddedDecorations) {
                     continue;
                 }
+
                 const line = doc.line(dl.newLineNum);
-                if (!isLineNearVisibleRanges(line, visibleRanges)) {
-                    continue;
-                }
 
                 // Line-level decoration (green background)
                 decos.push({
@@ -486,18 +453,10 @@ function buildDiffDecorations(state: { doc: { length: number; lines: number; lin
                     if (insertBeforeLine == null) {
                         insertBeforeLine = doc.lines + 1;
                     }
-                    if (!isLineNumberNearVisibleRanges(Math.min(insertBeforeLine, doc.lines), visibleLineRanges)) {
-                        i = end - 1;
-                        continue;
-                    }
 
                     const pos = insertBeforeLine <= doc.lines
                         ? doc.line(insertBeforeLine).from
                         : doc.length;
-                    if (!isPositionNearVisibleRanges(pos, visibleRanges)) {
-                        i = end - 1;
-                        continue;
-                    }
 
                     const preview = removedLines
                         .slice(0, 2)
@@ -544,16 +503,10 @@ function buildDiffDecorations(state: { doc: { length: number; lines: number; lin
                 if (insertBeforeLine == null) {
                     insertBeforeLine = doc.lines + 1;
                 }
-                if (!isLineNumberNearVisibleRanges(Math.min(insertBeforeLine, doc.lines), visibleLineRanges)) {
-                    continue;
-                }
 
                 const pos = insertBeforeLine <= doc.lines
                     ? doc.line(insertBeforeLine).from
                     : doc.length;
-                if (!isPositionNearVisibleRanges(pos, visibleRanges)) {
-                    continue;
-                }
 
                 // Compute character highlights if this removed line is paired with an added line
                 let charHighlights: CharDiff[] = [];
@@ -584,16 +537,9 @@ function buildDiffDecorations(state: { doc: { length: number; lines: number; lin
                     }
                 }
 
-                if (gapBeforeLine != null && !isLineNumberNearVisibleRanges(gapBeforeLine, visibleLineRanges)) {
-                    continue;
-                }
-
                 const pos = gapBeforeLine != null && gapBeforeLine <= doc.lines
                     ? doc.line(gapBeforeLine).from
                     : doc.length;
-                if (!isPositionNearVisibleRanges(pos, visibleRanges)) {
-                    continue;
-                }
 
                 decos.push({
                     from: pos,
@@ -634,13 +580,10 @@ const diffDecorationsField = StateField.define<DecorationSet>({
         }
 
         if (diffChanged) {
-            // Diff state changed explicitly — rebuild from scratch
             return buildDiffDecorations(tr.state);
         }
 
         if (tr.docChanged) {
-            // Document changed but diff state didn't — map existing decorations
-            // through the changes to keep them at the correct positions
             return decorations.map(tr.changes);
         }
 
@@ -807,6 +750,10 @@ export const aiGlowField = StateField.define<DecorationSet>({
                 // Mark all added lines from the current diff state
                 const diffState = tr.state.field(diffStateField, false);
                 if (!diffState) return Decoration.none;
+                const addedLineCount = diffState.lines.reduce((count, line) => count + (line.type === 'added' ? 1 : 0), 0);
+                if (addedLineCount > MAX_INLINE_DIFF_DECORATED_LINES) {
+                    return Decoration.none;
+                }
 
                 const builder = new RangeSetBuilder<Decoration>();
                 const doc = tr.state.doc;

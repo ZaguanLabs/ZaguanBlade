@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef, Suspense, useCallback } from 'react
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { watchImmediate } from '@tauri-apps/plugin-fs';
+import { exists, watchImmediate } from '@tauri-apps/plugin-fs';
 const MarkdownEditor = React.lazy(() =>
     import('./MarkdownEditor').then((module) => ({ default: module.MarkdownEditor }))
 );
@@ -13,7 +13,7 @@ import { BladeDispatcher } from '../services/blade';
 import { subscribeBladeEvents } from '../services/bladeEvents';
 import { EditorFacade } from '../services/editorFacade';
 import { FileEvent } from '../types/blade';
-import { ArrowRight, Server, Cloud, FolderOpen } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Server, Cloud, FolderOpen } from 'lucide-react';
 import zbladeLogoUrl from '../assets/zblade-in-app-logo.png';
 import { FileChangeBar } from './editor/FileChangeBar';
 import { Breadcrumb } from './editor/Breadcrumb';
@@ -21,6 +21,7 @@ import { useUncommittedChanges } from '../hooks/useUncommittedChanges';
 import { formatBladeError, formatUnknownBackendError } from '../utils/backendErrors';
 import { recordDebugPerf } from '../utils/debugPerf';
 import { readDebugFlag } from '../utils/debugFlags';
+import type { UncommittedChange } from '../types/uncommitted';
 import {
     createEditorContentSnapshot,
     getEditorContentStatePropagation,
@@ -241,6 +242,65 @@ const WelcomePage: React.FC<{
     );
 };
 
+const DeletedFileNotice: React.FC<{
+    filePath: string;
+    isDirty: boolean;
+    onSave: () => void;
+}> = ({ filePath, isDirty, onSave }) => {
+    const { t } = useTranslation();
+
+    return (
+        <div role="alert" className="border-b border-[color-mix(in_srgb,var(--state-danger)_45%,var(--separator-subtle))] bg-[color-mix(in_srgb,var(--state-danger)_14%,var(--bg-app))] px-3 py-2 text-xs text-(--fg-primary)">
+            <div className="flex min-w-0 items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-2">
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-(--state-danger)" aria-hidden="true" />
+                    <span className="min-w-0 truncate font-medium text-(--state-danger)">
+                        {isDirty ? t('editor.deletedOnDiskDirty') : t('editor.deletedOnDisk')}
+                    </span>
+                    <span className="hidden min-w-0 truncate font-mono text-(--fg-tertiary) sm:inline">
+                        {filePath}
+                    </span>
+                </div>
+                <button
+                    type="button"
+                    onClick={onSave}
+                    className="shrink-0 rounded-(--radius-control) border border-[color-mix(in_srgb,var(--state-danger)_42%,transparent)] bg-[color-mix(in_srgb,var(--state-danger)_12%,transparent)] px-2 py-1 font-medium text-(--state-danger) transition-colors hover:bg-[color-mix(in_srgb,var(--state-danger)_18%,transparent)]"
+                >
+                    {t('editor.saveToRecreate')}
+                </button>
+            </div>
+        </div>
+    );
+};
+
+const DeletedFileEmptyState: React.FC<{
+    filePath: string;
+    onSave: () => void;
+}> = ({ filePath, onSave }) => {
+    const { t } = useTranslation();
+
+    return (
+        <div className="flex h-full w-full items-center justify-center bg-(--bg-editor) p-6 text-center">
+            <div className="max-w-lg">
+                <AlertTriangle className="mx-auto h-8 w-8 text-(--state-danger)" aria-hidden="true" />
+                <h2 className="mt-3 text-sm font-semibold text-(--state-danger)">
+                    {t('editor.deletedOnDisk')}
+                </h2>
+                <p className="mt-2 break-all font-mono text-xs leading-5 text-(--fg-tertiary)">
+                    {filePath}
+                </p>
+                <button
+                    type="button"
+                    onClick={onSave}
+                    className="mt-4 rounded-(--radius-control) border border-[color-mix(in_srgb,var(--state-danger)_42%,transparent)] bg-[color-mix(in_srgb,var(--state-danger)_12%,transparent)] px-3 py-1.5 text-xs font-medium text-(--state-danger) transition-colors hover:bg-[color-mix(in_srgb,var(--state-danger)_18%,transparent)]"
+                >
+                    {t('editor.saveToRecreate')}
+                </button>
+            </div>
+        </div>
+    );
+};
+
 
 interface EditorPanelProps {
     activeFile: string | null;
@@ -250,6 +310,10 @@ interface EditorPanelProps {
     savedContent?: string | null;
     draftContent?: string | null;
     isDirty?: boolean;
+    isDeletedOnDisk?: boolean;
+    uncommittedChange?: UncommittedChange;
+    onAcceptFileChange?: (filePath: string) => Promise<boolean>;
+    onRejectFileChange?: (filePath: string) => Promise<boolean>;
     onContentStateChange?: (state: EditorContentState) => void;
     onRegisterContentSnapshot?: (getSnapshot: (() => EditorContentState) | null) => void;
     onOpenSettings?: () => void;
@@ -264,6 +328,10 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     savedContent,
     draftContent,
     isDirty = false,
+    isDeletedOnDisk = false,
+    uncommittedChange,
+    onAcceptFileChange,
+    onRejectFileChange,
     onContentStateChange,
     onRegisterContentSnapshot,
     onOpenSettings,
@@ -288,6 +356,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     const documentVersionRef = useRef(0);
     const awaitingInitialSyncRef = useRef(false);
     const syncedDocumentPathRef = useRef<string | null>(null);
+    const lastSyncedDocumentRef = useRef<{ path: string; content: string } | null>(null);
     const onContentStateChangeRef = useRef(onContentStateChange);
     const lastPropagatedDirtyRef = useRef(isDirty);
     const previousActiveFileRef = useRef(activeFile);
@@ -307,6 +376,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     };
 
     useUncommittedChanges({
+        trackChanges: false,
         onFileChanged: (filePath, reason: UncommittedChangesUpdateReason) => {
             if (!activeFile || !pathsMatch(filePath, activeFile)) {
                 return;
@@ -370,6 +440,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 filePath: activeFile ?? undefined,
                 baselineContent: baseContentRef.current,
                 currentContent,
+                isDeletedOnDisk,
             });
         });
 
@@ -390,14 +461,32 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             return;
         }
 
+        const contentToSync = getActiveEditorContent();
+        const lastSynced = lastSyncedDocumentRef.current;
+        if (lastSynced?.path === activeFile && lastSynced.content === contentToSync) {
+            if (syncTimerRef.current) {
+                clearTimeout(syncTimerRef.current);
+                syncTimerRef.current = null;
+            }
+            return;
+        }
+
         if (syncTimerRef.current) {
             clearTimeout(syncTimerRef.current);
         }
 
         syncTimerRef.current = setTimeout(() => {
+            const currentContent = getActiveEditorContent();
+            const latestSynced = lastSyncedDocumentRef.current;
+            if (latestSynced?.path === activeFile && latestSynced.content === currentContent) {
+                syncTimerRef.current = null;
+                return;
+            }
+
             documentVersionRef.current += 1;
             syncedDocumentPathRef.current = activeFile;
-            void EditorFacade.syncDocument(activeFile, getActiveEditorContent(), documentVersionRef.current);
+            lastSyncedDocumentRef.current = { path: activeFile, content: currentContent };
+            void EditorFacade.syncDocument(activeFile, currentContent, documentVersionRef.current);
             syncTimerRef.current = null;
         }, 180);
     }, [activeFile, getActiveEditorContent, isPdfFile]);
@@ -497,6 +586,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 
     useEffect(() => {
         documentVersionRef.current = 0;
+        lastSyncedDocumentRef.current = null;
 
         return () => {
             if (syncTimerRef.current) {
@@ -513,6 +603,9 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             if (activeFile && syncedDocumentPathRef.current === activeFile) {
                 void EditorFacade.closeDocument(activeFile);
                 syncedDocumentPathRef.current = null;
+            }
+            if (lastSyncedDocumentRef.current?.path === activeFile) {
+                lastSyncedDocumentRef.current = null;
             }
 
             if (pendingLocalSaveRef.current?.clearTimer) {
@@ -532,7 +625,41 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         let disposed = false;
         let unwatch: (() => void) | null = null;
 
-        const scheduleExternalReload = () => {
+        const scheduleExternalReload = async () => {
+            let fileExists = true;
+            try {
+                fileExists = await exists(watchedFile);
+            } catch (error) {
+                console.warn('[EDITOR] Failed to check watched file presence:', watchedFile, error);
+                return;
+            }
+
+            if (disposed || watchedFile !== activeFile) {
+                return;
+            }
+
+            if (!fileExists) {
+                awaitingInitialSyncRef.current = false;
+                setLoading(false);
+                setError(null);
+                emitContentStateChange(createEditorContentSnapshot({
+                    filePath: watchedFile,
+                    baselineContent: baseContentRef.current,
+                    currentContent: getActiveEditorContent(),
+                    isDeletedOnDisk: true,
+                }));
+                return;
+            }
+
+            if (isDeletedOnDisk) {
+                emitContentStateChange(createEditorContentSnapshot({
+                    filePath: watchedFile,
+                    baselineContent: baseContentRef.current,
+                    currentContent: getActiveEditorContent(),
+                    isDeletedOnDisk: false,
+                }));
+            }
+
             if (isDirty) {
                 return;
             }
@@ -566,7 +693,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 return;
             }
 
-            scheduleExternalReload();
+            void scheduleExternalReload();
         }).then((dispose) => {
             if (disposed) {
                 dispose();
@@ -586,7 +713,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             }
             unwatch?.();
         };
-    }, [activeFile, isDirty, isPdfFile]);
+    }, [activeFile, emitContentStateChange, getActiveEditorContent, isDeletedOnDisk, isDirty, isPdfFile]);
 
     useEffect(() => {
         if (!activeFile) return;
@@ -670,6 +797,12 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 return;
             }
 
+            if (isDeletedOnDisk) {
+                setLoading(false);
+                setError(null);
+                return;
+            }
+
             if (isDirty && reloadTrigger === 0) {
                 setLoading(false);
                 return;
@@ -699,7 +832,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             }
         }
         loadFile();
-    }, [activeFile, reloadTrigger, t]);
+    }, [activeFile, isDeletedOnDisk, isDirty, reloadTrigger, t]);
 
     useEffect(() => {
         if (!activeFile || isPdfFile) {
@@ -766,6 +899,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     filePath: activeFile,
                     baselineContent: currentContent,
                     currentContent,
+                    isDeletedOnDisk: false,
                 }));
                 console.debug("Save intent dispatched:", activeFile);
                 // ToDo: Toast notification
@@ -787,6 +921,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             filePath: activeFile ?? undefined,
             baselineContent: baseContentRef.current,
             currentContent: nextText,
+            isDeletedOnDisk,
         }));
     };
 
@@ -799,6 +934,9 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     const immediateTabContent = isDirty && draftContent != null ? draftContent : savedContent;
     const hasActiveEditorContent = immediateTabContent != null;
     const activeEditorContent = immediateTabContent ?? content;
+    const saveDeletedFile = () => {
+        void handleSave(getActiveEditorContent());
+    };
 
     if (!activeFile) {
         return <WelcomePage hasRemoteApiKey={hasRemoteApiKey} workspaceRoot={workspaceRoot} onOpenSettings={onOpenSettings} onOpenProject={onOpenProject} />;
@@ -819,11 +957,16 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     {error}
                 </div>
             )}
+            {isDeletedOnDisk && !isPdfFile && isDirty && (
+                <DeletedFileNotice filePath={activeFile} isDirty={isDirty} onSave={saveDeletedFile} />
+            )}
             <div className="flex-1 min-h-0 relative">
                 {isPdfFile ? (
                     <Suspense fallback={<div className="h-full w-full bg-(--bg-editor)" />}>
                         <PdfViewer filePath={activeFile} />
                     </Suspense>
+                ) : isDeletedOnDisk && !isDirty ? (
+                    <DeletedFileEmptyState filePath={activeFile} onSave={saveDeletedFile} />
                 ) : !hasActiveEditorContent ? (
                     <div className="h-full w-full bg-(--bg-editor)" />
                 ) : isMarkdownFile ? (
@@ -836,6 +979,9 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                             onDocumentChange={handleEditorDocumentChange}
                             onSave={handleSave}
                             filename={activeFile}
+                            uncommittedChange={uncommittedChange}
+                            onAcceptFileChange={onAcceptFileChange}
+                            onRejectFileChange={onRejectFileChange}
                         />
                     </Suspense>
                 ) : (
@@ -848,6 +994,9 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                         activeFile={activeFile}
                         highlightLines={highlightLines}
                         handleNavigate={handleNavigate}
+                        uncommittedChange={uncommittedChange}
+                        onAcceptFileChange={onAcceptFileChange}
+                        onRejectFileChange={onRejectFileChange}
                     />
                 )}
             </div>
@@ -864,6 +1013,9 @@ interface EditorWithChangeBarProps {
     activeFile: string;
     highlightLines?: { startLine: number; endLine: number } | null;
     handleNavigate: (path: string, line: number, character: number) => void;
+    uncommittedChange?: UncommittedChange;
+    onAcceptFileChange?: (filePath: string) => Promise<boolean>;
+    onRejectFileChange?: (filePath: string) => Promise<boolean>;
 }
 
 function EditorWithChangeBar({
@@ -875,16 +1027,16 @@ function EditorWithChangeBar({
     activeFile,
     highlightLines,
     handleNavigate,
+    uncommittedChange,
+    onAcceptFileChange,
+    onRejectFileChange,
 }: EditorWithChangeBarProps) {
-    const { getChangeForFile, acceptFile, rejectFile } = useUncommittedChanges();
-    const change = getChangeForFile(activeFile);
-
     const handleAccept = async () => {
-        await acceptFile(activeFile);
+        await onAcceptFileChange?.(activeFile);
     };
 
     const handleReject = async () => {
-        await rejectFile(activeFile);
+        await onRejectFileChange?.(activeFile);
     };
 
     return (
@@ -900,12 +1052,12 @@ function EditorWithChangeBar({
                     filename={activeFile}
                     highlightLines={highlightLines || undefined}
                     onNavigate={handleNavigate}
-                    unifiedDiff={change?.unified_diff}
+                    unifiedDiff={uncommittedChange?.unified_diff}
                 />
             </Suspense>
-            {change && (
+            {uncommittedChange && (
                 <FileChangeBar
-                    change={change}
+                    change={uncommittedChange}
                     onAccept={handleAccept}
                     onReject={handleReject}
                 />

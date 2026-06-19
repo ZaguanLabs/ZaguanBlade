@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open } from '@tauri-apps/plugin-dialog';
+import { exists } from '@tauri-apps/plugin-fs';
 import { EditorPanel, type EditorContentState } from './EditorPanel';
 import { TerminalPane, TerminalPaneHandle } from './TerminalPane';
 import { AppBar } from './AppBar';
@@ -25,6 +26,7 @@ import { formatIndexStatusLabel, formatIndexStatusTitle, shouldShowIndexStatusCu
 import type { ChatMode } from '../types/chat';
 import type { BackendSettings } from '../types/settings';
 import type { IndexHealthSnapshot } from '../types/blade';
+import type { UncommittedChange } from '../types/uncommitted';
 import { recordDebugPerf } from '../utils/debugPerf';
 import {
     applyEditorContentSnapshot,
@@ -53,6 +55,10 @@ const StorageSetupModal = React.lazy(() => import('./StorageSetupModal').then(mo
 const ProtocolExplorer = React.lazy(() => import('./dev/ProtocolExplorer').then(module => ({ default: module.ProtocolExplorer })));
 
 type ShutdownDecision = 'save' | 'discard' | 'cancel';
+type FileChangesDetectedPayload = {
+    count: number;
+    paths: string[];
+};
 
 interface ShutdownPromptState {
     files: string[];
@@ -71,10 +77,10 @@ function isBoundarySuffixMatch(full: string, suffix: string): boolean {
     return full[full.length - suffix.length - 1] === '/';
 }
 
-function findMatchingChangeRange(
+function findMatchingChange(
     filePath: string,
-    changes: { file_path: string; unified_diff: string; timestamp: number }[]
-): { startLine: number; endLine: number } | null {
+    changes: UncommittedChange[],
+): UncommittedChange | undefined {
     const target = normalizeEditorPath(filePath);
     const matches = changes
         .filter((change) => {
@@ -85,7 +91,14 @@ function findMatchingChangeRange(
         })
         .sort((a, b) => b.timestamp - a.timestamp);
 
-    const change = matches.find((item) => item.unified_diff.trim().length > 0) ?? matches[0];
+    return matches.find((item) => item.unified_diff.trim().length > 0) ?? matches[0];
+}
+
+function findMatchingChangeRange(
+    filePath: string,
+    changes: UncommittedChange[],
+): { startLine: number; endLine: number } | null {
+    const change = findMatchingChange(filePath, changes);
     if (!change) return null;
 
     const hunkMatch = change.unified_diff.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/m);
@@ -347,12 +360,16 @@ const AppLayoutInner: React.FC = () => {
     const [wasStoppedByUser, setWasStoppedByUser] = useState(false);
     const {
         changes: uncommittedChanges,
+        acceptFile: acceptFileChange,
         acceptAll: acceptAllChanges,
+        rejectFile: rejectFileChange,
         rejectAll: rejectAllChanges,
     } = disableUncommittedChanges
         ? {
             changes: [],
+            acceptFile: async () => false,
             acceptAll: async () => false,
+            rejectFile: async () => false,
             rejectAll: async () => false,
         }
         : useUncommittedChanges();
@@ -448,6 +465,7 @@ const AppLayoutInner: React.FC = () => {
         path: tab.path,
         isEphemeral: tab.type === 'ephemeral',
         isDirty: tabDirtyStates.get(tab.id) ?? false,
+        isDeletedOnDisk: Boolean(tab.isDeletedOnDisk),
         hasVirtualChanges: Boolean(tab.path && uncommittedChanges.some(change => change.file_path === tab.path)),
         isAiEdited: Boolean(tab.path && aiEditedFilePaths.has(tab.path)),
         hasUnreadAiEdit: Boolean(tab.path && unseenAiEditedFilePaths.has(tab.path)),
@@ -458,6 +476,72 @@ const AppLayoutInner: React.FC = () => {
             setShutdownPrompt({ files, overflowCount, resolve });
         })
     ), []);
+
+    useEffect(() => {
+        const fileTabs = tabs.filter((tab) => tab.type === 'file' && tab.path);
+        if (fileTabs.length === 0) {
+            return;
+        }
+
+        let disposed = false;
+
+        const refreshOpenFilePresence = async (changedPaths?: string[]) => {
+            const changedPathSet = changedPaths?.map(normalizeEditorPath);
+            const tabsToCheck = changedPathSet
+                ? fileTabs.filter((tab) => {
+                    const tabPath = normalizeEditorPath(tab.path!);
+                    return changedPathSet.some((changedPath) => (
+                        tabPath === changedPath
+                        || tabPath.endsWith(`/${changedPath}`)
+                        || changedPath.endsWith(`/${tabPath}`)
+                    ));
+                })
+                : fileTabs;
+
+            if (tabsToCheck.length === 0) {
+                return;
+            }
+
+            const results = await Promise.all(tabsToCheck.map(async (tab) => {
+                try {
+                    return [tab.id, await exists(tab.path!)] as const;
+                } catch (error) {
+                    console.warn('[Layout] Failed to check open file presence:', tab.path, error);
+                    return [tab.id, true] as const;
+                }
+            }));
+
+            if (disposed) {
+                return;
+            }
+
+            const existsByTabId = new Map(results);
+            setTabs((prev) => prev.map((tab) => {
+                if (!existsByTabId.has(tab.id)) {
+                    return tab;
+                }
+
+                const nextDeletedOnDisk = !existsByTabId.get(tab.id);
+                if (Boolean(tab.isDeletedOnDisk) === nextDeletedOnDisk) {
+                    return tab;
+                }
+
+                return {
+                    ...tab,
+                    isDeletedOnDisk: nextDeletedOnDisk,
+                };
+            }));
+        };
+
+        const unlistenPromise = listen<FileChangesDetectedPayload>('file-changes-detected', (event) => {
+            void refreshOpenFilePresence(event.payload.paths);
+        });
+
+        return () => {
+            disposed = true;
+            unlistenPromise.then((unlisten) => unlisten());
+        };
+    }, [setTabs, tabs]);
 
     const requestShutdownSaveErrorAck = useCallback((message: string) => (
         new Promise<void>((resolve) => {
@@ -881,6 +965,9 @@ const AppLayoutInner: React.FC = () => {
     const activeEditorContentState = activeTab?.type === 'file'
         ? getEditorContentSnapshotForMirror(editorBufferRegistryRef.current, activeTab)
         : null;
+    const activeUncommittedChange = activeTab?.type === 'file' && activeTab.path
+        ? findMatchingChange(activeTab.path, uncommittedChanges)
+        : undefined;
 
     const handleBeforeShutdown = useCallback(async () => {
         const activeSnapshot = activeContentSnapshotRef.current?.();
@@ -1305,6 +1392,10 @@ const AppLayoutInner: React.FC = () => {
                                         savedContent={activeEditorContentState?.savedContent ?? null}
                                         draftContent={activeEditorContentState?.draftContent ?? null}
                                         isDirty={Boolean(activeEditorContentState?.isDirty)}
+                                        isDeletedOnDisk={Boolean(activeEditorContentState?.isDeletedOnDisk)}
+                                        uncommittedChange={activeUncommittedChange}
+                                        onAcceptFileChange={acceptFileChange}
+                                        onRejectFileChange={rejectFileChange}
                                         onContentStateChange={handleActiveTabContentStateChange}
                                         onRegisterContentSnapshot={handleRegisterContentSnapshot}
                                         onOpenSettings={() => setIsSettingsOpen(true)}

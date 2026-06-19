@@ -54,6 +54,21 @@ test('createEditorContentSnapshot derives dirty state from changed current conte
     });
 });
 
+test('createEditorContentSnapshot preserves deleted-on-disk metadata when present', () => {
+    assert.deepEqual(createEditorContentSnapshot({
+        filePath: 'src/file.ts',
+        baselineContent: 'baseline',
+        currentContent: 'draft',
+        isDeletedOnDisk: true,
+    }), {
+        filePath: 'src/file.ts',
+        savedContent: 'baseline',
+        draftContent: 'draft',
+        isDirty: true,
+        isDeletedOnDisk: true,
+    });
+});
+
 test('getEditorContentStatePropagation flushes clean snapshots immediately', () => {
     const clean = createEditorContentSnapshot({
         filePath: 'src/file.ts',
@@ -154,6 +169,38 @@ test('applyEditorContentSnapshotToMirror returns same mirror when no mirrored st
         draftContent: undefined,
         isDirty: false,
     }), mirror);
+});
+
+test('applyEditorContentSnapshotToMirror sets and clears deleted-on-disk state', () => {
+    const deleted = applyEditorContentSnapshotToMirror({
+        savedContent: 'saved',
+        draftContent: undefined,
+        isDirty: false,
+    }, {
+        filePath: 'src/file.ts',
+        savedContent: 'saved',
+        draftContent: undefined,
+        isDirty: false,
+        isDeletedOnDisk: true,
+    });
+
+    assert.deepEqual(deleted, {
+        savedContent: 'saved',
+        draftContent: undefined,
+        isDirty: false,
+        isDeletedOnDisk: true,
+    });
+
+    assert.deepEqual(applyEditorContentSnapshotToMirror(deleted, {
+        filePath: 'src/file.ts',
+        savedContent: 'saved',
+        draftContent: undefined,
+        isDirty: false,
+    }), {
+        savedContent: 'saved',
+        draftContent: undefined,
+        isDirty: false,
+    });
 });
 
 test('getEditorContentSnapshotFromMirror projects dirty mirror content when registry has no buffer', () => {

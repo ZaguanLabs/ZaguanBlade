@@ -20,6 +20,7 @@ import {
     setBaseContent,
     scrollPastEnd,
     diffDecorations,
+    diffStateField,
     setDiffState,
     createDiffStateFromUnifiedDiff,
     aiGlowDecorations,
@@ -550,18 +551,27 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
         if (!view) return;
 
         if (unifiedDiff) {
+            const nextDiffState = createDiffStateFromUnifiedDiff(unifiedDiff);
+            if (view.state.field(diffStateField, false) === nextDiffState) {
+                return;
+            }
+
             dispatchPreservingScroll(view, {
                 effects: [
-                    setDiffState.of(createDiffStateFromUnifiedDiff(unifiedDiff)),
+                    setDiffState.of(nextDiffState),
                     triggerAiGlow.of(undefined),
                 ]
             });
         } else {
+            if (!view.state.field(diffStateField, false)) {
+                return;
+            }
+
             dispatchPreservingScroll(view, {
                 effects: setDiffState.of(null)
             });
         }
-    }, [content, unifiedDiff]);
+    }, [unifiedDiff]);
 
 
     // Handle line highlighting when highlightLines prop changes

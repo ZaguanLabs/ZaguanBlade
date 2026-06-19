@@ -13,6 +13,10 @@ export interface Tab {
     content?: string;
     suggestedName?: string;
     highlightLines?: { startLine: number; endLine: number };
+    savedContent?: string;
+    draftContent?: string;
+    isDirty?: boolean;
+    isDeletedOnDisk?: boolean;
 }
 
 // Helper to convert backend TabInfo to frontend Tab
@@ -37,6 +41,7 @@ export interface AppBarTab {
     hasVirtualChanges: boolean;
     isAiEdited: boolean;
     hasUnreadAiEdit: boolean;
+    isDeletedOnDisk?: boolean;
 }
 
 export function useTabManager(uncommittedChanges: UncommittedChange[]) {

@@ -335,7 +335,7 @@ For providers that only support images, zcoderd can transform this into:
 
 The model/provider decision does not remove the hardest local dependency: ZaguanBlade still needs reliable continuous screen/window capture.
 
-The current workspace has a clean local `scap` clone at `.tmp/scap`, on `main` at `c03f15a` (`fix windows build`), with `origin` pointing at `https://github.com/ZaguanLabs/scap`. Inspecting that clone confirms the older plan's core concern:
+The current workspace has a local `scap` clone at `streaming/scap`, on `main` at `c03f15a` (`fix windows build`), with `origin` pointing at `https://github.com/ZaguanLabs/scap`. Inspecting that clone confirms the older plan's core concern:
 
 - Linux capture is still PipeWire/xdg-desktop-portal based (`src/capturer/engine/linux/portal.rs`).
 - There is no X11 backend under `src/capturer/engine/linux/`.
@@ -357,7 +357,7 @@ ZaguanLabs/scap
   feat/linux-targets    upstreamable Linux target/dimension improvements where possible
 ```
 
-Use `.tmp/scap` as the development clone while researching and patching. Do not commit ZaguanBlade against `.tmp/scap` as a permanent dependency path; `.tmp` is a workspace scratch area. Once the patches are usable, push them to `ZaguanLabs/scap` and consume either:
+Use `streaming/scap` as the development clone while researching and patching. Once the patches are usable, push them to `ZaguanLabs/scap` and consume either:
 
 ```toml
 scap = { git = "https://github.com/ZaguanLabs/scap", branch = "zaguan" }
@@ -366,7 +366,7 @@ scap = { git = "https://github.com/ZaguanLabs/scap", branch = "zaguan" }
 or, for local iteration only:
 
 ```toml
-scap = { path = "../.tmp/scap" }
+scap = { path = "../streaming/scap" }
 ```
 
 Prefer keeping any local path override in developer-only config rather than in committed release/CI manifests.
@@ -430,7 +430,7 @@ Before building the full ZaguanBlade UI, validate the capture stack by itself:
 3. Confirm output is usable at 720p and 1080p for terminal/browser OCR.
 4. Confirm stop/start works repeatedly in one process.
 5. Confirm Wayland portal capture still works on a compositor with ScreenCast support.
-6. Run `cargo fmt`, `cargo test`, and a Linux `cargo check` in `.tmp/scap`.
+6. Run `cargo fmt`, `cargo test`, and a Linux `cargo check` in `streaming/scap`.
 7. Once Linux changes are isolated, smoke-test macOS and Windows via CI or contributors before sending upstream PRs.
 
 This means the practical first implementation order is:
@@ -508,7 +508,7 @@ CONFIDENCE:
 
 The old capture work still mostly stands:
 
-- `ZaguanLabs/scap` still makes sense for continuous local capture, with `.tmp/scap` as the current development clone.
+- `ZaguanLabs/scap` still makes sense for continuous local capture, with `streaming/scap` as the current development clone.
 - The X11 backend issue remains independent of model choice.
 - Keep the local ring buffer.
 - Add clip encoding, not just JPEG-per-frame transport.
@@ -540,7 +540,7 @@ Before implementing the full UI, run two parallel validation tracks.
 
 Capture track:
 
-1. Use `.tmp/scap` to build the Linux X11/XShm capture spike.
+1. Use `streaming/scap` to build the Linux X11/XShm capture spike.
 2. Prove 15 FPS capture on Mageia/Openbox X11 for at least 60 seconds.
 3. Confirm stop/start behavior, frame size, pixel format, CPU use, and dropped frames.
 4. Split generic patches into upstreamable branches before wiring them into ZaguanBlade.

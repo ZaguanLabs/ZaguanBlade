@@ -3,6 +3,7 @@ export type EditorContentSnapshot = {
     savedContent?: string;
     draftContent?: string;
     isDirty: boolean;
+    isDeletedOnDisk?: boolean;
 };
 
 export type EditorBufferState = {
@@ -10,6 +11,7 @@ export type EditorBufferState = {
     cleanContent: string;
     draftContent?: string;
     dirty: boolean;
+    deletedOnDisk?: boolean;
     version: number;
 };
 
@@ -26,12 +28,14 @@ export type EditorContentSnapshotFallback = {
     savedContent?: string | null;
     draftContent?: string | null;
     isDirty?: boolean;
+    isDeletedOnDisk?: boolean;
 };
 
 export type CreateEditorContentSnapshotInput = {
     filePath?: string;
     baselineContent: string;
     currentContent: string;
+    isDeletedOnDisk?: boolean;
 };
 
 export type EditorContentStatePropagation = {
@@ -44,6 +48,7 @@ export type EditorContentMirrorState = {
     savedContent?: string;
     draftContent?: string;
     isDirty?: boolean;
+    isDeletedOnDisk?: boolean;
 };
 
 export type EditorContentTargetMirror = {
@@ -70,6 +75,7 @@ export function createEditorContentSnapshot({
     filePath,
     baselineContent,
     currentContent,
+    isDeletedOnDisk = false,
 }: CreateEditorContentSnapshotInput): EditorContentSnapshot {
     const isDirty = currentContent !== baselineContent;
 
@@ -78,6 +84,7 @@ export function createEditorContentSnapshot({
         savedContent: isDirty ? baselineContent : currentContent,
         draftContent: isDirty ? currentContent : undefined,
         isDirty,
+        ...(isDeletedOnDisk ? { isDeletedOnDisk: true } : {}),
     };
 }
 
@@ -96,6 +103,7 @@ export function getEditorContentStatePropagation(
                 savedContent: snapshot.savedContent,
                 draftContent: undefined,
                 isDirty: true,
+                ...(snapshot.isDeletedOnDisk ? { isDeletedOnDisk: true } : {}),
             },
             debounced: snapshot,
         };
@@ -124,16 +132,21 @@ export function applyEditorContentSnapshotToMirror<T extends EditorContentMirror
         mirror.savedContent === nextSavedContent
         && mirror.draftContent === nextDraftContent
         && Boolean(mirror.isDirty) === snapshot.isDirty
+        && Boolean(mirror.isDeletedOnDisk) === Boolean(snapshot.isDeletedOnDisk)
     ) {
         return mirror;
     }
 
+    const { isDeletedOnDisk: _deletedOnDisk, ...mirrorWithoutDeletedState } = mirror;
+    const mirrorBase = snapshot.isDeletedOnDisk ? mirror : mirrorWithoutDeletedState;
+
     return {
-        ...mirror,
+        ...mirrorBase,
         savedContent: nextSavedContent,
         draftContent: nextDraftContent,
         isDirty: snapshot.isDirty,
-    };
+        ...(snapshot.isDeletedOnDisk ? { isDeletedOnDisk: true } : {}),
+    } as T;
 }
 
 export function getEditorContentSnapshotFromMirror(
@@ -142,7 +155,7 @@ export function getEditorContentSnapshotFromMirror(
 ): EditorContentSnapshot | null {
     if (
         !mirror.path
-        || (!mirror.isDirty && mirror.savedContent === undefined && mirror.draftContent === undefined)
+        || (!mirror.isDirty && !mirror.isDeletedOnDisk && mirror.savedContent === undefined && mirror.draftContent === undefined)
     ) {
         return null;
     }
@@ -152,6 +165,7 @@ export function getEditorContentSnapshotFromMirror(
         savedContent: hasRegistryBuffer ? undefined : mirror.savedContent,
         draftContent: hasRegistryBuffer ? undefined : mirror.isDirty ? mirror.draftContent : undefined,
         isDirty: Boolean(mirror.isDirty),
+        ...(mirror.isDeletedOnDisk ? { isDeletedOnDisk: true } : {}),
     };
 }
 
@@ -215,12 +229,16 @@ export function applyEditorContentSnapshot(
         dirty: snapshot.isDirty,
         version: (previous?.version ?? 0) + 1,
     };
+    if (snapshot.isDeletedOnDisk) {
+        next.deletedOnDisk = true;
+    }
 
     if (
         previous
         && previous.cleanContent === next.cleanContent
         && previous.draftContent === next.draftContent
         && previous.dirty === next.dirty
+        && Boolean(previous.deletedOnDisk) === Boolean(next.deletedOnDisk)
     ) {
         return registry;
     }
@@ -335,6 +353,7 @@ export function getEditorContentSnapshotForPath(
             savedContent: buffer.cleanContent,
             draftContent: buffer.draftContent,
             isDirty: buffer.dirty,
+            ...(buffer.deletedOnDisk ? { isDeletedOnDisk: true } : {}),
         };
     }
 
@@ -343,6 +362,7 @@ export function getEditorContentSnapshotForPath(
         savedContent: fallback.savedContent ?? undefined,
         draftContent: fallback.draftContent ?? undefined,
         isDirty: Boolean(fallback.isDirty),
+        ...(fallback.isDeletedOnDisk ? { isDeletedOnDisk: true } : {}),
     };
 }
 
@@ -481,6 +501,7 @@ export function getEditorContentSnapshotForMirror(
         savedContent: mirror.savedContent,
         draftContent: mirror.draftContent,
         isDirty: mirror.isDirty,
+        isDeletedOnDisk: mirror.isDeletedOnDisk,
     });
 }
 

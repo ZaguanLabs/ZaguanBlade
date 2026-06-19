@@ -1817,6 +1817,15 @@ impl LanguageService {
     /// Notify that a document was opened
     pub fn did_open(&self, file_path: &str, content: &str) -> Result<(), LanguageError> {
         let snapshot_key = self.snapshot_key(file_path);
+        if self
+            .buffer_snapshots
+            .get(&snapshot_key)
+            .map(|snapshot| snapshot.is_live() && snapshot.content() == content)
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+
         self.buffer_snapshots
             .upsert_live(&snapshot_key, None, content);
 
@@ -1838,6 +1847,26 @@ impl LanguageService {
         content: &str,
     ) -> Result<(), LanguageError> {
         let snapshot_key = self.snapshot_key(file_path);
+        if let Some(snapshot) = self.buffer_snapshots.get(&snapshot_key) {
+            if snapshot.is_live() {
+                if snapshot
+                    .version()
+                    .map(|existing_version| version < existing_version)
+                    .unwrap_or(false)
+                {
+                    return Ok(());
+                }
+
+                if snapshot.content() == content {
+                    if snapshot.version() != Some(version) {
+                        self.buffer_snapshots
+                            .upsert_live(&snapshot_key, Some(version), content);
+                    }
+                    return Ok(());
+                }
+            }
+        }
+
         self.buffer_snapshots
             .upsert_live(&snapshot_key, Some(version), content);
 
@@ -6340,6 +6369,39 @@ func helper() {}
                 "{ \"name\": \"demo\", \"private\": true }"
             )
             .is_ok());
+    }
+
+    #[test]
+    fn test_live_sync_ignores_duplicate_and_stale_snapshots() {
+        let (service, _temp_dir) = create_test_service();
+        let path = "package.json";
+
+        service.did_open(path, "{ \"name\": \"demo\" }").unwrap();
+        service
+            .did_change(path, 2, "{ \"name\": \"demo\", \"private\": true }")
+            .unwrap();
+        service
+            .did_change(path, 1, "{ \"name\": \"stale\" }")
+            .unwrap();
+
+        let snapshot_key = service.snapshot_key(path);
+        let snapshot = service.buffer_snapshots.get(&snapshot_key).unwrap();
+        assert_eq!(snapshot.version(), Some(2));
+        assert_eq!(
+            snapshot.content(),
+            "{ \"name\": \"demo\", \"private\": true }"
+        );
+
+        service
+            .did_change(path, 3, "{ \"name\": \"demo\", \"private\": true }")
+            .unwrap();
+
+        let snapshot = service.buffer_snapshots.get(&snapshot_key).unwrap();
+        assert_eq!(snapshot.version(), Some(3));
+        assert_eq!(
+            snapshot.content(),
+            "{ \"name\": \"demo\", \"private\": true }"
+        );
     }
 
     #[test]

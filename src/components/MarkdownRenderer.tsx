@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
-import { Streamdown, type AnimateOptions, type Components as StreamdownComponents, type ControlsConfig } from 'streamdown';
+import { Streamdown, type AnimateOptions, type Components as StreamdownComponents, type ControlsConfig, type StreamdownProps } from 'streamdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Copy, Check } from 'lucide-react';
@@ -12,6 +12,8 @@ interface MarkdownRendererProps {
     content: string;
     className?: string;
     isAnimating?: boolean;
+    profile?: 'default' | 'reasoning';
+    mode?: StreamdownProps['mode'];
 }
 
 // Stable theme object - defined outside component to prevent recreation
@@ -386,11 +388,20 @@ const streamdownControls = {
     mermaid: false,
 } as const satisfies ControlsConfig;
 
+const reasoningStreamdownControls = false satisfies ControlsConfig;
+
 const streamdownAnimation = {
     duration: 90,
     stagger: 10,
     sep: 'word',
 } as const satisfies AnimateOptions;
+
+const reasoningRemendOptions = {
+    inlineCode: false,
+    images: false,
+    inlineKatex: false,
+    linkMode: 'text-only',
+} as const satisfies NonNullable<StreamdownProps['remend']>;
 
 function renderMarkdownBody(content: string, components: typeof markdownComponents) {
     return (
@@ -411,17 +422,24 @@ const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, c
     );
 };
 
-const StreamingMarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, className = '', isAnimating = true }) => {
+const StreamingMarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, className = '', isAnimating = true, profile = 'default', mode = 'streaming' }) => {
+    const isReasoning = profile === 'reasoning';
+    const effectiveIsAnimating = isReasoning ? false : isAnimating;
+    const effectiveControls = isReasoning ? reasoningStreamdownControls : streamdownControls;
+    const effectiveAnimation = isReasoning ? false : streamdownAnimation;
+    const remend = isReasoning ? reasoningRemendOptions : undefined;
+
     return (
         <div className={`markdown-content select-text ${className}`} style={{ fontSize: 'var(--markdown-font-size, var(--editor-content-font-size, 14px))' }}>
             <Streamdown
-                mode="streaming"
+                mode={mode}
                 components={streamdownComponents}
-                controls={streamdownControls}
-                animated={streamdownAnimation}
-                isAnimating={isAnimating}
+                controls={effectiveControls}
+                animated={effectiveAnimation}
+                isAnimating={effectiveIsAnimating}
                 lineNumbers={false}
                 parseIncompleteMarkdown
+                remend={remend}
             >
                 {content}
             </Streamdown>
@@ -434,6 +452,10 @@ export const MarkdownRenderer = React.memo(MarkdownRendererComponent, (prevProps
     return prevProps.content === nextProps.content && prevProps.className === nextProps.className;
 });
 export const StreamingMarkdownRenderer = React.memo(StreamingMarkdownRendererComponent, (prevProps, nextProps) => {
-    return prevProps.content === nextProps.content && prevProps.className === nextProps.className && prevProps.isAnimating === nextProps.isAnimating;
+    return prevProps.content === nextProps.content
+        && prevProps.className === nextProps.className
+        && prevProps.isAnimating === nextProps.isAnimating
+        && prevProps.profile === nextProps.profile
+        && prevProps.mode === nextProps.mode;
 });
 export default MarkdownRenderer;

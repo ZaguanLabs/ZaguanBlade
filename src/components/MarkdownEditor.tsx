@@ -3,9 +3,9 @@ import { useTranslation } from 'react-i18next';
 import CodeEditor, { type CodeEditorHandle } from './CodeEditor';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { Eye, Edit3 } from 'lucide-react';
-import { useUncommittedChanges } from '../hooks/useUncommittedChanges';
 import { FileChangeBar } from './editor/FileChangeBar';
 import { ScrollArea } from './ui/ScrollArea';
+import type { UncommittedChange } from '../types/uncommitted';
 
 interface MarkdownEditorProps {
     content: string;
@@ -13,6 +13,9 @@ interface MarkdownEditorProps {
     onSave?: (val: string) => void;
     filename?: string;
     externalContentVersion?: number;
+    uncommittedChange?: UncommittedChange;
+    onAcceptFileChange?: (filePath: string) => Promise<boolean>;
+    onRejectFileChange?: (filePath: string) => Promise<boolean>;
 }
 
 export const MarkdownEditor = forwardRef<CodeEditorHandle, MarkdownEditorProps>(({
@@ -21,15 +24,15 @@ export const MarkdownEditor = forwardRef<CodeEditorHandle, MarkdownEditorProps>(
     onSave,
     filename,
     externalContentVersion,
+    uncommittedChange,
+    onAcceptFileChange,
+    onRejectFileChange,
 }, ref) => {
     const { t } = useTranslation();
     const [mode, setMode] = useState<'edit' | 'view'>('edit');
     const [previewContent, setPreviewContent] = useState(content);
     const previewContentRef = React.useRef(content);
     const editorRef = React.useRef<CodeEditorHandle>(null);
-
-    const { getChangeForFile, acceptFile, rejectFile } = useUncommittedChanges();
-    const change = filename ? getChangeForFile(filename) : undefined;
 
     useImperativeHandle(ref, () => ({
         getView: () => editorRef.current?.getView() ?? null,
@@ -63,12 +66,12 @@ export const MarkdownEditor = forwardRef<CodeEditorHandle, MarkdownEditorProps>(
     }, [mode]);
 
     const handleAccept = async () => {
-        if (filename) await acceptFile(filename);
+        if (filename) await onAcceptFileChange?.(filename);
     };
 
     const handleReject = async () => {
         if (filename) {
-            await rejectFile(filename);
+            await onRejectFileChange?.(filename);
         }
     };
 
@@ -139,11 +142,11 @@ export const MarkdownEditor = forwardRef<CodeEditorHandle, MarkdownEditorProps>(
                             onSave={onSave}
                             filename={filename}
                             externalContentVersion={externalContentVersion}
-                            unifiedDiff={change?.unified_diff}
+                            unifiedDiff={uncommittedChange?.unified_diff}
                         />
-                        {change && (
+                        {uncommittedChange && (
                             <FileChangeBar
-                                change={change}
+                                change={uncommittedChange}
                                 onAccept={handleAccept}
                                 onReject={handleReject}
                             />

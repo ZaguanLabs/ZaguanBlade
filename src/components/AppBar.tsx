@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useId, useLayoutEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { Minus, Square, X, Maximize2, ChevronDown, FileText, FolderOpen } from 'lucide-react';
+import { AlertTriangle, Minus, Square, X, Maximize2, ChevronDown, FileText, FolderOpen } from 'lucide-react';
 import zbladeAppIcon from '../assets/zblade-app-icon.png';
 import { getFileIcon } from '../lib/fileIcons';
 import { useContextMenu } from './ui/ContextMenu';
@@ -15,6 +15,7 @@ export interface AppBarTab {
     hasVirtualChanges?: boolean;
     isAiEdited?: boolean;
     hasUnreadAiEdit?: boolean;
+    isDeletedOnDisk?: boolean;
 }
 
 interface AppBarProps {
@@ -363,13 +364,15 @@ export const AppBar: React.FC<AppBarProps> = ({
                         const { icon, color } = getFileIcon(tab.title, isActive);
                         const isDragging = draggedIndex === index;
                         const isDropTarget = dropTargetIndex === index;
-                        const statusLabel = tab.hasVirtualChanges
-                            ? (tab.hasUnreadAiEdit ? t('tabs.aiPendingReviewUnread') : t('tabs.aiPendingReview'))
-                            : tab.isAiEdited
-                                ? (tab.hasUnreadAiEdit ? t('tabs.aiEditedUnread') : t('tabs.aiEdited'))
-                                : tab.isDirty
-                                    ? t('editor.unsavedChanges')
-                                    : null;
+                        const statusLabel = tab.isDeletedOnDisk
+                            ? (tab.isDirty ? t('editor.deletedOnDiskDirty') : t('editor.deletedOnDisk'))
+                            : tab.hasVirtualChanges
+                                ? (tab.hasUnreadAiEdit ? t('tabs.aiPendingReviewUnread') : t('tabs.aiPendingReview'))
+                                : tab.isAiEdited
+                                    ? (tab.hasUnreadAiEdit ? t('tabs.aiEditedUnread') : t('tabs.aiEdited'))
+                                    : tab.isDirty
+                                        ? t('editor.unsavedChanges')
+                                        : null;
 
                         return (
                             <div
@@ -423,28 +426,44 @@ export const AppBar: React.FC<AppBarProps> = ({
                                 className={`
                                     group flex items-center gap-1.5 px-3 h-[33px] cursor-pointer
                                     transition-colors relative whitespace-nowrap shrink-0 text-xs
-                                    ${isActive
-                                        ? 'text-(--fg-primary)'
-                                        : 'text-(--fg-tertiary) hover:text-(--fg-secondary)'
+                                    ${tab.isDeletedOnDisk
+                                        ? 'text-(--state-danger) hover:text-(--state-danger)'
+                                        : isActive
+                                            ? 'text-(--fg-primary)'
+                                            : 'text-(--fg-tertiary) hover:text-(--fg-secondary)'
                                     }
+                                    ${tab.isDeletedOnDisk ? 'border-t-2 border-t-(--state-danger)' : ''}
                                     ${isDragging ? 'opacity-50' : ''}
                                     ${isDropTarget ? 'border-l-2 border-l-(--accent-ai)' : ''}
                                 `}
                                 style={{
                                     backgroundColor: isActive
-                                        ? 'var(--surface-editor)'
-                                        : 'color-mix(in srgb, var(--surface-toolbar) 72%, var(--surface-app))',
+                                        ? tab.isDeletedOnDisk
+                                            ? 'color-mix(in srgb, var(--state-danger) 13%, var(--surface-editor))'
+                                            : 'var(--surface-editor)'
+                                        : tab.isDeletedOnDisk
+                                            ? 'color-mix(in srgb, var(--state-danger) 9%, var(--surface-toolbar))'
+                                            : 'color-mix(in srgb, var(--surface-toolbar) 72%, var(--surface-app))',
                                     borderBottom: 'none',
                                 }}
                             >
-                                {tab.isEphemeral ? (
+                                {tab.isDeletedOnDisk ? (
+                                    <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-(--state-danger)" aria-hidden="true" />
+                                ) : tab.isEphemeral ? (
                                     <FileText className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-(--accent-warning)' : 'text-(--fg-tertiary)'}`} aria-hidden="true" />
                                 ) : (
                                     <span className={color} aria-hidden="true">{icon}</span>
                                 )}
-                                <span className={isActive ? 'font-medium' : ''}>
+                                <span className={`${isActive ? 'font-medium' : ''} ${tab.isDeletedOnDisk ? 'line-through decoration-2 decoration-(--state-danger)' : ''}`}>
                                     {tab.title}
                                 </span>
+                                {tab.isDeletedOnDisk && (
+                                    <span
+                                        className="h-1.5 w-1.5 shrink-0 rounded-full bg-(--state-danger)"
+                                        title={statusLabel ?? undefined}
+                                        aria-hidden="true"
+                                    />
+                                )}
                                 {tab.isAiEdited && !tab.hasVirtualChanges && (
                                     <span
                                         className={`w-1.5 h-1.5 rounded-full shrink-0 ${tab.hasUnreadAiEdit ? 'animate-pulse' : ''}`}
@@ -461,7 +480,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                                         aria-hidden="true"
                                     />
                                 )}
-                                {tab.isDirty && !tab.hasVirtualChanges && (
+                                {tab.isDirty && !tab.hasVirtualChanges && !tab.isDeletedOnDisk && (
                                     <span
                                         className="w-1.5 h-1.5 rounded-full shrink-0 group-hover:hidden"
                                         style={{ backgroundColor: 'var(--fg-secondary)' }}

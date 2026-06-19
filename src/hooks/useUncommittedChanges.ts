@@ -15,11 +15,13 @@ import {
 
 interface UseUncommittedChangesOptions {
   onFileChanged?: (filePath: string, reason: UncommittedChangesUpdateReason) => void;
+  trackChanges?: boolean;
 }
 
 export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
+  const trackChanges = options?.trackChanges ?? true;
   const [changes, setChanges] = useState<UncommittedChange[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(trackChanges);
   const sourceIdRef = useRef(`uncommitted-${crypto.randomUUID()}`);
   const onFileChangedRef = useRef(options?.onFileChanged);
 
@@ -38,6 +40,11 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
   }, []);
 
   const refresh = useCallback(async () => {
+    if (!trackChanges) {
+      setLoading(false);
+      return;
+    }
+
     try {
       const result = await invoke<UncommittedChange[]>('get_uncommitted_changes');
       setChanges(result.filter(change => change.unified_diff.trim().length > 0));
@@ -46,7 +53,7 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [trackChanges]);
 
   const upsertChange = useCallback((filePath: string, nextChange: UncommittedChange | null) => {
     setChanges(prev => {
@@ -67,7 +74,11 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
   }, []);
 
   useEffect(() => {
-    refresh();
+    if (trackChanges) {
+      void refresh();
+    } else {
+      setLoading(false);
+    }
 
     const unlistenPromise = listen<{ change_id: string; file_path: string; file_paths?: string[] }>('change-applied', (event) => {
       void (async () => {
@@ -75,21 +86,23 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
           ? event.payload.file_paths
           : [event.payload.file_path];
 
-        try {
-          const nextChanges = await Promise.all(
-            affectedPaths.map(filePath => invoke<UncommittedChange | null>('get_uncommitted_change_for_file', {
-              filePath,
-            }))
-          );
-          nextChanges.forEach((nextChange, index) => {
-            const affectedPath = affectedPaths[index] ?? nextChange?.file_path;
-            if (affectedPath) {
-              upsertChange(affectedPath, nextChange);
-            }
-          });
-        } catch (error) {
-          console.error('Failed to get uncommitted change for file:', error);
-          void refresh();
+        if (trackChanges) {
+          try {
+            const nextChanges = await Promise.all(
+              affectedPaths.map(filePath => invoke<UncommittedChange | null>('get_uncommitted_change_for_file', {
+                filePath,
+              }))
+            );
+            nextChanges.forEach((nextChange, index) => {
+              const affectedPath = affectedPaths[index] ?? nextChange?.file_path;
+              if (affectedPath) {
+                upsertChange(affectedPath, nextChange);
+              }
+            });
+          } catch (error) {
+            console.error('Failed to get uncommitted change for file:', error);
+            void refresh();
+          }
         }
 
         if (onFileChangedRef.current) {
@@ -104,7 +117,9 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
       if (customEvent.detail?.sourceId === sourceIdRef.current) {
         return;
       }
-      void refresh();
+      if (trackChanges) {
+        void refresh();
+      }
 
       if (onFileChangedRef.current) {
         const reason = customEvent.detail?.reason ?? 'refresh';
@@ -119,7 +134,7 @@ export function useUncommittedChanges(options?: UseUncommittedChangesOptions) {
         .catch(console.error);
       window.removeEventListener('uncommitted-changes-updated', handleGlobalRefresh as EventListener);
     };
-  }, [refresh, upsertChange]);
+  }, [refresh, trackChanges, upsertChange]);
 
   const getChangeForFile = useCallback((filePath: string): UncommittedChange | undefined => {
     const target = normalizePath(filePath);

@@ -218,11 +218,12 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
                         className="select-text overflow-wrap-anywhere text-[11px] leading-relaxed"
                         style={contentTextStyle}
                     >
-                        {isActive ? (
-                            <StreamingMarkdownRenderer content={displayContent} />
-                        ) : (
-                            <MarkdownRenderer content={displayContent} />
-                        )}
+                        <StreamingMarkdownRenderer
+                            content={displayContent}
+                            isAnimating={false}
+                            mode={isActive ? 'streaming' : 'static'}
+                            profile="reasoning"
+                        />
                     </div>
                 </div>
             )}
