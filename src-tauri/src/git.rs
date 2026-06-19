@@ -1538,9 +1538,12 @@ Do NOT include analysis, reasoning, explanations, or multiple options."#,
     .await
     .map_err(|_| "WebSocket authentication timed out".to_string())??;
 
+    let request_id = crate::blade_ws_client::BladeWsClient::new_chat_request_id();
+
     // Send the commit message generation request
     ws_manager
-        .send_message_with_storage_mode(
+        .send_message_with_storage_mode_and_id(
+            request_id.clone(),
             None,
             resolved_model_id,
             prompt,
@@ -1569,17 +1572,28 @@ Do NOT include analysis, reasoning, explanations, or multiple options."#,
         while let Some(event) = ws_rx.recv().await {
             match event {
                 crate::blade_ws_client::BladeWsEvent::TextChunk {
+                    request_id: event_request_id,
                     content: chunk,
                     phase,
                     ..
-                } => {
+                } if event_request_id
+                    .as_deref()
+                    .is_none_or(|id| id == request_id) =>
+                {
                     if phase.as_deref() == Some("commentary") && content.trim().is_empty() {
                         reasoning.push_str(&chunk);
                     } else {
                         content.push_str(&chunk);
                     }
                 }
-                crate::blade_ws_client::BladeWsEvent::ReasoningChunk { content: chunk, .. } => {
+                crate::blade_ws_client::BladeWsEvent::ReasoningChunk {
+                    request_id: event_request_id,
+                    content: chunk,
+                    ..
+                } if event_request_id
+                    .as_deref()
+                    .is_none_or(|id| id == request_id) =>
+                {
                     reasoning.push_str(&chunk);
                 }
                 crate::blade_ws_client::BladeWsEvent::GetConversationContext {
@@ -1593,26 +1607,51 @@ Do NOT include analysis, reasoning, explanations, or multiple options."#,
                             format!("Failed to send empty commit-message context: {}", e)
                         })?;
                 }
-                crate::blade_ws_client::BladeWsEvent::ToolCall { name, .. } => {
+                crate::blade_ws_client::BladeWsEvent::ToolCall {
+                    request_id: event_request_id,
+                    name,
+                    ..
+                } if event_request_id
+                    .as_deref()
+                    .is_none_or(|id| id == request_id) =>
+                {
                     return Err(format!(
                         "Commit message generation unexpectedly requested tool `{}`",
                         name
                     ));
                 }
-                crate::blade_ws_client::BladeWsEvent::ApprovalRequest { tool_name, .. } => {
+                crate::blade_ws_client::BladeWsEvent::ApprovalRequest {
+                    request_id: event_request_id,
+                    tool_name,
+                    ..
+                } if event_request_id
+                    .as_deref()
+                    .is_none_or(|id| id == request_id) =>
+                {
                     return Err(format!(
                         "Commit message generation unexpectedly requested approval for `{}`",
                         tool_name
                     ));
                 }
                 crate::blade_ws_client::BladeWsEvent::ChatDone {
+                    request_id: event_request_id,
                     finish_reason: reason,
                     ..
-                } => {
+                } if event_request_id
+                    .as_deref()
+                    .is_none_or(|id| id == request_id) =>
+                {
                     finish_reason = Some(reason);
                     return Ok(());
                 }
-                crate::blade_ws_client::BladeWsEvent::Error { message, .. } => {
+                crate::blade_ws_client::BladeWsEvent::Error {
+                    request_id: event_request_id,
+                    message,
+                    ..
+                } if event_request_id
+                    .as_deref()
+                    .is_none_or(|id| id == request_id) =>
+                {
                     return Err(format!("AI generation failed: {}", message));
                 }
                 crate::blade_ws_client::BladeWsEvent::Disconnected => {

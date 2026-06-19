@@ -81,16 +81,19 @@ pub enum BladeWsEvent {
         mode_source: Option<String>,
     },
     TextChunk {
+        request_id: Option<String>,
         content: String,
         output_index: Option<i64>,
         phase: Option<String>,
     },
     ReasoningChunk {
+        request_id: Option<String>,
         content: String,
         output_index: Option<i64>,
         phase: Option<String>,
     },
     ToolCall {
+        request_id: Option<String>,
         id: String,
         name: String,
         arguments: Value,
@@ -102,6 +105,7 @@ pub enum BladeWsEvent {
         todos: Vec<TodoItem>,
     },
     ApprovalRequest {
+        request_id: Option<String>,
         session_id: String,
         approval_id: String,
         tool_call_id: String,
@@ -113,6 +117,7 @@ pub enum BladeWsEvent {
         decision: Option<String>,
     },
     ChatDone {
+        request_id: Option<String>,
         finish_reason: String,
         recoverable: Option<bool>,
     },
@@ -382,6 +387,23 @@ impl BladeWsClient {
                     .map(ToString::to_string)
             })
             .unwrap_or_else(|| msg.id.clone())
+    }
+
+    fn request_id_for_message(msg: &WsIncomingMessage) -> Option<String> {
+        msg.request_id
+            .clone()
+            .or_else(|| {
+                msg.payload
+                    .get("request_id")
+                    .and_then(|value| value.as_str())
+                    .map(ToString::to_string)
+            })
+            .or_else(|| {
+                msg.payload
+                    .get("original_request_id")
+                    .and_then(|value| value.as_str())
+                    .map(ToString::to_string)
+            })
     }
 
     /// Create a new WebSocket Blade Protocol client
@@ -1137,6 +1159,7 @@ impl BladeWsClient {
         let msg: WsIncomingMessage =
             serde_json::from_str(text).map_err(|e| format!("JSON parse error: {}", e))?;
         let correlation_id = Self::correlation_id_for_message(&msg);
+        let request_id = Self::request_id_for_message(&msg);
 
         match msg.msg_type.as_str() {
             "authenticated" => {
@@ -1244,6 +1267,7 @@ impl BladeWsClient {
                     .map(|s| s.to_string());
                 if let Some(content) = msg.payload.get("content").and_then(|v| v.as_str()) {
                     let _ = tx.send(BladeWsEvent::TextChunk {
+                        request_id,
                         content: content.to_string(),
                         output_index,
                         phase,
@@ -1264,6 +1288,7 @@ impl BladeWsClient {
                     .map(|s| s.to_string());
                 if let Some(content) = msg.payload.get("content").and_then(|v| v.as_str()) {
                     let _ = tx.send(BladeWsEvent::ReasoningChunk {
+                        request_id,
                         content: content.to_string(),
                         output_index,
                         phase,
@@ -1303,6 +1328,7 @@ impl BladeWsClient {
 
                 // eprintln!("[BLADE WS] Tool call: {} ({})", name, id);
                 let _ = tx.send(BladeWsEvent::ToolCall {
+                    request_id,
                     id,
                     name,
                     arguments,
@@ -1377,6 +1403,7 @@ impl BladeWsClient {
                 let arguments = msg.payload.get("arguments").cloned().unwrap_or(Value::Null);
 
                 let _ = tx.send(BladeWsEvent::ApprovalRequest {
+                    request_id,
                     session_id,
                     approval_id,
                     tool_call_id,
@@ -1399,6 +1426,7 @@ impl BladeWsClient {
 
                 // eprintln!("[BLADE WS] Chat done: {} (recoverable: {:?})", finish_reason, recoverable);
                 let _ = tx.send(BladeWsEvent::ChatDone {
+                    request_id,
                     finish_reason,
                     recoverable,
                 });
@@ -1855,6 +1883,36 @@ mod tests {
                 assert_eq!(request_id, "chat-123");
                 assert_eq!(session_id.as_deref(), Some("sess-456"));
                 assert_eq!(reason.as_deref(), Some("user_stop"));
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_stream_event_request_ids() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let message = r#"{
+            "type": "text_chunk",
+            "id": "event-1",
+            "request_id": "chat-123",
+            "payload": {
+                "content": "fix(git): correlate stream events",
+                "phase": "final"
+            }
+        }"#;
+
+        BladeWsClient::parse_message(message, &tx).unwrap();
+
+        match rx.try_recv().unwrap() {
+            BladeWsEvent::TextChunk {
+                request_id,
+                content,
+                phase,
+                ..
+            } => {
+                assert_eq!(request_id.as_deref(), Some("chat-123"));
+                assert_eq!(content, "fix(git): correlate stream events");
+                assert_eq!(phase.as_deref(), Some("final"));
             }
             other => panic!("unexpected event: {:?}", other),
         }

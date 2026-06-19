@@ -53,6 +53,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
     const { t } = useTranslation();
     const [commitMessage, setCommitMessage] = useState('');
     const commitTextareaRef = useRef<HTMLTextAreaElement>(null);
+    const activeActionRef = useRef<string | null>(null);
     const [actionError, setActionError] = useState<string | null>(null);
     const [preflightWarning, setPreflightWarning] = useState<string | null>(null);
     const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -92,6 +93,11 @@ export const GitPanel: React.FC<GitPanelProps> = ({
     }, [commitMessage, resizeCommitTextarea]);
 
     const runAction = async (id: string, action: () => Promise<void>) => {
+        if (activeActionRef.current === id) {
+            return;
+        }
+
+        activeActionRef.current = id;
         setActionError(null);
         setBusyAction(id);
         try {
@@ -99,6 +105,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
         } catch (e) {
             setActionError(formatUnknownBackendError(e));
         } finally {
+            activeActionRef.current = null;
             setBusyAction(null);
         }
     };
@@ -316,7 +323,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
                                                 ? 'border-(--border-subtle) text-(--fg-tertiary) cursor-not-allowed opacity-50'
                                                 : 'border-(--border-default) text-(--fg-secondary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover)'
                                     }`}
-                                    disabled={changedCount === 0}
+                                    disabled={changedCount === 0 || busyAction === 'generate-message'}
                                     onClick={() =>
                                         runAction('generate-message', async () => {
                                             const message = await onGenerateCommitMessage();

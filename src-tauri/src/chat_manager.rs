@@ -1000,6 +1000,7 @@ impl ChatManager {
                                 });
                             }
                             crate::blade_ws_client::BladeWsEvent::TextChunk {
+                                request_id: _,
                                 content: text,
                                 output_index: _,
                                 phase,
@@ -1019,6 +1020,7 @@ impl ChatManager {
                                 let _ = tx.send_chunk(text);
                             }
                             crate::blade_ws_client::BladeWsEvent::ReasoningChunk {
+                                request_id: _,
                                 content: text,
                                 output_index: _,
                                 phase: _,
@@ -1028,6 +1030,7 @@ impl ChatManager {
                                 let _ = tx.send_reasoning_chunk(text);
                             }
                             crate::blade_ws_client::BladeWsEvent::ToolCall {
+                                request_id: _,
                                 id,
                                 name,
                                 arguments,
@@ -1073,6 +1076,7 @@ impl ChatManager {
                                 let _ = tx.send(ChatEvent::TodoUpdated(protocol_todos));
                             }
                             crate::blade_ws_client::BladeWsEvent::ApprovalRequest {
+                                request_id: _,
                                 session_id,
                                 approval_id,
                                 tool_call_id,
@@ -1099,6 +1103,7 @@ impl ChatManager {
                                 ));
                             }
                             crate::blade_ws_client::BladeWsEvent::ChatDone {
+                                request_id: _,
                                 finish_reason,
                                 recoverable,
                             } => {

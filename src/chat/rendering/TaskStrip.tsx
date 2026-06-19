@@ -2,7 +2,6 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle2, Circle, Loader2 } from 'lucide-react';
 import type { TodoItem } from '../../types/events';
-import { StatusStripFrame } from './StatusStripFrame';
 
 export const TaskStrip: React.FC<{ todos: TodoItem[] }> = ({ todos }) => {
     const { t } = useTranslation();
@@ -12,7 +11,13 @@ export const TaskStrip: React.FC<{ todos: TodoItem[] }> = ({ todos }) => {
     }
 
     return (
-        <StatusStripFrame label="Plan" count={todos.length} tone="ai">
+        <div className="shrink-0 px-2 pt-1.5">
+            <div className="mb-1.5 flex items-center gap-2 text-[9px] font-semibold uppercase tracking-[0.16em] text-(--fg-tertiary)">
+                <span className="text-(--accent-ai)">Plan</span>
+                <span className="rounded-full border border-(--border-subtle) px-1.5 py-0.5 text-[9px] leading-none text-(--fg-tertiary)">
+                    {todos.length}
+                </span>
+            </div>
             <div role="list" className="space-y-1">
                 {todos.map((todo, index) => {
                     const Icon = todo.status === 'completed' ? CheckCircle2 : todo.status === 'in_progress' ? Loader2 : Circle;
@@ -29,6 +34,6 @@ export const TaskStrip: React.FC<{ todos: TodoItem[] }> = ({ todos }) => {
                     );
                 })}
             </div>
-        </StatusStripFrame>
+        </div>
     );
 };

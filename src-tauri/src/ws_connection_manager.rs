@@ -509,6 +509,50 @@ impl WsConnectionManager {
             .await
     }
 
+    /// Send a chat message with storage mode and an explicit request id.
+    pub async fn send_message_with_storage_mode_and_id(
+        &self,
+        request_id: String,
+        session_id: Option<String>,
+        model_id: String,
+        message: String,
+        images: Option<Vec<crate::protocol::ChatImage>>,
+        workspace: Option<WorkspaceInfo>,
+        storage_mode: Option<String>,
+        mode: Option<String>,
+        local_conversation_state: Option<crate::blade_ws_client::LocalConversationState>,
+        tools: Option<Vec<Value>>,
+        tool_choice: Option<Value>,
+        parallel_tool_calls: Option<bool>,
+        tag: Option<String>,
+        tags: Option<Vec<String>>,
+    ) -> Result<(), String> {
+        {
+            let mut current_storage_mode = self.storage_mode.write().await;
+            *current_storage_mode = storage_mode.clone();
+        }
+
+        let client = self.get_client().await?;
+        client
+            .send_message_with_storage_mode_and_id(
+                request_id,
+                session_id,
+                model_id,
+                message,
+                images,
+                workspace,
+                storage_mode,
+                mode,
+                local_conversation_state,
+                tools,
+                tool_choice,
+                parallel_tool_calls,
+                tag,
+                tags,
+            )
+            .await
+    }
+
     /// Send a tool result
     pub async fn send_tool_result(
         &self,
