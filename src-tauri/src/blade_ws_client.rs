@@ -11,7 +11,11 @@ use std::time::Duration;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio_tungstenite::{
     connect_async_with_config,
-    tungstenite::protocol::{Message, WebSocketConfig},
+    tungstenite::{
+        client::IntoClientRequest,
+        http::{header::AUTHORIZATION, Request},
+        protocol::{Message, WebSocketConfig},
+    },
 };
 
 lazy_static! {
@@ -261,7 +265,6 @@ struct WsBaseMessage {
 
 #[derive(Debug, Serialize)]
 struct AuthenticatePayload {
-    api_key: String,
     client: String,
     version: String,
     client_name: String,
@@ -287,7 +290,6 @@ struct ChatRequestPayload {
     tag: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tags: Option<Vec<String>>,
-    api_key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     storage_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -312,8 +314,6 @@ struct ToolResultPayload {
     content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    api_key: Option<String>, // API key for auth in multi-turn conversations
     #[serde(skip_serializing_if = "Option::is_none")]
     model_id: Option<String>,
 }
@@ -373,6 +373,28 @@ struct WsIncomingMessage {
 }
 
 impl BladeWsClient {
+    fn websocket_endpoint_url(base_url: &str) -> String {
+        let ws_url = crate::blade_endpoint::to_websocket_url(base_url);
+        format!("{}/v1/blade/v2", ws_url)
+    }
+
+    fn websocket_request(base_url: &str, api_key: &str) -> Result<Request<()>, String> {
+        let url = Self::websocket_endpoint_url(base_url);
+        let mut request = url
+            .into_client_request()
+            .map_err(|e| format!("failed to build WebSocket request: {}", e))?;
+
+        let trimmed_key = api_key.trim();
+        if !trimmed_key.is_empty() {
+            let header_value = format!("Bearer {}", trimmed_key)
+                .parse()
+                .map_err(|e| format!("invalid Authorization header: {}", e))?;
+            request.headers_mut().insert(AUTHORIZATION, header_value);
+        }
+
+        Ok(request)
+    }
+
     fn correlation_id_for_message(msg: &WsIncomingMessage) -> String {
         msg.request_id
             .clone()
@@ -438,8 +460,14 @@ impl BladeWsClient {
 
             for endpoint in candidates {
                 // Intentionally quiet: avoid high-frequency websocket connect logs.
-                let ws_url = crate::blade_endpoint::to_websocket_url(&endpoint.base_url);
-                let url = format!("{}/v1/blade/v2?api_key={}", ws_url, self.api_key);
+                let request = match Self::websocket_request(&endpoint.base_url, &self.api_key) {
+                    Ok(request) => request,
+                    Err(error) => {
+                        last_error = format!("{}: {}", endpoint.base_url, error);
+                        crate::blade_endpoint::mark_failure(&endpoint, &self.api_key).await;
+                        continue;
+                    }
+                };
 
                 // Configure WebSocket with larger message size limit (64MB instead of default 16MB)
                 // This prevents "Space limit exceeded" errors for large tool results
@@ -449,7 +477,7 @@ impl BladeWsClient {
 
                 match tokio::time::timeout(
                     connect_timeout,
-                    connect_async_with_config(&url, Some(ws_config), false),
+                    connect_async_with_config(request, Some(ws_config), false),
                 )
                 .await
                 {
@@ -558,7 +586,6 @@ impl BladeWsClient {
 
         // Spawn read task
         let event_tx_clone = event_tx.clone();
-        let api_key = self.api_key.clone();
         let msg_tx_clone = msg_tx.clone();
 
         tokio::spawn(async move {
@@ -590,7 +617,6 @@ impl BladeWsClient {
                 timestamp: chrono::Utc::now().timestamp_millis(),
                 payload: Some(
                     serde_json::to_value(AuthenticatePayload {
-                        api_key,
                         client: "zblade".to_string(),
                         version: env!("CARGO_PKG_VERSION").to_string(),
                         client_name: "zblade".to_string(),
@@ -782,7 +808,6 @@ impl BladeWsClient {
             workspace,
             tag,
             tags,
-            api_key: self.api_key.clone(),
             storage_mode: storage_mode.clone(),
             mode,
             planning_mode,
@@ -837,7 +862,6 @@ impl BladeWsClient {
             success: result.success,
             content: result.content,
             error: result.error,
-            api_key: Some(self.api_key.clone()), // Include API key for multi-turn auth
             model_id,
         };
 
@@ -1842,6 +1866,112 @@ impl BladeWsClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn websocket_endpoint_url_has_no_api_key_query() {
+        let url = BladeWsClient::websocket_endpoint_url("https://coder-api.zblade.dev/");
+
+        assert_eq!(url, "wss://coder-api.zblade.dev/v1/blade/v2");
+        assert!(!url.contains("api_key"));
+        assert!(!url.contains('?'));
+    }
+
+    #[test]
+    fn websocket_request_uses_authorization_bearer_header() {
+        let request =
+            BladeWsClient::websocket_request("https://coder-api.zblade.dev", "  ps_live_secret  ")
+                .unwrap();
+
+        assert_eq!(
+            request.uri().to_string(),
+            "wss://coder-api.zblade.dev/v1/blade/v2"
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get(AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer ps_live_secret")
+        );
+        assert!(request.uri().query().is_none());
+    }
+
+    #[test]
+    fn authenticate_payload_omits_api_key_for_header_auth() {
+        let value = serde_json::to_value(AuthenticatePayload {
+            client: "zblade".to_string(),
+            version: "0.0.0-test".to_string(),
+            client_name: "zblade".to_string(),
+            client_version: "0.0.0-test".to_string(),
+            protocol_version: 3,
+            capabilities: None,
+            environment: None,
+        })
+        .unwrap();
+
+        assert!(value.get("api_key").is_none());
+    }
+
+    #[test]
+    fn post_auth_payloads_omit_api_key() {
+        let chat_payload = serde_json::to_value(ChatRequestPayload {
+            session_id: Some("sess-1".to_string()),
+            model_id: "model".to_string(),
+            message: "hello".to_string(),
+            images: None,
+            workspace: None,
+            tag: None,
+            tags: None,
+            storage_mode: None,
+            mode: None,
+            planning_mode: None,
+            local_conversation_state: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: None,
+        })
+        .unwrap();
+        let tool_payload = serde_json::to_value(ToolResultPayload {
+            session_id: "sess-1".to_string(),
+            tool_call_id: "tool-1".to_string(),
+            success: true,
+            content: "ok".to_string(),
+            error: None,
+            model_id: Some("model".to_string()),
+        })
+        .unwrap();
+
+        assert!(chat_payload.get("api_key").is_none());
+        assert!(tool_payload.get("api_key").is_none());
+    }
+
+    #[test]
+    fn parses_immediate_authenticated_message_after_header_auth() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let message = r#"{
+            "type": "authenticated",
+            "id": "",
+            "payload": {
+                "user_id": "user_abcdefgh",
+                "server_version": "2026.06.20",
+                "protocol_version": 3,
+                "capabilities": ["tool_execution"]
+            }
+        }"#;
+
+        BladeWsClient::parse_message(message, &tx).unwrap();
+
+        match rx.try_recv().unwrap() {
+            BladeWsEvent::Connected {
+                user_id,
+                server_version,
+            } => {
+                assert_eq!(user_id, "user_abcdefgh");
+                assert_eq!(server_version, "2026.06.20");
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+    }
 
     #[test]
     fn parses_documented_context_pack_request_without_timestamp() {

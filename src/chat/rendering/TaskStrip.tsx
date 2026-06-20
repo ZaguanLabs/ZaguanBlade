@@ -12,7 +12,7 @@ export const TaskStrip: React.FC<{ todos: TodoItem[] }> = ({ todos }) => {
     }
 
     return (
-        <StatusStripFrame label="Plan" count={todos.length} tone="ai" outerBackground={false}>
+        <StatusStripFrame label="Plan" count={todos.length} tone="ai" outerBackground={false} bottomCorners="square">
             <div role="list" className="space-y-1">
                 {todos.map((todo, index) => {
                     const Icon = todo.status === 'completed' ? CheckCircle2 : todo.status === 'in_progress' ? Loader2 : Circle;

@@ -5,6 +5,7 @@ interface StatusStripFrameProps {
     count?: number;
     tone?: 'default' | 'ai' | 'danger';
     outerBackground?: boolean;
+    bottomCorners?: 'rounded' | 'square';
     children: React.ReactNode;
 }
 
@@ -13,6 +14,7 @@ export const StatusStripFrame: React.FC<StatusStripFrameProps> = ({
     count,
     tone = 'default',
     outerBackground = true,
+    bottomCorners = 'rounded',
     children,
 }) => {
     const toneClass = tone === 'danger'
@@ -23,10 +25,13 @@ export const StatusStripFrame: React.FC<StatusStripFrameProps> = ({
     const outerClassName = outerBackground
         ? 'shrink-0 bg-(--bg-panel) px-2 pt-1.5'
         : 'shrink-0 px-2 pt-1.5';
+    const frameRadiusClass = bottomCorners === 'square'
+        ? 'rounded-t-[calc(var(--panel-radius)*0.75)] rounded-b-none'
+        : 'rounded-[calc(var(--panel-radius)*0.75)]';
 
     return (
         <div className={outerClassName}>
-            <div className="rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle) bg-(--bg-surface)/55 px-2.5 py-2 shadow-(--shadow-sm)">
+            <div className={`${frameRadiusClass} border border-(--border-subtle) bg-(--bg-surface)/55 px-2.5 py-2 shadow-(--shadow-sm)`}>
                 <div className="mb-1.5 flex items-center gap-2 text-[9px] font-semibold uppercase tracking-[0.16em] text-(--fg-tertiary)">
                     <span className={toneClass}>{label}</span>
                     {typeof count === 'number' && (

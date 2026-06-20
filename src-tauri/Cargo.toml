@@ -1,6 +1,6 @@
 [package]
 name = "zblade"
-version = "0.8.2"
+version = "0.8.3"
 description = "Zaguán Blade - A versatile AI code editor"
 authors = ["Zaguán Labs"]
 edition = "2021"
@@ -15,10 +15,10 @@ name = "zblade_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.6.2", features = [] }
+tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
-tauri = { version = "2.11.2", features = [] }
+tauri = { version = "2.11.3", features = [] }
 tauri-plugin-opener = "2.5.4"
 tauri-plugin-fs = "2.5.1"
 tauri-plugin-dialog = "2.7.1"

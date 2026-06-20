@@ -863,6 +863,9 @@ impl LanguageService {
         let mut indexed_files_missing_root_symbol = 0usize;
 
         for record in indexed_files {
+            if is_anchor_only_index_file(&record.file_path) {
+                continue;
+            }
             if self
                 .symbol_store
                 .get_symbol(&Self::synthetic_file_root_id(&record.file_path))?
@@ -1292,12 +1295,24 @@ impl LanguageService {
         }
 
         // Detect language and parse
-        let language = snapshot
+        let Some(language) = snapshot
             .language()
             .or_else(|| Language::from_path(file_path))
-            .ok_or_else(|| {
-                LanguageError::NotSupported(format!("Unknown language for: {}", file_path))
-            })?;
+        else {
+            if is_anchor_only_index_file(file_path) {
+                return self.index_anchor_only_file(
+                    file_path,
+                    &hash,
+                    index_metadata,
+                    snapshot.clone(),
+                    content,
+                );
+            }
+            return Err(LanguageError::NotSupported(format!(
+                "Unknown language for: {}",
+                file_path
+            )));
+        };
 
         let SymbolExtraction {
             symbols: extracted_symbols,
@@ -1324,13 +1339,20 @@ impl LanguageService {
 
         // Delete old symbols and insert new ones
         let semantic_anchors = extract_semantic_anchors(file_path, &content);
+        let translation_call_aliases =
+            extract_translation_call_aliases(extraction_content.as_ref());
         self.resolve_relationship_targets(
             file_path,
             extraction_language,
             &symbols,
             &mut relationships,
+            &translation_call_aliases,
         )?;
-        Self::suppress_known_external_relationships(extraction_language, &mut relationships);
+        Self::suppress_known_external_relationships(
+            extraction_language,
+            &mut relationships,
+            &translation_call_aliases,
+        );
         self.symbol_store.replace_file_index(
             file_path,
             &hash,
@@ -1357,6 +1379,38 @@ impl LanguageService {
         Ok(self.filter_visible_symbols(file_path, symbols))
     }
 
+    fn index_anchor_only_file(
+        &self,
+        file_path: &str,
+        hash: &str,
+        index_metadata: Option<FileIndexMetadata>,
+        snapshot: Arc<BufferSnapshot>,
+        content: &str,
+    ) -> Result<Vec<Symbol>, LanguageError> {
+        let anchors = extract_semantic_anchors(file_path, content);
+        self.symbol_store.replace_file_index(
+            file_path,
+            hash,
+            index_metadata.as_ref().map(|metadata| metadata.file_size),
+            index_metadata.as_ref().map(|metadata| metadata.modified_at),
+            &[],
+            &anchors,
+            &[],
+        )?;
+
+        let mut cache = self.file_cache.write().unwrap();
+        cache.insert(
+            file_path.to_string(),
+            CachedFile {
+                hash: hash.to_string(),
+                _snapshot: snapshot,
+                symbols: Vec::new(),
+            },
+        );
+
+        Ok(Vec::new())
+    }
+
     fn stage_file_index(&self, file_path: &str) -> Result<StagedFileIndex, LanguageError> {
         let disk_metadata = file_index_metadata(&self.resolve_path(file_path)).ok();
         let snapshot = self.load_snapshot_for_indexing(file_path)?;
@@ -1368,12 +1422,31 @@ impl LanguageService {
             disk_metadata
         };
 
-        let language = snapshot
+        let Some(language) = snapshot
             .language()
             .or_else(|| Language::from_path(file_path))
-            .ok_or_else(|| {
-                LanguageError::NotSupported(format!("Unknown language for: {}", file_path))
-            })?;
+        else {
+            if is_anchor_only_index_file(file_path) {
+                let anchors = extract_semantic_anchors(file_path, &content);
+                return Ok(StagedFileIndex {
+                    file_path: file_path.to_string(),
+                    hash,
+                    file_size: index_metadata.map(|metadata| metadata.file_size),
+                    modified_at: index_metadata.map(|metadata| metadata.modified_at),
+                    symbols: Vec::new(),
+                    anchors,
+                    relationships: Vec::new(),
+                    extraction_content: content,
+                    extraction_language: Language::Markdown,
+                    source_language: Language::Markdown,
+                    snapshot,
+                });
+            }
+            return Err(LanguageError::NotSupported(format!(
+                "Unknown language for: {}",
+                file_path
+            )));
+        };
 
         let SymbolExtraction {
             symbols: extracted_symbols,
@@ -1459,15 +1532,19 @@ impl LanguageService {
                     &mut relationships,
                 );
             }
+            let translation_call_aliases =
+                extract_translation_call_aliases(&file.extraction_content);
             self.resolve_relationship_targets(
                 &file.file_path,
                 file.extraction_language,
                 &file.symbols,
                 &mut relationships,
+                &translation_call_aliases,
             )?;
             suppressed_external_relationships += Self::suppress_known_external_relationships(
                 file.extraction_language,
                 &mut relationships,
+                &translation_call_aliases,
             );
             final_relationship_records.push(FileRelationshipRecord {
                 file_path: file.file_path.clone(),
@@ -1580,7 +1657,7 @@ impl LanguageService {
                 self.index_directory_recursive(base_path, &relative, stats, gitignore_filter)?;
             } else if path.is_file() {
                 // Check if it's a supported language
-                if Language::from_path(&relative).is_some() {
+                if is_supported_index_file(&relative) {
                     match self.index_file(&relative) {
                         Ok(symbols) => {
                             stats.files_indexed += 1;
@@ -2388,7 +2465,7 @@ impl LanguageService {
                     gitignore_filter,
                     files,
                 );
-            } else if path.is_file() && Language::from_path(&relative).is_some() {
+            } else if path.is_file() && is_supported_index_file(&relative) {
                 files.push(relative);
             }
         }
@@ -2404,7 +2481,7 @@ impl LanguageService {
                 self.remove_file(&record.file_path)?;
                 continue;
             }
-            if !resolved.is_file() || Language::from_path(&record.file_path).is_none() {
+            if !resolved.is_file() || !is_supported_index_file(&record.file_path) {
                 continue;
             }
 
@@ -2606,6 +2683,7 @@ impl LanguageService {
         language: Language,
         file_symbols: &[Symbol],
         relationships: &mut [SymbolRelationship],
+        translation_call_aliases: &HashSet<String>,
     ) -> Result<(), LanguageError> {
         let imported_files = relationships
             .iter()
@@ -2633,6 +2711,7 @@ impl LanguageService {
                 &imported_files,
                 &mut imported_symbol_cache,
                 &mut contextual_cache,
+                translation_call_aliases,
             )?;
         }
 
@@ -2649,6 +2728,7 @@ impl LanguageService {
         imported_files: &[String],
         imported_symbol_cache: &mut HashMap<String, Vec<Symbol>>,
         contextual_cache: &mut HashMap<String, Option<String>>,
+        translation_call_aliases: &HashSet<String>,
     ) -> Result<Option<String>, LanguageError> {
         let mut same_file = Vec::new();
         let mut seen = HashSet::new();
@@ -2687,7 +2767,8 @@ impl LanguageService {
         }
 
         if relationship_type == SymbolRelationshipType::Call
-            && Self::is_known_external_call_name(language, reference_name)
+            && (Self::is_runtime_external_call_name(language, reference_name)
+                || translation_call_aliases.contains(reference_name))
         {
             return Ok(None);
         }
@@ -2741,10 +2822,15 @@ impl LanguageService {
     fn suppress_known_external_relationships(
         language: Language,
         relationships: &mut Vec<SymbolRelationship>,
+        translation_call_aliases: &HashSet<String>,
     ) -> usize {
         let before = relationships.len();
         relationships.retain(|relationship| {
-            !Self::is_known_external_unresolved_call(language, relationship)
+            !Self::is_known_external_unresolved_call(
+                language,
+                relationship,
+                translation_call_aliases,
+            )
         });
         before - relationships.len()
     }
@@ -2752,10 +2838,12 @@ impl LanguageService {
     fn is_known_external_unresolved_call(
         language: Language,
         relationship: &SymbolRelationship,
+        translation_call_aliases: &HashSet<String>,
     ) -> bool {
         relationship.relationship_type == SymbolRelationshipType::Call
             && relationship.target_symbol_id.is_none()
-            && Self::is_known_external_call_name(language, &relationship.target_name)
+            && (Self::is_known_external_call_name(language, &relationship.target_name)
+                || translation_call_aliases.contains(&relationship.target_name))
     }
 
     fn is_known_external_call_name(language: Language, target_name: &str) -> bool {
@@ -2773,28 +2861,49 @@ impl LanguageService {
                     | "Error"
                     | "JSON"
                     | "Map"
+                    | "Math"
                     | "Number"
                     | "Object"
                     | "Promise"
                     | "RegExp"
                     | "Set"
                     | "String"
+                    | "add"
+                    | "aggregate"
+                    | "all"
+                    | "append"
                     | "at"
                     | "catch"
                     | "concat"
+                    | "count"
+                    | "create"
+                    | "createMany"
+                    | "debug"
+                    | "delete"
+                    | "deleteMany"
+                    | "endsWith"
                     | "error"
                     | "every"
                     | "filter"
                     | "find"
                     | "findIndex"
+                    | "findFirst"
+                    | "findFirstOrThrow"
+                    | "findMany"
+                    | "findUnique"
+                    | "findUniqueOrThrow"
+                    | "finally"
                     | "flat"
                     | "flatMap"
                     | "forEach"
                     | "get"
                     | "getTime"
+                    | "groupBy"
                     | "has"
                     | "includes"
+                    | "info"
                     | "join"
+                    | "log"
                     | "map"
                     | "notFound"
                     | "parse"
@@ -2802,23 +2911,31 @@ impl LanguageService {
                     | "redirect"
                     | "reduce"
                     | "revalidatePath"
+                    | "replace"
+                    | "round"
                     | "set"
                     | "slice"
                     | "some"
                     | "sort"
                     | "split"
+                    | "startsWith"
                     | "stringify"
+                    | "table"
                     | "then"
                     | "toISOString"
                     | "toLowerCase"
                     | "toString"
                     | "toUpperCase"
                     | "trim"
+                    | "update"
+                    | "updateMany"
+                    | "upsert"
                     | "useCallback"
                     | "useEffect"
                     | "useMemo"
                     | "useRef"
                     | "useState"
+                    | "warn"
             ),
             Language::Rust => matches!(
                 name,
@@ -2908,6 +3025,88 @@ impl LanguageService {
         }
     }
 
+    fn is_runtime_external_call_name(language: Language, target_name: &str) -> bool {
+        let name = target_name.rsplit("::").next().unwrap_or(target_name);
+        match language {
+            Language::TypeScript
+            | Language::Tsx
+            | Language::Astro
+            | Language::JavaScript
+            | Language::Jsx => matches!(
+                name,
+                "Array"
+                    | "Boolean"
+                    | "Date"
+                    | "Error"
+                    | "JSON"
+                    | "Map"
+                    | "Math"
+                    | "Number"
+                    | "Object"
+                    | "Promise"
+                    | "RegExp"
+                    | "Set"
+                    | "String"
+                    | "catch"
+                    | "finally"
+                    | "parse"
+                    | "stringify"
+                    | "then"
+            ),
+            Language::Rust => matches!(
+                name,
+                "Err"
+                    | "None"
+                    | "Ok"
+                    | "Some"
+                    | "and_then"
+                    | "as_ref"
+                    | "clone"
+                    | "collect"
+                    | "expect"
+                    | "filter"
+                    | "format"
+                    | "iter"
+                    | "map"
+                    | "or_else"
+                    | "to_string"
+                    | "unwrap"
+                    | "unwrap_or"
+                    | "unwrap_or_default"
+            ),
+            Language::Go => matches!(
+                name,
+                "append"
+                    | "cap"
+                    | "close"
+                    | "copy"
+                    | "delete"
+                    | "len"
+                    | "make"
+                    | "new"
+                    | "panic"
+                    | "recover"
+            ),
+            Language::Python => matches!(
+                name,
+                "dict"
+                    | "enumerate"
+                    | "filter"
+                    | "format"
+                    | "int"
+                    | "len"
+                    | "list"
+                    | "map"
+                    | "open"
+                    | "print"
+                    | "range"
+                    | "set"
+                    | "str"
+            ),
+            Language::Markdown => false,
+        }
+    }
+
     fn index_file_content(
         &self,
         file_path: &str,
@@ -2963,13 +3162,20 @@ impl LanguageService {
         // Delete old symbols and insert new ones
         self.symbol_store.delete_file_symbols(file_path)?;
         self.symbol_store.upsert_symbols(&symbols)?;
+        let translation_call_aliases =
+            extract_translation_call_aliases(extraction_content.as_ref());
         self.resolve_relationship_targets(
             file_path,
             extraction_language,
             &symbols,
             &mut relationships,
+            &translation_call_aliases,
         )?;
-        Self::suppress_known_external_relationships(extraction_language, &mut relationships);
+        Self::suppress_known_external_relationships(
+            extraction_language,
+            &mut relationships,
+            &translation_call_aliases,
+        );
         self.symbol_store
             .replace_relationships_for_file(file_path, &relationships)?;
         self.symbol_store
@@ -4165,6 +4371,19 @@ fn astro_script_body_ranges(content: &str) -> Vec<(usize, usize)> {
 fn extract_semantic_anchors(file_path: &str, content: &str) -> Vec<SemanticAnchor> {
     let mut anchors = Vec::new();
     let mut seen = HashSet::new();
+    let limit = semantic_anchor_limit_for_file(file_path);
+
+    if is_translation_resource_path(file_path) {
+        extract_translation_definition_anchors(file_path, content, &mut anchors, &mut seen, limit);
+        if anchors.len() >= limit {
+            return anchors;
+        }
+    }
+
+    extract_translation_usage_anchors(file_path, content, &mut anchors, &mut seen, limit);
+    if anchors.len() >= limit {
+        return anchors;
+    }
 
     for (line_index, line) in content.lines().enumerate() {
         let preview = line.trim().chars().take(240).collect::<String>();
@@ -4178,38 +4397,544 @@ fn extract_semantic_anchors(file_path: &str, content: &str) -> Vec<SemanticAncho
                 continue;
             }
             let kind = semantic_anchor_kind(&value, line);
-            let key = (
-                kind.clone(),
-                value.clone(),
+            let confidence = semantic_anchor_confidence(&value, line);
+            push_semantic_anchor(
+                &mut anchors,
+                &mut seen,
+                file_path,
+                kind,
+                value,
                 line_index as u32,
                 character as u32,
+                preview.clone(),
+                confidence,
+                limit,
             );
-            if !seen.insert(key) {
-                continue;
-            }
-            anchors.push(SemanticAnchor {
-                id: format!(
-                    "{}::anchor:{}:{}:{}",
-                    file_path,
-                    line_index,
-                    character,
-                    compute_hash(&value)
-                ),
-                file_path: file_path.to_string(),
-                kind,
-                value: value.clone(),
-                line: line_index as u32,
-                character: character as u32,
-                preview: preview.clone(),
-                confidence: semantic_anchor_confidence(&value, line),
-            });
-            if anchors.len() >= 256 {
+            if anchors.len() >= limit {
                 return anchors;
             }
         }
     }
 
     anchors
+}
+
+fn semantic_anchor_limit_for_file(file_path: &str) -> usize {
+    if is_translation_resource_path(file_path) {
+        2048
+    } else {
+        256
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_semantic_anchor(
+    anchors: &mut Vec<SemanticAnchor>,
+    seen: &mut HashSet<(String, String, u32, u32)>,
+    file_path: &str,
+    kind: impl Into<String>,
+    value: impl Into<String>,
+    line: u32,
+    character: u32,
+    preview: String,
+    confidence: f32,
+    limit: usize,
+) -> bool {
+    if anchors.len() >= limit {
+        return false;
+    }
+    let kind = kind.into();
+    let value = value.into();
+    let value = value.trim();
+    if value.is_empty() {
+        return true;
+    }
+    let key = (kind.clone(), value.to_string(), line, character);
+    if !seen.insert(key) {
+        return true;
+    }
+
+    anchors.push(SemanticAnchor {
+        id: format!(
+            "{}::anchor:{}:{}:{}:{}",
+            file_path,
+            kind,
+            line,
+            character,
+            compute_hash(value)
+        ),
+        file_path: file_path.to_string(),
+        kind,
+        value: value.to_string(),
+        line,
+        character,
+        preview,
+        confidence,
+    });
+    true
+}
+
+fn extract_translation_definition_anchors(
+    file_path: &str,
+    content: &str,
+    anchors: &mut Vec<SemanticAnchor>,
+    seen: &mut HashSet<(String, String, u32, u32)>,
+    limit: usize,
+) {
+    let mut entries = Vec::new();
+    if file_path.to_lowercase().ends_with(".json") {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(content) {
+            collect_json_translation_entries(&value, &mut Vec::new(), &mut entries);
+        }
+    } else if let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(content) {
+        collect_yaml_translation_entries(&value, &mut Vec::new(), &mut entries);
+    }
+
+    if entries.is_empty() {
+        collect_line_based_translation_entries(content, &mut entries);
+    }
+
+    for entry in entries {
+        if anchors.len() >= limit {
+            return;
+        }
+        let location =
+            locate_translation_entry(content, &entry.key_path, &entry.leaf_key, &entry.text);
+        let preview = format_translation_preview(&entry.key_path, &entry.text);
+        push_semantic_anchor(
+            anchors,
+            seen,
+            file_path,
+            "translation_definition_key",
+            entry.key_path.clone(),
+            location.line,
+            location.character,
+            preview.clone(),
+            0.98,
+            limit,
+        );
+        if is_translation_text_value(&entry.text) {
+            push_semantic_anchor(
+                anchors,
+                seen,
+                file_path,
+                "translation_text",
+                entry.text,
+                location.line,
+                location.character,
+                preview,
+                0.96,
+                limit,
+            );
+        }
+    }
+}
+
+#[derive(Debug)]
+struct TranslationEntry {
+    key_path: String,
+    leaf_key: String,
+    text: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AnchorLocation {
+    line: u32,
+    character: u32,
+}
+
+fn collect_json_translation_entries(
+    value: &serde_json::Value,
+    path: &mut Vec<String>,
+    entries: &mut Vec<TranslationEntry>,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, value) in map {
+                if !is_translation_key_segment(key) {
+                    continue;
+                }
+                path.push(key.clone());
+                collect_json_translation_entries(value, path, entries);
+                path.pop();
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for (index, value) in items.iter().enumerate() {
+                path.push(index.to_string());
+                collect_json_translation_entries(value, path, entries);
+                path.pop();
+            }
+        }
+        serde_json::Value::String(text) => push_translation_entry(path, text, entries),
+        _ => {}
+    }
+}
+
+fn collect_yaml_translation_entries(
+    value: &serde_yaml::Value,
+    path: &mut Vec<String>,
+    entries: &mut Vec<TranslationEntry>,
+) {
+    match value {
+        serde_yaml::Value::Mapping(map) => {
+            for (key, value) in map {
+                let Some(key) = key.as_str() else {
+                    continue;
+                };
+                if !is_translation_key_segment(key) {
+                    continue;
+                }
+                path.push(key.to_string());
+                collect_yaml_translation_entries(value, path, entries);
+                path.pop();
+            }
+        }
+        serde_yaml::Value::Sequence(items) => {
+            for (index, value) in items.iter().enumerate() {
+                path.push(index.to_string());
+                collect_yaml_translation_entries(value, path, entries);
+                path.pop();
+            }
+        }
+        serde_yaml::Value::String(text) => push_translation_entry(path, text, entries),
+        _ => {}
+    }
+}
+
+fn push_translation_entry(path: &[String], text: &str, entries: &mut Vec<TranslationEntry>) {
+    if path.is_empty() || !is_translation_text_value(text) {
+        return;
+    }
+    let key_path = path.join(".");
+    let leaf_key = path.last().cloned().unwrap_or_default();
+    entries.push(TranslationEntry {
+        key_path,
+        leaf_key,
+        text: text.to_string(),
+    });
+}
+
+fn collect_line_based_translation_entries(content: &str, entries: &mut Vec<TranslationEntry>) {
+    let mut stack: Vec<(usize, String)> = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
+            continue;
+        }
+        let Some((raw_key, raw_value)) = trimmed.split_once(':') else {
+            continue;
+        };
+        let key = raw_key.trim().trim_matches(['"', '\'']);
+        if !is_translation_key_segment(key) {
+            continue;
+        }
+        let indent = line.len().saturating_sub(line.trim_start().len());
+        while stack.last().is_some_and(|(level, _)| *level >= indent) {
+            stack.pop();
+        }
+        let mut path = stack
+            .iter()
+            .map(|(_, segment)| segment.clone())
+            .collect::<Vec<_>>();
+        path.push(key.to_string());
+
+        let value = raw_value
+            .trim()
+            .trim_end_matches(',')
+            .trim()
+            .trim_matches(['"', '\'']);
+        if value.is_empty() || matches!(value, "{" | "[" | "|" | ">") {
+            stack.push((indent, key.to_string()));
+            continue;
+        }
+        push_translation_entry(&path, value, entries);
+    }
+}
+
+fn locate_translation_entry(
+    content: &str,
+    key_path: &str,
+    leaf_key: &str,
+    text: &str,
+) -> AnchorLocation {
+    let quoted_key = format!("\"{}\"", leaf_key);
+    let quoted_text = format!("\"{}\"", text);
+    for (line_index, line) in content.lines().enumerate() {
+        if line.contains(&quoted_key)
+            || line.contains(leaf_key)
+                && (line.contains(&quoted_text) || line.contains(text) || line.contains(':'))
+            || line.contains(key_path)
+        {
+            let character = line.find(leaf_key).or_else(|| line.find(text)).unwrap_or(0);
+            return AnchorLocation {
+                line: line_index as u32,
+                character: character as u32,
+            };
+        }
+    }
+    AnchorLocation {
+        line: 0,
+        character: 0,
+    }
+}
+
+fn format_translation_preview(key_path: &str, text: &str) -> String {
+    let text = text.trim().chars().take(180).collect::<String>();
+    format!("{} = {}", key_path, text)
+}
+
+fn extract_translation_usage_anchors(
+    file_path: &str,
+    content: &str,
+    anchors: &mut Vec<SemanticAnchor>,
+    seen: &mut HashSet<(String, String, u32, u32)>,
+    limit: usize,
+) {
+    if !is_translation_usage_source_path(file_path) {
+        return;
+    }
+
+    let alias_namespaces = extract_translation_call_alias_namespaces(content);
+    let namespaces = extract_translation_namespaces(content);
+    for namespace in &namespaces {
+        if anchors.len() >= limit {
+            return;
+        }
+        let location = locate_text(content, namespace);
+        push_semantic_anchor(
+            anchors,
+            seen,
+            file_path,
+            "translation_namespace",
+            namespace.clone(),
+            location.line,
+            location.character,
+            format!("translation namespace {}", namespace),
+            0.9,
+            limit,
+        );
+    }
+
+    for (line_index, line) in content.lines().enumerate() {
+        let preview = line.trim().chars().take(240).collect::<String>();
+        for (value, character) in extract_quoted_values(line) {
+            let context = &line[..character.min(line.len())];
+            let call_namespace =
+                translation_alias_namespace_for_context(context, &alias_namespaces);
+            if !is_translation_usage_literal_context(context) && call_namespace.is_none() {
+                continue;
+            }
+            if !is_probable_translation_usage_key(&value) {
+                continue;
+            }
+            push_semantic_anchor(
+                anchors,
+                seen,
+                file_path,
+                "translation_usage_key",
+                value.clone(),
+                line_index as u32,
+                character as u32,
+                preview.clone(),
+                0.93,
+                limit,
+            );
+            let namespace =
+                call_namespace.or_else(|| (namespaces.len() == 1).then(|| namespaces[0].as_str()));
+            if let Some(namespace) = namespace {
+                let qualified = qualify_translation_key(namespace, &value);
+                push_semantic_anchor(
+                    anchors,
+                    seen,
+                    file_path,
+                    "translation_usage_key",
+                    qualified,
+                    line_index as u32,
+                    character as u32,
+                    preview.clone(),
+                    0.95,
+                    limit,
+                );
+            }
+            if anchors.len() >= limit {
+                return;
+            }
+        }
+    }
+}
+
+fn extract_translation_namespaces(content: &str) -> Vec<String> {
+    let mut namespaces = Vec::new();
+    for line in content.lines() {
+        if !line.contains("useTranslations") && !line.contains("getTranslations") {
+            continue;
+        }
+        for (value, _) in extract_quoted_values(line) {
+            let Some(character) = line
+                .find(&format!("\"{}\"", value))
+                .or_else(|| line.find(&format!("'{}'", value)))
+            else {
+                continue;
+            };
+            let context = line[..character].trim_end();
+            if !context.ends_with("useTranslations(") && !context.ends_with("getTranslations(") {
+                continue;
+            }
+            if is_probable_translation_usage_key(&value) && !namespaces.contains(&value) {
+                namespaces.push(value);
+            }
+            if namespaces.len() >= 4 {
+                return namespaces;
+            }
+        }
+    }
+    namespaces
+}
+
+fn extract_translation_call_aliases(content: &str) -> HashSet<String> {
+    extract_translation_call_alias_namespaces(content)
+        .into_keys()
+        .collect()
+}
+
+fn extract_translation_call_alias_namespaces(content: &str) -> HashMap<String, String> {
+    let mut aliases = HashMap::new();
+    for line in content.lines() {
+        let Some(helper_index) = line
+            .find("useTranslations(")
+            .or_else(|| line.find("getTranslations("))
+        else {
+            continue;
+        };
+        let before_helper = &line[..helper_index];
+        let Some((left, _)) = before_helper.rsplit_once('=') else {
+            continue;
+        };
+        let Some(alias) = trailing_identifier(left) else {
+            continue;
+        };
+        let Some(namespace) = extract_quoted_values(&line[helper_index..])
+            .into_iter()
+            .next()
+            .map(|(value, _)| value)
+        else {
+            continue;
+        };
+        if is_probable_translation_usage_key(&namespace) {
+            aliases.insert(alias, namespace);
+        }
+    }
+    aliases
+}
+
+fn translation_alias_namespace_for_context<'a>(
+    context: &str,
+    aliases: &'a HashMap<String, String>,
+) -> Option<&'a str> {
+    let context = context.trim_end();
+    aliases.iter().find_map(|(alias, namespace)| {
+        context
+            .ends_with(&format!("{}(", alias))
+            .then_some(namespace.as_str())
+    })
+}
+
+fn qualify_translation_key(namespace: &str, key: &str) -> String {
+    if key == namespace || key.starts_with(&format!("{}.", namespace)) {
+        key.to_string()
+    } else {
+        format!("{}.{}", namespace, key)
+    }
+}
+
+fn trailing_identifier(text: &str) -> Option<String> {
+    let mut end = None;
+    let mut start = None;
+
+    for (index, ch) in text.char_indices().rev() {
+        if end.is_none() {
+            if is_identifier_continue(ch) {
+                end = Some(index + ch.len_utf8());
+                start = Some(index);
+            }
+            continue;
+        }
+
+        if is_identifier_continue(ch) {
+            start = Some(index);
+        } else {
+            break;
+        }
+    }
+
+    let (Some(start), Some(end)) = (start, end) else {
+        return None;
+    };
+    let identifier = &text[start..end];
+    is_identifier_start(identifier.chars().next()?).then(|| identifier.to_string())
+}
+
+fn is_identifier_start(ch: char) -> bool {
+    ch == '_' || ch == '$' || ch.is_ascii_alphabetic()
+}
+
+fn is_identifier_continue(ch: char) -> bool {
+    is_identifier_start(ch) || ch.is_ascii_digit()
+}
+
+fn locate_text(content: &str, needle: &str) -> AnchorLocation {
+    for (line_index, line) in content.lines().enumerate() {
+        if let Some(character) = line.find(needle) {
+            return AnchorLocation {
+                line: line_index as u32,
+                character: character as u32,
+            };
+        }
+    }
+    AnchorLocation {
+        line: 0,
+        character: 0,
+    }
+}
+
+fn is_translation_usage_literal_context(context: &str) -> bool {
+    let context = context.trim_end();
+    context.ends_with("t(")
+        || context.ends_with(".t(")
+        || context.ends_with("i18n.t(")
+        || context.ends_with("formatMessage({ id:")
+        || context.ends_with("formatMessage({id:")
+        || context.ends_with("id:")
+        || context.ends_with("i18nKey=")
+        || context.ends_with("i18nKey =")
+}
+
+fn is_probable_translation_usage_key(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.len() < 2 || trimmed.len() > 160 || trimmed.contains(char::is_whitespace) {
+        return false;
+    }
+    trimmed
+        .split('.')
+        .all(|segment| is_translation_key_segment(segment))
+}
+
+fn is_translation_key_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment.len() <= 80
+        && segment
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+        && segment.chars().any(|ch| ch.is_ascii_alphabetic())
+}
+
+fn is_translation_text_value(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value.len() <= 500
+        && !value.chars().any(|ch| ch.is_control())
+        && value.chars().any(|ch| ch.is_alphabetic())
 }
 
 fn extract_quoted_values(line: &str) -> Vec<(String, usize)> {
@@ -4307,6 +5032,95 @@ fn is_semantic_anchor_value(value: &str) -> bool {
             || value.contains(':')
             || value.contains("--")
             || value.chars().any(|ch| ch.is_uppercase()))
+}
+
+fn is_supported_index_file(file_path: &str) -> bool {
+    Language::from_path(file_path).is_some() || is_anchor_only_index_file(file_path)
+}
+
+fn is_anchor_only_index_file(file_path: &str) -> bool {
+    Language::from_path(file_path).is_none() && is_translation_resource_path(file_path)
+}
+
+fn is_translation_resource_path(file_path: &str) -> bool {
+    let lower = file_path.replace('\\', "/").to_lowercase();
+    let extension_supported =
+        lower.ends_with(".json") || lower.ends_with(".yaml") || lower.ends_with(".yml");
+    if !extension_supported || is_known_non_translation_resource_path(&lower) {
+        return false;
+    }
+
+    let components = lower.split('/').collect::<Vec<_>>();
+    let in_translation_dir = components.iter().any(|component| {
+        matches!(
+            *component,
+            "i18n"
+                | "intl"
+                | "l10n"
+                | "lang"
+                | "langs"
+                | "locale"
+                | "locales"
+                | "messages"
+                | "translations"
+                | "dictionaries"
+                | "dictionary"
+        )
+    });
+    let file_name = components.last().copied().unwrap_or_default();
+    in_translation_dir
+        || file_name.contains("translation")
+        || file_name.contains("message")
+        || is_locale_resource_file_name(file_name)
+}
+
+fn is_translation_usage_source_path(file_path: &str) -> bool {
+    matches!(
+        Language::from_path(file_path),
+        Some(
+            Language::TypeScript
+                | Language::Tsx
+                | Language::JavaScript
+                | Language::Jsx
+                | Language::Astro
+                | Language::Python
+        )
+    )
+}
+
+fn is_known_non_translation_resource_path(lower_path: &str) -> bool {
+    [
+        "package.json",
+        "package-lock.json",
+        "tsconfig.json",
+        "jsconfig.json",
+        "composer.json",
+        "deno.json",
+        "deno.lock",
+        "bun.lockb",
+    ]
+    .iter()
+    .any(|suffix| lower_path.ends_with(suffix))
+}
+
+fn is_locale_resource_file_name(file_name: &str) -> bool {
+    let stem = file_name
+        .strip_suffix(".json")
+        .or_else(|| file_name.strip_suffix(".yaml"))
+        .or_else(|| file_name.strip_suffix(".yml"))
+        .unwrap_or(file_name);
+    let parts = stem
+        .split(['-', '_'])
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+
+    matches!(parts.as_slice(), [language] if is_locale_part(language, 2, 3))
+        || matches!(parts.as_slice(), [language, region]
+            if is_locale_part(language, 2, 3) && is_locale_part(region, 2, 4))
+}
+
+fn is_locale_part(part: &str, min_len: usize, max_len: usize) -> bool {
+    (min_len..=max_len).contains(&part.len()) && part.chars().all(|ch| ch.is_ascii_alphabetic())
 }
 
 fn semantic_anchor_kind(value: &str, line: &str) -> String {
@@ -5032,6 +5846,121 @@ export function loadPosts() {
     }
 
     #[test]
+    fn translation_json_resources_are_anchor_indexed_and_searchable() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::create_dir_all(temp_dir.path().join("locales")).unwrap();
+        fs::write(
+            temp_dir.path().join("locales/en.json"),
+            r#"{
+                "auth": {
+                    "login": {
+                        "title": "Sign in to continue",
+                        "submit": "Continue"
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let report = service.reconcile_index().unwrap();
+        let key_matches = service
+            .search_semantic_anchors("auth.login.title", None, 10)
+            .unwrap();
+        let text_matches = service
+            .search_semantic_anchors("Sign in to continue", None, 10)
+            .unwrap();
+
+        assert!(report.files_indexed >= 1);
+        assert_eq!(report.graph_quality.indexed_files_missing_root_symbol, 0);
+        assert!(key_matches.iter().any(|result| {
+            result.anchor.file_path == "locales/en.json"
+                && result.anchor.kind == "translation_definition_key"
+                && result.anchor.value == "auth.login.title"
+        }));
+        assert!(text_matches.iter().any(|result| {
+            result.anchor.file_path == "locales/en.json"
+                && result.anchor.kind == "translation_text"
+                && result.anchor.value == "Sign in to continue"
+        }));
+    }
+
+    #[test]
+    fn translation_usage_keys_are_anchor_indexed() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("page.tsx"),
+            r#"
+            import { useTranslations } from "next-intl";
+
+            export function Page() {
+                const t = useTranslations("auth.login");
+                return <button>{t("submit")}</button>;
+            }
+            "#,
+        )
+        .unwrap();
+
+        service.index_file("page.tsx").unwrap();
+        let anchors = service
+            .search_semantic_anchors("auth.login.submit", None, 10)
+            .unwrap();
+
+        assert!(anchors.iter().any(|result| {
+            result.anchor.file_path == "page.tsx"
+                && result.anchor.kind == "translation_usage_key"
+                && result.anchor.value == "auth.login.submit"
+        }));
+    }
+
+    #[test]
+    fn translation_call_aliases_are_indexed_and_suppressed_as_graph_noise() {
+        let (service, temp_dir) = create_test_service();
+        let content = r#"
+            import { useTranslations } from "next-intl";
+
+            export function StudioDialog(): string {
+                const translateStudio = useTranslations("studio");
+                const title = translateStudio("create.title");
+                return title;
+            }
+            "#;
+
+        fs::write(temp_dir.path().join("studio.ts"), content).unwrap();
+
+        let aliases = extract_translation_call_aliases(content);
+        let mut relationships = vec![SymbolRelationship {
+            source_symbol_id: "studio.ts::StudioDialog#function".to_string(),
+            source_file_path: "studio.ts".to_string(),
+            target_name: "translateStudio".to_string(),
+            target_symbol_id: None,
+            relationship_type: SymbolRelationshipType::Call,
+            line: 5,
+        }];
+        assert_eq!(
+            LanguageService::suppress_known_external_relationships(
+                Language::TypeScript,
+                &mut relationships,
+                &aliases
+            ),
+            1
+        );
+        assert!(relationships.is_empty());
+
+        service.reconcile_index().unwrap();
+        let anchors = service
+            .search_semantic_anchors("studio.create.title", None, 10)
+            .unwrap();
+
+        assert!(anchors.iter().any(|result| {
+            result.anchor.file_path == "studio.ts"
+                && result.anchor.kind == "translation_usage_key"
+                && result.anchor.value == "studio.create.title"
+        }));
+    }
+
+    #[test]
     fn semantic_anchor_extraction_handles_multibyte_delimiters() {
         let anchors = extract_semantic_anchors("notes.md", "    The correct focus for €1M:\n");
 
@@ -5159,6 +6088,37 @@ export function loadPosts() {
             .iter()
             .any(|target| target.relationship_type == "call"
                 && matches!(target.target_name.as_str(), "map" | "trim")));
+    }
+
+    #[test]
+    fn common_library_method_names_still_resolve_to_project_symbols() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("main.ts"),
+            "export function run() {\n  return findUnique();\n}",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("project-api.ts"),
+            "export function findUnique() {\n  return 42;\n}",
+        )
+        .unwrap();
+
+        service.reconcile_index().unwrap();
+        let target = service
+            .search_symbols("findUnique", 10)
+            .unwrap()
+            .into_iter()
+            .find(|result| result.symbol.file_path == "project-api.ts")
+            .map(|result| result.symbol)
+            .unwrap();
+        let references = service.find_references_to_symbol(&target, 10).unwrap();
+
+        assert!(references.iter().any(|reference| {
+            reference.source_symbol.file_path == "main.ts"
+                && reference.target_symbol_id.as_deref() == Some(target.id.as_str())
+        }));
     }
 
     #[test]

@@ -86,7 +86,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "semantic_anchor_search",
             "function": {
                 "name": "semantic_anchor_search",
-                "description": "Search indexed semantic anchors such as protocol tags, command names, event names, route-like strings, config keys, translation keys, and CSS/theme tokens.",
+                "description": "Search indexed semantic anchors such as protocol tags, command names, event names, route-like strings, config keys, translation keys/text, and CSS/theme tokens.",
                 "strict": false,
                 "parameters": {
                     "type": "object",

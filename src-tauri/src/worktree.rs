@@ -359,7 +359,7 @@ impl WorktreeSnapshot {
             let hidden = relative_path
                 .split('/')
                 .any(|component| component.starts_with('.'));
-            let supported_language = !is_dir && Language::from_path(&relative_path).is_some();
+            let supported_language = !is_dir && is_supported_index_path(&relative_path);
             let index = entries.len();
             entries.push(WorktreeEntry {
                 path: relative_path.clone(),
@@ -452,6 +452,77 @@ impl WorktreeSnapshot {
             .map(|entry| entry.path.clone())
             .collect()
     }
+}
+
+fn is_supported_index_path(path: &str) -> bool {
+    Language::from_path(path).is_some() || is_translation_resource_path(path)
+}
+
+fn is_translation_resource_path(path: &str) -> bool {
+    let lower = path.replace('\\', "/").to_lowercase();
+    let extension_supported =
+        lower.ends_with(".json") || lower.ends_with(".yaml") || lower.ends_with(".yml");
+    if !extension_supported || is_known_non_translation_json_path(&lower) {
+        return false;
+    }
+
+    let components = lower.split('/').collect::<Vec<_>>();
+    let in_translation_dir = components.iter().any(|component| {
+        matches!(
+            *component,
+            "i18n"
+                | "intl"
+                | "l10n"
+                | "lang"
+                | "langs"
+                | "locale"
+                | "locales"
+                | "messages"
+                | "translations"
+                | "dictionaries"
+                | "dictionary"
+        )
+    });
+    let file_name = components.last().copied().unwrap_or_default();
+    in_translation_dir
+        || file_name.contains("translation")
+        || file_name.contains("message")
+        || is_locale_resource_file_name(file_name)
+}
+
+fn is_known_non_translation_json_path(lower_path: &str) -> bool {
+    [
+        "package.json",
+        "package-lock.json",
+        "tsconfig.json",
+        "jsconfig.json",
+        "composer.json",
+        "deno.json",
+        "deno.lock",
+        "bun.lockb",
+    ]
+    .iter()
+    .any(|suffix| lower_path.ends_with(suffix))
+}
+
+fn is_locale_resource_file_name(file_name: &str) -> bool {
+    let stem = file_name
+        .strip_suffix(".json")
+        .or_else(|| file_name.strip_suffix(".yaml"))
+        .or_else(|| file_name.strip_suffix(".yml"))
+        .unwrap_or(file_name);
+    let parts = stem
+        .split(['-', '_'])
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+
+    matches!(parts.as_slice(), [language] if is_locale_part(language, 2, 3))
+        || matches!(parts.as_slice(), [language, region]
+            if is_locale_part(language, 2, 3) && is_locale_part(region, 2, 4))
+}
+
+fn is_locale_part(part: &str, min_len: usize, max_len: usize) -> bool {
+    (min_len..=max_len).contains(&part.len()) && part.chars().all(|ch| ch.is_ascii_alphabetic())
 }
 
 fn allow_gitignored_files(workspace_root: &Path) -> bool {
