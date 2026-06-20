@@ -13,6 +13,7 @@ pub mod store;
 
 pub use search::{SearchQuery, SearchResult};
 pub use store::{
-    FileIndexRecord, FileRelationshipRecord, RelationshipIntegrityStats, SemanticAnchor,
-    SemanticAnchorResult, SymbolReference, SymbolStore, SymbolStoreError,
+    FileIndexRecord, FileRelationshipRecord, RelationshipIntegrityStats, RelationshipTypeStats,
+    SemanticAnchor, SemanticAnchorResult, SymbolReference, SymbolStore, SymbolStoreError,
+    UnresolvedRelationshipTarget,
 };

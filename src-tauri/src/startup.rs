@@ -98,8 +98,38 @@ pub fn ensure_post_ui_startup<R: Runtime>(app_handle: &tauri::AppHandle<R>) {
                     });
                     match result {
                         Ok(report) => {
+                            let unresolved_by_type = report
+                                .graph_quality
+                                .by_type
+                                .iter()
+                                .filter(|stats| stats.unresolved_symbol_relationships > 0)
+                                .map(|stats| {
+                                    format!(
+                                        "{}:{}/{}",
+                                        stats.relationship_type,
+                                        stats.unresolved_symbol_relationships,
+                                        stats.total_relationships
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            let top_unresolved = report
+                                .graph_quality
+                                .top_unresolved_targets
+                                .iter()
+                                .map(|target| {
+                                    format!(
+                                        "{}:{}({} @ {})",
+                                        target.relationship_type,
+                                        target.target_name,
+                                        target.count,
+                                        target.example_source_file
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ");
                             eprintln!(
-                                "[LanguageService] Post-UI index reconciliation complete: {} indexed, {} removed in {}ms; relationships {}/{} resolved, {} unresolved, {} missing sources, {} missing targets, {} missing roots",
+                                "[LanguageService] Post-UI index reconciliation complete: {} indexed, {} removed in {}ms; relationships {}/{} resolved, {} unresolved, {} missing sources, {} missing targets, {} missing roots; unresolved by type [{}]; top unresolved [{}]",
                                 report.files_indexed,
                                 report.files_removed,
                                 report.duration_ms,
@@ -108,7 +138,9 @@ pub fn ensure_post_ui_startup<R: Runtime>(app_handle: &tauri::AppHandle<R>) {
                                 report.graph_quality.unresolved_symbol_relationships,
                                 report.graph_quality.missing_source_symbols,
                                 report.graph_quality.missing_target_symbols,
-                                report.graph_quality.indexed_files_missing_root_symbol
+                                report.graph_quality.indexed_files_missing_root_symbol,
+                                unresolved_by_type,
+                                top_unresolved
                             );
                         }
                         Err(error) => {

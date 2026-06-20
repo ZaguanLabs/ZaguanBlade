@@ -15,6 +15,7 @@ use crate::project_settings;
 use crate::symbol_index::{
     FileIndexRecord, FileRelationshipRecord, RelationshipIntegrityStats, SearchQuery, SearchResult,
     SemanticAnchor, SemanticAnchorResult, SymbolReference, SymbolStore,
+    UnresolvedRelationshipTarget,
 };
 use crate::tree_sitter::{
     extract_symbol_relationships, extract_symbols, Language, Position, Range, Symbol,
@@ -108,6 +109,16 @@ pub struct IndexGraphQualityReport {
     pub missing_source_symbols: usize,
     pub missing_target_symbols: usize,
     pub indexed_files_missing_root_symbol: usize,
+    pub by_type: Vec<IndexRelationshipTypeQuality>,
+    pub top_unresolved_targets: Vec<UnresolvedRelationshipTarget>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IndexRelationshipTypeQuality {
+    pub relationship_type: String,
+    pub total_relationships: usize,
+    pub resolved_relationships: usize,
+    pub unresolved_symbol_relationships: usize,
 }
 
 impl IndexGraphQualityReport {
@@ -122,6 +133,17 @@ impl IndexGraphQualityReport {
             missing_source_symbols: stats.missing_source_symbols,
             missing_target_symbols: stats.missing_target_symbols,
             indexed_files_missing_root_symbol,
+            by_type: stats
+                .by_type
+                .into_iter()
+                .map(|stats| IndexRelationshipTypeQuality {
+                    relationship_type: stats.relationship_type,
+                    total_relationships: stats.total_relationships,
+                    resolved_relationships: stats.resolved_relationships,
+                    unresolved_symbol_relationships: stats.unresolved_symbol_relationships,
+                })
+                .collect(),
+            top_unresolved_targets: stats.top_unresolved_targets,
         }
     }
 }

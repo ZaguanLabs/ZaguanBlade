@@ -53,13 +53,31 @@ pub struct FileRelationshipRecord {
     pub relationships: Vec<SymbolRelationship>,
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RelationshipIntegrityStats {
     pub total_relationships: usize,
     pub resolved_relationships: usize,
     pub unresolved_symbol_relationships: usize,
     pub missing_source_symbols: usize,
     pub missing_target_symbols: usize,
+    pub by_type: Vec<RelationshipTypeStats>,
+    pub top_unresolved_targets: Vec<UnresolvedRelationshipTarget>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RelationshipTypeStats {
+    pub relationship_type: String,
+    pub total_relationships: usize,
+    pub resolved_relationships: usize,
+    pub unresolved_symbol_relationships: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UnresolvedRelationshipTarget {
+    pub relationship_type: String,
+    pub target_name: String,
+    pub count: usize,
+    pub example_source_file: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1410,6 +1428,53 @@ impl SymbolStore {
             [],
             |row| row.get(0),
         )?;
+        let by_type = {
+            let mut stmt = conn.prepare(
+                r#"
+                SELECT relationship_type,
+                       COUNT(*),
+                       SUM(CASE WHEN target_symbol_id IS NOT NULL THEN 1 ELSE 0 END),
+                       SUM(CASE WHEN target_symbol_id IS NULL AND relationship_type <> 'import' THEN 1 ELSE 0 END)
+                FROM symbol_relationships
+                GROUP BY relationship_type
+                ORDER BY COUNT(*) DESC, relationship_type ASC
+                "#,
+            )?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok(RelationshipTypeStats {
+                        relationship_type: row.get(0)?,
+                        total_relationships: row.get::<_, i64>(1)? as usize,
+                        resolved_relationships: row.get::<_, i64>(2)? as usize,
+                        unresolved_symbol_relationships: row.get::<_, i64>(3)? as usize,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        let top_unresolved_targets = {
+            let mut stmt = conn.prepare(
+                r#"
+                SELECT relationship_type, target_name, COUNT(*), MIN(source_file_path)
+                FROM symbol_relationships
+                WHERE target_symbol_id IS NULL AND relationship_type <> 'import'
+                GROUP BY relationship_type, target_name
+                ORDER BY COUNT(*) DESC, relationship_type ASC, target_name ASC
+                LIMIT 12
+                "#,
+            )?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok(UnresolvedRelationshipTarget {
+                        relationship_type: row.get(0)?,
+                        target_name: row.get(1)?,
+                        count: row.get::<_, i64>(2)? as usize,
+                        example_source_file: row.get(3)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
 
         Ok(RelationshipIntegrityStats {
             total_relationships: total_relationships as usize,
@@ -1417,6 +1482,8 @@ impl SymbolStore {
             unresolved_symbol_relationships: unresolved_symbol_relationships as usize,
             missing_source_symbols: missing_source_symbols as usize,
             missing_target_symbols: missing_target_symbols as usize,
+            by_type,
+            top_unresolved_targets,
         })
     }
 
@@ -1898,6 +1965,18 @@ mod tests {
         assert_eq!(stats.unresolved_symbol_relationships, 1);
         assert_eq!(stats.missing_source_symbols, 2);
         assert_eq!(stats.missing_target_symbols, 1);
+        assert!(stats.by_type.iter().any(|stats| {
+            stats.relationship_type == "call"
+                && stats.total_relationships == 2
+                && stats.resolved_relationships == 1
+                && stats.unresolved_symbol_relationships == 1
+        }));
+        assert!(stats.top_unresolved_targets.iter().any(|target| {
+            target.relationship_type == "call"
+                && target.target_name == "dynamicCall"
+                && target.count == 1
+                && target.example_source_file == "main.ts"
+        }));
     }
 
     #[test]
