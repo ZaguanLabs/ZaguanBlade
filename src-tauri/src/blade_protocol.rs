@@ -770,6 +770,18 @@ pub struct ContextProjectInfo {
     pub likely_entry_points: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index_health_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_instructions: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_instruction_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_instruction_includes: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub agent_instructions_truncated: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

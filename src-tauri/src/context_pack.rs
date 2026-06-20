@@ -73,6 +73,7 @@ pub fn build_context_pack(
                 include_project_index_min,
                 normalized_active_file.as_deref(),
                 &normalized_open_files,
+                &[],
                 None,
             ));
             payload.timing_ms = Some(started_at.elapsed().as_millis() as u64);
@@ -81,14 +82,6 @@ pub fn build_context_pack(
     };
 
     let index_health = service.audit_index_health().ok();
-    let project_context = build_project_context(
-        workspace_root,
-        include_project_index_min,
-        normalized_active_file.as_deref(),
-        &normalized_open_files,
-        index_health.as_ref(),
-    );
-
     let mut primary = collect_primary_files_for_queries(
         &service,
         &queries,
@@ -139,6 +132,18 @@ pub fn build_context_pack(
         &enriched_files,
         index_health.as_ref(),
         max_results,
+    );
+    let primary_paths = primary
+        .iter()
+        .map(|file| file.path.clone())
+        .collect::<Vec<_>>();
+    let project_context = build_project_context(
+        workspace_root,
+        include_project_index_min,
+        normalized_active_file.as_deref(),
+        &normalized_open_files,
+        &primary_paths,
+        index_health.as_ref(),
     );
 
     let summary = if let Some(first) = primary.first() {
@@ -306,6 +311,7 @@ fn build_project_context(
     include_project_index_min: bool,
     active_file: Option<&str>,
     open_files: &[String],
+    candidate_paths: &[String],
     index_health: Option<&IndexHealthSnapshot>,
 ) -> ContextProjectInfo {
     let context_dir = get_zblade_dir(workspace_root).join("context");
@@ -332,6 +338,13 @@ fn build_project_context(
     let languages = project_language_summaries(&source_files);
     let top_directories = project_directory_summaries(&source_files);
     let likely_entry_points = likely_entry_points(&source_files);
+    let mut agent_candidate_paths = open_files.to_vec();
+    if let Some(active_file) = active_file {
+        agent_candidate_paths.insert(0, active_file.to_string());
+    }
+    agent_candidate_paths.extend(candidate_paths.iter().cloned());
+    let agent_instructions =
+        crate::agent_instructions::load_agent_instructions(workspace_root, &agent_candidate_paths);
 
     ContextProjectInfo {
         project_index_min,
@@ -366,6 +379,10 @@ fn build_project_context(
         likely_entry_points,
         index_health_status: index_health
             .map(|health| format!("{:?}", health.status).to_ascii_lowercase()),
+        agent_instructions: agent_instructions.content,
+        agent_instruction_files: agent_instructions.files,
+        agent_instruction_includes: agent_instructions.includes,
+        agent_instructions_truncated: agent_instructions.truncated,
     }
 }
 
@@ -2087,7 +2104,7 @@ mod tests {
         .unwrap();
         std::fs::write(context_dir.join("project_index.md"), "full project context").unwrap();
 
-        let project_context = build_project_context(temp_dir.path(), true, None, &[], None);
+        let project_context = build_project_context(temp_dir.path(), true, None, &[], &[], None);
 
         assert_eq!(
             project_context.project_index_min.as_deref(),
@@ -2119,7 +2136,7 @@ mod tests {
             Some(".zblade/context/project_index.md")
         );
 
-        let project_context = build_project_context(temp_dir.path(), false, None, &[], None);
+        let project_context = build_project_context(temp_dir.path(), false, None, &[], &[], None);
         assert!(project_context.project_index_min.is_none());
         assert!(project_context.project_index_min_available);
         assert!(!project_context.project_index_min_requested);
@@ -2133,7 +2150,7 @@ mod tests {
     #[test]
     fn project_context_reports_missing_project_index_files() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let project_context = build_project_context(temp_dir.path(), true, None, &[], None);
+        let project_context = build_project_context(temp_dir.path(), true, None, &[], &[], None);
 
         assert!(project_context.project_index_min.is_none());
         assert!(!project_context.project_index_min_available);
@@ -2154,7 +2171,7 @@ mod tests {
         std::fs::create_dir_all(&context_dir).unwrap();
         std::fs::write(context_dir.join("project_index_min.md"), "   \n").unwrap();
 
-        let project_context = build_project_context(temp_dir.path(), true, None, &[], None);
+        let project_context = build_project_context(temp_dir.path(), true, None, &[], &[], None);
 
         assert!(project_context.project_index_min.is_none());
         assert!(project_context.project_index_min_available);
@@ -2214,6 +2231,7 @@ mod tests {
             false,
             Some("src/main.tsx"),
             &open_files,
+            &[],
             Some(&health),
         );
 
@@ -2262,7 +2280,7 @@ mod tests {
         std::fs::create_dir_all(temp_dir.path().join("src")).unwrap();
         std::fs::write(temp_dir.path().join("src/lib.rs"), "pub fn run() {}").unwrap();
 
-        let project_context = build_project_context(temp_dir.path(), false, None, &[], None);
+        let project_context = build_project_context(temp_dir.path(), false, None, &[], &[], None);
 
         assert_eq!(
             project_context.source.as_deref(),
@@ -2283,6 +2301,39 @@ mod tests {
         assert!(project_context
             .likely_entry_points
             .contains(&"src/lib.rs".to_string()));
+    }
+
+    #[test]
+    fn project_context_includes_agent_instructions_for_candidate_paths() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp_dir.path().join("src/ui")).unwrap();
+        std::fs::write(temp_dir.path().join("AGENTS.md"), "Root workflow").unwrap();
+        std::fs::write(temp_dir.path().join("src/AGENTS.md"), "Rust workflow").unwrap();
+        std::fs::write(
+            temp_dir.path().join("src/ui/Button.tsx"),
+            "export const Button = null;\n",
+        )
+        .unwrap();
+
+        let project_context = build_project_context(
+            temp_dir.path(),
+            false,
+            None,
+            &[],
+            &["src/ui/Button.tsx".to_string()],
+            None,
+        );
+
+        let instructions = project_context
+            .agent_instructions
+            .expect("agent instructions");
+        assert!(instructions.contains("Root workflow"));
+        assert!(instructions.contains("Rust workflow"));
+        assert_eq!(
+            project_context.agent_instruction_files,
+            vec!["AGENTS.md", "src/AGENTS.md"]
+        );
+        assert!(!project_context.agent_instructions_truncated);
     }
 
     #[test]

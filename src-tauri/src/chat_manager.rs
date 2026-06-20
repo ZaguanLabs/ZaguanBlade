@@ -204,6 +204,7 @@ fn load_local_system_prompt(
     shell_value: &str,
     date_value: &str,
     time_value: &str,
+    agent_instructions: Option<&str>,
 ) -> Option<String> {
     let rendered = crate::config::read_prompt_for_model(model_id)
         .ok()
@@ -223,10 +224,33 @@ fn load_local_system_prompt(
         })
         .filter(|prompt| !prompt.trim().is_empty());
 
-    Some(maybe_prefix_gemma4_think_token(
-        model_id,
-        apply_zblade_workflow_guidance(rendered),
-    ))
+    let mut prompt =
+        maybe_prefix_gemma4_think_token(model_id, apply_zblade_workflow_guidance(rendered));
+    if let Some(instructions) = agent_instructions
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        prompt.push_str("\n\n# Repository Instructions\n\n");
+        prompt.push_str(instructions);
+    }
+    Some(prompt)
+}
+
+fn resolve_local_agent_instructions(
+    workspace: Option<&PathBuf>,
+    active_file: Option<&str>,
+    open_files: Option<&[String]>,
+) -> Option<String> {
+    let workspace_root = workspace?;
+    let mut candidate_paths = Vec::new();
+    if let Some(active_file) = active_file.filter(|path| !path.trim().is_empty()) {
+        candidate_paths.push(active_file.to_string());
+    }
+    if let Some(open_files) = open_files {
+        candidate_paths.extend(open_files.iter().cloned());
+    }
+
+    crate::agent_instructions::load_agent_instructions(workspace_root, &candidate_paths).content
 }
 
 fn gemma4_temperature(model_id: &str) -> Option<f32> {
@@ -774,7 +798,7 @@ impl ChatManager {
                     http,
                     workspace,
                     active_file,
-                    None,
+                    open_files.clone(),
                     None,
                     None,
                     None,
@@ -791,7 +815,7 @@ impl ChatManager {
                     http,
                     workspace,
                     active_file,
-                    None,
+                    open_files.clone(),
                     None,
                     None,
                     None,
@@ -1424,6 +1448,7 @@ impl ChatManager {
         http: reqwest::Client,
         workspace: Option<&PathBuf>,
         active_file: Option<String>,
+        open_files: Option<Vec<String>>,
         composite_tools_enabled: bool,
     ) -> Result<(), String> {
         let model_name = model_id
@@ -1439,6 +1464,11 @@ impl ChatManager {
         let shell_value = std::env::var("SHELL").unwrap_or_default();
         let date_value = chrono::Local::now().format("%Y-%m-%d").to_string();
         let time_value = chrono::Local::now().format("%H:%M:%S %z").to_string();
+        let agent_instructions = resolve_local_agent_instructions(
+            workspace,
+            (!active_file_value.is_empty()).then_some(active_file_value.as_str()),
+            open_files.as_deref(),
+        );
 
         let mut messages: Vec<OllamaMessage> = Vec::new();
         if let Some(rendered_prompt) = load_local_system_prompt(
@@ -1449,6 +1479,7 @@ impl ChatManager {
             &shell_value,
             &date_value,
             &time_value,
+            agent_instructions.as_deref(),
         ) {
             messages.push(OllamaMessage {
                 role: "system".to_string(),
@@ -1866,6 +1897,7 @@ impl ChatManager {
         http: reqwest::Client,
         workspace: Option<&PathBuf>,
         active_file: Option<String>,
+        open_files: Option<Vec<String>>,
         composite_tools_enabled: bool,
     ) -> Result<(), String> {
         let model_name = model_id
@@ -1881,6 +1913,11 @@ impl ChatManager {
         let shell_value = std::env::var("SHELL").unwrap_or_default();
         let date_value = chrono::Local::now().format("%Y-%m-%d").to_string();
         let time_value = chrono::Local::now().format("%H:%M:%S %z").to_string();
+        let agent_instructions = resolve_local_agent_instructions(
+            workspace,
+            (!active_file_value.is_empty()).then_some(active_file_value.as_str()),
+            open_files.as_deref(),
+        );
 
         #[derive(Serialize, Clone)]
         #[serde(untagged)]
@@ -1941,6 +1978,7 @@ impl ChatManager {
             &shell_value,
             &date_value,
             &time_value,
+            agent_instructions.as_deref(),
         ) {
             messages.push(OpenAIMessage {
                 role: "system".to_string(),
@@ -3524,6 +3562,7 @@ mod tests {
             "zsh",
             "2026-06-03",
             "10:00:00 +0200",
+            None,
         )
         .expect("fallback prompt");
 
@@ -3545,6 +3584,7 @@ mod tests {
             "zsh",
             "2026-06-13",
             "10:00:00 +0200",
+            None,
         )
         .expect("fallback prompt");
 
@@ -3554,6 +3594,25 @@ mod tests {
         assert!(prompt.contains("Current date: 2026-06-13"));
         assert!(!prompt.contains("{{CURRENT_DATE}}"));
         assert!(!prompt.contains("ZBlade workflow guidance:"));
+    }
+
+    #[test]
+    fn local_system_prompt_appends_agent_instructions() {
+        let prompt = load_local_system_prompt(
+            "test-model-without-local-prompt",
+            "/workspace/project",
+            "src/main.rs",
+            "linux",
+            "zsh",
+            "2026-06-03",
+            "10:00:00 +0200",
+            Some("## AGENTS.md\n\nUse the user's workflow."),
+        )
+        .expect("fallback prompt");
+
+        assert!(prompt.contains("You are an AI coding assistant in Zaguán Blade"));
+        assert!(prompt.contains("# Repository Instructions"));
+        assert!(prompt.contains("Use the user's workflow."));
     }
 
     #[test]

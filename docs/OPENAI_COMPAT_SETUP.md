@@ -106,6 +106,9 @@ Available tools: {{AVAILABLE_TOOLS}}
 
 If no matching file exists, Blade uses its bundled local-AI system prompt.
 
+Workspace `AGENTS.md` files are handled separately from these model prompts. When present, Blade adds the applicable repository instructions after the local
+model prompt, including nested `AGENTS.md` files and local Markdown includes such as `@workflow.md`.
+
 ## Current Limitations
 
 - Local OpenAI-compatible providers do not have built-in web fetch or deep research. Provide external context yourself when current web facts matter.

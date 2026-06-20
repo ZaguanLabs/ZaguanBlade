@@ -259,7 +259,7 @@ impl AiProviderRuntime for OllamaRuntime {
         http: reqwest::Client,
         workspace: Option<&PathBuf>,
         active_file: Option<String>,
-        _open_files: Option<Vec<String>>,
+        open_files: Option<Vec<String>>,
         _cursor_line: Option<usize>,
         _cursor_column: Option<usize>,
         _storage_mode: Option<String>,
@@ -273,6 +273,7 @@ impl AiProviderRuntime for OllamaRuntime {
             http,
             workspace,
             active_file,
+            open_files,
             composite_tools_enabled,
         )?;
 
@@ -297,6 +298,7 @@ impl AiProviderRuntime for OllamaRuntime {
             http,
             workspace,
             None,
+            None,
             manager.composite_tools_enabled(),
         )?;
         Ok(ProviderSessionHandle { started: true })
@@ -317,7 +319,7 @@ impl AiProviderRuntime for OpenAiCompatRuntime {
         http: reqwest::Client,
         workspace: Option<&PathBuf>,
         active_file: Option<String>,
-        _open_files: Option<Vec<String>>,
+        open_files: Option<Vec<String>>,
         _cursor_line: Option<usize>,
         _cursor_column: Option<usize>,
         _storage_mode: Option<String>,
@@ -331,6 +333,7 @@ impl AiProviderRuntime for OpenAiCompatRuntime {
             http,
             workspace,
             active_file,
+            open_files,
             composite_tools_enabled,
         )?;
 
@@ -354,6 +357,7 @@ impl AiProviderRuntime for OpenAiCompatRuntime {
             model_id,
             http,
             workspace,
+            None,
             None,
             manager.composite_tools_enabled(),
         )?;

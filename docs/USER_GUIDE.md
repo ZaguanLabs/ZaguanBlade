@@ -191,6 +191,8 @@ Available when a workspace is open:
 - Context compression toggle
 - Remote or local compression model
 - Whether files matched by `.gitignore` may be included in AI context
+- Existing `AGENTS.md` files are loaded as workspace instructions. Blade reads the root file and any nested files that apply to the active or relevant
+  paths, and supports local Markdown includes such as `@workflow.md` or `@docs/workflow.md`.
 
 ### Remote
 
