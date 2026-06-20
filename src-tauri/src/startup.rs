@@ -129,13 +129,14 @@ pub fn ensure_post_ui_startup<R: Runtime>(app_handle: &tauri::AppHandle<R>) {
                                 .collect::<Vec<_>>()
                                 .join(", ");
                             eprintln!(
-                                "[LanguageService] Post-UI index reconciliation complete: {} indexed, {} removed in {}ms; relationships {}/{} resolved, {} unresolved, {} missing sources, {} missing targets, {} missing roots; unresolved by type [{}]; top unresolved [{}]",
+                                "[LanguageService] Post-UI index reconciliation complete: {} indexed, {} removed in {}ms; relationships {}/{} resolved, {} unresolved, {} suppressed external, {} missing sources, {} missing targets, {} missing roots; unresolved by type [{}]; top unresolved [{}]",
                                 report.files_indexed,
                                 report.files_removed,
                                 report.duration_ms,
                                 report.graph_quality.resolved_relationships,
                                 report.graph_quality.total_relationships,
                                 report.graph_quality.unresolved_symbol_relationships,
+                                report.graph_quality.suppressed_external_relationships,
                                 report.graph_quality.missing_source_symbols,
                                 report.graph_quality.missing_target_symbols,
                                 report.graph_quality.indexed_files_missing_root_symbol,

@@ -88,13 +88,28 @@ impl WsConnectionManager {
     pub async fn ensure_connected(
         self: &Arc<Self>,
     ) -> Result<mpsc::UnboundedReceiver<BladeWsEvent>, String> {
-        let has_client = {
+        let current_client = {
             let client_lock = self.client.lock().await;
-            client_lock.is_some()
+            client_lock.as_ref().cloned()
         };
+        let has_client = current_client.is_some();
 
         let state = self.state.read().await.clone();
-        if !has_client || matches!(state, ConnectionState::Disconnected) {
+        let should_return_to_primary = if matches!(state, ConnectionState::Connected) {
+            if let Some(client) = current_client {
+                client.connected_role().await
+                    == Some(crate::blade_endpoint::BladeEndpointRole::Backup)
+                    && crate::blade_endpoint::preferred_managed_role().await
+                        == crate::blade_endpoint::BladeEndpointRole::Primary
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if !has_client || matches!(state, ConnectionState::Disconnected) || should_return_to_primary
+        {
             self.connect().await?;
         }
 

@@ -105,7 +105,7 @@ impl AppState {
             if let Ok(url) = std::env::var("BLADE_URL") {
                 config.blade_url = url;
             } else {
-                config.blade_url = "https://coder.zaguanai.com".to_string();
+                config.blade_url = config::default_blade_url();
             }
         }
 

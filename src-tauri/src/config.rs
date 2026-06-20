@@ -125,9 +125,8 @@ impl ApiConfig {
     }
 }
 
-fn default_blade_url() -> String {
-    // Check environment variable first, then fall back to fidelity
-    std::env::var("BLADE_URL").unwrap_or_else(|_| "https://coder.zaguanai.com".to_string())
+pub fn default_blade_url() -> String {
+    crate::blade_endpoint::default_blade_url()
 }
 
 pub fn default_ollama_url() -> String {

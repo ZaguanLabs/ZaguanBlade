@@ -7,7 +7,8 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use std::time::Duration;
+use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio_tungstenite::{
     connect_async_with_config,
     tungstenite::protocol::{Message, WebSocketConfig},
@@ -29,6 +30,7 @@ pub struct BladeWsClient {
     base_url: String,
     api_key: String,
     connection: Arc<Mutex<Option<WsConnection>>>,
+    connected_role: Arc<RwLock<Option<crate::blade_endpoint::BladeEndpointRole>>>,
 }
 
 struct WsConnection {
@@ -412,7 +414,12 @@ impl BladeWsClient {
             base_url,
             api_key,
             connection: Arc::new(Mutex::new(None)),
+            connected_role: Arc::new(RwLock::new(None)),
         }
+    }
+
+    pub async fn connected_role(&self) -> Option<crate::blade_endpoint::BladeEndpointRole> {
+        *self.connected_role.read().await
     }
 
     /// Connect to the WebSocket server and authenticate with retry logic
@@ -421,50 +428,68 @@ impl BladeWsClient {
         &self,
         workspace_path: Option<String>,
     ) -> Result<mpsc::UnboundedReceiver<BladeWsEvent>, String> {
-        // Convert HTTP URL to WebSocket URL
-        let ws_url = self
-            .base_url
-            .replace("http://", "ws://")
-            .replace("https://", "wss://");
-        let url = format!("{}/v1/blade/v2?api_key={}", ws_url, self.api_key);
-
         let mut retry_count = 0;
         let max_retries = 8; // ~2 minutes total wait time with exponential backoff
-        let ws_stream;
+        let connect_timeout = Duration::from_secs(10);
 
-        loop {
-            // Intentionally quiet: avoid high-frequency websocket connect logs.
+        let (ws_stream, connected_role) = 'connect_loop: loop {
+            let candidates = crate::blade_endpoint::connection_candidates(&self.base_url).await;
+            let mut last_error = "no Blade endpoints configured".to_string();
 
-            // Configure WebSocket with larger message size limit (64MB instead of default 16MB)
-            // This prevents "Space limit exceeded" errors for large tool results
-            let mut ws_config = WebSocketConfig::default();
-            ws_config.max_message_size = Some(64 * 1024 * 1024); // 64MB
-            ws_config.max_frame_size = Some(64 * 1024 * 1024); // 64MB per frame
+            for endpoint in candidates {
+                // Intentionally quiet: avoid high-frequency websocket connect logs.
+                let ws_url = crate::blade_endpoint::to_websocket_url(&endpoint.base_url);
+                let url = format!("{}/v1/blade/v2?api_key={}", ws_url, self.api_key);
 
-            match connect_async_with_config(&url, Some(ws_config), false).await {
-                Ok((stream, _)) => {
-                    // eprintln!("[BLADE WS] Connected successfully");
-                    ws_stream = stream;
-                    break;
-                }
-                Err(e) => {
-                    retry_count += 1;
-                    if retry_count > max_retries {
-                        return Err(format!(
-                            "WebSocket connection failed after {} retries: {}",
-                            max_retries, e
-                        ));
+                // Configure WebSocket with larger message size limit (64MB instead of default 16MB)
+                // This prevents "Space limit exceeded" errors for large tool results
+                let mut ws_config = WebSocketConfig::default();
+                ws_config.max_message_size = Some(64 * 1024 * 1024); // 64MB
+                ws_config.max_frame_size = Some(64 * 1024 * 1024); // 64MB per frame
+
+                match tokio::time::timeout(
+                    connect_timeout,
+                    connect_async_with_config(&url, Some(ws_config), false),
+                )
+                .await
+                {
+                    Ok(Ok((stream, _))) => {
+                        crate::blade_endpoint::mark_success(&endpoint).await;
+                        if endpoint.role == crate::blade_endpoint::BladeEndpointRole::Backup {
+                            crate::blade_endpoint::start_primary_monitor(self.api_key.clone());
+                        }
+                        break 'connect_loop (stream, endpoint.role);
                     }
-
-                    // Exponential backoff: 500ms, 1s, 2s, 4s, 8s, 16s, 32s, 64s
-                    let delay_ms = 500 * (1 << (retry_count - 1));
-                    let delay = std::time::Duration::from_millis(delay_ms);
-
-                    let _ = (&e, &delay, retry_count, max_retries);
-
-                    tokio::time::sleep(delay).await;
+                    Ok(Err(error)) => {
+                        last_error = format!("{}: {}", endpoint.base_url, error);
+                        crate::blade_endpoint::mark_failure(&endpoint, &self.api_key).await;
+                    }
+                    Err(_) => {
+                        last_error = format!(
+                            "{}: connection timed out after {:?}",
+                            endpoint.base_url, connect_timeout
+                        );
+                        crate::blade_endpoint::mark_failure(&endpoint, &self.api_key).await;
+                    }
                 }
             }
+
+            retry_count += 1;
+            if retry_count > max_retries {
+                return Err(format!(
+                    "WebSocket connection failed after {} retries: {}",
+                    max_retries, last_error
+                ));
+            }
+
+            // Exponential backoff: 500ms, 1s, 2s, 4s, 8s, 16s, 32s, 64s
+            let delay_ms = 500 * (1 << (retry_count - 1));
+            let delay = Duration::from_millis(delay_ms);
+            tokio::time::sleep(delay).await;
+        };
+        {
+            let mut role = self.connected_role.write().await;
+            *role = Some(connected_role);
         }
 
         let (mut write, mut read) = ws_stream.split();
@@ -1152,6 +1177,8 @@ impl BladeWsClient {
         if let Some(ref c) = *conn {
             let _ = c.tx.send(WsMessage::Close);
         }
+        let mut role = self.connected_role.write().await;
+        *role = None;
     }
 
     /// Parse incoming WebSocket message

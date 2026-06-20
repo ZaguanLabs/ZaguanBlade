@@ -20,7 +20,7 @@ pub async fn save_global_settings(
 
     // Enforce hardcoded Blade URL
     let mut safe_settings = settings.clone();
-    safe_settings.blade_url = "https://coder.zaguanai.com".to_string();
+    safe_settings.blade_url = config::default_blade_url();
 
     *config = safe_settings.clone();
     drop(config);

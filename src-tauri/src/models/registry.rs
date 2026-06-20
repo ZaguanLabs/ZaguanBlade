@@ -59,18 +59,81 @@ async fn fetch_models_from_server(
     blade_url: &str,
     api_key: &str,
 ) -> Result<Vec<ModelInfo>, Box<dyn std::error::Error + Send + Sync>> {
-    let url = format!("{}/v1/blade/models", blade_url);
+    let candidates = crate::blade_endpoint::connection_candidates(blade_url).await;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()?;
+    let mut last_error = "no Blade endpoints configured".to_string();
+
+    for endpoint in candidates {
+        match fetch_models_from_endpoint(&client, &endpoint, api_key).await {
+            Ok(models) => {
+                crate::blade_endpoint::mark_success(&endpoint).await;
+                if endpoint.role == crate::blade_endpoint::BladeEndpointRole::Backup {
+                    crate::blade_endpoint::start_primary_monitor(api_key.to_string());
+                }
+                return Ok(models);
+            }
+            Err(error) => {
+                last_error = error.to_string();
+                if error.should_failover {
+                    crate::blade_endpoint::mark_failure(&endpoint, api_key).await;
+                    continue;
+                }
+                return Err(error.source);
+            }
+        }
+    }
+
+    Err(boxed_error(last_error))
+}
+
+struct EndpointFetchError {
+    source: Box<dyn std::error::Error + Send + Sync>,
+    should_failover: bool,
+}
+
+impl std::fmt::Display for EndpointFetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.source.fmt(f)
+    }
+}
+
+fn boxed_error(message: String) -> Box<dyn std::error::Error + Send + Sync> {
+    Box::new(std::io::Error::other(message))
+}
+
+async fn fetch_models_from_endpoint(
+    client: &reqwest::Client,
+    endpoint: &crate::blade_endpoint::BladeEndpoint,
+    api_key: &str,
+) -> Result<Vec<ModelInfo>, EndpointFetchError> {
+    let url = format!("{}/v1/blade/models", endpoint.base_url);
 
     let mut request = client.get(&url);
     if !api_key.is_empty() {
         request = request.header("Authorization", format!("Bearer {}", api_key));
     }
 
-    let response = request.send().await?;
-    let response_text = response.text().await?;
+    let response = request.send().await.map_err(|error| EndpointFetchError {
+        should_failover: true,
+        source: Box::new(error),
+    })?;
+
+    let status = response.status();
+    let response_text = response.text().await.map_err(|error| EndpointFetchError {
+        should_failover: true,
+        source: Box::new(error),
+    })?;
+    if !status.is_success() {
+        return Err(EndpointFetchError {
+            should_failover: status.is_server_error(),
+            source: boxed_error(format!(
+                "Blade model registry error {}: {}",
+                status, response_text
+            )),
+        });
+    }
 
     // Try to deserialize
     let blade_response: BladeModelsResponse = match serde_json::from_str(&response_text) {
@@ -81,7 +144,10 @@ async fn fetch_models_from_server(
                 "[MODEL REGISTRY] Raw response preview: {:.1000}",
                 response_text
             );
-            return Err(Box::new(e));
+            return Err(EndpointFetchError {
+                source: Box::new(e),
+                should_failover: false,
+            });
         }
     };
 

@@ -21,7 +21,7 @@ use crate::tree_sitter::{
     extract_symbol_relationships, extract_symbols, Language, Position, Range, Symbol,
     SymbolRelationship, SymbolRelationshipType, SymbolType, TreeSitterParser,
 };
-use crate::worktree::WorktreeStore;
+use crate::worktree::{normalize_path, WorktreeStore};
 use serde::{Deserialize, Serialize};
 
 thread_local! {
@@ -106,6 +106,7 @@ pub struct IndexGraphQualityReport {
     pub total_relationships: usize,
     pub resolved_relationships: usize,
     pub unresolved_symbol_relationships: usize,
+    pub suppressed_external_relationships: usize,
     pub missing_source_symbols: usize,
     pub missing_target_symbols: usize,
     pub indexed_files_missing_root_symbol: usize,
@@ -130,6 +131,7 @@ impl IndexGraphQualityReport {
             total_relationships: stats.total_relationships,
             resolved_relationships: stats.resolved_relationships,
             unresolved_symbol_relationships: stats.unresolved_symbol_relationships,
+            suppressed_external_relationships: 0,
             missing_source_symbols: stats.missing_source_symbols,
             missing_target_symbols: stats.missing_target_symbols,
             indexed_files_missing_root_symbol,
@@ -923,6 +925,7 @@ impl LanguageService {
 
         let total_queued = queued_files.len();
         let mut files_indexed = 0usize;
+        let mut suppressed_external_relationships = 0usize;
         if total_queued > 0 || files_removed > 0 {
             health.status = IndexHealthStatus::Indexing;
             health.queued_files = total_queued;
@@ -1028,7 +1031,8 @@ impl LanguageService {
                 );
                 self.set_index_health(health.clone());
                 progress(&health);
-                self.commit_staged_file_indexes(&staged_files)?;
+                suppressed_external_relationships +=
+                    self.commit_staged_file_indexes(&staged_files)?;
             }
         }
 
@@ -1038,7 +1042,8 @@ impl LanguageService {
         final_health.active_workers = 0;
         final_health.current_file = None;
         final_health.queued_files = final_health.stale_files + final_health.missing_files;
-        let graph_quality = self.audit_index_graph_quality()?;
+        let mut graph_quality = self.audit_index_graph_quality()?;
+        graph_quality.suppressed_external_relationships = suppressed_external_relationships;
         let has_hard_graph_issues = graph_quality.missing_source_symbols > 0
             || graph_quality.missing_target_symbols > 0
             || graph_quality.indexed_files_missing_root_symbol > 0;
@@ -1319,7 +1324,13 @@ impl LanguageService {
 
         // Delete old symbols and insert new ones
         let semantic_anchors = extract_semantic_anchors(file_path, &content);
-        self.resolve_relationship_targets(file_path, &symbols, &mut relationships)?;
+        self.resolve_relationship_targets(
+            file_path,
+            extraction_language,
+            &symbols,
+            &mut relationships,
+        )?;
+        Self::suppress_known_external_relationships(extraction_language, &mut relationships);
         self.symbol_store.replace_file_index(
             file_path,
             &hash,
@@ -1392,9 +1403,9 @@ impl LanguageService {
     fn commit_staged_file_indexes(
         &self,
         staged_files: &[StagedFileIndex],
-    ) -> Result<(), LanguageError> {
+    ) -> Result<usize, LanguageError> {
         if staged_files.is_empty() {
-            return Ok(());
+            return Ok(0);
         }
 
         let initial_records = staged_files
@@ -1431,6 +1442,7 @@ impl LanguageService {
         self.symbol_store.replace_file_indexes(&initial_records)?;
 
         let mut final_relationship_records = Vec::with_capacity(staged_files.len());
+        let mut suppressed_external_relationships = 0usize;
         for file in staged_files {
             let mut relationships = file.relationships.clone();
             self.append_module_export_relationships(
@@ -1447,7 +1459,16 @@ impl LanguageService {
                     &mut relationships,
                 );
             }
-            self.resolve_relationship_targets(&file.file_path, &file.symbols, &mut relationships)?;
+            self.resolve_relationship_targets(
+                &file.file_path,
+                file.extraction_language,
+                &file.symbols,
+                &mut relationships,
+            )?;
+            suppressed_external_relationships += Self::suppress_known_external_relationships(
+                file.extraction_language,
+                &mut relationships,
+            );
             final_relationship_records.push(FileRelationshipRecord {
                 file_path: file.file_path.clone(),
                 relationships,
@@ -1469,7 +1490,7 @@ impl LanguageService {
             );
         }
 
-        Ok(())
+        Ok(suppressed_external_relationships)
     }
 
     /// Index an entire directory recursively
@@ -2243,9 +2264,10 @@ impl LanguageService {
     }
 
     fn path_to_workspace_relative(&self, path: &Path) -> String {
-        match path.strip_prefix(&self.workspace_root) {
+        let normalized = std::fs::canonicalize(path).unwrap_or_else(|_| normalize_path(path));
+        match normalized.strip_prefix(&self.workspace_root) {
             Ok(relative) => relative.to_string_lossy().replace('\\', "/"),
-            Err(_) => path.to_string_lossy().replace('\\', "/"),
+            Err(_) => normalized.to_string_lossy().replace('\\', "/"),
         }
     }
 
@@ -2581,6 +2603,7 @@ impl LanguageService {
     fn resolve_relationship_targets(
         &self,
         file_path: &str,
+        language: Language,
         file_symbols: &[Symbol],
         relationships: &mut [SymbolRelationship],
     ) -> Result<(), LanguageError> {
@@ -2603,6 +2626,8 @@ impl LanguageService {
 
             relationship.target_symbol_id = self.resolve_relationship_symbol_id(
                 &relationship.target_name,
+                relationship.relationship_type,
+                language,
                 file_path,
                 file_symbols,
                 &imported_files,
@@ -2617,6 +2642,8 @@ impl LanguageService {
     fn resolve_relationship_symbol_id(
         &self,
         reference_name: &str,
+        relationship_type: SymbolRelationshipType,
+        language: Language,
         file_path: &str,
         file_symbols: &[Symbol],
         imported_files: &[String],
@@ -2656,6 +2683,12 @@ impl LanguageService {
             return Ok(Some(imported_matches[0].id.clone()));
         }
         if imported_matches.len() > 1 {
+            return Ok(None);
+        }
+
+        if relationship_type == SymbolRelationshipType::Call
+            && Self::is_known_external_call_name(language, reference_name)
+        {
             return Ok(None);
         }
 
@@ -2702,6 +2735,176 @@ impl LanguageService {
             if seen.insert(symbol.id.clone()) {
                 resolved.push(symbol.clone());
             }
+        }
+    }
+
+    fn suppress_known_external_relationships(
+        language: Language,
+        relationships: &mut Vec<SymbolRelationship>,
+    ) -> usize {
+        let before = relationships.len();
+        relationships.retain(|relationship| {
+            !Self::is_known_external_unresolved_call(language, relationship)
+        });
+        before - relationships.len()
+    }
+
+    fn is_known_external_unresolved_call(
+        language: Language,
+        relationship: &SymbolRelationship,
+    ) -> bool {
+        relationship.relationship_type == SymbolRelationshipType::Call
+            && relationship.target_symbol_id.is_none()
+            && Self::is_known_external_call_name(language, &relationship.target_name)
+    }
+
+    fn is_known_external_call_name(language: Language, target_name: &str) -> bool {
+        let name = target_name.rsplit("::").next().unwrap_or(target_name);
+        match language {
+            Language::TypeScript
+            | Language::Tsx
+            | Language::Astro
+            | Language::JavaScript
+            | Language::Jsx => matches!(
+                name,
+                "Array"
+                    | "Boolean"
+                    | "Date"
+                    | "Error"
+                    | "JSON"
+                    | "Map"
+                    | "Number"
+                    | "Object"
+                    | "Promise"
+                    | "RegExp"
+                    | "Set"
+                    | "String"
+                    | "at"
+                    | "catch"
+                    | "concat"
+                    | "error"
+                    | "every"
+                    | "filter"
+                    | "find"
+                    | "findIndex"
+                    | "flat"
+                    | "flatMap"
+                    | "forEach"
+                    | "get"
+                    | "getTime"
+                    | "has"
+                    | "includes"
+                    | "join"
+                    | "map"
+                    | "notFound"
+                    | "parse"
+                    | "push"
+                    | "redirect"
+                    | "reduce"
+                    | "revalidatePath"
+                    | "set"
+                    | "slice"
+                    | "some"
+                    | "sort"
+                    | "split"
+                    | "stringify"
+                    | "then"
+                    | "toISOString"
+                    | "toLowerCase"
+                    | "toString"
+                    | "toUpperCase"
+                    | "trim"
+                    | "useCallback"
+                    | "useEffect"
+                    | "useMemo"
+                    | "useRef"
+                    | "useState"
+            ),
+            Language::Rust => matches!(
+                name,
+                "Err"
+                    | "None"
+                    | "Ok"
+                    | "Some"
+                    | "and_then"
+                    | "as_ref"
+                    | "clone"
+                    | "collect"
+                    | "contains"
+                    | "expect"
+                    | "filter"
+                    | "format"
+                    | "get"
+                    | "insert"
+                    | "is_empty"
+                    | "iter"
+                    | "join"
+                    | "len"
+                    | "map"
+                    | "new"
+                    | "or_else"
+                    | "path"
+                    | "push"
+                    | "remove"
+                    | "to_path_buf"
+                    | "to_string"
+                    | "to_string_lossy"
+                    | "unwrap"
+                    | "unwrap_or"
+                    | "unwrap_or_default"
+                    | "write"
+            ),
+            Language::Go => matches!(
+                name,
+                "Contains"
+                    | "Error"
+                    | "Errorf"
+                    | "Fatal"
+                    | "Fatalf"
+                    | "Marshal"
+                    | "New"
+                    | "Printf"
+                    | "Println"
+                    | "Sprintf"
+                    | "TrimSpace"
+                    | "Unmarshal"
+                    | "WriteString"
+                    | "append"
+                    | "cap"
+                    | "close"
+                    | "copy"
+                    | "delete"
+                    | "len"
+                    | "make"
+                    | "new"
+                    | "panic"
+                    | "recover"
+            ),
+            Language::Python => matches!(
+                name,
+                "append"
+                    | "dict"
+                    | "enumerate"
+                    | "filter"
+                    | "format"
+                    | "get"
+                    | "int"
+                    | "items"
+                    | "join"
+                    | "keys"
+                    | "len"
+                    | "list"
+                    | "map"
+                    | "open"
+                    | "print"
+                    | "range"
+                    | "set"
+                    | "split"
+                    | "str"
+                    | "strip"
+                    | "values"
+            ),
+            Language::Markdown => false,
         }
     }
 
@@ -2760,7 +2963,13 @@ impl LanguageService {
         // Delete old symbols and insert new ones
         self.symbol_store.delete_file_symbols(file_path)?;
         self.symbol_store.upsert_symbols(&symbols)?;
-        self.resolve_relationship_targets(file_path, &symbols, &mut relationships)?;
+        self.resolve_relationship_targets(
+            file_path,
+            extraction_language,
+            &symbols,
+            &mut relationships,
+        )?;
+        Self::suppress_known_external_relationships(extraction_language, &mut relationships);
         self.symbol_store
             .replace_relationships_for_file(file_path, &relationships)?;
         self.symbol_store
@@ -4719,6 +4928,22 @@ export function loadPosts() {
     }
 
     #[test]
+    fn resolve_import_target_normalizes_parent_segments() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::create_dir_all(temp_dir.path().join("scripts")).unwrap();
+        fs::create_dir_all(temp_dir.path().join("src/lib")).unwrap();
+        fs::write(temp_dir.path().join("scripts/fix.ts"), "").unwrap();
+        fs::write(temp_dir.path().join("src/lib/availability.ts"), "").unwrap();
+
+        let resolved = service
+            .resolve_import_target("scripts/fix.ts", "../src/lib/availability")
+            .unwrap();
+
+        assert_eq!(resolved, "src/lib/availability.ts");
+    }
+
+    #[test]
     fn self_healing_search_reindexes_literal_matching_stale_file() {
         let (service, temp_dir) = create_test_service();
 
@@ -4913,6 +5138,27 @@ export function loadPosts() {
             reference.source_symbol.file_path == "main.ts"
                 && reference.target_symbol_id.as_deref() == Some(helper.id.as_str())
         }));
+    }
+
+    #[test]
+    fn reconcile_index_suppresses_known_external_calls_after_resolution() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("main.ts"),
+            "export function run(items: string[]) {\n  return items.map((item) => item.trim());\n}",
+        )
+        .unwrap();
+
+        let report = service.reconcile_index().unwrap();
+
+        assert!(report.graph_quality.suppressed_external_relationships >= 2);
+        assert!(!report
+            .graph_quality
+            .top_unresolved_targets
+            .iter()
+            .any(|target| target.relationship_type == "call"
+                && matches!(target.target_name.as_str(), "map" | "trim")));
     }
 
     #[test]

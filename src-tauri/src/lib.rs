@@ -6,6 +6,7 @@ pub mod agentic_loop;
 pub mod ai_workflow;
 pub mod app_state;
 pub mod blade_client;
+pub mod blade_endpoint;
 pub mod blade_event_scheduler;
 pub mod blade_protocol;
 pub mod blade_ws_client;

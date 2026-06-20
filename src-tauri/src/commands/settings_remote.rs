@@ -14,7 +14,7 @@ pub async fn save_remote_ai_settings(
 ) -> Result<(), String> {
     // Enforce hardcoded Blade URL for remote flow.
     let mut safe_settings = settings;
-    safe_settings.blade_url = "https://coder.zaguanai.com".to_string();
+    safe_settings.blade_url = config::default_blade_url();
 
     {
         let mut cfg = state.config.lock().unwrap();

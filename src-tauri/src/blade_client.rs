@@ -173,23 +173,54 @@ impl BladeClient {
         &self,
         request: T,
     ) -> Result<mpsc::UnboundedReceiver<BladeEvent>, String> {
-        let url = format!("{}/v1/blade/chat", self.base_url);
+        let candidates = crate::blade_endpoint::connection_candidates(&self.base_url).await;
+        let mut last_error = "no Blade endpoints configured".to_string();
+        let mut response = None;
 
-        let response = self
-            .http_client
-            .post(&url)
-            .header("Content-Type", "application/json")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| format!("Failed to send request: {}", e))?;
+        for endpoint in candidates {
+            let url = format!("{}/v1/blade/chat", endpoint.base_url);
+            let request_builder = self
+                .http_client
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .json(&request);
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            return Err(format!("Blade Protocol error {}: {}", status, text));
+            let candidate_response = match request_builder.send().await {
+                Ok(response) => response,
+                Err(error) => {
+                    last_error = format!(
+                        "Failed to send request via {}: {}",
+                        endpoint.base_url, error
+                    );
+                    crate::blade_endpoint::mark_failure(&endpoint, &self.api_key).await;
+                    continue;
+                }
+            };
+
+            if !candidate_response.status().is_success() {
+                let status = candidate_response.status();
+                let text = candidate_response.text().await.unwrap_or_default();
+                last_error = format!(
+                    "Blade Protocol error via {}: {}: {}",
+                    endpoint.base_url, status, text
+                );
+                if status.is_server_error() {
+                    crate::blade_endpoint::mark_failure(&endpoint, &self.api_key).await;
+                    continue;
+                }
+                return Err(last_error);
+            }
+
+            crate::blade_endpoint::mark_success(&endpoint).await;
+            if endpoint.role == crate::blade_endpoint::BladeEndpointRole::Backup {
+                crate::blade_endpoint::start_primary_monitor(self.api_key.clone());
+            }
+            response = Some(candidate_response);
+            break;
         }
+
+        let response = response.ok_or(last_error)?;
 
         // Create channel for events (unbounded for simplicity)
         let (tx, rx) = mpsc::unbounded_channel();

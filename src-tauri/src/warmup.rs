@@ -118,28 +118,57 @@ impl WarmupClient {
             preferred_artifacts,
         };
 
-        let url = format!("{}/v1/blade/warmup", self.base_url);
+        let candidates = crate::blade_endpoint::connection_candidates(&self.base_url).await;
+        let mut last_error = "no Blade endpoints configured".to_string();
+        let mut data = None;
 
-        let response = self
-            .http_client
-            .post(&url)
-            .header("Content-Type", "application/json")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| format!("Warmup request failed: {}", e))?;
+        for endpoint in candidates {
+            let url = format!("{}/v1/blade/warmup", endpoint.base_url);
+            let response = match self
+                .http_client
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .json(&request)
+                .send()
+                .await
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    last_error =
+                        format!("Warmup request failed via {}: {}", endpoint.base_url, error);
+                    crate::blade_endpoint::mark_failure(&endpoint, &self.api_key).await;
+                    continue;
+                }
+            };
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            return Err(format!("Warmup error {}: {}", status, text));
+            if !response.status().is_success() {
+                let status = response.status();
+                let text = response.text().await.unwrap_or_default();
+                last_error = format!(
+                    "Warmup error via {}: {}: {}",
+                    endpoint.base_url, status, text
+                );
+                if status.is_server_error() {
+                    crate::blade_endpoint::mark_failure(&endpoint, &self.api_key).await;
+                    continue;
+                }
+                return Err(last_error);
+            }
+
+            let parsed = response
+                .json()
+                .await
+                .map_err(|e| format!("Failed to parse warmup response: {}", e))?;
+            crate::blade_endpoint::mark_success(&endpoint).await;
+            if endpoint.role == crate::blade_endpoint::BladeEndpointRole::Backup {
+                crate::blade_endpoint::start_primary_monitor(self.api_key.clone());
+            }
+            data = Some(parsed);
+            break;
         }
 
-        let data: WarmupResponse = response
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse warmup response: {}", e))?;
+        let data = data.ok_or(last_error)?;
 
         // Track last warmup time
         *self.last_warmup.lock().unwrap() = Some(Instant::now());
