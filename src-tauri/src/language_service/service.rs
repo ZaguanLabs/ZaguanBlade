@@ -13,7 +13,8 @@ use crate::buffer_snapshot::{BufferSnapshot, BufferSnapshotStore};
 use crate::gitignore_filter::GitignoreFilter;
 use crate::project_settings;
 use crate::symbol_index::{
-    SearchQuery, SearchResult, SemanticAnchor, SemanticAnchorResult, SymbolReference, SymbolStore,
+    FileIndexRecord, FileRelationshipRecord, RelationshipIntegrityStats, SearchQuery, SearchResult,
+    SemanticAnchor, SemanticAnchorResult, SymbolReference, SymbolStore,
 };
 use crate::tree_sitter::{
     extract_symbol_relationships, extract_symbols, Language, Position, Range, Symbol,
@@ -96,6 +97,33 @@ pub struct IndexReconciliationReport {
     pub files_indexed: usize,
     pub files_removed: usize,
     pub duration_ms: u64,
+    pub graph_quality: IndexGraphQualityReport,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IndexGraphQualityReport {
+    pub total_relationships: usize,
+    pub resolved_relationships: usize,
+    pub unresolved_symbol_relationships: usize,
+    pub missing_source_symbols: usize,
+    pub missing_target_symbols: usize,
+    pub indexed_files_missing_root_symbol: usize,
+}
+
+impl IndexGraphQualityReport {
+    fn from_relationship_stats(
+        stats: RelationshipIntegrityStats,
+        indexed_files_missing_root_symbol: usize,
+    ) -> Self {
+        Self {
+            total_relationships: stats.total_relationships,
+            resolved_relationships: stats.resolved_relationships,
+            unresolved_symbol_relationships: stats.unresolved_symbol_relationships,
+            missing_source_symbols: stats.missing_source_symbols,
+            missing_target_symbols: stats.missing_target_symbols,
+            indexed_files_missing_root_symbol,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,6 +172,20 @@ struct SymbolExtraction<'a> {
     relationships: Vec<SymbolRelationship>,
     content: Cow<'a, str>,
     language: Language,
+}
+
+struct StagedFileIndex {
+    file_path: String,
+    hash: String,
+    file_size: Option<u64>,
+    modified_at: Option<i64>,
+    symbols: Vec<Symbol>,
+    anchors: Vec<SemanticAnchor>,
+    relationships: Vec<SymbolRelationship>,
+    extraction_content: String,
+    extraction_language: Language,
+    source_language: Language,
+    snapshot: Arc<BufferSnapshot>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -791,6 +833,27 @@ impl LanguageService {
         })
     }
 
+    pub fn audit_index_graph_quality(&self) -> Result<IndexGraphQualityReport, LanguageError> {
+        let relationship_stats = self.symbol_store.relationship_integrity_stats()?;
+        let indexed_files = self.symbol_store.list_all_indexed_files()?;
+        let mut indexed_files_missing_root_symbol = 0usize;
+
+        for record in indexed_files {
+            if self
+                .symbol_store
+                .get_symbol(&Self::synthetic_file_root_id(&record.file_path))?
+                .is_none()
+            {
+                indexed_files_missing_root_symbol += 1;
+            }
+        }
+
+        Ok(IndexGraphQualityReport::from_relationship_stats(
+            relationship_stats,
+            indexed_files_missing_root_symbol,
+        ))
+    }
+
     pub fn reconcile_index(&self) -> Result<IndexReconciliationReport, LanguageError> {
         self.reconcile_index_with_progress(|_| {})
     }
@@ -850,13 +913,14 @@ impl LanguageService {
         if total_queued > 0 {
             enum IndexWorkerEvent {
                 Started(String),
-                Finished(String, Result<usize, String>),
+                Finished(String, Result<StagedFileIndex, String>),
             }
 
             let worker_count = indexing_worker_count(total_queued);
             let (tx, rx) = mpsc::channel::<IndexWorkerEvent>();
             let mut completed_files = 0usize;
             let mut active_files = HashSet::new();
+            let mut staged_files = Vec::with_capacity(total_queued);
 
             std::thread::scope(|scope| {
                 for worker_index in 0..worker_count {
@@ -872,8 +936,7 @@ impl LanguageService {
                         for file_path in worker_files {
                             let _ = tx.send(IndexWorkerEvent::Started(file_path.clone()));
                             let result = self
-                                .index_file(&file_path)
-                                .map(|symbols| symbols.len())
+                                .stage_file_index(&file_path)
                                 .map_err(|error| error.to_string());
                             let _ = tx.send(IndexWorkerEvent::Finished(file_path, result));
                         }
@@ -902,7 +965,8 @@ impl LanguageService {
                             active_files.remove(&file_path);
                             completed_files += 1;
                             match result {
-                                Ok(_) => {
+                                Ok(staged_file) => {
+                                    staged_files.push(staged_file);
                                     files_indexed += 1;
                                 }
                                 Err(error) => {
@@ -932,6 +996,18 @@ impl LanguageService {
                     }
                 }
             });
+
+            if !staged_files.is_empty() {
+                health.active_workers = 1;
+                health.current_file = None;
+                health.message = format!(
+                    "Writing symbol index... {} files staged",
+                    staged_files.len()
+                );
+                self.set_index_health(health.clone());
+                progress(&health);
+                self.commit_staged_file_indexes(&staged_files)?;
+            }
         }
 
         let mut final_health = self.audit_index_health()?;
@@ -940,14 +1016,30 @@ impl LanguageService {
         final_health.active_workers = 0;
         final_health.current_file = None;
         final_health.queued_files = final_health.stale_files + final_health.missing_files;
-        final_health.status = if final_health.queued_files == 0 && final_health.orphaned_files == 0
+        let graph_quality = self.audit_index_graph_quality()?;
+        let has_hard_graph_issues = graph_quality.missing_source_symbols > 0
+            || graph_quality.missing_target_symbols > 0
+            || graph_quality.indexed_files_missing_root_symbol > 0;
+        final_health.status = if final_health.queued_files == 0
+            && final_health.orphaned_files == 0
+            && !has_hard_graph_issues
         {
             IndexHealthStatus::Fresh
         } else {
             IndexHealthStatus::Partial
         };
-        final_health.message = if final_health.status == IndexHealthStatus::Fresh {
-            "Code intelligence ready".to_string()
+        final_health.message = if has_hard_graph_issues {
+            format!(
+                "Code intelligence partial: graph integrity issues detected ({} missing sources, {} missing targets, {} files missing roots)",
+                graph_quality.missing_source_symbols,
+                graph_quality.missing_target_symbols,
+                graph_quality.indexed_files_missing_root_symbol
+            )
+        } else if final_health.status == IndexHealthStatus::Fresh {
+            format!(
+                "Code intelligence ready: {}/{} symbol relationships resolved",
+                graph_quality.resolved_relationships, graph_quality.total_relationships
+            )
         } else {
             format!(
                 "Code intelligence partial: {} files pending",
@@ -962,6 +1054,7 @@ impl LanguageService {
             files_indexed,
             files_removed,
             duration_ms: started.elapsed().as_millis() as u64,
+            graph_quality,
         })
     }
 
@@ -1229,6 +1322,132 @@ impl LanguageService {
         }
 
         Ok(self.filter_visible_symbols(file_path, symbols))
+    }
+
+    fn stage_file_index(&self, file_path: &str) -> Result<StagedFileIndex, LanguageError> {
+        let disk_metadata = file_index_metadata(&self.resolve_path(file_path)).ok();
+        let snapshot = self.load_snapshot_for_indexing(file_path)?;
+        let content = snapshot.content().to_string();
+        let hash = snapshot.hash().to_string();
+        let index_metadata = if snapshot.is_live() {
+            None
+        } else {
+            disk_metadata
+        };
+
+        let language = snapshot
+            .language()
+            .or_else(|| Language::from_path(file_path))
+            .ok_or_else(|| {
+                LanguageError::NotSupported(format!("Unknown language for: {}", file_path))
+            })?;
+
+        let SymbolExtraction {
+            symbols: extracted_symbols,
+            mut relationships,
+            content: extraction_content,
+            language: extraction_language,
+        } = self.extract_file_symbols_and_relationships(file_path, &content, language)?;
+        let symbols = self.with_file_root_symbol(file_path, &content, extracted_symbols);
+        self.canonicalize_import_relationships(file_path, &mut relationships);
+        let anchors = extract_semantic_anchors(file_path, &content);
+
+        Ok(StagedFileIndex {
+            file_path: file_path.to_string(),
+            hash,
+            file_size: index_metadata.map(|metadata| metadata.file_size),
+            modified_at: index_metadata.map(|metadata| metadata.modified_at),
+            symbols,
+            anchors,
+            relationships,
+            extraction_content: extraction_content.into_owned(),
+            extraction_language,
+            source_language: language,
+            snapshot,
+        })
+    }
+
+    fn commit_staged_file_indexes(
+        &self,
+        staged_files: &[StagedFileIndex],
+    ) -> Result<(), LanguageError> {
+        if staged_files.is_empty() {
+            return Ok(());
+        }
+
+        let initial_records = staged_files
+            .iter()
+            .map(|file| {
+                let mut relationships = file.relationships.clone();
+                self.append_direct_module_export_relationships(
+                    &file.file_path,
+                    &file.extraction_content,
+                    file.extraction_language,
+                    &file.symbols,
+                    &mut relationships,
+                );
+                if matches!(file.source_language, Language::Astro) {
+                    self.append_astro_component_export_relationship(
+                        &file.file_path,
+                        &file.symbols,
+                        &mut relationships,
+                    );
+                }
+
+                FileIndexRecord {
+                    file_path: file.file_path.clone(),
+                    file_hash: file.hash.clone(),
+                    file_size: file.file_size,
+                    modified_at: file.modified_at,
+                    symbols: file.symbols.clone(),
+                    anchors: file.anchors.clone(),
+                    relationships,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        self.symbol_store.replace_file_indexes(&initial_records)?;
+
+        let mut final_relationship_records = Vec::with_capacity(staged_files.len());
+        for file in staged_files {
+            let mut relationships = file.relationships.clone();
+            self.append_module_export_relationships(
+                &file.file_path,
+                &file.extraction_content,
+                file.extraction_language,
+                &file.symbols,
+                &mut relationships,
+            );
+            if matches!(file.source_language, Language::Astro) {
+                self.append_astro_component_export_relationship(
+                    &file.file_path,
+                    &file.symbols,
+                    &mut relationships,
+                );
+            }
+            self.resolve_relationship_targets(&file.file_path, &file.symbols, &mut relationships)?;
+            final_relationship_records.push(FileRelationshipRecord {
+                file_path: file.file_path.clone(),
+                relationships,
+            });
+        }
+
+        self.symbol_store
+            .replace_relationships_for_files(&final_relationship_records)?;
+
+        let mut cache = self.file_cache.write().unwrap();
+        for file in staged_files {
+            cache.insert(
+                file.file_path.clone(),
+                CachedFile {
+                    hash: file.hash.clone(),
+                    _snapshot: file.snapshot.clone(),
+                    symbols: file.symbols.clone(),
+                },
+            );
+        }
+
+        Ok(())
     }
 
     /// Index an entire directory recursively
@@ -2074,7 +2293,13 @@ impl LanguageService {
         } else {
             scope.trim_matches('/').to_string()
         };
-        self.collect_supported_language_files_recursive(&root, &scope_prefix, &mut files);
+        let gitignore_filter = self.create_gitignore_filter();
+        self.collect_supported_language_files_recursive(
+            &root,
+            &scope_prefix,
+            gitignore_filter.as_ref(),
+            &mut files,
+        );
         files
     }
 
@@ -2082,6 +2307,7 @@ impl LanguageService {
         &self,
         dir_path: &Path,
         relative_path: &str,
+        gitignore_filter: Option<&GitignoreFilter>,
         files: &mut Vec<String>,
     ) {
         let Ok(entries) = std::fs::read_dir(dir_path) else {
@@ -2099,6 +2325,11 @@ impl LanguageService {
             {
                 continue;
             }
+            if let Some(filter) = gitignore_filter {
+                if filter.should_ignore(&path) {
+                    continue;
+                }
+            }
 
             let relative = if relative_path.is_empty() {
                 file_name
@@ -2107,7 +2338,12 @@ impl LanguageService {
             };
 
             if path.is_dir() {
-                self.collect_supported_language_files_recursive(&path, &relative, files);
+                self.collect_supported_language_files_recursive(
+                    &path,
+                    &relative,
+                    gitignore_filter,
+                    files,
+                );
             } else if path.is_file() && Language::from_path(&relative).is_some() {
                 files.push(relative);
             }
@@ -2940,6 +3176,49 @@ impl LanguageService {
 
         self.find_existing_import_candidate(&parent.join(&normalized))
             .or_else(|| self.find_existing_import_candidate(&self.resolve_path(&normalized)))
+    }
+
+    fn append_direct_module_export_relationships(
+        &self,
+        file_path: &str,
+        content: &str,
+        language: Language,
+        symbols: &[Symbol],
+        relationships: &mut Vec<SymbolRelationship>,
+    ) {
+        let root_id = Self::synthetic_file_root_id(file_path);
+        let Some(root_symbol) = symbols.iter().find(|symbol| symbol.id == root_id) else {
+            return;
+        };
+        let mut seen = HashSet::new();
+
+        for symbol in symbols {
+            if symbol.parent_id.as_deref() != Some(root_id.as_str()) {
+                continue;
+            }
+            if symbol.symbol_type == SymbolType::Import
+                || Self::is_synthetic_file_root_symbol(symbol)
+            {
+                continue;
+            }
+            let Some(exported_name) = Self::direct_export_name(content, language, symbol) else {
+                continue;
+            };
+
+            let key = (exported_name.clone(), symbol.id.clone());
+            if !seen.insert(key) {
+                continue;
+            }
+
+            relationships.push(SymbolRelationship {
+                source_symbol_id: root_symbol.id.clone(),
+                source_file_path: file_path.to_string(),
+                target_name: exported_name,
+                target_symbol_id: Some(symbol.id.clone()),
+                relationship_type: SymbolRelationshipType::Export,
+                line: symbol.range.start.line,
+            });
+        }
     }
 
     fn append_module_export_relationships(
@@ -4374,6 +4653,50 @@ export function loadPosts() {
     }
 
     #[test]
+    fn supported_language_files_respects_gitignore_by_default() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(temp_dir.path().join(".gitignore"), "generated/\n").unwrap();
+        fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+        fs::create_dir_all(temp_dir.path().join("generated")).unwrap();
+        fs::write(
+            temp_dir.path().join("src/main.ts"),
+            "export const main = 1;",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("generated/client.ts"),
+            "export const generated = 1;",
+        )
+        .unwrap();
+
+        let files = service.supported_language_files(".");
+
+        assert!(files.iter().any(|path| path == "src/main.ts"));
+        assert!(!files.iter().any(|path| path == "generated/client.ts"));
+    }
+
+    #[test]
+    fn supported_language_files_can_include_gitignored_files_when_allowed() {
+        let (service, temp_dir) = create_test_service();
+        let mut settings = project_settings::ProjectSettings::default();
+        settings.allow_gitignored_files = true;
+        project_settings::save_project_settings(temp_dir.path(), &settings).unwrap();
+
+        fs::write(temp_dir.path().join(".gitignore"), "generated/\n").unwrap();
+        fs::create_dir_all(temp_dir.path().join("generated")).unwrap();
+        fs::write(
+            temp_dir.path().join("generated/client.ts"),
+            "export const generated = 1;",
+        )
+        .unwrap();
+
+        let files = service.supported_language_files(".");
+
+        assert!(files.iter().any(|path| path == "generated/client.ts"));
+    }
+
+    #[test]
     fn self_healing_search_reindexes_literal_matching_stale_file() {
         let (service, temp_dir) = create_test_service();
 
@@ -4524,10 +4847,50 @@ export function loadPosts() {
         assert_eq!(report.files_indexed, 1);
         assert_eq!(health.status, IndexHealthStatus::Fresh);
         assert_eq!(health.queued_files, 0);
+        assert_eq!(report.graph_quality.missing_source_symbols, 0);
+        assert_eq!(report.graph_quality.missing_target_symbols, 0);
+        assert_eq!(report.graph_quality.indexed_files_missing_root_symbol, 0);
         assert!(results
             .iter()
             .any(|result| result.symbol.name == "GitCommitMessage"));
         assert!(service.get_file_symbols_raw("old.ts").unwrap().is_empty());
+    }
+
+    #[test]
+    fn reconcile_index_resolves_relationships_after_batch_symbol_commit() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("main.ts"),
+            "import { helper } from './utils';\nexport function run() {\n  helper();\n}",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("utils.ts"),
+            "export function helper() {\n  return 42;\n}",
+        )
+        .unwrap();
+
+        let report = service.reconcile_index().unwrap();
+        let helper = service
+            .search_symbols("helper", 10)
+            .unwrap()
+            .into_iter()
+            .find(|result| result.symbol.name == "helper")
+            .map(|result| result.symbol)
+            .unwrap();
+        let references = service.find_references_to_symbol(&helper, 10).unwrap();
+
+        assert_eq!(report.files_indexed, 2);
+        assert_eq!(report.graph_quality.missing_source_symbols, 0);
+        assert_eq!(report.graph_quality.missing_target_symbols, 0);
+        assert_eq!(report.graph_quality.indexed_files_missing_root_symbol, 0);
+        assert!(report.graph_quality.total_relationships > 0);
+        assert!(report.graph_quality.resolved_relationships > 0);
+        assert!(references.iter().any(|reference| {
+            reference.source_symbol.file_path == "main.ts"
+                && reference.target_symbol_id.as_deref() == Some(helper.id.as_str())
+        }));
     }
 
     #[test]
