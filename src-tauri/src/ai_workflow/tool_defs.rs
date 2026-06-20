@@ -323,6 +323,23 @@ pub fn get_tool_definitions() -> Vec<Value> {
         }),
         serde_json::json!({
             "type": "function",
+            "name": "load_skill",
+            "function": {
+                "name": "load_skill",
+                "description": "Load the full instructions for an available skill by skill_id. Use this only when the task clearly matches a skill from the available skills catalog.",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "skill_id": { "type": "string", "description": "Skill ID from the available skills catalog" }
+                    },
+                    "required": ["skill_id"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
             "name": "read_many_files",
             "function": {
                 "name": "read_many_files",
@@ -597,6 +614,7 @@ mod tests {
         assert!(!names.contains(&"get_project_index_overview"));
         assert!(!names.contains(&"get_project_index_chunk"));
         assert!(names.contains(&"fast_context"));
+        assert!(names.contains(&"load_skill"));
     }
 
     #[test]

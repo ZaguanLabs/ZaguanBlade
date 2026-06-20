@@ -1,6 +1,7 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod agent_instructions;
+pub mod agent_skills;
 pub mod agentic_loop;
 pub mod ai_workflow;
 pub mod app_state;

@@ -81,6 +81,18 @@ fn get_string_array_arg(
     None
 }
 
+fn get_string_arg(args: &HashMap<String, serde_json::Value>, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Some(value) = args.get(*key).and_then(|value| value.as_str()) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
 fn normalize_rel_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
@@ -172,6 +184,7 @@ fn is_batch_read_only_tool(tool_name: &str) -> bool {
         | "symbol_outline"
         | "read_file"
         | "read_file_range"
+        | "load_skill"
         | "read_many_files"
         | "grep_search"
         | "rg"
@@ -873,6 +886,39 @@ mod tests {
     }
 
     #[test]
+    fn load_skill_returns_workspace_skill_body() {
+        let workspace = tempdir().expect("tempdir");
+        let skill_path = workspace.path().join(".agents/skills/example/SKILL.md");
+        fs::create_dir_all(skill_path.parent().expect("skill path parent")).unwrap();
+        fs::write(
+            &skill_path,
+            "---\nid: example\ndescription: Example workflow\n---\nRead references/guide.md.",
+        )
+        .expect("write skill");
+        fs::create_dir_all(workspace.path().join(".agents/skills/example/references")).unwrap();
+        fs::write(
+            workspace
+                .path()
+                .join(".agents/skills/example/references/guide.md"),
+            "reference details",
+        )
+        .expect("write referenced file");
+
+        let result = execute_tool(workspace.path(), "load_skill", r#"{"skill_id":"example"}"#);
+
+        assert!(result.success, "load_skill should succeed");
+        let payload: serde_json::Value =
+            serde_json::from_str(&result.content).expect("load_skill json output");
+        assert_eq!(payload["skill_id"].as_str(), Some("example"));
+        assert_eq!(payload["base_dir"].as_str(), Some(".agents/skills/example"));
+        assert!(payload["content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Read references/guide.md."));
+        assert!(!result.content.contains("reference details"));
+    }
+
+    #[test]
     fn read_many_files_includes_metrics_in_summary() {
         let workspace = tempdir().expect("tempdir");
         let file_path = workspace.path().join("example.txt");
@@ -1385,6 +1431,7 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
         "symbol_graph" => symbol_graph_tool(workspace_root, &args, app_handle),
         "symbol_outline" => symbol_outline_tool(workspace_root, &args, app_handle),
         "read_file_range" => read_file_range(workspace_root, &args),
+        "load_skill" => load_skill_tool(workspace_root, &args),
         "apply_edit"
         | "apply_patch"
         | "apply_patch_validated"
@@ -1524,6 +1571,17 @@ fn read_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -
     match fs::read_to_string(&abs) {
         Ok(s) => ToolResult::ok(format_read_file_content(&abs, &s)),
         Err(e) => ToolResult::err(e.to_string()),
+    }
+}
+
+fn load_skill_tool(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {
+    let Some(skill_id) = get_string_arg(args, &["skill_id", "id", "name"]) else {
+        return ToolResult::err("missing required arg: skill_id");
+    };
+
+    match crate::agent_skills::load_workspace_skill(workspace_root, &skill_id) {
+        Ok(skill) => ToolResult::ok(serde_json::to_string_pretty(&skill).unwrap_or_default()),
+        Err(error) => ToolResult::err(error),
     }
 }
 

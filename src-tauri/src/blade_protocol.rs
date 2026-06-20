@@ -778,10 +778,25 @@ pub struct ContextProjectInfo {
     pub agent_instruction_includes: Vec<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub agent_instructions_truncated: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub local_skills: Vec<ContextSkillSummary>,
 }
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ContextSkillSummary {
+    pub skill_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub triggers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub short_description: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

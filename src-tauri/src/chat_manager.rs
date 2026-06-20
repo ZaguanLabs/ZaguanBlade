@@ -1,5 +1,5 @@
 // use eframe::egui; // Removed
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 
 use crate::agentic_loop::AgenticLoop;
@@ -232,6 +232,15 @@ fn load_local_system_prompt(
     {
         prompt.push_str("\n\n# Repository Instructions\n\n");
         prompt.push_str(instructions);
+    }
+    if !workspace_root.trim().is_empty() {
+        let workspace_path = Path::new(workspace_root);
+        if let Some(skills) =
+            crate::agent_skills::render_available_skills_for_prompt(workspace_path)
+        {
+            prompt.push_str("\n\n");
+            prompt.push_str(&skills);
+        }
     }
     Some(prompt)
 }
