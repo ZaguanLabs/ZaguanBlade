@@ -36,6 +36,32 @@ pub struct IndexedFileRecord {
     pub modified_at: Option<i64>,
 }
 
+#[derive(Debug, Clone)]
+pub struct FileIndexRecord {
+    pub file_path: String,
+    pub file_hash: String,
+    pub file_size: Option<u64>,
+    pub modified_at: Option<i64>,
+    pub symbols: Vec<Symbol>,
+    pub anchors: Vec<SemanticAnchor>,
+    pub relationships: Vec<SymbolRelationship>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FileRelationshipRecord {
+    pub file_path: String,
+    pub relationships: Vec<SymbolRelationship>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct RelationshipIntegrityStats {
+    pub total_relationships: usize,
+    pub resolved_relationships: usize,
+    pub unresolved_symbol_relationships: usize,
+    pub missing_source_symbols: usize,
+    pub missing_target_symbols: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SemanticAnchor {
     pub id: String,
@@ -538,6 +564,186 @@ impl SymbolStore {
                 modified_at
             ],
         )?;
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn replace_file_indexes(&self, files: &[FileIndexRecord]) -> Result<(), SymbolStoreError> {
+        if files.is_empty() {
+            return Ok(());
+        }
+
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        {
+            let mut delete_relationships =
+                tx.prepare("DELETE FROM symbol_relationships WHERE source_file_path = ?1")?;
+            let mut delete_anchors =
+                tx.prepare("DELETE FROM semantic_anchors WHERE file_path = ?1")?;
+            let mut delete_symbols = tx.prepare("DELETE FROM symbols WHERE file_path = ?1")?;
+
+            for file in files {
+                delete_relationships.execute(params![&file.file_path])?;
+                delete_anchors.execute(params![&file.file_path])?;
+                delete_symbols.execute(params![&file.file_path])?;
+            }
+        }
+
+        {
+            let mut insert_symbol = tx.prepare(
+                r#"
+                INSERT OR REPLACE INTO symbols
+                (id, name, qualified_name, symbol_type, file_path, start_line, start_char, end_line, end_char,
+                 byte_offset, byte_length, parent_id, docstring, signature, content_hash, indexed_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                "#,
+            )?;
+
+            for file in files {
+                for symbol in &file.symbols {
+                    insert_symbol.execute(params![
+                        &symbol.id,
+                        &symbol.name,
+                        &symbol.qualified_name,
+                        symbol.symbol_type.to_string(),
+                        &symbol.file_path,
+                        symbol.range.start.line,
+                        symbol.range.start.character,
+                        symbol.range.end.line,
+                        symbol.range.end.character,
+                        symbol.byte_offset as i64,
+                        symbol.byte_length as i64,
+                        symbol.parent_id.as_deref(),
+                        symbol.docstring.as_deref(),
+                        symbol.signature.as_deref(),
+                        &symbol.content_hash,
+                        now,
+                    ])?;
+                }
+            }
+        }
+
+        {
+            let mut insert_anchor = tx.prepare(
+                r#"
+                INSERT OR REPLACE INTO semantic_anchors
+                (id, file_path, kind, value, line, character, preview, confidence, indexed_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                "#,
+            )?;
+
+            for file in files {
+                for anchor in &file.anchors {
+                    insert_anchor.execute(params![
+                        &anchor.id,
+                        &anchor.file_path,
+                        &anchor.kind,
+                        &anchor.value,
+                        anchor.line,
+                        anchor.character,
+                        &anchor.preview,
+                        anchor.confidence,
+                        now,
+                    ])?;
+                }
+            }
+        }
+
+        {
+            let mut insert_relationship = tx.prepare(
+                r#"
+                INSERT OR REPLACE INTO symbol_relationships
+                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                "#,
+            )?;
+
+            for file in files {
+                for relationship in &file.relationships {
+                    insert_relationship.execute(params![
+                        &relationship.source_symbol_id,
+                        &relationship.source_file_path,
+                        &relationship.target_name,
+                        relationship.target_symbol_id.as_deref(),
+                        relationship.relationship_type.to_string(),
+                        relationship.line,
+                    ])?;
+                }
+            }
+        }
+
+        {
+            let mut insert_indexed_file = tx.prepare(
+                r#"
+                INSERT OR REPLACE INTO indexed_files
+                (file_path, file_hash, indexed_at, symbol_count, file_size, modified_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                "#,
+            )?;
+
+            for file in files {
+                insert_indexed_file.execute(params![
+                    &file.file_path,
+                    &file.file_hash,
+                    now,
+                    file.symbols.len() as i64,
+                    file.file_size.map(|size| size as i64),
+                    file.modified_at
+                ])?;
+            }
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn replace_relationships_for_files(
+        &self,
+        files: &[FileRelationshipRecord],
+    ) -> Result<(), SymbolStoreError> {
+        if files.is_empty() {
+            return Ok(());
+        }
+
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+
+        {
+            let mut delete_relationships =
+                tx.prepare("DELETE FROM symbol_relationships WHERE source_file_path = ?1")?;
+            for file in files {
+                delete_relationships.execute(params![&file.file_path])?;
+            }
+        }
+
+        {
+            let mut insert_relationship = tx.prepare(
+                r#"
+                INSERT OR REPLACE INTO symbol_relationships
+                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                "#,
+            )?;
+
+            for file in files {
+                for relationship in &file.relationships {
+                    insert_relationship.execute(params![
+                        &relationship.source_symbol_id,
+                        &relationship.source_file_path,
+                        &relationship.target_name,
+                        relationship.target_symbol_id.as_deref(),
+                        relationship.relationship_type.to_string(),
+                        relationship.line,
+                    ])?;
+                }
+            }
+        }
 
         tx.commit()?;
         Ok(())
@@ -1162,6 +1368,58 @@ impl SymbolStore {
         }
     }
 
+    pub fn relationship_integrity_stats(
+        &self,
+    ) -> Result<RelationshipIntegrityStats, SymbolStoreError> {
+        let conn = self.conn.lock().unwrap();
+        let total_relationships: i64 =
+            conn.query_row("SELECT COUNT(*) FROM symbol_relationships", [], |row| {
+                row.get(0)
+            })?;
+        let resolved_relationships: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM symbol_relationships WHERE target_symbol_id IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )?;
+        let unresolved_symbol_relationships: i64 = conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM symbol_relationships
+            WHERE target_symbol_id IS NULL AND relationship_type <> 'import'
+            "#,
+            [],
+            |row| row.get(0),
+        )?;
+        let missing_source_symbols: i64 = conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM symbol_relationships r
+            LEFT JOIN symbols s ON s.id = r.source_symbol_id
+            WHERE s.id IS NULL
+            "#,
+            [],
+            |row| row.get(0),
+        )?;
+        let missing_target_symbols: i64 = conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM symbol_relationships r
+            LEFT JOIN symbols s ON s.id = r.target_symbol_id
+            WHERE r.target_symbol_id IS NOT NULL AND s.id IS NULL
+            "#,
+            [],
+            |row| row.get(0),
+        )?;
+
+        Ok(RelationshipIntegrityStats {
+            total_relationships: total_relationships as usize,
+            resolved_relationships: resolved_relationships as usize,
+            unresolved_symbol_relationships: unresolved_symbol_relationships as usize,
+            missing_source_symbols: missing_source_symbols as usize,
+            missing_target_symbols: missing_target_symbols as usize,
+        })
+    }
+
     fn hydrate_symbol_references(
         &self,
         rows: Vec<(Symbol, String, String, Option<String>, u32)>,
@@ -1603,6 +1861,43 @@ mod tests {
                 .map(|symbol| symbol.id.as_str()),
             Some(helper.id.as_str())
         );
+    }
+
+    #[test]
+    fn test_relationship_integrity_stats_counts_missing_edges() {
+        let store = SymbolStore::in_memory().unwrap();
+
+        store
+            .replace_relationships_for_file(
+                "main.ts",
+                &[
+                    SymbolRelationship {
+                        source_symbol_id: "missing-source".to_string(),
+                        source_file_path: "main.ts".to_string(),
+                        target_name: "helper".to_string(),
+                        target_symbol_id: Some("missing-target".to_string()),
+                        relationship_type: SymbolRelationshipType::Call,
+                        line: 3,
+                    },
+                    SymbolRelationship {
+                        source_symbol_id: "missing-source".to_string(),
+                        source_file_path: "main.ts".to_string(),
+                        target_name: "dynamicCall".to_string(),
+                        target_symbol_id: None,
+                        relationship_type: SymbolRelationshipType::Call,
+                        line: 4,
+                    },
+                ],
+            )
+            .unwrap();
+
+        let stats = store.relationship_integrity_stats().unwrap();
+
+        assert_eq!(stats.total_relationships, 2);
+        assert_eq!(stats.resolved_relationships, 1);
+        assert_eq!(stats.unresolved_symbol_relationships, 1);
+        assert_eq!(stats.missing_source_symbols, 2);
+        assert_eq!(stats.missing_target_symbols, 1);
     }
 
     #[test]
