@@ -114,9 +114,6 @@ pub fn run() {
         .manage(AppState::new(resolved_path))
         .manage(terminal::TerminalManager::new())
         .setup(|app| {
-            let start = std::time::Instant::now();
-            eprintln!("[PERF] setup initialization took {:?}", start.elapsed());
-
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 use tauri::{Emitter, Manager};

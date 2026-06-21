@@ -842,6 +842,12 @@ export function useChatV2(options: UseChatV2Options = {}) {
     }, [buildEditorContext, mergeEditorSnapshots]);
 
     const syncSelectedModel = useCallback(async (modelId: string, explicit: boolean) => {
+        const isSameSelection = selectedModelIdRef.current === modelId;
+        const isSameExplicitState = hasExplicitModelRef.current === explicit;
+        if (isSameSelection && isSameExplicitState) {
+            return;
+        }
+
         hasExplicitModelRef.current = explicit;
         selectedModelIdRef.current = modelId;
         dispatch({ type: 'model/set', modelId });
@@ -853,6 +859,16 @@ export function useChatV2(options: UseChatV2Options = {}) {
         } catch (error) {
             console.error('[useChatV2] Failed to sync model to backend:', error);
         }
+    }, []);
+
+    const setLocalSelectedModel = useCallback((modelId: string, explicit: boolean) => {
+        if (selectedModelIdRef.current === modelId && hasExplicitModelRef.current === explicit) {
+            return;
+        }
+
+        hasExplicitModelRef.current = explicit;
+        selectedModelIdRef.current = modelId;
+        dispatch({ type: 'model/set', modelId });
     }, []);
 
     const refreshModels = useCallback(async () => {
@@ -871,12 +887,12 @@ export function useChatV2(options: UseChatV2Options = {}) {
         if (!hasSelectedModel) {
             const defaultModel = pickDefaultModel(models);
             if (defaultModel) {
-                await syncSelectedModel(defaultModel.id, false);
+                setLocalSelectedModel(defaultModel.id, false);
             }
         }
 
         return models;
-    }, [syncSelectedModel]);
+    }, [setLocalSelectedModel]);
 
     const resetStreamingState = useCallback(() => {
         messageBufferRef.current?.clearAll();
@@ -998,6 +1014,55 @@ export function useChatV2(options: UseChatV2Options = {}) {
         }
         flushPendingUpdates();
     }, [flushPendingUpdates]);
+
+    const finalizeActiveStreamingMessages = useCallback(() => {
+        flushPendingUpdatesImmediately();
+
+        const now = Date.now();
+        const activeIds = new Set<string>();
+        streamingStatesRef.current.forEach((_streaming, id) => activeIds.add(id));
+        messagesRef.current.forEach((message) => {
+            if (message.id && message.streaming && !message.streaming.endTime) {
+                activeIds.add(message.id);
+            }
+        });
+
+        if (activeIds.size === 0) {
+            return;
+        }
+
+        activeIds.forEach((id) => {
+            const existingStreaming = streamingStatesRef.current.get(id)
+                ?? messageByIdRef.current.get(id)?.streaming;
+            if (existingStreaming) {
+                streamingStatesRef.current.set(id, {
+                    ...existingStreaming,
+                    endTime: existingStreaming.endTime ?? now,
+                });
+            }
+            scheduleMessageCompletionCleanup(id);
+        });
+
+        setMessages((messages) => {
+            let changed = false;
+            const nextMessages = messages.map((message) => {
+                if (!message.id || !activeIds.has(message.id) || !message.streaming || message.streaming.endTime) {
+                    return message;
+                }
+
+                changed = true;
+                return {
+                    ...message,
+                    streaming: {
+                        ...message.streaming,
+                        endTime: now,
+                    },
+                };
+            });
+
+            return changed ? nextMessages : messages;
+        });
+    }, [flushPendingUpdatesImmediately, scheduleMessageCompletionCleanup, setMessages]);
 
     const scheduleFlush = useCallback(() => {
         if (flushFrameRef.current !== null) {
@@ -1379,6 +1444,11 @@ export function useChatV2(options: UseChatV2Options = {}) {
                     return;
                 }
 
+                finalizeActiveStreamingMessages();
+                toolActivityRef.current = null;
+                lastToolActivityDispatchAtRef.current = Date.now();
+                dispatch({ type: 'tool-activity/set', activity: null });
+
                 const settleTodosTimer = window.setTimeout(() => {
                     const currentTodos = activeTodosRef.current;
                     if (currentTodos.length === 0 || currentTodos.every((todo) => todo.status === 'completed')) {
@@ -1405,18 +1475,26 @@ export function useChatV2(options: UseChatV2Options = {}) {
                 if (inFlightToolCallIds.length > 0) {
                     updateToolCallsStatusLocally(inFlightToolCallIds, 'error', errorText);
                 }
+                finalizeActiveStreamingMessages();
+                toolActivityRef.current = null;
+                lastToolActivityDispatchAtRef.current = Date.now();
                 dispatchInFlightRef.current = false;
                 dispatch({ type: 'loading/set', loading: false });
                 dispatch({ type: 'pending-actions/set', actions: null });
                 dispatch({ type: 'pending-approval-request/set', request: null });
                 dispatch({ type: 'waiting-for-approval/set', waiting: false });
+                dispatch({ type: 'tool-activity/set', activity: null });
                 dispatch({ type: 'error/set', error: errorText });
             });
 
             unlistenContextLength = await listen<ContextLengthExceededPayload>('context-length-exceeded', (event) => {
+                finalizeActiveStreamingMessages();
+                toolActivityRef.current = null;
+                lastToolActivityDispatchAtRef.current = Date.now();
                 dispatchInFlightRef.current = false;
                 dispatch({ type: 'loading/set', loading: false });
                 dispatch({ type: 'pending-actions/set', actions: null });
+                dispatch({ type: 'tool-activity/set', activity: null });
                 dispatch({ type: 'pending-approval-request/set', request: null });
                 dispatch({ type: 'waiting-for-approval/set', waiting: false });
                 updateMessages((messages) => [
@@ -1429,8 +1507,13 @@ export function useChatV2(options: UseChatV2Options = {}) {
             });
 
             unlistenMessageTooLarge = await listen<MessageTooLargePayload>('message-too-large', (event) => {
+                finalizeActiveStreamingMessages();
+                toolActivityRef.current = null;
+                lastToolActivityDispatchAtRef.current = Date.now();
                 dispatchInFlightRef.current = false;
                 dispatch({ type: 'loading/set', loading: false });
+                dispatch({ type: 'pending-actions/set', actions: null });
+                dispatch({ type: 'tool-activity/set', activity: null });
                 dispatch({ type: 'pending-approval-request/set', request: null });
                 dispatch({ type: 'waiting-for-approval/set', waiting: false });
                 updateMessages((messages) => [

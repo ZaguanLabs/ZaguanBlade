@@ -466,16 +466,24 @@ export const AppBar: React.FC<AppBarProps> = ({
                                 )}
                                 {tab.isAiEdited && !tab.hasVirtualChanges && (
                                     <span
-                                        className={`w-1.5 h-1.5 rounded-full shrink-0 ${tab.hasUnreadAiEdit ? 'animate-pulse' : ''}`}
-                                        style={{ backgroundColor: 'var(--accent-ai)' }}
+                                        className="w-1.5 h-1.5 rounded-full shrink-0"
+                                        style={{
+                                            backgroundColor: 'var(--accent-ai)',
+                                            boxShadow: tab.hasUnreadAiEdit
+                                                ? '0 0 0 1px color-mix(in srgb, var(--accent-ai) 42%, transparent)'
+                                                : undefined,
+                                        }}
                                         title={tab.hasUnreadAiEdit ? t('tabs.aiEditedUnread') : t('tabs.aiEdited')}
                                         aria-hidden="true"
                                     />
                                 )}
                                 {tab.hasVirtualChanges && (
                                     <span
-                                        className="w-1.5 h-1.5 rounded-full shrink-0 animate-pulse"
-                                        style={{ backgroundColor: 'var(--accent-warning)' }}
+                                        className="w-1.5 h-1.5 rounded-full shrink-0"
+                                        style={{
+                                            backgroundColor: 'var(--accent-warning)',
+                                            boxShadow: '0 0 0 1px color-mix(in srgb, var(--accent-warning) 42%, transparent)',
+                                        }}
                                         title={tab.hasUnreadAiEdit ? t('tabs.aiPendingReviewUnread') : t('tabs.aiPendingReview')}
                                         aria-hidden="true"
                                     />

@@ -23,7 +23,6 @@ pub fn get_existing_project_id(workspace_root: &Path) -> Option<String> {
             Ok(content) => {
                 if let Ok(manifest) = serde_json::from_str::<ProjectManifest>(&content) {
                     if is_valid_project_id(&manifest.project_id) {
-                        eprintln!("Found existing project: {}", manifest.project_id);
                         return Some(manifest.project_id);
                     } else {
                         eprintln!("Invalid project ID in manifest, regenerating");

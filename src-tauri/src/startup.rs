@@ -98,23 +98,8 @@ pub fn ensure_post_ui_startup<R: Runtime>(app_handle: &tauri::AppHandle<R>) {
                     });
                     match result {
                         Ok(report) => {
-                            let top_unresolved = report
-                                .graph_quality
-                                .top_unresolved_targets
-                                .iter()
-                                .map(|target| {
-                                    format!(
-                                        "{}:{}({} @ {})",
-                                        target.relationship_type,
-                                        target.target_name,
-                                        target.count,
-                                        target.example_source_file
-                                    )
-                                })
-                                .collect::<Vec<_>>()
-                                .join(", ");
                             eprintln!(
-                                "[LanguageService] Post-UI index reconciliation complete: {} indexed, {} removed in {}ms; relationships {}/{} resolved, {} unresolved, {} suppressed external, {} missing sources, {} missing targets, {} missing roots; top unresolved [{}]",
+                                "[LanguageService] Post-UI index reconciliation complete: {} indexed, {} removed in {}ms; relationships {}/{} resolved, {} unresolved, {} suppressed external, {} missing sources, {} missing targets, {} missing roots",
                                 report.files_indexed,
                                 report.files_removed,
                                 report.duration_ms,
@@ -124,8 +109,7 @@ pub fn ensure_post_ui_startup<R: Runtime>(app_handle: &tauri::AppHandle<R>) {
                                 report.graph_quality.suppressed_external_relationships,
                                 report.graph_quality.missing_source_symbols,
                                 report.graph_quality.missing_target_symbols,
-                                report.graph_quality.indexed_files_missing_root_symbol,
-                                top_unresolved
+                                report.graph_quality.indexed_files_missing_root_symbol
                             );
                         }
                         Err(error) => {
