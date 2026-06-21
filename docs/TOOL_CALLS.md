@@ -396,6 +396,8 @@ Parameters:
 | `max_symbols` | integer | No | `limit`; default `200`, cap `1000` |
 | `include_outline` | boolean | No | defaults to `true` |
 
+Response metadata includes `_meta.line_count` when the file index has stored line-count metadata.
+
 ### `symbol_related`
 
 Returns symbols related to a seed symbol.

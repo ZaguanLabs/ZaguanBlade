@@ -789,6 +789,7 @@ fn is_false(value: &bool) -> bool {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ContextSkillSummary {
     pub skill_id: String,
+    pub source: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

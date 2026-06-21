@@ -1,7 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize, Clone)]
@@ -376,10 +375,37 @@ fn clamp_font_size(value: u8, fallback: u8) -> u8 {
 }
 
 pub fn default_global_config_dir() -> PathBuf {
-    let Some(dirs) = ProjectDirs::from("com", "zaguan", "zblade") else {
-        return Path::new(".").to_path_buf();
-    };
-    dirs.config_dir().to_path_buf()
+    let home_dir = dirs::home_dir().unwrap_or_else(|| Path::new(".").to_path_buf());
+    let config_home = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
+    let app_data_home = std::env::var_os("APPDATA").map(PathBuf::from);
+    zblade_global_config_dir_for(
+        std::env::consts::OS,
+        &home_dir,
+        config_home.as_deref(),
+        app_data_home.as_deref(),
+    )
+}
+
+pub fn zblade_global_config_dir_for(
+    platform: &str,
+    home_dir: &Path,
+    config_home: Option<&Path>,
+    app_data_home: Option<&Path>,
+) -> PathBuf {
+    match platform {
+        "windows" => app_data_home
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| home_dir.join("AppData").join("Roaming"))
+            .join("zblade"),
+        "macos" => home_dir
+            .join("Library")
+            .join("Application Support")
+            .join("zblade"),
+        _ => config_home
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| home_dir.join(".config"))
+            .join("zblade"),
+    }
 }
 
 pub fn default_api_config_path() -> PathBuf {
@@ -388,6 +414,10 @@ pub fn default_api_config_path() -> PathBuf {
 
 pub fn global_prompts_dir() -> PathBuf {
     default_global_config_dir().join("prompts")
+}
+
+pub fn global_skills_dir() -> PathBuf {
+    default_global_config_dir().join("skills")
 }
 
 pub fn ensure_global_prompts_dir() -> Result<(), String> {
@@ -713,6 +743,48 @@ pub fn get_or_create_user_id(config_path: &Path) -> String {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn zblade_global_config_dir_uses_xdg_on_linux() {
+        let home = Path::new("/home/test");
+        let config_home = Path::new("/home/test/.config");
+
+        assert_eq!(
+            zblade_global_config_dir_for("linux", home, Some(config_home), None),
+            PathBuf::from("/home/test/.config/zblade")
+        );
+    }
+
+    #[test]
+    fn zblade_global_config_dir_uses_application_support_on_macos() {
+        let home = Path::new("/Users/test");
+
+        assert_eq!(
+            zblade_global_config_dir_for("macos", home, None, None),
+            PathBuf::from("/Users/test/Library/Application Support/zblade")
+        );
+    }
+
+    #[test]
+    fn zblade_global_config_dir_uses_appdata_on_windows() {
+        let home = Path::new("C:/Users/test");
+        let app_data = Path::new("C:/Users/test/AppData/Roaming");
+
+        assert_eq!(
+            zblade_global_config_dir_for("windows", home, None, Some(app_data)),
+            PathBuf::from("C:/Users/test/AppData/Roaming/zblade")
+        );
+    }
+
+    #[test]
+    fn zblade_global_config_dir_falls_back_to_roaming_appdata_on_windows() {
+        let home = Path::new("C:/Users/test");
+
+        assert_eq!(
+            zblade_global_config_dir_for("windows", home, None, None),
+            PathBuf::from("C:/Users/test/AppData/Roaming/zblade")
+        );
+    }
 
     #[test]
     fn prompt_candidates_include_provider_stripped_and_lowercase_names() {

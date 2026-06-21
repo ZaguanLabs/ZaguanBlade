@@ -1558,12 +1558,44 @@ fn validate_path_under_workspace(workspace_root: &Path, path: &Path) -> Result<P
     Ok(normalized)
 }
 
+fn validate_read_path(workspace_root: &Path, path: &Path) -> Result<PathBuf, String> {
+    match validate_path_under_workspace(workspace_root, path) {
+        Ok(path) => Ok(path),
+        Err(workspace_error) => validate_path_under_global_skills(path).map_err(|global_error| {
+            format!("{workspace_error}; not a readable global skill resource: {global_error}")
+        }),
+    }
+}
+
+fn validate_path_under_global_skills(path: &Path) -> Result<PathBuf, String> {
+    if !path.is_absolute() {
+        return Err("path is not absolute".to_string());
+    }
+
+    let global_skills_dir = crate::config::global_skills_dir();
+    let candidate = normalize_path(path);
+    let root = normalize_path(&global_skills_dir);
+
+    if !candidate.exists() {
+        return Err(format!("path does not exist: {}", candidate.display()));
+    }
+    if !candidate.starts_with(&root) {
+        return Err(format!(
+            "path is outside global skills directory (global skills: {}, path: {})",
+            root.display(),
+            candidate.display()
+        ));
+    }
+
+    Ok(candidate)
+}
+
 fn read_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {
     let Some(path) = get_str_arg(args, &["path", "file_path", "filepath", "filename"]) else {
         return ToolResult::err("missing required arg: path (or file_path)");
     };
 
-    let abs = match validate_path_under_workspace(workspace_root, Path::new(&path)) {
+    let abs = match validate_read_path(workspace_root, Path::new(&path)) {
         Ok(p) => p,
         Err(e) => return ToolResult::err(e),
     };
@@ -1579,7 +1611,7 @@ fn load_skill_tool(workspace_root: &Path, args: &HashMap<String, serde_json::Val
         return ToolResult::err("missing required arg: skill_id");
     };
 
-    match crate::agent_skills::load_workspace_skill(workspace_root, &skill_id) {
+    match crate::agent_skills::load_skill(workspace_root, &skill_id) {
         Ok(skill) => ToolResult::ok(serde_json::to_string_pretty(&skill).unwrap_or_default()),
         Err(error) => ToolResult::err(error),
     }
@@ -2184,7 +2216,7 @@ fn read_file_range(workspace_root: &Path, args: &HashMap<String, serde_json::Val
         return ToolResult::err("missing required arg: path (or file_path)");
     };
 
-    let abs = match validate_path_under_workspace(workspace_root, Path::new(&path)) {
+    let abs = match validate_read_path(workspace_root, Path::new(&path)) {
         Ok(p) => p,
         Err(e) => return ToolResult::err(e),
     };
@@ -3242,6 +3274,10 @@ fn symbol_outline_tool<R: tauri::Runtime>(
         Ok(symbols) => symbols,
         Err(err) => return ToolResult::err(err.to_string()),
     };
+    let indexed_file = match service.indexed_file_record(&path) {
+        Ok(record) => record,
+        Err(err) => return ToolResult::err(err.to_string()),
+    };
     let total_symbols = symbols.len();
     let summary = symbol_inventory_summary(&symbols);
     let inventory_symbols = symbol_inventory_entries(&symbols, max_symbols);
@@ -3267,6 +3303,7 @@ fn symbol_outline_tool<R: tauri::Runtime>(
             "source": "language_service",
             "timing_ms": started.elapsed().as_millis(),
             "index_health": service.index_health_snapshot(),
+            "line_count": indexed_file.as_ref().and_then(|record| record.line_count),
             "total_symbols": total_symbols,
             "returned_symbols": total_symbols.min(max_symbols),
             "truncated": total_symbols > max_symbols,

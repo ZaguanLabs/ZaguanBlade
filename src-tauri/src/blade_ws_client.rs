@@ -648,6 +648,8 @@ impl BladeWsClient {
                 return;
             }
 
+            let mut connected_event_sent = false;
+
             // Read messages
             while let Some(msg_result) = read.next().await {
                 match msg_result {
@@ -657,7 +659,11 @@ impl BladeWsClient {
                         } else {
                             // eprintln!("[BLADE WS] Received: {}", text);
                         }
-                        if let Err(_e) = Self::parse_message(text.as_ref(), &event_tx_clone) {
+                        if let Err(_e) = Self::parse_message_with_auth_gate(
+                            text.as_ref(),
+                            &event_tx_clone,
+                            &mut connected_event_sent,
+                        ) {
                             // eprintln!("[BLADE WS] Parse error: {}", _e);
                         }
                     }
@@ -1205,8 +1211,19 @@ impl BladeWsClient {
         *role = None;
     }
 
-    /// Parse incoming WebSocket message
+    /// Parse incoming WebSocket message without preserving socket-level auth state.
+    #[cfg(test)]
     fn parse_message(text: &str, tx: &mpsc::UnboundedSender<BladeWsEvent>) -> Result<(), String> {
+        let mut connected_event_sent = false;
+        Self::parse_message_with_auth_gate(text, tx, &mut connected_event_sent)
+    }
+
+    /// Parse incoming WebSocket message while preserving socket-level auth state.
+    fn parse_message_with_auth_gate(
+        text: &str,
+        tx: &mpsc::UnboundedSender<BladeWsEvent>,
+        connected_event_sent: &mut bool,
+    ) -> Result<(), String> {
         let msg: WsIncomingMessage =
             serde_json::from_str(text).map_err(|e| format!("JSON parse error: {}", e))?;
         let correlation_id = Self::correlation_id_for_message(&msg);
@@ -1214,6 +1231,11 @@ impl BladeWsClient {
 
         match msg.msg_type.as_str() {
             "authenticated" => {
+                if *connected_event_sent {
+                    return Ok(());
+                }
+                *connected_event_sent = true;
+
                 let user_id = msg
                     .payload
                     .get("user_id")
@@ -1971,6 +1993,49 @@ mod tests {
             }
             other => panic!("unexpected event: {:?}", other),
         }
+    }
+
+    #[test]
+    fn suppresses_duplicate_authenticated_events_on_one_socket() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut connected_event_sent = false;
+        let header_auth_message = r#"{
+            "type": "authenticated",
+            "id": "",
+            "payload": {
+                "user_id": "user_header",
+                "server_version": "2026.06.20"
+            }
+        }"#;
+        let legacy_auth_message = r#"{
+            "type": "authenticated",
+            "id": "auth-1",
+            "payload": {
+                "user_id": "user_legacy",
+                "server_version": "2026.06.20"
+            }
+        }"#;
+
+        BladeWsClient::parse_message_with_auth_gate(
+            header_auth_message,
+            &tx,
+            &mut connected_event_sent,
+        )
+        .unwrap();
+        BladeWsClient::parse_message_with_auth_gate(
+            legacy_auth_message,
+            &tx,
+            &mut connected_event_sent,
+        )
+        .unwrap();
+
+        match rx.try_recv().unwrap() {
+            BladeWsEvent::Connected { user_id, .. } => {
+                assert_eq!(user_id, "user_header");
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

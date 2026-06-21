@@ -3,7 +3,7 @@
 //! Persistent storage for extracted code symbols with efficient
 //! indexing and retrieval.
 
-use rusqlite::{params, params_from_iter, types::Value, Connection};
+use rusqlite::{params, params_from_iter, types::Value, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
@@ -33,6 +33,7 @@ pub struct IndexedFileRecord {
     pub indexed_at: i64,
     pub symbol_count: usize,
     pub file_size: Option<u64>,
+    pub line_count: Option<usize>,
     pub modified_at: Option<i64>,
 }
 
@@ -41,6 +42,7 @@ pub struct FileIndexRecord {
     pub file_path: String,
     pub file_hash: String,
     pub file_size: Option<u64>,
+    pub line_count: Option<usize>,
     pub modified_at: Option<i64>,
     pub symbols: Vec<Symbol>,
     pub anchors: Vec<SemanticAnchor>,
@@ -183,6 +185,7 @@ impl SymbolStore {
                 indexed_at INTEGER NOT NULL,
                 symbol_count INTEGER NOT NULL,
                 file_size INTEGER,
+                line_count INTEGER,
                 modified_at INTEGER
             );
 
@@ -232,6 +235,7 @@ impl SymbolStore {
         ensure_column(&conn, "symbols", "content_hash", "TEXT NOT NULL DEFAULT ''")?;
         ensure_column(&conn, "symbol_relationships", "target_symbol_id", "TEXT")?;
         ensure_column(&conn, "indexed_files", "file_size", "INTEGER")?;
+        ensure_column(&conn, "indexed_files", "line_count", "INTEGER")?;
         ensure_column(&conn, "indexed_files", "modified_at", "INTEGER")?;
 
         conn.execute_batch(
@@ -474,6 +478,7 @@ impl SymbolStore {
         file_path: &str,
         file_hash: &str,
         file_size: Option<u64>,
+        line_count: Option<usize>,
         modified_at: Option<i64>,
         symbols: &[Symbol],
         anchors: &[SemanticAnchor],
@@ -570,8 +575,8 @@ impl SymbolStore {
         tx.execute(
             r#"
             INSERT OR REPLACE INTO indexed_files
-            (file_path, file_hash, indexed_at, symbol_count, file_size, modified_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            (file_path, file_hash, indexed_at, symbol_count, file_size, line_count, modified_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             "#,
             params![
                 file_path,
@@ -579,6 +584,7 @@ impl SymbolStore {
                 now,
                 symbols.len() as i64,
                 file_size.map(|size| size as i64),
+                line_count.map(|count| count as i64),
                 modified_at
             ],
         )?;
@@ -700,8 +706,8 @@ impl SymbolStore {
             let mut insert_indexed_file = tx.prepare(
                 r#"
                 INSERT OR REPLACE INTO indexed_files
-                (file_path, file_hash, indexed_at, symbol_count, file_size, modified_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                (file_path, file_hash, indexed_at, symbol_count, file_size, line_count, modified_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                 "#,
             )?;
 
@@ -712,6 +718,7 @@ impl SymbolStore {
                     now,
                     file.symbols.len() as i64,
                     file.file_size.map(|size| size as i64),
+                    file.line_count.map(|count| count as i64),
                     file.modified_at
                 ])?;
             }
@@ -1256,7 +1263,7 @@ impl SymbolStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             r#"
-            SELECT file_path, file_hash, indexed_at, symbol_count, file_size, modified_at
+            SELECT file_path, file_hash, indexed_at, symbol_count, file_size, line_count, modified_at
             FROM indexed_files
             ORDER BY symbol_count DESC, file_path ASC
             LIMIT ?1
@@ -1272,11 +1279,31 @@ impl SymbolStore {
         Ok(records)
     }
 
+    pub fn indexed_file_record(
+        &self,
+        file_path: &str,
+    ) -> Result<Option<IndexedFileRecord>, SymbolStoreError> {
+        let conn = self.conn.lock().unwrap();
+        let record = conn
+            .query_row(
+                r#"
+                SELECT file_path, file_hash, indexed_at, symbol_count, file_size, line_count, modified_at
+                FROM indexed_files
+                WHERE file_path = ?1
+                "#,
+                params![file_path],
+                indexed_file_record_from_row,
+            )
+            .optional()?;
+
+        Ok(record)
+    }
+
     pub fn list_all_indexed_files(&self) -> Result<Vec<IndexedFileRecord>, SymbolStoreError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             r#"
-            SELECT file_path, file_hash, indexed_at, symbol_count, file_size, modified_at
+            SELECT file_path, file_hash, indexed_at, symbol_count, file_size, line_count, modified_at
             FROM indexed_files
             ORDER BY file_path ASC
             "#,
@@ -1306,7 +1333,7 @@ impl SymbolStore {
         file_hash: &str,
         symbol_count: usize,
     ) -> Result<(), SymbolStoreError> {
-        self.mark_file_indexed_with_metadata(file_path, file_hash, symbol_count, None, None)
+        self.mark_file_indexed_with_metadata(file_path, file_hash, symbol_count, None, None, None)
     }
 
     pub fn mark_file_indexed_with_metadata(
@@ -1315,6 +1342,7 @@ impl SymbolStore {
         file_hash: &str,
         symbol_count: usize,
         file_size: Option<u64>,
+        line_count: Option<usize>,
         modified_at: Option<i64>,
     ) -> Result<(), SymbolStoreError> {
         let conn = self.conn.lock().unwrap();
@@ -1326,8 +1354,8 @@ impl SymbolStore {
         conn.execute(
             r#"
             INSERT OR REPLACE INTO indexed_files
-            (file_path, file_hash, indexed_at, symbol_count, file_size, modified_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            (file_path, file_hash, indexed_at, symbol_count, file_size, line_count, modified_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             "#,
             params![
                 file_path,
@@ -1335,6 +1363,7 @@ impl SymbolStore {
                 now,
                 symbol_count as i64,
                 file_size.map(|size| size as i64),
+                line_count.map(|count| count as i64),
                 modified_at
             ],
         )?;
@@ -1530,7 +1559,10 @@ fn indexed_file_record_from_row(row: &rusqlite::Row) -> rusqlite::Result<Indexed
         file_size: row
             .get::<_, Option<i64>>(4)?
             .and_then(|size| u64::try_from(size).ok()),
-        modified_at: row.get::<_, Option<i64>>(5)?,
+        line_count: row
+            .get::<_, Option<i64>>(5)?
+            .and_then(|count| usize::try_from(count).ok()),
+        modified_at: row.get::<_, Option<i64>>(6)?,
     })
 }
 
@@ -2066,8 +2098,19 @@ mod tests {
         );
 
         store
-            .mark_file_indexed_with_metadata("test.ts", "abc123", 5, Some(128), Some(1_234))
+            .mark_file_indexed_with_metadata(
+                "test.ts",
+                "abc123",
+                5,
+                Some(128),
+                Some(12),
+                Some(1_234),
+            )
             .unwrap();
+
+        let record = store.indexed_file_record("test.ts").unwrap().unwrap();
+        assert_eq!(record.file_size, Some(128));
+        assert_eq!(record.line_count, Some(12));
 
         assert_eq!(
             store

@@ -505,7 +505,7 @@
     },
     "aboutSection": {
       "appName": "Zaguán Blade",
-      "appTagline": "AI-native code editor",
+      "appTagline": "Built for developers who want context discipline, evidence and control.",
       "version": "Version {{version}}",
       "runtime": "Runtime",
       "runtimeValue": "Tauri Desktop",
@@ -513,7 +513,7 @@
       "engineValue": "React + CodeMirror 6",
       "mode": "Mode",
       "modeValue": "Local-first workflow",
-      "tidbits": "Tidbits",
+      "tidbits": "Resources",
       "website": "Website",
       "github": "GitHub",
       "support": "Support",

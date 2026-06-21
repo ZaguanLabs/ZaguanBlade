@@ -14,9 +14,17 @@ const MAX_TRIGGER_COUNT: usize = 32;
 const MAX_TRIGGER_CHARS: usize = 160;
 const MAX_BODY_BYTES: usize = 512 * 1024;
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SkillSource {
+    Global,
+    Workspace,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SkillCatalogEntry {
     pub skill_id: String,
+    pub source: SkillSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -31,6 +39,7 @@ pub struct SkillCatalogEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LoadedSkill {
     pub skill_id: String,
+    pub source: SkillSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -92,56 +101,71 @@ impl<'de> Deserialize<'de> for TriggerList {
 }
 
 pub fn discover_workspace_skills(workspace_root: &Path) -> Vec<SkillCatalogEntry> {
-    let skills_root = workspace_root.join(AGENTS_SKILLS_DIR);
-    if !skills_root.is_dir() {
-        return Vec::new();
-    }
+    discover_skills_from_root(
+        &workspace_root.join(AGENTS_SKILLS_DIR),
+        workspace_root,
+        SkillSource::Workspace,
+    )
+}
 
-    let mut skill_paths = WalkDir::new(&skills_root)
-        .follow_links(false)
-        .max_depth(MAX_SCAN_DEPTH)
-        .into_iter()
-        .filter_entry(should_descend)
-        .filter_map(Result::ok)
-        .filter(is_skill_file)
-        .map(|entry| entry.path().to_path_buf())
-        .collect::<Vec<PathBuf>>();
-    skill_paths.sort();
+pub fn discover_available_skills(workspace_root: &Path) -> Vec<SkillCatalogEntry> {
+    discover_available_skills_with_global_root(workspace_root, &crate::config::global_skills_dir())
+}
 
+fn discover_available_skills_with_global_root(
+    workspace_root: &Path,
+    global_skills_root: &Path,
+) -> Vec<SkillCatalogEntry> {
     let mut discovered = BTreeMap::<String, SkillCatalogEntry>::new();
-    for path in skill_paths {
-        if discovered.len() >= MAX_SKILLS {
-            break;
-        }
-        let Some(skill) = catalog_entry_from_path(workspace_root, &path) else {
-            continue;
-        };
-        discovered.entry(skill.skill_id.clone()).or_insert(skill);
+    for skill in discover_global_skills_from_root(global_skills_root) {
+        discovered.insert(skill.skill_id.clone(), skill);
+    }
+    for skill in discover_workspace_skills(workspace_root) {
+        discovered.insert(skill.skill_id.clone(), skill);
     }
 
     discovered.into_values().collect()
 }
 
-pub fn load_workspace_skill(workspace_root: &Path, skill_id: &str) -> Result<LoadedSkill, String> {
+pub fn discover_global_skills() -> Vec<SkillCatalogEntry> {
+    let skills_root = crate::config::global_skills_dir();
+    discover_global_skills_from_root(&skills_root)
+}
+
+fn discover_global_skills_from_root(skills_root: &Path) -> Vec<SkillCatalogEntry> {
+    discover_skills_from_root(skills_root, skills_root, SkillSource::Global)
+}
+
+pub fn load_skill(workspace_root: &Path, skill_id: &str) -> Result<LoadedSkill, String> {
+    load_skill_with_global_root(
+        workspace_root,
+        &crate::config::global_skills_dir(),
+        skill_id,
+    )
+}
+
+fn load_skill_with_global_root(
+    workspace_root: &Path,
+    global_skills_root: &Path,
+    skill_id: &str,
+) -> Result<LoadedSkill, String> {
     let normalized_id = skill_id.trim();
     if normalized_id.is_empty() {
         return Err("load_skill requires skill_id".to_string());
     }
 
-    for entry in discover_workspace_skills(workspace_root) {
+    for entry in discover_available_skills_with_global_root(workspace_root, global_skills_root) {
         if entry.skill_id != normalized_id && entry.name.as_deref() != Some(normalized_id) {
             continue;
         }
 
-        let path = workspace_root.join(&entry.path);
+        let path = entry.absolute_path(workspace_root);
         let raw = read_bounded_to_string(&path)?;
         let parsed = parse_skill_file(&raw);
-        let base_dir = path
-            .parent()
-            .and_then(|parent| relative_to_workspace(workspace_root, parent))
-            .unwrap_or_else(|| ".".to_string());
+        let base_dir = base_dir_for_loaded_skill(workspace_root, &entry, &path);
         return Ok(LoadedSkill {
             skill_id: entry.skill_id,
+            source: entry.source,
             name: entry.name,
             description: entry.description,
             triggers: entry.triggers,
@@ -155,8 +179,12 @@ pub fn load_workspace_skill(workspace_root: &Path, skill_id: &str) -> Result<Loa
     Err(format!("skill not found: {normalized_id}"))
 }
 
+pub fn load_workspace_skill(workspace_root: &Path, skill_id: &str) -> Result<LoadedSkill, String> {
+    load_skill(workspace_root, skill_id)
+}
+
 pub fn render_available_skills_for_prompt(workspace_root: &Path) -> Option<String> {
-    let skills = discover_workspace_skills(workspace_root);
+    let skills = discover_available_skills(workspace_root);
     if skills.is_empty() {
         return None;
     }
@@ -200,7 +228,55 @@ pub fn render_available_skills_for_prompt(workspace_root: &Path) -> Option<Strin
     Some(lines.join("\n"))
 }
 
-fn catalog_entry_from_path(workspace_root: &Path, path: &Path) -> Option<SkillCatalogEntry> {
+impl SkillCatalogEntry {
+    fn absolute_path(&self, workspace_root: &Path) -> PathBuf {
+        let path = Path::new(&self.path);
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            workspace_root.join(path)
+        }
+    }
+}
+
+fn discover_skills_from_root(
+    skills_root: &Path,
+    relative_base: &Path,
+    source: SkillSource,
+) -> Vec<SkillCatalogEntry> {
+    if !skills_root.is_dir() {
+        return Vec::new();
+    }
+
+    let mut skill_paths = WalkDir::new(skills_root)
+        .follow_links(false)
+        .max_depth(MAX_SCAN_DEPTH)
+        .into_iter()
+        .filter_entry(should_descend)
+        .filter_map(Result::ok)
+        .filter(is_skill_file)
+        .map(|entry| entry.path().to_path_buf())
+        .collect::<Vec<PathBuf>>();
+    skill_paths.sort();
+
+    let mut discovered = BTreeMap::<String, SkillCatalogEntry>::new();
+    for path in skill_paths {
+        if discovered.len() >= MAX_SKILLS {
+            break;
+        }
+        let Some(skill) = catalog_entry_from_path(relative_base, &path, source) else {
+            continue;
+        };
+        discovered.entry(skill.skill_id.clone()).or_insert(skill);
+    }
+    discovered.into_values().collect()
+}
+
+fn catalog_entry_from_path(
+    relative_base: &Path,
+    path: &Path,
+    source: SkillSource,
+) -> Option<SkillCatalogEntry> {
     let raw = read_bounded_to_string(path).ok()?;
     let parsed = parse_skill_file(&raw);
     let skill_dir_name = path.parent()?.file_name()?.to_string_lossy().to_string();
@@ -209,10 +285,14 @@ fn catalog_entry_from_path(workspace_root: &Path, path: &Path) -> Option<SkillCa
         parsed.frontmatter.name.as_deref(),
         Some(skill_dir_name.as_str()),
     ])?;
-    let path = relative_to_workspace(workspace_root, path)?;
+    let path = match source {
+        SkillSource::Workspace => relative_to_base(relative_base, path)?,
+        SkillSource::Global => path.to_string_lossy().to_string(),
+    };
 
     Some(SkillCatalogEntry {
         skill_id: skill_id.to_string(),
+        source,
         name: normalize_optional_string(parsed.frontmatter.name),
         description: normalize_optional_string(parsed.frontmatter.description)
             .map(|value| truncate_chars(&value, MAX_DESCRIPTION_CHARS)),
@@ -221,6 +301,23 @@ fn catalog_entry_from_path(workspace_root: &Path, path: &Path) -> Option<SkillCa
             .map(|value| truncate_chars(&value, MAX_DESCRIPTION_CHARS)),
         path,
     })
+}
+
+fn base_dir_for_loaded_skill(
+    workspace_root: &Path,
+    entry: &SkillCatalogEntry,
+    path: &Path,
+) -> String {
+    match entry.source {
+        SkillSource::Workspace => path
+            .parent()
+            .and_then(|parent| relative_to_base(workspace_root, parent))
+            .unwrap_or_else(|| ".".to_string()),
+        SkillSource::Global => path
+            .parent()
+            .map(|parent| parent.to_string_lossy().to_string())
+            .unwrap_or_else(|| ".".to_string()),
+    }
 }
 
 fn parse_skill_file(raw: &str) -> ParsedSkillFile {
@@ -316,8 +413,8 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect()
 }
 
-fn relative_to_workspace(workspace_root: &Path, path: &Path) -> Option<String> {
-    let relative = path.strip_prefix(workspace_root).ok()?;
+fn relative_to_base(base: &Path, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(base).ok()?;
     Some(if relative.as_os_str().is_empty() {
         ".".to_string()
     } else {
@@ -404,6 +501,64 @@ mod tests {
 
         assert_eq!(loaded.base_dir, ".agents/skills/example");
         assert_eq!(loaded.content, "Read references/guide.md.");
+    }
+
+    #[test]
+    fn discovers_global_skills_from_global_root() {
+        let global = TempDir::new().unwrap();
+        write(
+            &global.path().join("shared/SKILL.md"),
+            "---\nid: shared\ndescription: Shared workflow\n---\nUse globally.",
+        );
+
+        let skills = discover_global_skills_from_root(global.path());
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].skill_id, "shared");
+        assert_eq!(skills[0].source, SkillSource::Global);
+        assert_eq!(skills[0].description.as_deref(), Some("Shared workflow"));
+    }
+
+    #[test]
+    fn workspace_skill_overrides_global_skill_with_same_id() {
+        let workspace = TempDir::new().unwrap();
+        let global = TempDir::new().unwrap();
+        write(
+            &global.path().join("shared/SKILL.md"),
+            "---\nid: shared\ndescription: Global workflow\n---\nUse globally.",
+        );
+        write(
+            &workspace.path().join(".agents/skills/shared/SKILL.md"),
+            "---\nid: shared\ndescription: Workspace workflow\n---\nUse workspace.",
+        );
+
+        let skills = discover_available_skills_with_global_root(workspace.path(), global.path());
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].skill_id, "shared");
+        assert_eq!(skills[0].source, SkillSource::Workspace);
+        assert_eq!(skills[0].description.as_deref(), Some("Workspace workflow"));
+    }
+
+    #[test]
+    fn load_skill_can_load_global_skill() {
+        let workspace = TempDir::new().unwrap();
+        let global = TempDir::new().unwrap();
+        write(
+            &global.path().join("shared/SKILL.md"),
+            "---\nid: shared\n---\nUse globally.",
+        );
+
+        let loaded =
+            load_skill_with_global_root(workspace.path(), global.path(), "shared").unwrap();
+
+        assert_eq!(loaded.skill_id, "shared");
+        assert_eq!(loaded.source, SkillSource::Global);
+        assert_eq!(loaded.content, "Use globally.");
+        assert_eq!(
+            loaded.base_dir,
+            global.path().join("shared").to_string_lossy().to_string()
+        );
     }
 
     #[test]

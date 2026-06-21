@@ -202,6 +202,7 @@ struct StagedFileIndex {
     file_path: String,
     hash: String,
     file_size: Option<u64>,
+    line_count: usize,
     modified_at: Option<i64>,
     symbols: Vec<Symbol>,
     anchors: Vec<SemanticAnchor>,
@@ -762,6 +763,7 @@ impl LanguageService {
 
         if record.file_size == Some(metadata.file_size)
             && record.modified_at == Some(metadata.modified_at)
+            && record.line_count.is_some()
         {
             return Ok(false);
         }
@@ -780,6 +782,7 @@ impl LanguageService {
                 &record.file_hash,
                 record.symbol_count,
                 Some(metadata.file_size),
+                Some(source_line_count(&content)),
                 Some(metadata.modified_at),
             )?;
         }
@@ -1357,6 +1360,7 @@ impl LanguageService {
             file_path,
             &hash,
             index_metadata.map(|metadata| metadata.file_size),
+            Some(source_line_count(&content)),
             index_metadata.map(|metadata| metadata.modified_at),
             &symbols,
             &semantic_anchors,
@@ -1392,6 +1396,7 @@ impl LanguageService {
             file_path,
             hash,
             index_metadata.as_ref().map(|metadata| metadata.file_size),
+            Some(source_line_count(content)),
             index_metadata.as_ref().map(|metadata| metadata.modified_at),
             &[],
             &anchors,
@@ -1432,6 +1437,7 @@ impl LanguageService {
                     file_path: file_path.to_string(),
                     hash,
                     file_size: index_metadata.map(|metadata| metadata.file_size),
+                    line_count: source_line_count(&content),
                     modified_at: index_metadata.map(|metadata| metadata.modified_at),
                     symbols: Vec::new(),
                     anchors,
@@ -1462,6 +1468,7 @@ impl LanguageService {
             file_path: file_path.to_string(),
             hash,
             file_size: index_metadata.map(|metadata| metadata.file_size),
+            line_count: source_line_count(&content),
             modified_at: index_metadata.map(|metadata| metadata.modified_at),
             symbols,
             anchors,
@@ -1504,6 +1511,7 @@ impl LanguageService {
                     file_path: file.file_path.clone(),
                     file_hash: file.hash.clone(),
                     file_size: file.file_size,
+                    line_count: Some(file.line_count),
                     modified_at: file.modified_at,
                     symbols: file.symbols.clone(),
                     anchors: file.anchors.clone(),
@@ -2147,6 +2155,13 @@ impl LanguageService {
         self.ensure_file_fresh(file_path)?;
         let symbols = self.get_file_symbols_raw(file_path)?;
         Ok(self.filter_visible_symbols(file_path, symbols))
+    }
+
+    pub fn indexed_file_record(
+        &self,
+        file_path: &str,
+    ) -> Result<Option<crate::symbol_index::store::IndexedFileRecord>, LanguageError> {
+        Ok(self.symbol_store.indexed_file_record(file_path)?)
     }
 
     // =========================================================================
@@ -3178,8 +3193,14 @@ impl LanguageService {
         );
         self.symbol_store
             .replace_relationships_for_file(file_path, &relationships)?;
-        self.symbol_store
-            .mark_file_indexed(file_path, &hash, symbols.len())?;
+        self.symbol_store.mark_file_indexed_with_metadata(
+            file_path,
+            &hash,
+            symbols.len(),
+            None,
+            Some(source_line_count(snapshot.content())),
+            None,
+        )?;
 
         // Update cache
         {
@@ -3284,6 +3305,7 @@ impl LanguageService {
         struct ModuleSummary {
             file_path: String,
             symbol_count: usize,
+            line_count: Option<usize>,
             import_count: usize,
             export_count: usize,
             key_symbols: Vec<String>,
@@ -3296,8 +3318,12 @@ impl LanguageService {
         let mut entrypoints = Vec::<String>::new();
         let mut notable_tests = Vec::<String>::new();
         let mut notable_configs = Vec::<String>::new();
+        let mut indexed_line_count = 0usize;
 
         for record in indexed_files {
+            if let Some(line_count) = record.line_count {
+                indexed_line_count += line_count;
+            }
             let subsystem = subsystem_name_for_path(&record.file_path);
             *subsystem_counts.entry(subsystem.clone()).or_insert(0) += 1;
             push_unique_limited(
@@ -3344,6 +3370,7 @@ impl LanguageService {
             important_modules.push(ModuleSummary {
                 file_path: record.file_path,
                 symbol_count: record.symbol_count,
+                line_count: record.line_count,
                 import_count,
                 export_count,
                 key_symbols,
@@ -3378,6 +3405,9 @@ impl LanguageService {
         output.push_str("## Index Summary\n\n");
         output.push_str(&format!("- Indexed files: {}\n", stats.files_indexed));
         output.push_str(&format!("- Indexed symbols: {}\n", stats.symbols_extracted));
+        if indexed_line_count > 0 {
+            output.push_str(&format!("- Indexed lines: {}\n", indexed_line_count));
+        }
         if let Some(scope_root) = scope_root.as_ref() {
             output.push_str(&format!(
                 "- Scope root: {}\n",
@@ -3418,6 +3448,9 @@ impl LanguageService {
         for module in &important_modules {
             output.push_str(&format!("### {}\n\n", module.file_path));
             output.push_str(&format!("- Symbols: {}\n", module.symbol_count));
+            if let Some(line_count) = module.line_count {
+                output.push_str(&format!("- Lines: {}\n", line_count));
+            }
             output.push_str(&format!("- Imports: {}\n", module.import_count));
             output.push_str(&format!("- Exports: {}\n", module.export_count));
             if module.key_symbols.is_empty() {
@@ -5186,6 +5219,10 @@ fn compute_hash(content: &str) -> String {
     let mut hasher = DefaultHasher::new();
     content.hash(&mut hasher);
     format!("{:x}", hasher.finish())
+}
+
+fn source_line_count(content: &str) -> usize {
+    content.lines().count()
 }
 
 fn file_index_metadata(path: &Path) -> std::io::Result<FileIndexMetadata> {
