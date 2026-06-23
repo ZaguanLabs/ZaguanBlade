@@ -224,6 +224,13 @@ const GREP_SEARCH_MAX_RESULTS_CAP: usize = 20;
 const DEPENDENCY_DIRS: &[&str] = &["node_modules", "vendor"];
 
 const TOOL_METRICS_SAMPLE_CAP: usize = 512;
+const SYMBOL_OUTLINE_DEFAULT_MAX_SYMBOLS: usize = 120;
+const SYMBOL_OUTLINE_MAX_SYMBOLS_CAP: usize = 300;
+const SYMBOL_OUTLINE_DEFAULT_MAX_NODES: usize = 120;
+const SYMBOL_OUTLINE_MAX_NODES_CAP: usize = 500;
+const SYMBOL_OUTLINE_DEFAULT_MAX_DEPTH: usize = 4;
+const SYMBOL_OUTLINE_MAX_DEPTH_CAP: usize = 12;
+const SYMBOL_TEXT_PREVIEW_CHARS: usize = 240;
 
 #[derive(Default, Clone)]
 struct ToolMetricState {
@@ -525,12 +532,13 @@ fn build_tool_failure_feedback(tool_name: &str, error: &str) -> String {
 mod tests {
     use super::{
         apply_multi_patch_to_string, apply_patch_to_string, apply_patch_to_string_with_line_hint,
-        apply_semantic_patch_with_service, apply_semantic_patch_writes_with_service, execute_tool,
-        fast_context_tool, grep_search, impact_confidence, impact_risk_level,
-        is_batch_read_only_tool, parse_grep_timeout_ms, parse_relationship_types_arg,
-        related_test_files_for_paths, stage_semantic_patch_writes, symbol_inventory_entries,
-        symbol_inventory_summary, symbol_reference_resolution_json, PatchHunk, SemanticPatchWrite,
-        ToolResult, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS, GREP_TIMEOUT_MIN_MS,
+        apply_semantic_patch_with_service, apply_semantic_patch_writes_with_service,
+        compact_outline_nodes_for_parent, execute_tool, fast_context_tool, grep_search,
+        impact_confidence, impact_risk_level, is_batch_read_only_tool, parse_grep_timeout_ms,
+        parse_relationship_types_arg, related_test_files_for_paths, stage_semantic_patch_writes,
+        symbol_inventory_entries, symbol_inventory_summary, symbol_reference_resolution_json,
+        PatchHunk, SemanticPatchWrite, ToolResult, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS,
+        GREP_TIMEOUT_MIN_MS,
     };
     use crate::semantic_patch::{InsertPosition, PatchOperation, PatchTarget, SemanticPatch};
     use crate::symbol_index::SymbolStore;
@@ -733,13 +741,40 @@ mod tests {
             test_symbol("helper", "helper", SymbolType::Function, 30, None),
         ];
 
-        let entries = symbol_inventory_entries(&symbols, 2);
+        let entries = symbol_inventory_entries(&symbols, 2, false);
 
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0]["name"], "UserService");
         assert_eq!(entries[0]["child_count"], 1);
         assert_eq!(entries[0]["line_range"]["start_line"], 10);
         assert_eq!(entries[1]["name"], "getUser");
+        assert!(entries[0]["docstring"].is_null());
+    }
+
+    #[test]
+    fn compact_outline_nodes_are_bounded_and_do_not_emit_full_symbol_payloads() {
+        let symbols = vec![
+            test_symbol("class", "UserService", SymbolType::Class, 10, None),
+            test_symbol("method", "getUser", SymbolType::Method, 20, Some("class")),
+            test_symbol("helper", "helper", SymbolType::Function, 30, None),
+        ];
+        let mut by_parent = HashMap::new();
+        for symbol in symbols {
+            by_parent
+                .entry(symbol.parent_id.clone())
+                .or_insert_with(Vec::new)
+                .push(symbol);
+        }
+
+        let mut emitted = 0usize;
+        let nodes = compact_outline_nodes_for_parent(&by_parent, None, 2, 4, 0, &mut emitted);
+
+        assert_eq!(emitted, 2);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0]["name"], "UserService");
+        assert_eq!(nodes[0]["child_count"], 1);
+        assert_eq!(nodes[0]["children"][0]["name"], "getUser");
+        assert!(nodes[0]["byte_offset"].is_null());
     }
 
     #[test]
@@ -2707,16 +2742,28 @@ fn symbol_to_json(symbol: &crate::tree_sitter::Symbol) -> serde_json::Value {
     })
 }
 
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+
+    value.chars().take(max_chars).collect::<String>()
+}
+
 fn symbol_inventory_entry_to_json(
     symbol: &crate::tree_sitter::Symbol,
     child_count: usize,
+    include_docstrings: bool,
 ) -> serde_json::Value {
-    serde_json::json!({
+    let mut value = serde_json::json!({
         "id": symbol.id,
         "name": symbol.name,
         "qualified_name": symbol.qualified_name,
         "symbol_type": symbol.symbol_type.to_string(),
-        "signature": symbol.signature,
+        "signature": symbol
+            .signature
+            .as_ref()
+            .map(|signature| truncate_chars(signature, SYMBOL_TEXT_PREVIEW_CHARS)),
         "line_range": {
             "start_line": symbol.range.start.line,
             "end_line": symbol.range.end.line,
@@ -2733,8 +2780,16 @@ fn symbol_inventory_entry_to_json(
         },
         "parent_id": symbol.parent_id,
         "child_count": child_count,
-        "docstring": symbol.docstring,
-    })
+    });
+
+    if include_docstrings {
+        value["docstring"] = serde_json::json!(symbol
+            .docstring
+            .as_ref()
+            .map(|docstring| truncate_chars(docstring, SYMBOL_TEXT_PREVIEW_CHARS)));
+    }
+
+    value
 }
 
 fn symbol_inventory_summary(symbols: &[crate::tree_sitter::Symbol]) -> serde_json::Value {
@@ -2770,6 +2825,7 @@ fn symbol_inventory_summary(symbols: &[crate::tree_sitter::Symbol]) -> serde_jso
 fn symbol_inventory_entries(
     symbols: &[crate::tree_sitter::Symbol],
     max_symbols: usize,
+    include_docstrings: bool,
 ) -> Vec<serde_json::Value> {
     let mut child_counts = HashMap::<String, usize>::new();
     for symbol in symbols {
@@ -2785,7 +2841,7 @@ fn symbol_inventory_entries(
         .take(max_symbols)
         .map(|symbol| {
             let child_count = child_counts.get(&symbol.id).copied().unwrap_or_default();
-            symbol_inventory_entry_to_json(&symbol, child_count)
+            symbol_inventory_entry_to_json(&symbol, child_count, include_docstrings)
         })
         .collect()
 }
@@ -3041,24 +3097,60 @@ fn resolve_symbol_from_graph_args(
     }))
 }
 
-fn outline_nodes_for_parent(
+fn compact_outline_nodes_for_parent(
     by_parent: &HashMap<Option<String>, Vec<crate::tree_sitter::Symbol>>,
     parent_id: Option<&str>,
+    max_nodes: usize,
+    max_depth: usize,
+    depth: usize,
+    emitted_nodes: &mut usize,
 ) -> Vec<serde_json::Value> {
+    if *emitted_nodes >= max_nodes || depth >= max_depth {
+        return Vec::new();
+    }
+
     let mut symbols = by_parent
         .get(&parent_id.map(|id| id.to_string()))
         .cloned()
         .unwrap_or_default();
     symbols.sort_by_key(|symbol| (symbol.range.start.line, symbol.range.start.character));
-    symbols
-        .into_iter()
-        .map(|symbol| {
-            let mut value = symbol_to_json(&symbol);
-            value["children"] =
-                serde_json::Value::Array(outline_nodes_for_parent(by_parent, Some(&symbol.id)));
-            value
-        })
-        .collect()
+
+    let mut nodes = Vec::new();
+    for symbol in symbols {
+        if *emitted_nodes >= max_nodes {
+            break;
+        }
+
+        *emitted_nodes += 1;
+        let child_count = by_parent
+            .get(&Some(symbol.id.clone()))
+            .map(Vec::len)
+            .unwrap_or_default();
+        let children = compact_outline_nodes_for_parent(
+            by_parent,
+            Some(&symbol.id),
+            max_nodes,
+            max_depth,
+            depth + 1,
+            emitted_nodes,
+        );
+        let children_returned = children.len();
+        nodes.push(serde_json::json!({
+            "id": symbol.id,
+            "name": symbol.name,
+            "qualified_name": symbol.qualified_name,
+            "symbol_type": symbol.symbol_type.to_string(),
+            "line_range": {
+                "start_line": symbol.range.start.line,
+                "end_line": symbol.range.end.line,
+            },
+            "child_count": child_count,
+            "children": children,
+            "children_truncated": child_count > children_returned,
+        }));
+    }
+
+    nodes
 }
 
 fn symbol_search_tool<R: tauri::Runtime>(
@@ -3268,8 +3360,26 @@ fn symbol_outline_tool<R: tauri::Runtime>(
         Err(err) => return ToolResult::err(err),
     };
     let started = Instant::now();
-    let include_outline = get_bool_arg(args, &["include_outline"], true);
-    let max_symbols = get_bounded_usize_arg(args, &["max_symbols", "limit"], 200, 1000);
+    let include_outline = get_bool_arg(args, &["include_outline"], false);
+    let include_docstrings = get_bool_arg(args, &["include_docstrings", "include_docs"], false);
+    let max_symbols = get_bounded_usize_arg(
+        args,
+        &["max_symbols", "limit"],
+        SYMBOL_OUTLINE_DEFAULT_MAX_SYMBOLS,
+        SYMBOL_OUTLINE_MAX_SYMBOLS_CAP,
+    );
+    let max_outline_nodes = get_bounded_usize_arg(
+        args,
+        &["max_outline_nodes", "outline_limit"],
+        SYMBOL_OUTLINE_DEFAULT_MAX_NODES,
+        SYMBOL_OUTLINE_MAX_NODES_CAP,
+    );
+    let max_outline_depth = get_bounded_usize_arg(
+        args,
+        &["max_outline_depth", "outline_depth"],
+        SYMBOL_OUTLINE_DEFAULT_MAX_DEPTH,
+        SYMBOL_OUTLINE_MAX_DEPTH_CAP,
+    );
     let symbols = match service.get_file_symbols(&path) {
         Ok(symbols) => symbols,
         Err(err) => return ToolResult::err(err.to_string()),
@@ -3280,7 +3390,7 @@ fn symbol_outline_tool<R: tauri::Runtime>(
     };
     let total_symbols = symbols.len();
     let summary = symbol_inventory_summary(&symbols);
-    let inventory_symbols = symbol_inventory_entries(&symbols, max_symbols);
+    let inventory_symbols = symbol_inventory_entries(&symbols, max_symbols, include_docstrings);
 
     let mut by_parent: HashMap<Option<String>, Vec<crate::tree_sitter::Symbol>> = HashMap::new();
     for symbol in symbols.iter().cloned() {
@@ -3289,15 +3399,25 @@ fn symbol_outline_tool<R: tauri::Runtime>(
             .or_default()
             .push(symbol);
     }
+    let mut outline_nodes_returned = 0usize;
+    let outline = if include_outline {
+        serde_json::Value::Array(compact_outline_nodes_for_parent(
+            &by_parent,
+            None,
+            max_outline_nodes,
+            max_outline_depth,
+            0,
+            &mut outline_nodes_returned,
+        ))
+    } else {
+        serde_json::Value::Null
+    };
+    let outline_truncated = include_outline && outline_nodes_returned < total_symbols;
     let payload = serde_json::json!({
         "path": path,
         "summary": summary,
         "symbols": inventory_symbols,
-        "outline": if include_outline {
-            serde_json::Value::Array(outline_nodes_for_parent(&by_parent, None))
-        } else {
-            serde_json::Value::Null
-        },
+        "outline": outline,
         "_meta": {
             "tool": "symbol_outline",
             "source": "language_service",
@@ -3306,8 +3426,20 @@ fn symbol_outline_tool<R: tauri::Runtime>(
             "line_count": indexed_file.as_ref().and_then(|record| record.line_count),
             "total_symbols": total_symbols,
             "returned_symbols": total_symbols.min(max_symbols),
-            "truncated": total_symbols > max_symbols,
-            "include_outline": include_outline
+            "truncated": total_symbols > max_symbols || outline_truncated,
+            "symbols_truncated": total_symbols > max_symbols,
+            "outline_nodes_returned": outline_nodes_returned,
+            "outline_truncated": outline_truncated,
+            "include_outline": include_outline,
+            "include_docstrings": include_docstrings,
+            "max_symbols": max_symbols,
+            "max_outline_nodes": max_outline_nodes,
+            "max_outline_depth": max_outline_depth,
+            "guidance": if total_symbols > max_symbols || outline_truncated {
+                "Use symbol_search to narrow candidates and symbol_resolve for full details on a specific symbol."
+            } else {
+                "Use symbol_resolve for full details on a specific symbol."
+            }
         }
     });
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())

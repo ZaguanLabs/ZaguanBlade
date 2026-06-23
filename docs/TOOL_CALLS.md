@@ -393,10 +393,13 @@ Parameters:
 | Name | Type | Required | Aliases |
 |------|------|----------|---------|
 | `path` | string | Yes | `file`, `file_path` |
-| `max_symbols` | integer | No | `limit`; default `200`, cap `1000` |
-| `include_outline` | boolean | No | defaults to `true` |
+| `max_symbols` | integer | No | `limit`; default `120`, cap `300` |
+| `include_outline` | boolean | No | defaults to `false`; returns compact nodes only |
+| `max_outline_nodes` | integer | No | `outline_limit`; default `120`, cap `500` |
+| `max_outline_depth` | integer | No | `outline_depth`; default `4`, cap `12` |
+| `include_docstrings` | boolean | No | `include_docs`; defaults to `false`; docstrings are truncated when included |
 
-Response metadata includes `_meta.line_count` when the file index has stored line-count metadata.
+Response metadata includes `_meta.line_count` when the file index has stored line-count metadata, plus truncation fields such as `_meta.symbols_truncated` and `_meta.outline_truncated`.
 
 ### `symbol_related`
 

@@ -890,7 +890,18 @@ impl LanguageService {
 
     pub fn reconcile_index_with_progress<F>(
         &self,
+        progress: F,
+    ) -> Result<IndexReconciliationReport, LanguageError>
+    where
+        F: FnMut(&IndexHealthSnapshot),
+    {
+        self.reconcile_index_with_progress_inner(progress, true)
+    }
+
+    fn reconcile_index_with_progress_inner<F>(
+        &self,
         mut progress: F,
+        allow_full_rebuild: bool,
     ) -> Result<IndexReconciliationReport, LanguageError>
     where
         F: FnMut(&IndexHealthSnapshot),
@@ -1053,6 +1064,27 @@ impl LanguageService {
         let has_hard_graph_issues = graph_quality.missing_source_symbols > 0
             || graph_quality.missing_target_symbols > 0
             || graph_quality.indexed_files_missing_root_symbol > 0;
+
+        if has_hard_graph_issues && allow_full_rebuild {
+            let mut rebuild_health = final_health.clone();
+            rebuild_health.status = IndexHealthStatus::Indexing;
+            rebuild_health.active_workers = 1;
+            rebuild_health.current_file = None;
+            rebuild_health.message = format!(
+                "Rebuilding symbol index after graph integrity issues ({} missing sources, {} missing targets, {} files missing roots)",
+                graph_quality.missing_source_symbols,
+                graph_quality.missing_target_symbols,
+                graph_quality.indexed_files_missing_root_symbol
+            );
+            self.set_index_health(rebuild_health.clone());
+            progress(&rebuild_health);
+
+            self.file_cache.write().unwrap().clear();
+            self.symbol_store.clear()?;
+
+            return self.reconcile_index_with_progress_inner(progress, false);
+        }
+
         final_health.status = if final_health.queued_files == 0
             && final_health.orphaned_files == 0
             && !has_hard_graph_issues
@@ -6067,6 +6099,38 @@ export function loadPosts() {
             .iter()
             .any(|result| result.symbol.name == "GitCommitMessage"));
         assert!(service.get_file_symbols_raw("old.ts").unwrap().is_empty());
+    }
+
+    #[test]
+    fn reconcile_index_rebuilds_once_when_graph_integrity_is_hard_broken() {
+        let (service, temp_dir) = create_test_service();
+
+        let content = "export function repairedSymbol() { return 42; }\n";
+        fs::write(temp_dir.path().join("broken.ts"), content).unwrap();
+        service
+            .symbol_store
+            .replace_file_index(
+                "broken.ts",
+                &compute_hash(content),
+                None,
+                Some(source_line_count(content)),
+                None,
+                &[],
+                &[],
+                &[],
+            )
+            .unwrap();
+
+        let report = service.reconcile_index().unwrap();
+        let symbols = service.get_file_symbols_raw("broken.ts").unwrap();
+
+        assert_eq!(report.health.status, IndexHealthStatus::Fresh);
+        assert!(report.files_indexed >= 1);
+        assert_eq!(report.graph_quality.indexed_files_missing_root_symbol, 0);
+        assert!(symbols
+            .iter()
+            .any(|symbol| symbol.id == LanguageService::synthetic_file_root_id("broken.ts")));
+        assert!(symbols.iter().any(|symbol| symbol.name == "repairedSymbol"));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import React, { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChatMessage as ChatMessageType, HookApprovalRequest, QueuedRequest, ToolActivityState } from '../../types/chat';
 import type { StructuredAction } from '../../types/events';
@@ -7,13 +7,12 @@ import { ProgressIndicator } from '../../components/ProgressIndicator';
 import type { ChatActivity } from '../../utils/chatTimeline';
 import { FloatingJumpToBottomButton } from './FloatingJumpToBottomButton';
 import { useChatTimelineRows } from './useChatTimelineRows';
-import { shouldDetachChatAutoScrollOnWheel } from '../../utils/chatScroll';
+import { isNearChatBottom, shouldDetachChatAutoScrollOnWheel } from '../../utils/chatScroll';
 import { useSmoothWheelScroll } from '../../hooks/useSmoothWheelScroll';
 import { readDebugFlag } from '../../utils/debugFlags';
 import zbladeAppIcon from '../../assets/zblade-app-icon.png';
 
 const FOLLOW_BOTTOM_THRESHOLD_PX = 48;
-const DETACH_BOTTOM_THRESHOLD_PX = 140;
 
 interface ResearchProgress {
     message: string;
@@ -69,7 +68,10 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
     const bottomRef = useRef<HTMLDivElement>(null);
     const [scrollMode, setScrollMode] = useState<'following' | 'detached'>('following');
     const scrollModeRef = useRef<'following' | 'detached'>('following');
-    const wheelDetachedRef = useRef(false);
+    const isUserAtBottomRef = useRef(true);
+    const isBottomSentinelVisibleRef = useRef(true);
+    const previousFirstMessageIdRef = useRef<string | undefined>(undefined);
+    const previousMessageCountRef = useRef(0);
     const [smoothScrollResetKey, setSmoothScrollResetKey] = useState(0);
     const { rows } = useChatTimelineRows({
         messages,
@@ -80,6 +82,22 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
     });
     const activeMessage = rows.find((row) => row.kind === 'message' && row.isActive)?.message;
     const lastUserMessageId = [...messages].reverse().find((message) => message.role === 'User')?.id;
+    const firstMessageId = messages[0]?.id;
+    const lastMessage = messages[messages.length - 1];
+    const messageCount = messages.length;
+    const streamingSignature = useMemo(() => {
+        if (!activeMessage) {
+            return '';
+        }
+
+        return [
+            activeMessage.id,
+            activeMessage.content.length,
+            activeMessage.reasoning?.length ?? 0,
+            activeMessage.blocks?.length ?? 0,
+            activeMessage.streaming?.seq ?? '',
+        ].join('|');
+    }, [activeMessage]);
     const showProgressIndicator = Boolean(researchProgress?.isActive);
     const showPendingResponse = loading && messages[messages.length - 1]?.role !== 'Assistant' && !showProgressIndicator;
 
@@ -88,27 +106,49 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
             return;
         }
         scrollModeRef.current = nextMode;
+        if (nextMode === 'following') {
+            setSmoothScrollResetKey((value) => value + 1);
+        }
         setScrollMode(nextMode);
     }, []);
 
-    const getDistanceFromBottom = useCallback(() => {
-        const element = scrollRef.current;
-        if (!element) {
-            return 0;
-        }
+    const getDistanceFromBottom = useCallback((element: HTMLDivElement) => {
         return Math.max(0, element.scrollHeight - element.scrollTop - element.clientHeight);
     }, []);
 
-    const handleScroll = useCallback(() => {
-        const distanceFromBottom = getDistanceFromBottom();
-        if (scrollModeRef.current === 'following' && distanceFromBottom > DETACH_BOTTOM_THRESHOLD_PX) {
-            setStableScrollMode('detached');
+    const syncBottomState = useCallback((element: HTMLDivElement) => {
+        const isAtBottom = isNearChatBottom(
+            element.scrollHeight,
+            element.scrollTop,
+            element.clientHeight,
+            FOLLOW_BOTTOM_THRESHOLD_PX,
+        );
+
+        isUserAtBottomRef.current = isAtBottom;
+        if (isAtBottom) {
+            isBottomSentinelVisibleRef.current = true;
+        }
+        setStableScrollMode(isAtBottom ? 'following' : 'detached');
+    }, [setStableScrollMode]);
+
+    const scrollToBottom = useCallback((attachFollow = true) => {
+        const element = scrollRef.current;
+        if (!element) {
             return;
         }
-        if (scrollModeRef.current === 'detached' && distanceFromBottom <= FOLLOW_BOTTOM_THRESHOLD_PX && !wheelDetachedRef.current) {
+
+        element.scrollTop = element.scrollHeight;
+
+        if (attachFollow) {
+            isUserAtBottomRef.current = true;
+            isBottomSentinelVisibleRef.current = true;
             setStableScrollMode('following');
         }
-    }, [getDistanceFromBottom, setStableScrollMode]);
+    }, [setStableScrollMode]);
+
+    const handleScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+        syncBottomState(event.currentTarget);
+    }, [syncBottomState]);
 
     const handleWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
         const element = scrollRef.current;
@@ -116,12 +156,9 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
             return;
         }
 
-        if (event.deltaY > 0) {
-            wheelDetachedRef.current = false;
-        }
-
         if (shouldDetachChatAutoScrollOnWheel(event.deltaY, element.scrollTop)) {
-            wheelDetachedRef.current = true;
+            isUserAtBottomRef.current = false;
+            isBottomSentinelVisibleRef.current = false;
             setStableScrollMode('detached');
         }
     }, [setStableScrollMode]);
@@ -130,27 +167,79 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
         resetKey: smoothScrollResetKey,
     });
 
-    const scrollToBottom = useCallback(() => {
-        const element = scrollRef.current;
-        if (!element) {
+    useEffect(() => {
+        const sentinel = bottomRef.current;
+        const scrollRoot = scrollRef.current;
+        if (!sentinel || !scrollRoot || typeof IntersectionObserver === 'undefined') {
             return;
         }
-        setSmoothScrollResetKey((value) => value + 1);
-        wheelDetachedRef.current = false;
-        element.scrollTop = element.scrollHeight;
+
+        const observer = new IntersectionObserver(
+            ([entry]) => {
+                isBottomSentinelVisibleRef.current = entry.isIntersecting;
+            },
+            {
+                root: scrollRoot,
+                threshold: 0,
+                rootMargin: `0px 0px ${FOLLOW_BOTTOM_THRESHOLD_PX}px 0px`,
+            },
+        );
+
+        observer.observe(sentinel);
+        return () => observer.disconnect();
+    }, []);
+
+    useEffect(() => {
+        if (messageCount === 0) {
+            previousFirstMessageIdRef.current = undefined;
+            previousMessageCountRef.current = 0;
+            isUserAtBottomRef.current = true;
+            isBottomSentinelVisibleRef.current = true;
+            setStableScrollMode('following');
+            return;
+        }
+
+        if (firstMessageId === previousFirstMessageIdRef.current) {
+            return;
+        }
+
+        previousFirstMessageIdRef.current = firstMessageId;
+        previousMessageCountRef.current = messageCount;
+        isUserAtBottomRef.current = true;
+        isBottomSentinelVisibleRef.current = true;
         setStableScrollMode('following');
-    }, [setStableScrollMode]);
+
+        const timer = window.setTimeout(() => scrollToBottom(), 50);
+        return () => window.clearTimeout(timer);
+    }, [firstMessageId, messageCount, scrollToBottom, setStableScrollMode]);
+
+    useEffect(() => {
+        if (messageCount === previousMessageCountRef.current) {
+            return;
+        }
+
+        previousMessageCountRef.current = messageCount;
+
+        if (lastMessage?.role === 'User' || isUserAtBottomRef.current) {
+            const frameId = requestAnimationFrame(() => scrollToBottom());
+            return () => cancelAnimationFrame(frameId);
+        }
+    }, [lastMessage?.role, messageCount, scrollToBottom]);
 
     useLayoutEffect(() => {
-        if (scrollMode !== 'following') {
+        if (!loading || !isUserAtBottomRef.current || !isBottomSentinelVisibleRef.current) {
             return;
         }
+
         const element = scrollRef.current;
         if (!element) {
             return;
         }
-        element.scrollTop = element.scrollHeight;
-    }, [activeMessage?.content, activeMessage?.reasoning, activeMessage?.streaming?.seq, rows.length, scrollMode]);
+
+        if (getDistanceFromBottom(element) > 2) {
+            element.scrollTop = element.scrollHeight;
+        }
+    }, [getDistanceFromBottom, loading, streamingSignature]);
 
     return (
         <div className="relative min-h-0 flex-1">
@@ -240,7 +329,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                     <div ref={bottomRef} className="h-4" />
                 </div>
             </div>
-            <FloatingJumpToBottomButton visible={scrollMode === 'detached'} onClick={scrollToBottom} />
+            <FloatingJumpToBottomButton visible={scrollMode === 'detached'} onClick={() => scrollToBottom()} />
         </div>
     );
 };

@@ -154,7 +154,10 @@ pub fn get_tool_definitions() -> Vec<Value> {
                         "path": { "type": "string", "description": "File path whose symbol inventory should be returned" },
                         "max_symbols": { "type": "integer", "description": "Maximum flat inventory symbols to return, capped by the backend" },
                         "limit": { "type": "integer", "description": "Alias for max_symbols" },
-                        "include_outline": { "type": "boolean", "description": "Whether to include the nested hierarchy in addition to the flat inventory" }
+                        "include_outline": { "type": "boolean", "description": "Whether to include a compact, bounded nested hierarchy in addition to the flat inventory. Defaults to false." },
+                        "max_outline_nodes": { "type": "integer", "description": "Maximum compact outline nodes to return when include_outline is true, capped by the backend" },
+                        "max_outline_depth": { "type": "integer", "description": "Maximum compact outline nesting depth when include_outline is true, capped by the backend" },
+                        "include_docstrings": { "type": "boolean", "description": "Whether to include truncated docstring previews in inventory entries. Defaults to false." }
                     },
                     "required": ["path"],
                     "additionalProperties": false
