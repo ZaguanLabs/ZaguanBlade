@@ -4,15 +4,29 @@ import type { ChatMessage as ChatMessageType, HookApprovalRequest, QueuedRequest
 import type { StructuredAction } from '../../types/events';
 import { ChatMessage } from '../../components/ChatMessage';
 import { ProgressIndicator } from '../../components/ProgressIndicator';
-import type { ChatActivity } from '../../utils/chatTimeline';
+import {
+    estimateChatRowHeight,
+    findFirstUnvirtualizedChatRowIndex,
+    type ChatActivity,
+    type DerivedChatMessageRow,
+} from '../../utils/chatTimeline';
 import { FloatingJumpToBottomButton } from './FloatingJumpToBottomButton';
 import { useChatTimelineRows } from './useChatTimelineRows';
 import { isNearChatBottom, shouldDetachChatAutoScrollOnWheel } from '../../utils/chatScroll';
 import { useSmoothWheelScroll } from '../../hooks/useSmoothWheelScroll';
 import { readDebugFlag } from '../../utils/debugFlags';
+import { recordDebugPerf } from '../../utils/debugPerf';
+import { computeVisibleVirtualRange, sameVisibleVirtualRange, type VisibleVirtualRange } from '../../utils/chatVirtualization';
 import zbladeAppIcon from '../../assets/zblade-app-icon.png';
 
 const FOLLOW_BOTTOM_THRESHOLD_PX = 48;
+const DEFERRED_ROW_MINIMUM_COUNT = 24;
+const EMPTY_VIRTUAL_RANGE: VisibleVirtualRange = {
+    startIndex: 0,
+    endIndex: 0,
+    topSpacerHeight: 0,
+    bottomSpacerHeight: 0,
+};
 
 interface ResearchProgress {
     message: string;
@@ -63,8 +77,10 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
     onEditLastUserMessage,
 }) => {
     const { t } = useTranslation();
+    recordDebugPerf('ChatViewport.render');
     const compactEmptyStatesV1 = readDebugFlag('compactEmptyStatesV1');
     const scrollRef = useRef<HTMLDivElement>(null);
+    const contentRef = useRef<HTMLDivElement>(null);
     const bottomRef = useRef<HTMLDivElement>(null);
     const [scrollMode, setScrollMode] = useState<'following' | 'detached'>('following');
     const scrollModeRef = useRef<'following' | 'detached'>('following');
@@ -72,7 +88,15 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
     const isBottomSentinelVisibleRef = useRef(true);
     const previousFirstMessageIdRef = useRef<string | undefined>(undefined);
     const previousMessageCountRef = useRef(0);
+    const scrollTopRef = useRef(0);
+    const viewportHeightRef = useRef(0);
+    const virtualizedRowOffsetsRef = useRef<number[]>([]);
+    const virtualizedRowHeightsRef = useRef<number[]>([]);
+    const totalVirtualizedHeightRef = useRef(0);
+    const visibleRangeFrameRef = useRef<number | null>(null);
     const [smoothScrollResetKey, setSmoothScrollResetKey] = useState(0);
+    const [viewportMetrics, setViewportMetrics] = useState({ width: 0, height: 0 });
+    const [visibleVirtualRange, setVisibleVirtualRange] = useState<VisibleVirtualRange>(EMPTY_VIRTUAL_RANGE);
     const { rows } = useChatTimelineRows({
         messages,
         activities: chatActivities,
@@ -80,6 +104,48 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
         pendingActions,
         pendingApprovalRequest,
     });
+    const messageRows = useMemo(
+        () => rows.filter((row): row is DerivedChatMessageRow => row.kind === 'message'),
+        [rows],
+    );
+    const firstLiveMessageRowIndex = useMemo(
+        () => findFirstUnvirtualizedChatRowIndex(messageRows, loading),
+        [loading, messageRows],
+    );
+    const shouldVirtualizeRows = messageRows.length >= DEFERRED_ROW_MINIMUM_COUNT;
+    const virtualizedMessageRows = useMemo(() => {
+        if (!shouldVirtualizeRows) {
+            return [];
+        }
+        return messageRows.slice(0, firstLiveMessageRowIndex);
+    }, [firstLiveMessageRowIndex, messageRows, shouldVirtualizeRows]);
+    const liveMessageRows = useMemo(() => {
+        if (!shouldVirtualizeRows) {
+            return messageRows;
+        }
+        return messageRows.slice(firstLiveMessageRowIndex);
+    }, [firstLiveMessageRowIndex, messageRows]);
+    const virtualizedRowHeights = useMemo(
+        () => virtualizedMessageRows.map((row) => estimateChatRowHeight(row, { viewportWidthPx: viewportMetrics.width })),
+        [viewportMetrics.width, virtualizedMessageRows],
+    );
+    const virtualizedRowOffsets = useMemo(() => {
+        const offsets: number[] = [];
+        let runningTotal = 0;
+        for (const height of virtualizedRowHeights) {
+            offsets.push(runningTotal);
+            runningTotal += height;
+        }
+        return offsets;
+    }, [virtualizedRowHeights]);
+    const totalVirtualizedHeight = useMemo(
+        () => virtualizedRowHeights.reduce((sum, height) => sum + height, 0),
+        [virtualizedRowHeights],
+    );
+    const visibleVirtualRows = useMemo(
+        () => virtualizedMessageRows.slice(visibleVirtualRange.startIndex, visibleVirtualRange.endIndex),
+        [virtualizedMessageRows, visibleVirtualRange.endIndex, visibleVirtualRange.startIndex],
+    );
     const activeMessage = rows.find((row) => row.kind === 'message' && row.isActive)?.message;
     const lastUserMessageId = [...messages].reverse().find((message) => message.role === 'User')?.id;
     const firstMessageId = messages[0]?.id;
@@ -100,6 +166,36 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
     }, [activeMessage]);
     const showProgressIndicator = Boolean(researchProgress?.isActive);
     const showPendingResponse = loading && messages[messages.length - 1]?.role !== 'Assistant' && !showProgressIndicator;
+
+    const scheduleVisibleVirtualRangeUpdate = useCallback((scrollTop?: number, immediate = false) => {
+        if (typeof scrollTop === 'number') {
+            scrollTopRef.current = scrollTop;
+        }
+
+        if (visibleRangeFrameRef.current !== null) {
+            return;
+        }
+
+        const runUpdate = () => {
+            visibleRangeFrameRef.current = null;
+            recordDebugPerf('ChatViewport.visibleRangeUpdate');
+            const nextRange = computeVisibleVirtualRange(
+                scrollTopRef.current,
+                viewportHeightRef.current,
+                virtualizedRowOffsetsRef.current,
+                virtualizedRowHeightsRef.current,
+                totalVirtualizedHeightRef.current,
+            );
+            setVisibleVirtualRange((currentRange) => sameVisibleVirtualRange(currentRange, nextRange) ? currentRange : nextRange);
+        };
+
+        if (immediate) {
+            runUpdate();
+            return;
+        }
+
+        visibleRangeFrameRef.current = requestAnimationFrame(runUpdate);
+    }, []);
 
     const setStableScrollMode = useCallback((nextMode: 'following' | 'detached') => {
         if (scrollModeRef.current === nextMode) {
@@ -138,6 +234,8 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
         }
 
         element.scrollTop = element.scrollHeight;
+        scrollTopRef.current = element.scrollTop;
+        scheduleVisibleVirtualRangeUpdate(element.scrollTop, true);
 
         if (attachFollow) {
             isUserAtBottomRef.current = true;
@@ -147,8 +245,10 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
     }, [setStableScrollMode]);
 
     const handleScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+        scrollTopRef.current = event.currentTarget.scrollTop;
+        scheduleVisibleVirtualRangeUpdate(event.currentTarget.scrollTop);
         syncBottomState(event.currentTarget);
-    }, [syncBottomState]);
+    }, [scheduleVisibleVirtualRangeUpdate, syncBottomState]);
 
     const handleWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
         const element = scrollRef.current;
@@ -166,6 +266,99 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
         disabled: scrollMode === 'following',
         resetKey: smoothScrollResetKey,
     });
+
+    useEffect(() => {
+        virtualizedRowOffsetsRef.current = virtualizedRowOffsets;
+        virtualizedRowHeightsRef.current = virtualizedRowHeights;
+        totalVirtualizedHeightRef.current = totalVirtualizedHeight;
+        viewportHeightRef.current = viewportMetrics.height;
+        scheduleVisibleVirtualRangeUpdate(scrollTopRef.current);
+    }, [scheduleVisibleVirtualRangeUpdate, totalVirtualizedHeight, viewportMetrics.height, virtualizedRowHeights, virtualizedRowOffsets]);
+
+    useEffect(() => {
+        if (virtualizedMessageRows.length > 0) {
+            recordDebugPerf('ChatViewport.virtualizedRows', virtualizedMessageRows.length);
+        }
+        if (visibleVirtualRows.length > 0) {
+            recordDebugPerf('ChatViewport.mountedVirtualRows', visibleVirtualRows.length);
+        }
+    }, [virtualizedMessageRows.length, visibleVirtualRows.length]);
+
+    useEffect(() => {
+        const element = scrollRef.current;
+        if (!element) {
+            return;
+        }
+
+        setViewportMetrics({ width: element.clientWidth, height: element.clientHeight });
+        viewportHeightRef.current = element.clientHeight;
+        scrollTopRef.current = element.scrollTop;
+
+        if (typeof ResizeObserver === 'undefined') {
+            return;
+        }
+
+        let frameId: number | null = null;
+        const observer = new ResizeObserver(([entry]) => {
+            recordDebugPerf('ChatViewport.widthResizeObserver');
+            const nextWidth = Math.round(entry?.contentRect.width ?? element.clientWidth);
+            const nextHeight = Math.round(entry?.contentRect.height ?? element.clientHeight);
+            if (frameId !== null) {
+                cancelAnimationFrame(frameId);
+            }
+            frameId = requestAnimationFrame(() => {
+                frameId = null;
+                viewportHeightRef.current = nextHeight;
+                setViewportMetrics((currentMetrics) => (
+                    currentMetrics.width === nextWidth && currentMetrics.height === nextHeight
+                        ? currentMetrics
+                        : { width: nextWidth, height: nextHeight }
+                ));
+                scheduleVisibleVirtualRangeUpdate(scrollTopRef.current);
+            });
+        });
+
+        observer.observe(element);
+        return () => {
+            observer.disconnect();
+            if (frameId !== null) {
+                cancelAnimationFrame(frameId);
+            }
+        };
+    }, [scheduleVisibleVirtualRangeUpdate]);
+
+    useEffect(() => {
+        const content = contentRef.current;
+        if (!content || typeof ResizeObserver === 'undefined') {
+            return;
+        }
+
+        let frameId: number | null = null;
+        const observer = new ResizeObserver(() => {
+            recordDebugPerf('ChatViewport.contentResizeObserver');
+            if (scrollModeRef.current !== 'following' || !isUserAtBottomRef.current) {
+                return;
+            }
+
+            if (frameId !== null) {
+                cancelAnimationFrame(frameId);
+            }
+            frameId = requestAnimationFrame(() => {
+                frameId = null;
+                recordDebugPerf('ChatViewport.contentResizeFollowBottom');
+                scrollToBottom(false);
+            });
+        });
+
+        observer.observe(content);
+        return () => {
+            observer.disconnect();
+            if (frameId !== null) {
+                cancelAnimationFrame(frameId);
+                frameId = null;
+            }
+        };
+    }, [scrollToBottom]);
 
     useEffect(() => {
         const sentinel = bottomRef.current;
@@ -241,10 +434,53 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
         }
     }, [getDistanceFromBottom, loading, streamingSignature]);
 
+    useEffect(() => () => {
+        if (visibleRangeFrameRef.current !== null) {
+            cancelAnimationFrame(visibleRangeFrameRef.current);
+            visibleRangeFrameRef.current = null;
+        }
+    }, []);
+
+    const renderMessageRow = useCallback((row: DerivedChatMessageRow) => (
+        <ChatMessage
+            message={row.message}
+            pendingActions={row.pendingActions}
+            pendingApprovalRequest={row.pendingApprovalRequest}
+            onApproveCommand={row.pendingActions ? onApproveCommand : undefined}
+            onSkipCommand={row.pendingActions ? onSkipCommand : undefined}
+            onApproveApprovalRequest={row.pendingApprovalRequest ? onApproveApprovalRequest : undefined}
+            onDenyApprovalRequest={row.pendingApprovalRequest ? onDenyApprovalRequest : undefined}
+            onApproveSingleCommand={row.pendingActions ? onApproveSingleCommand : undefined}
+            onSkipSingleCommand={row.pendingActions ? onSkipSingleCommand : undefined}
+            isContinued={row.isContinued}
+            isActive={row.isActive}
+            onUndoTool={onUndoTool}
+            onStopCommand={onStopCommand}
+            onOpenFile={onOpenFile}
+            workspaceRoot={workspaceRoot}
+            onEditMessage={row.message.id === lastUserMessageId ? onEditLastUserMessage : undefined}
+            showInlineWorkLog={false}
+            workDetailsVisible={true}
+        />
+    ), [
+        lastUserMessageId,
+        onApproveApprovalRequest,
+        onApproveCommand,
+        onDenyApprovalRequest,
+        onEditLastUserMessage,
+        onOpenFile,
+        onSkipCommand,
+        onApproveSingleCommand,
+        onSkipSingleCommand,
+        onStopCommand,
+        onUndoTool,
+        workspaceRoot,
+    ]);
+
     return (
         <div className="relative min-h-0 flex-1">
             <div ref={scrollRef} onScroll={handleScroll} onWheel={handleSmoothWheel} className="h-full overflow-y-auto overscroll-contain [overflow-anchor:none] scrollbar-thin scrollbar-thumb-(--bg-surface-hover) scrollbar-track-transparent">
-                <div className="mx-auto flex w-full max-w-none flex-col gap-1 px-0.5 py-4 md:px-1">
+                <div ref={contentRef} className="mx-auto flex w-full max-w-none flex-col gap-1 px-0.5 py-4 md:px-1">
                     {messages.length === 0 && (
                         compactEmptyStatesV1 ? (
                             <div className="mx-3 mt-3 border-b border-(--separator-subtle) px-1 pb-4 text-left">
@@ -277,35 +513,25 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                         )
                     )}
 
-                    {rows.map((row) => {
-                        if (row.kind === 'work_log') {
-                            return null;
-                        }
+                    {visibleVirtualRange.topSpacerHeight > 0 && (
+                        <div style={{ height: `${visibleVirtualRange.topSpacerHeight}px` }} />
+                    )}
 
-                        return (
-                            <ChatMessage
-                                key={row.key}
-                                message={row.message}
-                                pendingActions={row.pendingActions}
-                                pendingApprovalRequest={row.pendingApprovalRequest}
-                                onApproveCommand={row.pendingActions ? onApproveCommand : undefined}
-                                onSkipCommand={row.pendingActions ? onSkipCommand : undefined}
-                                onApproveApprovalRequest={row.pendingApprovalRequest ? onApproveApprovalRequest : undefined}
-                                onDenyApprovalRequest={row.pendingApprovalRequest ? onDenyApprovalRequest : undefined}
-                                onApproveSingleCommand={row.pendingActions ? onApproveSingleCommand : undefined}
-                                onSkipSingleCommand={row.pendingActions ? onSkipSingleCommand : undefined}
-                                isContinued={row.isContinued}
-                                isActive={row.isActive}
-                                onUndoTool={onUndoTool}
-                                onStopCommand={onStopCommand}
-                                onOpenFile={onOpenFile}
-                                workspaceRoot={workspaceRoot}
-                                onEditMessage={row.message.id === lastUserMessageId ? onEditLastUserMessage : undefined}
-                                showInlineWorkLog={false}
-                                workDetailsVisible={true}
-                            />
-                        );
-                    })}
+                    {visibleVirtualRows.map((row) => (
+                        <div key={row.key}>
+                            {renderMessageRow(row)}
+                        </div>
+                    ))}
+
+                    {visibleVirtualRange.bottomSpacerHeight > 0 && (
+                        <div style={{ height: `${visibleVirtualRange.bottomSpacerHeight}px` }} />
+                    )}
+
+                    {liveMessageRows.map((row) => (
+                        <div key={row.key}>
+                            {renderMessageRow(row)}
+                        </div>
+                    ))}
 
                     {showPendingResponse && (
                         <div className="px-4 py-3">

@@ -20,63 +20,11 @@ import { TaskPanel } from './TaskPanel';
 import { QueuePanel } from './QueuePanel';
 import type { UncommittedChange } from '../types/uncommitted';
 import { computeStableChatRows, deriveChatRows, estimateChatRowHeight, findFirstUnvirtualizedChatRowIndex, type StableChatRowsState } from '../utils/chatTimeline';
+import { computeVisibleVirtualRange, sameVisibleVirtualRange, type VisibleVirtualRange } from '../utils/chatVirtualization';
 import { recordDebugPerf } from '../utils/debugPerf';
 
-const VIRTUALIZATION_OVERSCAN_PX = 720;
 const SCROLL_BOTTOM_THRESHOLD_PX = 80;
 const VIRTUALIZATION_SCROLL_THROTTLE_MS = 150;
-
-interface VisibleVirtualRange {
-    startIndex: number;
-    endIndex: number;
-    topSpacerHeight: number;
-    bottomSpacerHeight: number;
-}
-
-function sameVisibleVirtualRange(a: VisibleVirtualRange, b: VisibleVirtualRange): boolean {
-    return a.startIndex === b.startIndex
-        && a.endIndex === b.endIndex
-        && a.topSpacerHeight === b.topSpacerHeight
-        && a.bottomSpacerHeight === b.bottomSpacerHeight;
-}
-
-function computeVisibleVirtualRange(
-    scrollTop: number,
-    viewportHeight: number,
-    virtualizedRowOffsets: number[],
-    virtualizedRowHeights: number[],
-    totalVirtualizedHeight: number,
-): VisibleVirtualRange {
-    const rowCount = virtualizedRowHeights.length;
-    if (rowCount === 0) {
-        return { startIndex: 0, endIndex: 0, topSpacerHeight: 0, bottomSpacerHeight: 0 };
-    }
-
-    const viewportStart = Math.max(0, scrollTop - VIRTUALIZATION_OVERSCAN_PX);
-    const viewportEnd = scrollTop + viewportHeight + VIRTUALIZATION_OVERSCAN_PX;
-
-    let startIndex = 0;
-    while (
-        startIndex < rowCount
-        && virtualizedRowOffsets[startIndex] + virtualizedRowHeights[startIndex] < viewportStart
-    ) {
-        startIndex += 1;
-    }
-
-    let endIndex = startIndex;
-    while (endIndex < rowCount && virtualizedRowOffsets[endIndex] < viewportEnd) {
-        endIndex += 1;
-    }
-
-    const topSpacerHeight = virtualizedRowOffsets[startIndex] ?? totalVirtualizedHeight;
-    let renderedHeight = 0;
-    for (let index = startIndex; index < endIndex; index += 1) {
-        renderedHeight += virtualizedRowHeights[index] ?? 0;
-    }
-    const bottomSpacerHeight = Math.max(0, totalVirtualizedHeight - topSpacerHeight - renderedHeight);
-
-    return { startIndex, endIndex, topSpacerHeight, bottomSpacerHeight };
-}
 
 interface ResearchProgress {
     message: string;

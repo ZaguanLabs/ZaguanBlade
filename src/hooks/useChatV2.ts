@@ -1780,6 +1780,33 @@ export function useChatV2(options: UseChatV2Options = {}) {
                         return;
                     }
                     flushPendingUpdatesImmediately();
+                    const completedAt = Date.now();
+                    const previousStreaming = streamingStatesRef.current.get(id)
+                        ?? messageByIdRef.current.get(id)?.streaming;
+                    if (previousStreaming && !previousStreaming.endTime) {
+                        streamingStatesRef.current.set(id, {
+                            ...previousStreaming,
+                            endTime: completedAt,
+                        });
+                    }
+                    setMessages((messages) => {
+                        let changed = false;
+                        const nextMessages = messages.map((message) => {
+                            if (message.id !== id || !message.streaming || message.streaming.endTime) {
+                                return message;
+                            }
+
+                            changed = true;
+                            return {
+                                ...message,
+                                streaming: {
+                                    ...message.streaming,
+                                    endTime: completedAt,
+                                },
+                            };
+                        });
+                        return changed ? nextMessages : messages;
+                    });
                     scheduleMessageCompletionCleanup(id);
                     toolChunkCountsRef.current.clear();
                     return;

@@ -587,13 +587,15 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
 
     const hasReasoning = !!message.reasoning || message.blocks?.some(b => b.type === 'reasoning');
     const stream = message.streaming;
+    const isAssistantActive = isAssistant && isActive;
     const hasChunkCounter = isAssistant && !!stream && stream.seq > 0;
     const hasLiveTextStream = isAssistant
+        && isAssistantActive
         && !!stream
         && !stream.endTime
         && (stream.activeKind === 'content' || stream.activeKind === 'reasoning');
     const shouldUseStreamingMarkdown = hasLiveTextStream;
-    const showAssistantLiveState = isAssistant && (isActive || hasLiveTextStream);
+    const showAssistantLiveState = isAssistantActive && (!stream || !stream.endTime);
     const isActiveContentBlock = useCallback((blockId?: string) => (
         shouldUseStreamingMarkdown
         && stream?.activeKind === 'content'
