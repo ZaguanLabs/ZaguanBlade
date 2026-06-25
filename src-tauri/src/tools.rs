@@ -542,8 +542,8 @@ mod tests {
         parse_grep_timeout_ms, parse_relationship_types_arg, related_test_files_for_paths,
         stage_semantic_patch_writes, symbol_inventory_entries, symbol_inventory_summary,
         symbol_language_diagnostics, symbol_outline_diagnostics, symbol_reference_resolution_json,
-        PatchHunk, SemanticPatchWrite, ToolResult, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS,
-        GREP_TIMEOUT_MIN_MS,
+        symbol_search_connection_json, PatchHunk, SemanticPatchWrite, ToolResult,
+        GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS, GREP_TIMEOUT_MIN_MS,
     };
     use crate::semantic_patch::{InsertPosition, PatchOperation, PatchTarget, SemanticPatch};
     use crate::symbol_index::SymbolStore;
@@ -919,6 +919,26 @@ mod tests {
             symbol_reference_resolution_json(&fallback)["confidence"],
             "low"
         );
+    }
+
+    #[test]
+    fn symbol_search_connection_includes_resolution_metadata() {
+        let source = test_symbol("caller", "caller", SymbolType::Function, 1, None);
+        let target = test_symbol("helper", "helper", SymbolType::Function, 3, None);
+        let reference = crate::symbol_index::SymbolReference {
+            source_symbol: source,
+            relationship_type: crate::tree_sitter::SymbolRelationshipType::Call,
+            target_name: "helper".to_string(),
+            target_symbol_id: Some(target.id.clone()),
+            target_symbol: Some(target),
+            line: 2,
+        };
+
+        let connection = symbol_search_connection_json(&reference, "outgoing");
+
+        assert_eq!(connection["resolution"]["strategy"], "resolved_symbol_id");
+        assert_eq!(connection["resolution"]["confidence"], "high");
+        assert_eq!(connection["resolution"]["resolved"], true);
     }
 
     #[test]
@@ -3668,6 +3688,7 @@ fn symbol_search_connection_json(
         "target_name": &reference.target_name,
         "target_symbol_id": &reference.target_symbol_id,
         "line": reference.line,
+        "resolution": symbol_reference_resolution_json(reference),
         "symbol": connected_symbol.map(|symbol| serde_json::json!({
             "id": &symbol.id,
             "name": &symbol.name,
