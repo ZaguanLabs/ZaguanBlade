@@ -181,6 +181,7 @@ fn is_batch_read_only_tool(tool_name: &str) -> bool {
         | "symbol_references"
         | "edit_impact"
         | "symbol_graph"
+        | "symbol_trace"
         | "symbol_schema"
         | "symbol_outline"
         | "read_file"
@@ -1695,6 +1696,7 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
         "symbol_references" => symbol_references_tool(workspace_root, &args, app_handle),
         "edit_impact" => edit_impact_tool(workspace_root, &args, app_handle),
         "symbol_graph" => symbol_graph_tool(workspace_root, &args, app_handle),
+        "symbol_trace" => symbol_trace_tool(workspace_root, &args, app_handle),
         "symbol_schema" => symbol_schema_tool(app_handle),
         "symbol_outline" => symbol_outline_tool(workspace_root, &args, app_handle),
         "read_file_range" => read_file_range(workspace_root, &args),
@@ -3297,6 +3299,26 @@ fn symbol_reference_to_json(reference: &crate::symbol_index::SymbolReference) ->
     })
 }
 
+fn symbol_trace_node_to_json(node: &crate::language_service::SymbolTraceNode) -> serde_json::Value {
+    serde_json::json!({
+        "symbol": symbol_to_json(&node.symbol),
+        "depth": node.depth,
+    })
+}
+
+fn symbol_trace_edge_to_json(edge: &crate::language_service::SymbolTraceEdge) -> serde_json::Value {
+    serde_json::json!({
+        "source_symbol": symbol_to_json(&edge.source_symbol),
+        "target_symbol": edge.target_symbol.as_ref().map(symbol_to_json),
+        "target_name": edge.target_name,
+        "relationship_type": edge.relationship_type.to_string(),
+        "direction": edge.direction.as_str(),
+        "depth": edge.depth,
+        "line": edge.line,
+        "resolved": edge.resolved,
+    })
+}
+
 fn related_symbol_to_json(related: &crate::language_service::RelatedSymbol) -> serde_json::Value {
     serde_json::json!({
         "symbol": symbol_to_json(&related.symbol),
@@ -3338,6 +3360,28 @@ fn parse_relationship_types_arg(
         Ok(relationship_type_values())
     } else {
         Ok(parsed)
+    }
+}
+
+fn parse_symbol_trace_direction_arg(
+    args: &HashMap<String, serde_json::Value>,
+) -> Result<crate::language_service::SymbolTraceDirection, String> {
+    let Some(direction) = get_str_arg(args, &["direction"]) else {
+        return Ok(crate::language_service::SymbolTraceDirection::Both);
+    };
+
+    match direction.to_ascii_lowercase().as_str() {
+        "incoming" | "inbound" | "in" => {
+            Ok(crate::language_service::SymbolTraceDirection::Incoming)
+        }
+        "outgoing" | "outbound" | "out" => {
+            Ok(crate::language_service::SymbolTraceDirection::Outgoing)
+        }
+        "both" => Ok(crate::language_service::SymbolTraceDirection::Both),
+        _ => Err(format!(
+            "unknown symbol_trace direction '{}'; expected incoming, outgoing, or both",
+            direction
+        )),
     }
 }
 
@@ -4454,6 +4498,69 @@ fn symbol_graph_tool<R: tauri::Runtime>(
             "language_support": language_support_meta_json(Some(&graph.symbol.file_path)),
             "limit": limit,
             "truncated": graph.incoming.len() >= limit || graph.outgoing.len() >= limit,
+        }
+    });
+    ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
+}
+
+fn symbol_trace_tool<R: tauri::Runtime>(
+    workspace_root: &Path,
+    args: &HashMap<String, serde_json::Value>,
+    app_handle: Option<&tauri::AppHandle<R>>,
+) -> ToolResult {
+    let service = match language_service_from_app_handle(app_handle) {
+        Ok(service) => service,
+        Err(err) => return ToolResult::err(err),
+    };
+    let symbol = match resolve_symbol_from_graph_args(workspace_root, &service, args) {
+        Ok(Some(symbol)) => symbol,
+        Ok(None) => return ToolResult::err("symbol not found".to_string()),
+        Err(err) => return ToolResult::err(err),
+    };
+    let relationships = match parse_relationship_types_arg(args) {
+        Ok(values) => values,
+        Err(err) => return ToolResult::err(err),
+    };
+    let direction = match parse_symbol_trace_direction_arg(args) {
+        Ok(direction) => direction,
+        Err(err) => return ToolResult::err(err),
+    };
+    let max_depth = parse_bounded_usize_arg(args, "depth", 2, 4);
+    let edge_limit = get_bounded_usize_arg(args, &["edge_limit", "limit"], 80, 200);
+    let per_node_limit = get_bounded_usize_arg(args, &["per_node_limit"], 16, 50);
+    let started = Instant::now();
+    let trace = match service.trace_symbol_graph(
+        &symbol,
+        &relationships,
+        direction,
+        max_depth,
+        edge_limit,
+        per_node_limit,
+    ) {
+        Ok(trace) => trace,
+        Err(err) => return ToolResult::err(err.to_string()),
+    };
+    let payload = serde_json::json!({
+        "seed": symbol_to_json(&trace.seed),
+        "nodes": trace.nodes.iter().map(symbol_trace_node_to_json).collect::<Vec<_>>(),
+        "edges": trace.edges.iter().map(symbol_trace_edge_to_json).collect::<Vec<_>>(),
+        "summary": {
+            "node_count": trace.nodes.len(),
+            "edge_count": trace.edges.len(),
+            "max_depth": trace.max_depth,
+            "unresolved_edge_count": trace.unresolved_edges,
+            "truncated": trace.truncated,
+        },
+        "_meta": {
+            "tool": "symbol_trace",
+            "source": "language_service",
+            "timing_ms": started.elapsed().as_millis(),
+            "index_health": service.index_health_snapshot(),
+            "language_support": language_support_meta_json(Some(&trace.seed.file_path)),
+            "direction": direction.as_str(),
+            "relationship_types": relationships.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "edge_limit": edge_limit,
+            "per_node_limit": per_node_limit,
         }
     });
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())

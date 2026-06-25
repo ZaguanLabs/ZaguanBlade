@@ -177,6 +177,7 @@ const LOCAL_AI_DEFAULT_SYSTEM_PROMPT: &str = r#"You are an AI coding assistant i
 **symbol_schema** - Inspect Symbols Index coverage, symbol counts, relationship counts, and support levels
 **symbol_resolve** - Resolve a symbol to its exact file and line range
 **symbol_references** - Find where a symbol is used
+**symbol_trace** - Trace bounded multi-hop symbol relationships with truncation and unresolved-edge metadata
 **read_file_range** - Read targeted line ranges from a file
 **read_file** - Read full file contents when broader context is needed
 **get_workspace_structure** - Get the project directory tree

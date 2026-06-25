@@ -79,7 +79,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
                         "kind": { "type": "string", "description": "Optional symbol kind filter" },
                         "limit": { "type": "integer", "description": "Optional max results" },
                         "offset": { "type": "integer", "description": "Optional zero-based result offset for pagination. Use only after checking has_more in a prior response." },
-                        "include_connected": { "type": "boolean", "description": "Optional compact one-hop connected-symbol preview for returned results; use symbol_references or symbol_graph for deeper traversal." }
+                        "include_connected": { "type": "boolean", "description": "Optional compact one-hop connected-symbol preview for returned results; use symbol_references for one-hop expansion or symbol_trace for bounded multi-hop traversal." }
                     },
                     "required": ["query"],
                     "additionalProperties": false
@@ -424,6 +424,32 @@ pub fn get_tool_definitions() -> Vec<Value> {
                         }
                     },
                     "required": ["calls"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "name": "symbol_trace",
+            "function": {
+                "name": "symbol_trace",
+                "description": "Trace bounded multi-hop incoming/outgoing symbol relationships from one seed symbol. Returns visited symbols, edges, hop depth, truncation status, and unresolved edge counts without claiming type-aware call graph precision.",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "symbol_id": { "type": "string", "description": "Stable symbol ID" },
+                        "path": { "type": "string", "description": "Optional file path when resolving by name" },
+                        "qualified_name": { "type": "string", "description": "Optional exact qualified name" },
+                        "name": { "type": "string", "description": "Optional simple symbol name" },
+                        "direction": { "type": "string", "description": "incoming, outgoing, or both; defaults to both" },
+                        "relationship_type": { "type": "string", "description": "Optional single edge kind: call, import, export, extends, implements, contains, or usage" },
+                        "relationships": { "type": "array", "items": { "type": "string" }, "description": "Optional edge kind list" },
+                        "depth": { "type": "integer", "description": "Optional traversal depth, capped at 4" },
+                        "edge_limit": { "type": "integer", "description": "Optional total edge cap, capped at 200" },
+                        "per_node_limit": { "type": "integer", "description": "Optional per-node per-relationship edge cap, capped at 50" }
+                    },
+                    "required": [],
                     "additionalProperties": false
                 }
             }

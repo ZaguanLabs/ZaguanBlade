@@ -5,7 +5,7 @@
 
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, RwLock};
 
@@ -4224,6 +4224,163 @@ impl LanguageService {
         })
     }
 
+    pub fn trace_symbol_graph(
+        &self,
+        seed: &Symbol,
+        relationship_types: &[SymbolRelationshipType],
+        direction: SymbolTraceDirection,
+        max_depth: usize,
+        edge_limit: usize,
+        per_node_limit: usize,
+    ) -> Result<SymbolTrace, LanguageError> {
+        let max_depth = max_depth.min(4);
+        let edge_limit = edge_limit.min(200);
+        let per_node_limit = per_node_limit.min(50);
+        let mut nodes = Vec::new();
+        let mut edges = Vec::new();
+        let mut visited_nodes = HashSet::new();
+        let mut seen_edges = HashSet::new();
+        let mut queue = VecDeque::new();
+        let mut truncated = false;
+        let mut unresolved_edges = 0usize;
+
+        visited_nodes.insert(seed.id.clone());
+        nodes.push(SymbolTraceNode {
+            symbol: seed.clone(),
+            depth: 0,
+        });
+        queue.push_back((seed.clone(), 0usize));
+
+        while let Some((symbol, depth)) = queue.pop_front() {
+            if depth >= max_depth || edges.len() >= edge_limit {
+                continue;
+            }
+
+            for relationship_type in relationship_types {
+                if edges.len() >= edge_limit {
+                    truncated = true;
+                    break;
+                }
+
+                let graph = self.get_symbol_graph(&symbol, *relationship_type, per_node_limit)?;
+                if graph.incoming.len() >= per_node_limit || graph.outgoing.len() >= per_node_limit
+                {
+                    truncated = true;
+                }
+
+                if direction.includes_incoming() {
+                    for reference in graph.incoming {
+                        if edges.len() >= edge_limit {
+                            truncated = true;
+                            break;
+                        }
+
+                        let resolved = Self::trace_reference_is_resolved(&reference);
+                        if !resolved {
+                            unresolved_edges += 1;
+                        }
+                        let edge_key = (
+                            reference.source_symbol.id.clone(),
+                            symbol.id.clone(),
+                            reference.relationship_type,
+                            reference.line,
+                        );
+                        if seen_edges.insert(edge_key) {
+                            edges.push(SymbolTraceEdge {
+                                source_symbol: reference.source_symbol.clone(),
+                                target_symbol: Some(symbol.clone()),
+                                target_name: reference.target_name.clone(),
+                                relationship_type: reference.relationship_type,
+                                direction: SymbolTraceDirection::Incoming,
+                                depth: depth + 1,
+                                line: reference.line,
+                                resolved,
+                            });
+                        }
+
+                        if visited_nodes.insert(reference.source_symbol.id.clone()) {
+                            nodes.push(SymbolTraceNode {
+                                symbol: reference.source_symbol.clone(),
+                                depth: depth + 1,
+                            });
+                            queue.push_back((reference.source_symbol, depth + 1));
+                        }
+                    }
+                }
+
+                if direction.includes_outgoing() {
+                    for reference in graph.outgoing {
+                        if edges.len() >= edge_limit {
+                            truncated = true;
+                            break;
+                        }
+
+                        let resolved = Self::trace_reference_is_resolved(&reference);
+                        if !resolved {
+                            unresolved_edges += 1;
+                        }
+                        let target_key = reference
+                            .target_symbol
+                            .as_ref()
+                            .map(|symbol| symbol.id.clone())
+                            .or_else(|| reference.target_symbol_id.clone())
+                            .unwrap_or_else(|| {
+                                format!(
+                                    "unresolved:{}:{}:{}",
+                                    reference.target_name,
+                                    reference.relationship_type,
+                                    reference.line
+                                )
+                            });
+                        let edge_key = (
+                            reference.source_symbol.id.clone(),
+                            target_key,
+                            reference.relationship_type,
+                            reference.line,
+                        );
+                        if seen_edges.insert(edge_key) {
+                            edges.push(SymbolTraceEdge {
+                                source_symbol: reference.source_symbol.clone(),
+                                target_symbol: reference.target_symbol.clone(),
+                                target_name: reference.target_name.clone(),
+                                relationship_type: reference.relationship_type,
+                                direction: SymbolTraceDirection::Outgoing,
+                                depth: depth + 1,
+                                line: reference.line,
+                                resolved,
+                            });
+                        }
+
+                        if let Some(target_symbol) = reference.target_symbol {
+                            if visited_nodes.insert(target_symbol.id.clone()) {
+                                nodes.push(SymbolTraceNode {
+                                    symbol: target_symbol.clone(),
+                                    depth: depth + 1,
+                                });
+                                queue.push_back((target_symbol, depth + 1));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(SymbolTrace {
+            seed: seed.clone(),
+            nodes,
+            edges,
+            max_depth,
+            truncated,
+            unresolved_edges,
+        })
+    }
+
+    fn trace_reference_is_resolved(reference: &SymbolReference) -> bool {
+        reference.target_symbol_id.is_some()
+            || reference.target_symbol.is_some()
+            || reference.relationship_type == SymbolRelationshipType::Import
+    }
+
     fn get_containment_incoming(
         &self,
         symbol: &Symbol,
@@ -5005,6 +5162,59 @@ pub struct SymbolGraph {
     pub symbol: Symbol,
     pub incoming: Vec<SymbolReference>,
     pub outgoing: Vec<SymbolReference>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SymbolTrace {
+    pub seed: Symbol,
+    pub nodes: Vec<SymbolTraceNode>,
+    pub edges: Vec<SymbolTraceEdge>,
+    pub max_depth: usize,
+    pub truncated: bool,
+    pub unresolved_edges: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct SymbolTraceNode {
+    pub symbol: Symbol,
+    pub depth: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct SymbolTraceEdge {
+    pub source_symbol: Symbol,
+    pub target_symbol: Option<Symbol>,
+    pub target_name: String,
+    pub relationship_type: SymbolRelationshipType,
+    pub direction: SymbolTraceDirection,
+    pub depth: usize,
+    pub line: u32,
+    pub resolved: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SymbolTraceDirection {
+    Incoming,
+    Outgoing,
+    Both,
+}
+
+impl SymbolTraceDirection {
+    pub fn includes_incoming(self) -> bool {
+        matches!(self, Self::Incoming | Self::Both)
+    }
+
+    pub fn includes_outgoing(self) -> bool {
+        matches!(self, Self::Outgoing | Self::Both)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Incoming => "incoming",
+            Self::Outgoing => "outgoing",
+            Self::Both => "both",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -9201,6 +9411,96 @@ export function loadPosts() {
         assert!(references.iter().any(|reference| {
             reference.source_symbol.file_path == "main.ts"
                 && reference.target_symbol_id.as_deref() == Some(helper.id.as_str())
+        }));
+    }
+
+    #[test]
+    fn trace_symbol_graph_returns_direct_outgoing_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("trace.ts"),
+            "export function leaf() {}\nexport function middle() { leaf(); }\nexport function root() { middle(); }\n",
+        )
+        .unwrap();
+        service.index_file("trace.ts").unwrap();
+        let root = service
+            .search_symbols("root", 10)
+            .unwrap()
+            .into_iter()
+            .find(|result| result.symbol.name == "root")
+            .map(|result| result.symbol)
+            .unwrap();
+
+        let trace = service
+            .trace_symbol_graph(
+                &root,
+                &[SymbolRelationshipType::Call],
+                SymbolTraceDirection::Outgoing,
+                1,
+                10,
+                10,
+            )
+            .unwrap();
+
+        assert!(!trace.truncated);
+        assert_eq!(trace.unresolved_edges, 0);
+        assert!(trace.edges.iter().any(|edge| {
+            edge.source_symbol.name == "root"
+                && edge
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.name.as_str())
+                    == Some("middle")
+                && edge.depth == 1
+        }));
+    }
+
+    #[test]
+    fn trace_symbol_graph_returns_bounded_multihop_edges() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("trace.ts"),
+            "export function leaf() {}\nexport function middle() { leaf(); }\nexport function root() { middle(); }\n",
+        )
+        .unwrap();
+        service.index_file("trace.ts").unwrap();
+        let root = service
+            .search_symbols("root", 10)
+            .unwrap()
+            .into_iter()
+            .find(|result| result.symbol.name == "root")
+            .map(|result| result.symbol)
+            .unwrap();
+
+        let trace = service
+            .trace_symbol_graph(
+                &root,
+                &[SymbolRelationshipType::Call],
+                SymbolTraceDirection::Outgoing,
+                2,
+                10,
+                10,
+            )
+            .unwrap();
+
+        assert!(trace
+            .nodes
+            .iter()
+            .any(|node| { node.symbol.name == "middle" && node.depth == 1 }));
+        assert!(trace
+            .nodes
+            .iter()
+            .any(|node| { node.symbol.name == "leaf" && node.depth == 2 }));
+        assert!(trace.edges.iter().any(|edge| {
+            edge.source_symbol.name == "middle"
+                && edge
+                    .target_symbol
+                    .as_ref()
+                    .map(|symbol| symbol.name.as_str())
+                    == Some("leaf")
+                && edge.depth == 2
         }));
     }
 

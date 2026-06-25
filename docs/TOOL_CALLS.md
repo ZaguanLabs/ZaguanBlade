@@ -362,7 +362,7 @@ Parameters:
 | `kind` | string | No | `symbol_type` |
 | `limit` | integer | No | cap `100` |
 | `offset` | integer | No | zero-based pagination offset; cap `1000` |
-| `include_connected` | boolean | No | compact one-hop connected-symbol preview for returned results; use `symbol_references` or `symbol_graph` for deeper traversal |
+| `include_connected` | boolean | No | compact one-hop connected-symbol preview for returned results; use `symbol_references` for one-hop expansion or `symbol_trace` for bounded multi-hop traversal |
 
 ### `semantic_anchor_search`
 
@@ -447,7 +447,7 @@ Relationship types include `call`, `import`, `export`, `extends`, `implements`, 
 
 ### `symbol_graph`
 
-Returns incoming and outgoing graph edges for one symbol.
+Returns one-hop incoming and outgoing graph edges for one symbol.
 
 Parameters:
 
@@ -461,6 +461,28 @@ Parameters:
 | `relationship_type` | string | No |
 | `kind` | string | No |
 | `limit` | integer | No |
+
+Relationship types include `call`, `import`, `export`, `extends`, `implements`, `contains`, and `usage`.
+
+### `symbol_trace`
+
+Traces bounded multi-hop incoming and/or outgoing symbol relationships from one seed symbol. This is a structural index traversal, not a type-aware call graph. Responses include visited symbols, edges, hop depth, truncation status, and unresolved edge counts.
+
+Parameters:
+
+| Name | Type | Required |
+|------|------|----------|
+| `symbol_id` / `id` | string | No |
+| `path` / `file` / `file_path` | string | No |
+| `qualified_name` | string | No |
+| `name` | string | No |
+| `direction` | string | No, `incoming`, `outgoing`, or `both`; defaults to `both` |
+| `relationship` | string | No |
+| `relationship_type` | string | No |
+| `relationships` | string[] | No |
+| `depth` | integer | No, capped at `4` |
+| `edge_limit` | integer | No, capped at `200`; alias `limit` |
+| `per_node_limit` | integer | No, capped at `50` |
 
 Relationship types include `call`, `import`, `export`, `extends`, `implements`, `contains`, and `usage`.
 

@@ -17,5 +17,6 @@ pub use indexer::{FileIndexer, IndexEvent};
 pub use service::{
     IndexDiscoverySnapshot, IndexHealthSnapshot, IndexHealthStatus, IndexLanguageCount,
     IndexSchemaCount, IndexSchemaLanguageCount, IndexSchemaSnapshot, IndexSchemaTotals,
-    IndexSkipCount, IndexTimingSnapshot, LanguageService, RelatedSymbol, SymbolGraph,
+    IndexSkipCount, IndexTimingSnapshot, LanguageService, RelatedSymbol, SymbolGraph, SymbolTrace,
+    SymbolTraceDirection, SymbolTraceEdge, SymbolTraceNode,
 };
