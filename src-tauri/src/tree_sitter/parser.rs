@@ -31,6 +31,7 @@ pub enum Language {
     Php,
     Java,
     CSharp,
+    Kotlin,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -312,6 +313,15 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extractor_version: 1,
         extracts: ExtractionCapabilities::scanner(true),
     },
+    LanguageCapability {
+        language: Language::Kotlin,
+        display_name: "Kotlin",
+        extensions: &["kt", "kts"],
+        parser: ParserKind::Scanner,
+        support: SupportLevel::Partial,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::scanner(true),
+    },
 ];
 
 impl Language {
@@ -370,6 +380,10 @@ impl Language {
 
     pub fn is_csharp_scanner(self) -> bool {
         matches!(self, Language::CSharp)
+    }
+
+    pub fn is_kotlin_scanner(self) -> bool {
+        matches!(self, Language::Kotlin)
     }
 
     /// Get display name for the language
@@ -556,6 +570,14 @@ mod tests {
         assert_eq!(
             Language::from_path("UserService.cs"),
             Some(Language::CSharp)
+        );
+        assert_eq!(
+            Language::from_path("UserService.kt"),
+            Some(Language::Kotlin)
+        );
+        assert_eq!(
+            Language::from_path("build.gradle.kts"),
+            Some(Language::Kotlin)
         );
         for path in ["main.cpp", "main.c"] {
             assert_eq!(

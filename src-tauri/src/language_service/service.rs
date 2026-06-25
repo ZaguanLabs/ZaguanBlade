@@ -1572,6 +1572,14 @@ impl LanguageService {
                 language,
             });
         }
+        if language.is_kotlin_scanner() {
+            return Ok(SymbolExtraction {
+                symbols: extract_kotlin_symbols(file_path, content),
+                relationships: Vec::new(),
+                content: Cow::Borrowed(content),
+                language,
+            });
+        }
 
         let (extraction_content, extraction_language) = if matches!(language, Language::Astro) {
             (Cow::Owned(astro_script_projection(content)), Language::Tsx)
@@ -3801,7 +3809,8 @@ impl LanguageService {
             | Language::Toml
             | Language::Php
             | Language::Java
-            | Language::CSharp => false,
+            | Language::CSharp
+            | Language::Kotlin => false,
         }
     }
 
@@ -3896,7 +3905,8 @@ impl LanguageService {
             | Language::Toml
             | Language::Php
             | Language::Java
-            | Language::CSharp => false,
+            | Language::CSharp
+            | Language::Kotlin => false,
         }
     }
 
@@ -5228,7 +5238,8 @@ impl LanguageService {
             | Language::Toml
             | Language::Php
             | Language::Java
-            | Language::CSharp => None,
+            | Language::CSharp
+            | Language::Kotlin => None,
         }
     }
 }
@@ -8610,6 +8621,184 @@ fn csharp_method_declaration(code: &str, code_start: usize) -> Option<LineScanne
     Some(declaration)
 }
 
+fn extract_kotlin_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
+    extract_line_scanner_symbols(file_path, content, kotlin_declarations_in_line)
+}
+
+fn kotlin_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
+    let code = kotlin_line_code(line);
+    if code.is_empty() {
+        return Vec::new();
+    }
+    let code_start = line.find(code).unwrap_or(0);
+
+    if let Some(declaration) = kotlin_package_declaration(code, code_start) {
+        return vec![declaration];
+    }
+    if let Some(declaration) = kotlin_import_declaration(code, code_start) {
+        return vec![declaration];
+    }
+
+    let mut declarations = Vec::new();
+    let has_special_class = ["enum class", "data class", "value class", "sealed class"]
+        .iter()
+        .any(|pattern| code.contains(pattern));
+    for (keyword, symbol_type) in [
+        ("class", SymbolType::Class),
+        ("interface", SymbolType::Interface),
+        ("object", SymbolType::Module),
+    ] {
+        if keyword == "class" && has_special_class {
+            continue;
+        }
+        if let Some(declaration) =
+            kotlin_keyword_declaration(code, code_start, keyword, symbol_type)
+        {
+            declarations.push(declaration);
+        }
+    }
+    if let Some(declaration) = kotlin_enum_declaration(code, code_start) {
+        declarations.push(declaration);
+    }
+    if let Some(declaration) = kotlin_record_like_declaration(code, code_start) {
+        declarations.push(declaration);
+    }
+    if declarations.is_empty() {
+        if let Some(declaration) = kotlin_function_declaration(code, code_start) {
+            declarations.push(declaration);
+        }
+    }
+
+    declarations
+}
+
+fn kotlin_line_code(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("//")
+        || trimmed.starts_with('*')
+        || trimmed.starts_with("/*")
+        || trimmed.starts_with('@')
+    {
+        ""
+    } else {
+        trimmed.split("//").next().unwrap_or(trimmed).trim_end()
+    }
+}
+
+fn kotlin_package_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
+    let rest = code.strip_prefix("package ")?;
+    let name_start = code.len().saturating_sub(rest.len());
+    let rest = rest.trim_start();
+    let leading_ws = code[name_start..].len().saturating_sub(rest.len());
+    let (name, name_len) = java_read_qualified_name(rest, false)?;
+    let start_char = code_start + name_start + leading_ws;
+    Some(LineScannerDeclaration {
+        name,
+        symbol_type: SymbolType::Namespace,
+        start_char,
+        end_char: start_char + name_len,
+    })
+}
+
+fn kotlin_import_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
+    let rest = code.strip_prefix("import ")?;
+    let rest = rest.trim_start();
+    let leading_ws = code.len().saturating_sub(rest.len());
+    let (name, name_len) = java_read_qualified_name(rest, true)?;
+    Some(LineScannerDeclaration {
+        name,
+        symbol_type: SymbolType::Import,
+        start_char: code_start + leading_ws,
+        end_char: code_start + leading_ws + name_len,
+    })
+}
+
+fn kotlin_keyword_declaration(
+    code: &str,
+    code_start: usize,
+    keyword: &str,
+    symbol_type: SymbolType,
+) -> Option<LineScannerDeclaration> {
+    let keyword_start = java_find_keyword(code, keyword)?;
+    let after_keyword = keyword_start + keyword.len();
+    let rest = code[after_keyword..].trim_start();
+    let leading_ws = code[after_keyword..].len().saturating_sub(rest.len());
+    let (name, name_len) = java_read_identifier(rest)?;
+    let start_char = code_start + after_keyword + leading_ws;
+    Some(LineScannerDeclaration {
+        name,
+        symbol_type,
+        start_char,
+        end_char: start_char + name_len,
+    })
+}
+
+fn kotlin_enum_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
+    let enum_start = java_find_keyword(code, "enum")?;
+    let after_enum = enum_start + "enum".len();
+    let rest = code[after_enum..].trim_start();
+    let rest = rest.strip_prefix("class ")?;
+    let leading_ws = code[after_enum..].len().saturating_sub(rest.len());
+    let (name, name_len) = java_read_identifier(rest)?;
+    let start_char = code_start + after_enum + leading_ws;
+    Some(LineScannerDeclaration {
+        name,
+        symbol_type: SymbolType::Enum,
+        start_char,
+        end_char: start_char + name_len,
+    })
+}
+
+fn kotlin_record_like_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
+    let keyword_start = java_find_keyword(code, "data")
+        .or_else(|| java_find_keyword(code, "value"))
+        .or_else(|| java_find_keyword(code, "sealed"))?;
+    let after_keyword = keyword_start + code[keyword_start..].split_whitespace().next()?.len();
+    let rest = code[after_keyword..].trim_start();
+    let rest = rest.strip_prefix("class ")?;
+    let leading_ws = code[after_keyword..].len().saturating_sub(rest.len());
+    let (name, name_len) = java_read_identifier(rest)?;
+    let start_char = code_start + after_keyword + leading_ws;
+    Some(LineScannerDeclaration {
+        name,
+        symbol_type: SymbolType::Struct,
+        start_char,
+        end_char: start_char + name_len,
+    })
+}
+
+fn kotlin_function_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
+    let keyword_start = java_find_keyword(code, "fun")?;
+    let after_keyword = keyword_start + "fun".len();
+    let mut rest = code[after_keyword..].trim_start();
+    if let Some(generic_end) = rest
+        .strip_prefix('<')
+        .and_then(|generic| generic.find('>').map(|end| end + 1))
+    {
+        rest = rest[generic_end..].trim_start();
+    }
+    if let Some(receiver_split) = rest.find('.') {
+        let paren_index = rest.find('(')?;
+        if receiver_split < paren_index {
+            rest = rest[receiver_split + 1..].trim_start();
+        }
+    }
+    let leading_ws = code[after_keyword..].len().saturating_sub(rest.len());
+    let (name, name_len) = java_read_identifier(rest)?;
+    let symbol_type = if code_start > 0 {
+        SymbolType::Method
+    } else {
+        SymbolType::Function
+    };
+    let start_char = code_start + after_keyword + leading_ws;
+    Some(LineScannerDeclaration {
+        name,
+        symbol_type,
+        start_char,
+        end_char: start_char + name_len,
+    })
+}
+
 fn push_line_scanner_symbol(
     symbols: &mut Vec<Symbol>,
     seen: &mut HashSet<(String, SymbolType, u32)>,
@@ -9107,6 +9296,7 @@ mod tests {
         "php/service.php",
         "java/UserService.java",
         "csharp/UserService.cs",
+        "kotlin/UserService.kt",
     ];
 
     fn write_symbol_fixture(workspace_root: &Path, relative_path: &str) {
@@ -9507,6 +9697,55 @@ mod tests {
                     },
                 ],
             },
+            SymbolFixture {
+                path: "kotlin/UserService.kt",
+                expected_symbols: &[
+                    ExpectedSymbol {
+                        name: "com.example.users",
+                        symbol_type: SymbolType::Namespace,
+                    },
+                    ExpectedSymbol {
+                        name: "kotlinx.coroutines.Dispatchers",
+                        symbol_type: SymbolType::Import,
+                    },
+                    ExpectedSymbol {
+                        name: "com.example.shared.UserId",
+                        symbol_type: SymbolType::Import,
+                    },
+                    ExpectedSymbol {
+                        name: "UserService",
+                        symbol_type: SymbolType::Class,
+                    },
+                    ExpectedSymbol {
+                        name: "findUser",
+                        symbol_type: SymbolType::Method,
+                    },
+                    ExpectedSymbol {
+                        name: "UserFormatter",
+                        symbol_type: SymbolType::Interface,
+                    },
+                    ExpectedSymbol {
+                        name: "format",
+                        symbol_type: SymbolType::Method,
+                    },
+                    ExpectedSymbol {
+                        name: "UserCache",
+                        symbol_type: SymbolType::Module,
+                    },
+                    ExpectedSymbol {
+                        name: "UserStatus",
+                        symbol_type: SymbolType::Enum,
+                    },
+                    ExpectedSymbol {
+                        name: "UserView",
+                        symbol_type: SymbolType::Struct,
+                    },
+                    ExpectedSymbol {
+                        name: "normalizeUserId",
+                        symbol_type: SymbolType::Function,
+                    },
+                ],
+            },
         ];
 
         for fixture in fixtures {
@@ -9548,6 +9787,11 @@ mod tests {
             ),
             ("findUser", "java/UserService.java", "findUser"),
             ("FindUser", "csharp/UserService.cs", "FindUser"),
+            (
+                "normalizeUserId",
+                "kotlin/UserService.kt",
+                "normalizeUserId",
+            ),
         ] {
             let results = service.search_symbols(query, 10).unwrap();
             assert!(
@@ -9607,6 +9851,7 @@ mod tests {
             ("PHP", 1),
             ("Java", 1),
             ("C#", 1),
+            ("Kotlin", 1),
         ] {
             assert!(
                 stats
