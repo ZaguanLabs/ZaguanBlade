@@ -7034,7 +7034,13 @@ fn extract_config_symbols(file_path: &str, content: &str, language: Language) ->
     match language {
         Language::Json => {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(content) {
-                collect_json_config_keys(&value, &mut Vec::new(), &mut entries);
+                if is_package_json_path(file_path) {
+                    collect_package_json_config_keys(&value, &mut entries);
+                } else if is_tsconfig_json_path(file_path) {
+                    collect_tsconfig_json_config_keys(&value, &mut entries);
+                } else {
+                    collect_json_config_keys(&value, &mut Vec::new(), &mut entries);
+                }
             }
         }
         Language::Yaml => {
@@ -7109,6 +7115,141 @@ fn collect_json_config_keys(
             }
         }
         _ => {}
+    }
+}
+
+fn collect_package_json_config_keys(value: &serde_json::Value, entries: &mut Vec<ConfigKeyEntry>) {
+    let Some(root) = value.as_object() else {
+        return;
+    };
+
+    for key in [
+        "name",
+        "version",
+        "type",
+        "main",
+        "module",
+        "browser",
+        "packageManager",
+        "engines",
+        "bin",
+        "exports",
+        "imports",
+    ] {
+        if root.contains_key(key) {
+            push_config_key_entry(&[key.to_string()], key, entries);
+        }
+    }
+
+    for section in [
+        "scripts",
+        "dependencies",
+        "devDependencies",
+        "peerDependencies",
+        "optionalDependencies",
+    ] {
+        collect_json_object_child_keys(root, section, entries);
+    }
+
+    if let Some(workspaces) = root.get("workspaces") {
+        if workspaces.is_array() || workspaces.is_object() {
+            push_config_key_entry(&["workspaces".to_string()], "workspaces", entries);
+        }
+    }
+}
+
+fn collect_tsconfig_json_config_keys(value: &serde_json::Value, entries: &mut Vec<ConfigKeyEntry>) {
+    let Some(root) = value.as_object() else {
+        return;
+    };
+
+    for key in ["extends", "include", "exclude", "files"] {
+        if root.contains_key(key) {
+            push_config_key_entry(&[key.to_string()], key, entries);
+        }
+    }
+
+    if let Some(compiler_options) = root
+        .get("compilerOptions")
+        .and_then(serde_json::Value::as_object)
+    {
+        for key in [
+            "baseUrl",
+            "paths",
+            "types",
+            "typeRoots",
+            "jsx",
+            "lib",
+            "module",
+            "moduleResolution",
+            "target",
+            "strict",
+            "noEmit",
+            "outDir",
+            "rootDir",
+        ] {
+            if compiler_options.contains_key(key) {
+                push_config_key_entry(
+                    &["compilerOptions".to_string(), key.to_string()],
+                    key,
+                    entries,
+                );
+            }
+        }
+        collect_json_nested_object_child_keys(
+            compiler_options,
+            &["compilerOptions".to_string(), "paths".to_string()],
+            "paths",
+            entries,
+        );
+    }
+
+    if let Some(references) = root.get("references").and_then(serde_json::Value::as_array) {
+        for reference in references {
+            if reference.get("path").is_some() {
+                push_config_key_entry(
+                    &["references".to_string(), "path".to_string()],
+                    "path",
+                    entries,
+                );
+                break;
+            }
+        }
+    }
+}
+
+fn collect_json_object_child_keys(
+    root: &serde_json::Map<String, serde_json::Value>,
+    section: &str,
+    entries: &mut Vec<ConfigKeyEntry>,
+) {
+    let Some(section_value) = root.get(section).and_then(serde_json::Value::as_object) else {
+        return;
+    };
+    for key in section_value
+        .keys()
+        .filter(|key| is_config_key_segment(key))
+    {
+        push_config_key_entry(&[section.to_string(), key.to_string()], key, entries);
+    }
+}
+
+fn collect_json_nested_object_child_keys(
+    root: &serde_json::Map<String, serde_json::Value>,
+    parent_path: &[String],
+    section: &str,
+    entries: &mut Vec<ConfigKeyEntry>,
+) {
+    let Some(section_value) = root.get(section).and_then(serde_json::Value::as_object) else {
+        return;
+    };
+    for key in section_value
+        .keys()
+        .filter(|key| is_config_key_segment(key))
+    {
+        let mut path = parent_path.to_vec();
+        path.push(key.to_string());
+        push_config_key_entry(&path, key, entries);
     }
 }
 
@@ -7221,6 +7362,26 @@ fn is_config_key_segment(key: &str) -> bool {
         && key.len() <= 120
         && !key.chars().any(|ch| ch.is_control())
         && key.chars().any(|ch| ch.is_ascii_alphabetic())
+}
+
+fn is_package_json_path(file_path: &str) -> bool {
+    config_file_name(file_path) == "package.json"
+}
+
+fn is_tsconfig_json_path(file_path: &str) -> bool {
+    matches!(
+        config_file_name(file_path).as_str(),
+        "tsconfig.json" | "jsconfig.json"
+    )
+}
+
+fn config_file_name(file_path: &str) -> String {
+    file_path
+        .replace('\\', "/")
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
 }
 
 fn locate_config_key(content: &str, key_path: &str, leaf_key: &str) -> AnchorLocation {
@@ -8322,6 +8483,33 @@ mod tests {
   },
   "dependencies": {
     "@tauri-apps/api": "2.0.0"
+  },
+  "config": {
+    "deep": {
+      "noise": true
+    }
+  }
+}
+"#,
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("tsconfig.json"),
+            r#"
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@app/*": ["src/app/*"],
+      "@ui/*": ["src/ui/*"]
+    },
+    "target": "ES2022"
+  },
+  "random": {
+    "deep": {
+      "noise": true
+    }
   }
 }
 "#,
@@ -8373,6 +8561,24 @@ testpaths = ["tests"]
             symbol.name == "dependencies.@tauri-apps/api"
                 && symbol.symbol_type == SymbolType::Property
         }));
+        assert!(!json_symbols
+            .iter()
+            .any(|symbol| symbol.name == "config.deep.noise"));
+
+        let tsconfig_symbols = service.index_file("tsconfig.json").unwrap();
+        assert!(tsconfig_symbols.iter().any(|symbol| {
+            symbol.name == "extends" && symbol.symbol_type == SymbolType::Property
+        }));
+        assert!(tsconfig_symbols.iter().any(|symbol| {
+            symbol.name == "compilerOptions.baseUrl" && symbol.symbol_type == SymbolType::Property
+        }));
+        assert!(tsconfig_symbols.iter().any(|symbol| {
+            symbol.name == "compilerOptions.paths.@app/*"
+                && symbol.symbol_type == SymbolType::Property
+        }));
+        assert!(!tsconfig_symbols
+            .iter()
+            .any(|symbol| symbol.name == "random.deep.noise"));
 
         let yaml_symbols = service.index_file("config/app.yaml").unwrap();
         assert!(yaml_symbols.iter().any(|symbol| {
