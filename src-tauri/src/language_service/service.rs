@@ -3094,7 +3094,12 @@ impl LanguageService {
             return Ok(());
         }
 
-        if resolved.is_file() && Language::from_path(file_path).is_some() {
+        if resolved.is_file() && is_supported_index_file(file_path) {
+            if let Some(record) = self.symbol_store.indexed_file_record(file_path)? {
+                if !self.indexed_file_needs_refresh(file_path, &record, true)? {
+                    return Ok(());
+                }
+            }
             let _ = self.index_file(file_path)?;
         }
 
@@ -12920,6 +12925,45 @@ metadata:
         let symbols = service.get_file_symbols("fresh.ts").unwrap();
         assert!(symbols.iter().any(|symbol| symbol.name == "updatedName"));
         assert!(!symbols.iter().any(|symbol| symbol.name == "firstName"));
+    }
+
+    #[test]
+    fn test_get_file_symbols_skips_indexer_when_file_is_fresh() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("fresh.ts"),
+            "export function freshSymbol() { return 1; }\n",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("marker.ts"),
+            "export function markerSymbol() { return 2; }\n",
+        )
+        .unwrap();
+
+        service.index_file("fresh.ts").unwrap();
+        service.index_file("marker.ts").unwrap();
+        assert_eq!(
+            service
+                .index_health_snapshot()
+                .timings
+                .last_file_path
+                .as_deref(),
+            Some("marker.ts")
+        );
+
+        let symbols = service.get_file_symbols("fresh.ts").unwrap();
+
+        assert!(symbols.iter().any(|symbol| symbol.name == "freshSymbol"));
+        assert_eq!(
+            service
+                .index_health_snapshot()
+                .timings
+                .last_file_path
+                .as_deref(),
+            Some("marker.ts")
+        );
     }
 
     #[test]
