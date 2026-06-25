@@ -6420,6 +6420,8 @@ fn semantic_anchor_kind(value: &str, line: &str) -> String {
         "command".to_string()
     } else if line.contains("event") || line.contains("Event") {
         "event_name".to_string()
+    } else if line.contains("service") || line.contains("Service") {
+        "service_name".to_string()
     } else if line.contains("config") || line.contains("Config") || line.contains('=') {
         "config_key".to_string()
     } else {
@@ -6441,6 +6443,8 @@ fn semantic_anchor_confidence(value: &str, line: &str) -> f32 {
         || line.contains("Command")
         || line.contains("event")
         || line.contains("Event")
+        || line.contains("service")
+        || line.contains("Service")
     {
         0.9
     } else if value.contains('.') || value.contains(':') {
@@ -12292,6 +12296,7 @@ export function loadPosts() {
             temp_dir.path().join("anchors.ts"),
             r#"
             export const commandName = "BladeProtocolGateway";
+            export const serviceName = "BladeGatewayService";
             export const route = "/api/blade/events";
             const cssToken = "--accent-ai";
             "#,
@@ -12319,6 +12324,11 @@ metadata:
             .iter()
             .any(|result| result.anchor.file_path == "anchors.ts"
                 && result.anchor.value == "BladeProtocolGateway"));
+        assert!(service
+            .search_semantic_anchors("BladeGatewayService", None, 10)
+            .unwrap()
+            .iter()
+            .any(|result| result.anchor.kind == "service_name"));
         assert!(service
             .search_semantic_anchors("/api/blade/events", None, 10)
             .unwrap()
