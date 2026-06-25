@@ -28,6 +28,7 @@ pub enum Language {
     Json,
     Yaml,
     Toml,
+    Php,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -282,6 +283,15 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extractor_version: 1,
         extracts: ExtractionCapabilities::scanner(true),
     },
+    LanguageCapability {
+        language: Language::Php,
+        display_name: "PHP",
+        extensions: &["php"],
+        parser: ParserKind::Scanner,
+        support: SupportLevel::Partial,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::scanner(true),
+    },
 ];
 
 impl Language {
@@ -328,6 +338,10 @@ impl Language {
 
     pub fn is_config_scanner(self) -> bool {
         matches!(self, Language::Json | Language::Yaml | Language::Toml)
+    }
+
+    pub fn is_php_scanner(self) -> bool {
+        matches!(self, Language::Php)
     }
 
     /// Get display name for the language
@@ -509,7 +523,8 @@ mod tests {
         assert_eq!(Language::from_path("config.yml"), Some(Language::Yaml));
         assert_eq!(Language::from_path("Cargo.toml"), Some(Language::Toml));
         assert_eq!(Language::from_path("pyproject.toml"), Some(Language::Toml));
-        for path in ["app.php", "Main.java", "main.cpp", "main.c"] {
+        assert_eq!(Language::from_path("app.php"), Some(Language::Php));
+        for path in ["Main.java", "main.cpp", "main.c"] {
             assert_eq!(
                 Language::from_path(path),
                 None,

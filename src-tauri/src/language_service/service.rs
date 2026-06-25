@@ -1548,6 +1548,14 @@ impl LanguageService {
                 language,
             });
         }
+        if language.is_php_scanner() {
+            return Ok(SymbolExtraction {
+                symbols: extract_php_symbols(file_path, content),
+                relationships: Vec::new(),
+                content: Cow::Borrowed(content),
+                language,
+            });
+        }
 
         let (extraction_content, extraction_language) = if matches!(language, Language::Astro) {
             (Cow::Owned(astro_script_projection(content)), Language::Tsx)
@@ -3774,7 +3782,8 @@ impl LanguageService {
             | Language::Svelte
             | Language::Json
             | Language::Yaml
-            | Language::Toml => false,
+            | Language::Toml
+            | Language::Php => false,
         }
     }
 
@@ -3866,7 +3875,8 @@ impl LanguageService {
             | Language::Svelte
             | Language::Json
             | Language::Yaml
-            | Language::Toml => false,
+            | Language::Toml
+            | Language::Php => false,
         }
     }
 
@@ -5195,7 +5205,8 @@ impl LanguageService {
             | Language::Svelte
             | Language::Json
             | Language::Yaml
-            | Language::Toml => None,
+            | Language::Toml
+            | Language::Php => None,
         }
     }
 }
@@ -7980,6 +7991,265 @@ fn push_config_symbol(
     });
 }
 
+fn extract_php_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
+    let mut symbols = Vec::new();
+    let mut seen = HashSet::new();
+    let mut byte_offset = 0usize;
+
+    for (line_index, segment) in content.split_inclusive('\n').enumerate() {
+        let line_start = byte_offset;
+        byte_offset += segment.len();
+
+        let line_without_lf = segment.strip_suffix('\n').unwrap_or(segment);
+        let line = line_without_lf
+            .strip_suffix('\r')
+            .unwrap_or(line_without_lf);
+        let line_number = line_index as u32;
+
+        for declaration in php_declarations_in_line(line) {
+            push_php_symbol(
+                &mut symbols,
+                &mut seen,
+                file_path,
+                declaration,
+                line_number,
+                line_start,
+                line,
+            );
+        }
+    }
+
+    symbols
+}
+
+#[derive(Debug, Clone)]
+struct PhpDeclaration {
+    name: String,
+    symbol_type: SymbolType,
+    start_char: usize,
+    end_char: usize,
+}
+
+fn php_declarations_in_line(line: &str) -> Vec<PhpDeclaration> {
+    let code = php_line_code(line);
+    if code.is_empty() {
+        return Vec::new();
+    }
+    let code_start = line.find(code).unwrap_or(0);
+
+    if let Some(declaration) = php_namespace_declaration(code, code_start) {
+        return vec![declaration];
+    }
+    if let Some(declaration) = php_import_declaration(code, code_start) {
+        return vec![declaration];
+    }
+
+    let mut declarations = Vec::new();
+    for (keyword, symbol_type) in [
+        ("class", SymbolType::Class),
+        ("interface", SymbolType::Interface),
+        ("trait", SymbolType::Trait),
+    ] {
+        if let Some(declaration) = php_keyword_declaration(code, code_start, keyword, symbol_type) {
+            declarations.push(declaration);
+        }
+    }
+    if let Some(declaration) = php_function_declaration(code, code_start) {
+        declarations.push(declaration);
+    }
+    declarations
+}
+
+fn php_line_code(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    let trimmed = trimmed
+        .strip_prefix("<?php")
+        .unwrap_or(trimmed)
+        .trim_start();
+    if trimmed.starts_with("//") || trimmed.starts_with('#') || trimmed.starts_with('*') {
+        ""
+    } else {
+        trimmed
+    }
+}
+
+fn php_namespace_declaration(code: &str, code_start: usize) -> Option<PhpDeclaration> {
+    let rest = code.strip_prefix("namespace ")?;
+    let name_start = code.len().saturating_sub(rest.len());
+    let (name, name_len) = php_read_qualified_name(rest.trim_start())?;
+    let leading_ws = rest.len().saturating_sub(rest.trim_start().len());
+    let start_char = code_start + name_start + leading_ws;
+    Some(PhpDeclaration {
+        name,
+        symbol_type: SymbolType::Namespace,
+        start_char,
+        end_char: start_char + name_len,
+    })
+}
+
+fn php_import_declaration(code: &str, code_start: usize) -> Option<PhpDeclaration> {
+    let rest = code.strip_prefix("use ")?;
+    if rest.trim_start().starts_with('(') {
+        return None;
+    }
+    let rest = rest
+        .trim_start()
+        .strip_prefix("function ")
+        .or_else(|| rest.trim_start().strip_prefix("const "))
+        .unwrap_or(rest.trim_start());
+    let leading_ws = code.len().saturating_sub(rest.len());
+    let (name, name_len) = php_read_qualified_name(rest)?;
+    Some(PhpDeclaration {
+        name,
+        symbol_type: SymbolType::Import,
+        start_char: code_start + leading_ws,
+        end_char: code_start + leading_ws + name_len,
+    })
+}
+
+fn php_keyword_declaration(
+    code: &str,
+    code_start: usize,
+    keyword: &str,
+    symbol_type: SymbolType,
+) -> Option<PhpDeclaration> {
+    let keyword_start = php_find_keyword(code, keyword)?;
+    let after_keyword = keyword_start + keyword.len();
+    let rest = code[after_keyword..].trim_start();
+    let leading_ws = code[after_keyword..].len().saturating_sub(rest.len());
+    let (name, name_len) = php_read_identifier(rest)?;
+    let start_char = code_start + after_keyword + leading_ws;
+    Some(PhpDeclaration {
+        name,
+        symbol_type,
+        start_char,
+        end_char: start_char + name_len,
+    })
+}
+
+fn php_function_declaration(code: &str, code_start: usize) -> Option<PhpDeclaration> {
+    let keyword_start = php_find_keyword(code, "function")?;
+    let after_keyword = keyword_start + "function".len();
+    let mut rest = code[after_keyword..].trim_start();
+    if let Some(after_ref) = rest.strip_prefix('&') {
+        rest = after_ref.trim_start();
+    }
+    let leading_ws = code[after_keyword..].len().saturating_sub(rest.len());
+    let (name, name_len) = php_read_identifier(rest)?;
+    let before_keyword = code[..keyword_start].trim();
+    let symbol_type = if before_keyword
+        .split_whitespace()
+        .any(|token| matches!(token, "public" | "protected" | "private"))
+    {
+        SymbolType::Method
+    } else {
+        SymbolType::Function
+    };
+    let start_char = code_start + after_keyword + leading_ws;
+    Some(PhpDeclaration {
+        name,
+        symbol_type,
+        start_char,
+        end_char: start_char + name_len,
+    })
+}
+
+fn php_find_keyword(code: &str, keyword: &str) -> Option<usize> {
+    let mut search_start = 0usize;
+    while let Some(relative_index) = code[search_start..].find(keyword) {
+        let start = search_start + relative_index;
+        let end = start + keyword.len();
+        let before_ok = code[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|ch| !is_php_identifier_char(ch));
+        let after_ok = code[end..]
+            .chars()
+            .next()
+            .is_none_or(|ch| !is_php_identifier_char(ch));
+        if before_ok && after_ok {
+            return Some(start);
+        }
+        search_start = end;
+    }
+    None
+}
+
+fn php_read_identifier(text: &str) -> Option<(String, usize)> {
+    let mut end = 0usize;
+    for (index, ch) in text.char_indices() {
+        if index == 0 && !(ch == '_' || ch.is_ascii_alphabetic()) {
+            return None;
+        }
+        if is_php_identifier_char(ch) {
+            end = index + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    (end > 0).then(|| (text[..end].to_string(), end))
+}
+
+fn php_read_qualified_name(text: &str) -> Option<(String, usize)> {
+    let mut end = 0usize;
+    for (index, ch) in text.char_indices() {
+        if index == 0 && !(ch == '\\' || ch == '_' || ch.is_ascii_alphabetic()) {
+            return None;
+        }
+        if is_php_identifier_char(ch) || ch == '\\' {
+            end = index + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    (end > 0).then(|| (text[..end].trim_start_matches('\\').to_string(), end))
+}
+
+fn is_php_identifier_char(ch: char) -> bool {
+    ch == '_' || ch.is_ascii_alphanumeric()
+}
+
+fn push_php_symbol(
+    symbols: &mut Vec<Symbol>,
+    seen: &mut HashSet<(String, SymbolType, u32)>,
+    file_path: &str,
+    declaration: PhpDeclaration,
+    line_number: u32,
+    line_start_byte: usize,
+    line_text: &str,
+) {
+    if declaration.name.is_empty()
+        || !seen.insert((
+            declaration.name.clone(),
+            declaration.symbol_type,
+            line_number,
+        ))
+    {
+        return;
+    }
+
+    symbols.push(Symbol {
+        id: format!(
+            "{}::{}#{}",
+            file_path, declaration.name, declaration.symbol_type
+        ),
+        name: declaration.name.clone(),
+        qualified_name: declaration.name,
+        symbol_type: declaration.symbol_type,
+        file_path: file_path.to_string(),
+        range: Range {
+            start: Position::new(line_number, declaration.start_char as u32),
+            end: Position::new(line_number, declaration.end_char as u32),
+        },
+        byte_offset: line_start_byte.saturating_add(declaration.start_char),
+        byte_length: declaration.end_char.saturating_sub(declaration.start_char),
+        parent_id: None,
+        docstring: None,
+        signature: Some(line_text.trim().to_string()),
+        content_hash: compute_hash(line_text),
+    });
+}
+
 fn line_start_offsets(content: &str) -> Vec<usize> {
     let mut offsets = Vec::new();
     let mut byte_offset = 0usize;
@@ -8433,6 +8703,7 @@ mod tests {
         "config/package.json",
         "config/github-action.yml",
         "config/app.toml",
+        "php/service.php",
     ];
 
     fn write_symbol_fixture(workspace_root: &Path, relative_path: &str) {
@@ -8714,6 +8985,39 @@ mod tests {
                     },
                 ],
             },
+            SymbolFixture {
+                path: "php/service.php",
+                expected_symbols: &[
+                    ExpectedSymbol {
+                        name: "App\\Service",
+                        symbol_type: SymbolType::Namespace,
+                    },
+                    ExpectedSymbol {
+                        name: "App\\Repository\\UserRepository",
+                        symbol_type: SymbolType::Import,
+                    },
+                    ExpectedSymbol {
+                        name: "UserService",
+                        symbol_type: SymbolType::Class,
+                    },
+                    ExpectedSymbol {
+                        name: "findUser",
+                        symbol_type: SymbolType::Method,
+                    },
+                    ExpectedSymbol {
+                        name: "UserFormatter",
+                        symbol_type: SymbolType::Interface,
+                    },
+                    ExpectedSymbol {
+                        name: "LogsUsers",
+                        symbol_type: SymbolType::Trait,
+                    },
+                    ExpectedSymbol {
+                        name: "normalize_user_id",
+                        symbol_type: SymbolType::Function,
+                    },
+                ],
+            },
         ];
 
         for fixture in fixtures {
@@ -8809,6 +9113,7 @@ mod tests {
             ("JSON", 1),
             ("YAML", 1),
             ("TOML", 1),
+            ("PHP", 1),
         ] {
             assert!(
                 stats

@@ -404,7 +404,8 @@ impl SymbolExtractor {
             | Language::Svelte
             | Language::Json
             | Language::Yaml
-            | Language::Toml => None,
+            | Language::Toml
+            | Language::Php => None,
         }
     }
 
@@ -988,7 +989,8 @@ impl SymbolExtractor {
             | Language::Svelte
             | Language::Json
             | Language::Yaml
-            | Language::Toml => {}
+            | Language::Toml
+            | Language::Php => {}
         }
         None
     }
@@ -1085,7 +1087,8 @@ fn extract_structural_relationships_from_node(
         | Language::Svelte
         | Language::Json
         | Language::Yaml
-        | Language::Toml => {}
+        | Language::Toml
+        | Language::Php => {}
     }
 
     for i in 0..node.child_count() {
@@ -1504,7 +1507,8 @@ fn extract_relationship_target_name(
         | Language::Svelte
         | Language::Json
         | Language::Yaml
-        | Language::Toml => None,
+        | Language::Toml
+        | Language::Php => None,
     }
 }
 
