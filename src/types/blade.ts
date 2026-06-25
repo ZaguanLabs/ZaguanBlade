@@ -315,6 +315,37 @@ export type IndexHealthSnapshot = {
     last_incremental_update_ms: number | null;
     current_file?: string | null;
     message: string;
+    timings?: {
+        last_discovery_ms?: number | null;
+        last_file_path?: string | null;
+        last_file_total_ms?: number | null;
+        last_file_load_ms?: number | null;
+        last_file_freshness_check_ms?: number | null;
+        last_file_parse_extract_ms?: number | null;
+        last_file_relationship_enrichment_ms?: number | null;
+        last_file_db_write_ms?: number | null;
+        last_file_cache_update_ms?: number | null;
+        last_batch_load_ms?: number | null;
+        last_batch_freshness_check_ms?: number | null;
+        last_batch_parse_extract_ms?: number | null;
+        last_batch_relationship_enrichment_ms?: number | null;
+        last_batch_db_write_ms?: number | null;
+        last_batch_cache_update_ms?: number | null;
+    };
+    discovery?: {
+        last_scope?: string | null;
+        last_discovered_files?: number;
+        last_supported_files?: number;
+        last_indexed_files?: number;
+        last_failed_files?: number;
+        last_fresh_files?: number;
+        last_reindexed_files?: number;
+        last_symbols_extracted?: number;
+        last_anchors_extracted?: number;
+        last_relationships_extracted?: number;
+        supported_by_language?: Array<{ language: string; count: number }>;
+        skipped_by_reason?: Array<{ reason: string; count: number }>;
+    };
 };
 
 export type LanguagePosition = {
@@ -345,5 +376,3 @@ export type LanguageSymbol = {
     docstring: string | null;
     signature: string | null;
 }
-
-

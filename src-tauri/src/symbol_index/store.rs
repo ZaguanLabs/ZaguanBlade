@@ -1015,6 +1015,11 @@ impl SymbolStore {
         query: &str,
         limit: usize,
     ) -> Result<Vec<Symbol>, SymbolStoreError> {
+        let fts_query = symbol_search_fts_query(query);
+        if fts_query.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let conn = self.conn.lock().unwrap();
 
         // Use FTS5 for searching
@@ -1025,13 +1030,10 @@ impl SymbolStore {
             FROM symbols s
             JOIN symbols_fts fts ON s.rowid = fts.rowid
             WHERE symbols_fts MATCH ?1
-            ORDER BY rank
+            ORDER BY bm25(symbols_fts), length(s.name), s.name
             LIMIT ?2
             "#,
         )?;
-
-        // FTS5 query syntax: prefix matching with *
-        let fts_query = format!("{}*", query.replace(' ', " OR "));
 
         let symbols = stmt
             .query_map(params![fts_query, limit as i64], |row| row_to_symbol(row))?
@@ -1688,6 +1690,18 @@ fn symbol_search_terms(query: &str) -> Vec<String> {
         .collect()
 }
 
+fn symbol_search_fts_query(query: &str) -> String {
+    let mut terms = Vec::new();
+    let mut seen = HashSet::new();
+    for term in symbol_search_terms(query) {
+        let term = term.to_lowercase();
+        if seen.insert(term.clone()) {
+            terms.push(format!("{}*", term));
+        }
+    }
+    terms.join(" OR ")
+}
+
 /// Error type for symbol store operations
 #[derive(Debug)]
 pub enum SymbolStoreError {
@@ -1835,6 +1849,26 @@ mod tests {
             .iter()
             .any(|symbol| symbol.name == "authenticateUser"));
         assert!(results.iter().any(|symbol| symbol.name == "UserService"));
+    }
+
+    #[test]
+    fn test_search_by_name_uses_fts_identifier_terms() {
+        let store = SymbolStore::in_memory().unwrap();
+        let sym1 = create_test_symbol("--accent-ai", "style.css");
+        let sym2 = create_test_symbol(".chat-message", "style.css");
+        let sym3 = create_test_symbol("UserService", "service.ts");
+
+        store.upsert_symbols(&[sym1, sym2, sym3]).unwrap();
+
+        let accent_results = store.search_by_name("--accent", 10).unwrap();
+        assert!(accent_results
+            .iter()
+            .any(|symbol| symbol.name == "--accent-ai"));
+
+        let selector_results = store.search_by_name("chat message", 10).unwrap();
+        assert!(selector_results
+            .iter()
+            .any(|symbol| symbol.name == ".chat-message"));
     }
 
     #[test]

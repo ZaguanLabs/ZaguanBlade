@@ -329,7 +329,7 @@ These tools require the language service and local code index to be available.
 
 ### `fast_context`
 
-Plans broad or uncertain code tasks and returns targeted context, ranked files, symbol and semantic-anchor metadata, related files, index health, confidence, suggested ranges, and next steps.
+Plans broad or uncertain code tasks and returns targeted context, ranked files, symbol and semantic-anchor metadata, related files, index health, language-support metadata, confidence, suggested ranges, and next steps.
 
 Parameters:
 
@@ -346,7 +346,9 @@ Parameters:
 
 ### `symbol_search`
 
-Searches indexed symbols by name or qualified name.
+Searches indexed symbols by name or qualified name. Results include code definitions plus partial scanner symbols such as CSS selectors/custom properties, markup `class`/`id` selectors, and JSON/YAML/TOML config key paths.
+
+Responses include `_meta.language_support`, `_meta.search_health`, `_meta.index_health`, and pagination fields such as `_meta.offset`, `_meta.limit`, `_meta.has_more`, and `_meta.total_lower_bound`. Empty results should only be treated as trustworthy when language support says the relevant file type is supported and the index is fresh enough for the task.
 
 Parameters:
 
@@ -356,10 +358,13 @@ Parameters:
 | `path` | string | No | `file`, `file_path` |
 | `kind` | string | No | `symbol_type` |
 | `limit` | integer | No | cap `100` |
+| `offset` | integer | No | zero-based pagination offset; cap `1000` |
 
 ### `semantic_anchor_search`
 
-Searches indexed semantic anchors such as command names, event names, route-like strings, config keys, translation keys, and theme tokens.
+Searches indexed semantic anchors such as command names, event names, route-like strings, config keys, translation keys/text, and CSS/theme tokens. Use this for literals and anchors when structural symbol support is absent, shallow, or too narrow for the question.
+
+Responses include `_meta.language_support` for the optional file filter.
 
 Parameters:
 
@@ -372,6 +377,8 @@ Parameters:
 ### `symbol_resolve`
 
 Resolves a symbol by stable ID or by name within a file.
+
+Responses include `_meta.language_support` for the resolved symbol file.
 
 Parameters:
 
@@ -386,7 +393,7 @@ Requires either `symbol_id` or `path` plus `name` or `qualified_name`.
 
 ### `symbol_outline`
 
-Returns a compact symbol inventory and optional hierarchy for one file.
+Returns a compact symbol inventory and optional hierarchy for one file. Unsupported files return explicit diagnostics instead of silently implying that no symbols exist. Partial scanner languages report shallow support in `_meta.language_support`.
 
 Parameters:
 
@@ -399,7 +406,7 @@ Parameters:
 | `max_outline_depth` | integer | No | `outline_depth`; default `4`, cap `12` |
 | `include_docstrings` | boolean | No | `include_docs`; defaults to `false`; docstrings are truncated when included |
 
-Response metadata includes `_meta.line_count` when the file index has stored line-count metadata, plus truncation fields such as `_meta.symbols_truncated` and `_meta.outline_truncated`.
+Response metadata includes `_meta.language_support`, `_meta.line_count` when the file index has stored line-count metadata, plus truncation fields such as `_meta.symbols_truncated` and `_meta.outline_truncated`.
 
 ### `symbol_related`
 
@@ -432,7 +439,7 @@ Parameters:
 | `limit` | integer | No |
 | `max_symbols` | integer | No |
 
-Relationship types include `call`, `import`, `export`, `extends`, `implements`, and `contains`.
+Relationship types include `call`, `import`, `export`, `extends`, `implements`, `contains`, and `usage`.
 
 ### `symbol_graph`
 
@@ -450,6 +457,8 @@ Parameters:
 | `relationship_type` | string | No |
 | `kind` | string | No |
 | `limit` | integer | No |
+
+Relationship types include `call`, `import`, `export`, `extends`, `implements`, `contains`, and `usage`.
 
 ### `edit_impact`
 

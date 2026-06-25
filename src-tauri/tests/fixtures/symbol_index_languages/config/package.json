@@ -1,0 +1,10 @@
+{
+  "name": "fixture-package",
+  "scripts": {
+    "build": "vite build",
+    "tauri:build": "tauri build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.0.0"
+  }
+}

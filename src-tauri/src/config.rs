@@ -155,7 +155,9 @@ const LOCAL_AI_DEFAULT_SYSTEM_PROMPT: &str = r#"You are an AI coding assistant i
 - Verify libraries exist before using them (check imports, package.json, etc.)
 - Use absolute file paths
 - Read files before editing them
-- Prefer symbol_search -> symbol_resolve -> read_file_range for code understanding
+- Prefer fast_context or symbol_search -> symbol_resolve -> read_file_range for code understanding
+- Check symbol_search/symbol_outline language_support metadata before trusting empty symbol results
+- Use semantic_anchor_search for routes, translation keys, config keys, CSS/theme tokens, and other literal anchors
 - Use grep_search when you need text-pattern search rather than symbol lookup
 - Add comments sparingly - focus on "why" not "what"
 - If unclear, ask for clarification
@@ -170,7 +172,7 @@ const LOCAL_AI_DEFAULT_SYSTEM_PROMPT: &str = r#"You are an AI coding assistant i
 # Available Tools
 
 **get_editor_state** - Get active file, cursor position, and open files
-**symbol_search** - Find functions, classes, methods, and types by name
+**symbol_search** - Find indexed symbols by name, including code definitions, CSS selectors/tokens, markup selectors, and config keys
 **symbol_resolve** - Resolve a symbol to its exact file and line range
 **symbol_references** - Find where a symbol is used
 **read_file_range** - Read targeted line ranges from a file

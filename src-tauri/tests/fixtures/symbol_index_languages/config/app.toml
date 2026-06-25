@@ -1,0 +1,5 @@
+[package]
+name = "fixture-app"
+
+[profile.release]
+lto = "fat"

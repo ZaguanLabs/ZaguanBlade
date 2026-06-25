@@ -1,0 +1,7 @@
+name: Fixture CI
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build frontend
+        run: bun run build

@@ -18,40 +18,321 @@ pub enum Language {
     Rust,
     Go,
     Markdown,
+    Css,
+    Scss,
+    Sass,
+    Less,
+    Html,
+    Vue,
+    Svelte,
+    Json,
+    Yaml,
+    Toml,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SupportLevel {
+    Full,
+    Partial,
+    AnchorOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TreeSitterGrammar {
+    TypeScript,
+    Tsx,
+    JavaScript,
+    Python,
+    Rust,
+    Go,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParserKind {
+    TreeSitter(TreeSitterGrammar),
+    Projection { target: Language },
+    Scanner,
+    MarkdownHeadings,
+    AnchorOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExtractionCapabilities {
+    pub definitions: bool,
+    pub imports: bool,
+    pub relationships: bool,
+    pub semantic_anchors: bool,
+    pub markdown_headings: bool,
+}
+
+impl ExtractionCapabilities {
+    pub const fn code(definitions: bool, imports: bool, relationships: bool) -> Self {
+        Self {
+            definitions,
+            imports,
+            relationships,
+            semantic_anchors: true,
+            markdown_headings: false,
+        }
+    }
+
+    pub const fn markdown() -> Self {
+        Self {
+            definitions: false,
+            imports: false,
+            relationships: false,
+            semantic_anchors: true,
+            markdown_headings: true,
+        }
+    }
+
+    pub const fn scanner(definitions: bool) -> Self {
+        Self {
+            definitions,
+            imports: false,
+            relationships: false,
+            semantic_anchors: true,
+            markdown_headings: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LanguageCapability {
+    pub language: Language,
+    pub display_name: &'static str,
+    pub extensions: &'static [&'static str],
+    pub parser: ParserKind,
+    pub support: SupportLevel,
+    pub extractor_version: u32,
+    pub extracts: ExtractionCapabilities,
+}
+
+const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
+    LanguageCapability {
+        language: Language::TypeScript,
+        display_name: "TypeScript",
+        extensions: &["ts"],
+        parser: ParserKind::TreeSitter(TreeSitterGrammar::TypeScript),
+        support: SupportLevel::Full,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::code(true, true, true),
+    },
+    LanguageCapability {
+        language: Language::Tsx,
+        display_name: "TSX",
+        extensions: &["tsx"],
+        parser: ParserKind::TreeSitter(TreeSitterGrammar::Tsx),
+        support: SupportLevel::Full,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::code(true, true, true),
+    },
+    LanguageCapability {
+        language: Language::Astro,
+        display_name: "Astro",
+        extensions: &["astro"],
+        parser: ParserKind::Projection {
+            target: Language::Tsx,
+        },
+        support: SupportLevel::Partial,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::code(true, true, true),
+    },
+    LanguageCapability {
+        language: Language::JavaScript,
+        display_name: "JavaScript",
+        extensions: &["js", "mjs", "cjs"],
+        parser: ParserKind::TreeSitter(TreeSitterGrammar::JavaScript),
+        support: SupportLevel::Full,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::code(true, true, true),
+    },
+    LanguageCapability {
+        language: Language::Jsx,
+        display_name: "JSX",
+        extensions: &["jsx"],
+        parser: ParserKind::TreeSitter(TreeSitterGrammar::JavaScript),
+        support: SupportLevel::Full,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::code(true, true, true),
+    },
+    LanguageCapability {
+        language: Language::Python,
+        display_name: "Python",
+        extensions: &["py"],
+        parser: ParserKind::TreeSitter(TreeSitterGrammar::Python),
+        support: SupportLevel::Full,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::code(true, true, true),
+    },
+    LanguageCapability {
+        language: Language::Rust,
+        display_name: "Rust",
+        extensions: &["rs"],
+        parser: ParserKind::TreeSitter(TreeSitterGrammar::Rust),
+        support: SupportLevel::Full,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::code(true, true, true),
+    },
+    LanguageCapability {
+        language: Language::Go,
+        display_name: "Go",
+        extensions: &["go"],
+        parser: ParserKind::TreeSitter(TreeSitterGrammar::Go),
+        support: SupportLevel::Full,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::code(true, true, true),
+    },
+    LanguageCapability {
+        language: Language::Markdown,
+        display_name: "Markdown",
+        extensions: &["md", "markdown"],
+        parser: ParserKind::MarkdownHeadings,
+        support: SupportLevel::Partial,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::markdown(),
+    },
+    LanguageCapability {
+        language: Language::Css,
+        display_name: "CSS",
+        extensions: &["css"],
+        parser: ParserKind::Scanner,
+        support: SupportLevel::Partial,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::scanner(true),
+    },
+    LanguageCapability {
+        language: Language::Scss,
+        display_name: "SCSS",
+        extensions: &["scss"],
+        parser: ParserKind::Scanner,
+        support: SupportLevel::Partial,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::scanner(true),
+    },
+    LanguageCapability {
+        language: Language::Sass,
+        display_name: "Sass",
+        extensions: &["sass"],
+        parser: ParserKind::Scanner,
+        support: SupportLevel::Partial,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::scanner(true),
+    },
+    LanguageCapability {
+        language: Language::Less,
+        display_name: "Less",
+        extensions: &["less"],
+        parser: ParserKind::Scanner,
+        support: SupportLevel::Partial,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::scanner(true),
+    },
+    LanguageCapability {
+        language: Language::Html,
+        display_name: "HTML",
+        extensions: &["html", "htm"],
+        parser: ParserKind::Scanner,
+        support: SupportLevel::Partial,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::scanner(true),
+    },
+    LanguageCapability {
+        language: Language::Vue,
+        display_name: "Vue",
+        extensions: &["vue"],
+        parser: ParserKind::Scanner,
+        support: SupportLevel::Partial,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::scanner(true),
+    },
+    LanguageCapability {
+        language: Language::Svelte,
+        display_name: "Svelte",
+        extensions: &["svelte"],
+        parser: ParserKind::Scanner,
+        support: SupportLevel::Partial,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::scanner(true),
+    },
+    LanguageCapability {
+        language: Language::Json,
+        display_name: "JSON",
+        extensions: &["json"],
+        parser: ParserKind::Scanner,
+        support: SupportLevel::Partial,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::scanner(true),
+    },
+    LanguageCapability {
+        language: Language::Yaml,
+        display_name: "YAML",
+        extensions: &["yaml", "yml"],
+        parser: ParserKind::Scanner,
+        support: SupportLevel::Partial,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::scanner(true),
+    },
+    LanguageCapability {
+        language: Language::Toml,
+        display_name: "TOML",
+        extensions: &["toml"],
+        parser: ParserKind::Scanner,
+        support: SupportLevel::Partial,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::scanner(true),
+    },
+];
 
 impl Language {
     /// Detect language from file path extension
     pub fn from_path(path: &str) -> Option<Self> {
         let ext = path.rsplit('.').next()?;
-        match ext.to_lowercase().as_str() {
-            "ts" => Some(Language::TypeScript),
-            "tsx" => Some(Language::Tsx),
-            "astro" => Some(Language::Astro),
-            "js" => Some(Language::JavaScript),
-            "jsx" => Some(Language::Jsx),
-            "mjs" | "cjs" => Some(Language::JavaScript),
-            "py" => Some(Language::Python),
-            "rs" => Some(Language::Rust),
-            "go" => Some(Language::Go),
-            "md" | "markdown" => Some(Language::Markdown),
-            _ => None,
-        }
+        Self::from_extension(ext)
+    }
+
+    pub fn from_extension(extension: &str) -> Option<Self> {
+        let extension = extension.trim_start_matches('.').to_lowercase();
+        LANGUAGE_CAPABILITIES
+            .iter()
+            .find(|capability| capability.extensions.contains(&extension.as_str()))
+            .map(|capability| capability.language)
+    }
+
+    pub fn capability(self) -> &'static LanguageCapability {
+        LANGUAGE_CAPABILITIES
+            .iter()
+            .find(|capability| capability.language == self)
+            .expect("every Language variant must have a capability entry")
+    }
+
+    pub fn capability_for_path(path: &str) -> Option<&'static LanguageCapability> {
+        let ext = path.rsplit('.').next()?;
+        Self::from_extension(ext).map(Self::capability)
+    }
+
+    pub fn all_capabilities() -> &'static [LanguageCapability] {
+        LANGUAGE_CAPABILITIES
+    }
+
+    pub fn is_stylesheet_scanner(self) -> bool {
+        matches!(
+            self,
+            Language::Css | Language::Scss | Language::Sass | Language::Less
+        )
+    }
+
+    pub fn is_markup_scanner(self) -> bool {
+        matches!(self, Language::Html | Language::Vue | Language::Svelte)
+    }
+
+    pub fn is_config_scanner(self) -> bool {
+        matches!(self, Language::Json | Language::Yaml | Language::Toml)
     }
 
     /// Get display name for the language
     pub fn display_name(&self) -> &'static str {
-        match self {
-            Language::TypeScript => "TypeScript",
-            Language::Tsx => "TSX",
-            Language::Astro => "Astro",
-            Language::JavaScript => "JavaScript",
-            Language::Jsx => "JSX",
-            Language::Python => "Python",
-            Language::Rust => "Rust",
-            Language::Go => "Go",
-            Language::Markdown => "Markdown",
-        }
+        self.capability().display_name
     }
 }
 
@@ -90,56 +371,43 @@ impl TreeSitterParser {
     pub fn new() -> Result<Self, TreeSitterError> {
         let mut parsers = HashMap::new();
 
-        // Initialize TypeScript parser
-        let mut ts_parser = Parser::new();
-        ts_parser
-            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
-            .map_err(|e| TreeSitterError::LanguageInitFailed(e.to_string()))?;
-        parsers.insert(Language::TypeScript, ts_parser);
-
-        // Initialize TSX parser
-        let mut tsx_parser = Parser::new();
-        tsx_parser
-            .set_language(&tree_sitter_typescript::LANGUAGE_TSX.into())
-            .map_err(|e| TreeSitterError::LanguageInitFailed(e.to_string()))?;
-        parsers.insert(Language::Tsx, tsx_parser);
-
-        // Initialize JavaScript parser
-        let mut js_parser = Parser::new();
-        js_parser
-            .set_language(&tree_sitter_javascript::LANGUAGE.into())
-            .map_err(|e| TreeSitterError::LanguageInitFailed(e.to_string()))?;
-        parsers.insert(Language::JavaScript, js_parser);
-
-        // JSX uses the same grammar as JavaScript in tree-sitter-javascript
-        let mut jsx_parser = Parser::new();
-        jsx_parser
-            .set_language(&tree_sitter_javascript::LANGUAGE.into())
-            .map_err(|e| TreeSitterError::LanguageInitFailed(e.to_string()))?;
-        parsers.insert(Language::Jsx, jsx_parser);
-
-        // Initialize Python parser
-        let mut py_parser = Parser::new();
-        py_parser
-            .set_language(&tree_sitter_python::LANGUAGE.into())
-            .map_err(|e| TreeSitterError::LanguageInitFailed(e.to_string()))?;
-        parsers.insert(Language::Python, py_parser);
-
-        // Initialize Rust parser
-        let mut rs_parser = Parser::new();
-        rs_parser
-            .set_language(&tree_sitter_rust::LANGUAGE.into())
-            .map_err(|e| TreeSitterError::LanguageInitFailed(e.to_string()))?;
-        parsers.insert(Language::Rust, rs_parser);
-
-        // Initialize Go parser
-        let mut go_parser = Parser::new();
-        go_parser
-            .set_language(&tree_sitter_go::LANGUAGE.into())
-            .map_err(|e| TreeSitterError::LanguageInitFailed(e.to_string()))?;
-        parsers.insert(Language::Go, go_parser);
+        for capability in Language::all_capabilities() {
+            let ParserKind::TreeSitter(grammar) = capability.parser else {
+                continue;
+            };
+            parsers.insert(
+                capability.language,
+                Self::new_parser(grammar).map_err(|e| {
+                    TreeSitterError::LanguageInitFailed(format!(
+                        "{}: {}",
+                        capability.display_name, e
+                    ))
+                })?,
+            );
+        }
 
         Ok(Self { parsers })
+    }
+
+    fn new_parser(grammar: TreeSitterGrammar) -> Result<Parser, tree_sitter::LanguageError> {
+        let mut parser = Parser::new();
+        match grammar {
+            TreeSitterGrammar::TypeScript => {
+                parser.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())?
+            }
+            TreeSitterGrammar::Tsx => {
+                parser.set_language(&tree_sitter_typescript::LANGUAGE_TSX.into())?
+            }
+            TreeSitterGrammar::JavaScript => {
+                parser.set_language(&tree_sitter_javascript::LANGUAGE.into())?
+            }
+            TreeSitterGrammar::Python => {
+                parser.set_language(&tree_sitter_python::LANGUAGE.into())?
+            }
+            TreeSitterGrammar::Rust => parser.set_language(&tree_sitter_rust::LANGUAGE.into())?,
+            TreeSitterGrammar::Go => parser.set_language(&tree_sitter_go::LANGUAGE.into())?,
+        }
+        Ok(parser)
     }
 
     /// Parse source code for the given language
@@ -210,7 +478,133 @@ mod tests {
             Language::from_path("docs/plan.markdown"),
             Some(Language::Markdown)
         );
-        assert_eq!(Language::from_path("data.json"), None);
+        assert_eq!(Language::from_path("src/index.css"), Some(Language::Css));
+        assert_eq!(
+            Language::from_path("src/Button.module.css"),
+            Some(Language::Css)
+        );
+        assert_eq!(Language::from_path("src/index.scss"), Some(Language::Scss));
+        assert_eq!(
+            Language::from_path("src/Button.module.scss"),
+            Some(Language::Scss)
+        );
+        assert_eq!(Language::from_path("src/index.sass"), Some(Language::Sass));
+        assert_eq!(Language::from_path("src/index.less"), Some(Language::Less));
+        assert_eq!(
+            Language::from_path("public/index.html"),
+            Some(Language::Html)
+        );
+        assert_eq!(
+            Language::from_path("public/index.htm"),
+            Some(Language::Html)
+        );
+        assert_eq!(Language::from_path("src/App.vue"), Some(Language::Vue));
+        assert_eq!(
+            Language::from_path("src/App.svelte"),
+            Some(Language::Svelte)
+        );
+        assert_eq!(Language::from_path("data.json"), Some(Language::Json));
+        assert_eq!(Language::from_path("config.yaml"), Some(Language::Yaml));
+        assert_eq!(Language::from_path("config.yml"), Some(Language::Yaml));
+        assert_eq!(Language::from_path("Cargo.toml"), Some(Language::Toml));
+        assert_eq!(Language::from_path("pyproject.toml"), Some(Language::Toml));
+        for path in [
+            "app.php",
+            "Main.java",
+            "main.cpp",
+            "main.c",
+            "tsconfig.jsonc",
+        ] {
+            assert_eq!(
+                Language::from_path(path),
+                None,
+                "{path} should not be claimed before it has an explicit capability entry"
+            );
+        }
+    }
+
+    #[test]
+    fn test_language_capabilities_are_the_detection_source() {
+        for capability in Language::all_capabilities() {
+            assert_eq!(capability.language.display_name(), capability.display_name);
+            for extension in capability.extensions {
+                assert_eq!(
+                    Language::from_extension(extension),
+                    Some(capability.language),
+                    "extension {extension} should resolve through the capability registry"
+                );
+                assert_eq!(
+                    Language::capability_for_path(&format!("file.{extension}")),
+                    Some(capability)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_non_tree_sitter_capability_strategies() {
+        let astro = Language::Astro.capability();
+        assert_eq!(
+            astro.parser,
+            ParserKind::Projection {
+                target: Language::Tsx
+            }
+        );
+        assert_eq!(astro.support, SupportLevel::Partial);
+
+        let markdown = Language::Markdown.capability();
+        assert_eq!(markdown.parser, ParserKind::MarkdownHeadings);
+        assert_eq!(markdown.support, SupportLevel::Partial);
+        assert!(markdown.extracts.markdown_headings);
+
+        let css = Language::Css.capability();
+        assert_eq!(css.parser, ParserKind::Scanner);
+        assert_eq!(css.support, SupportLevel::Partial);
+        assert!(css.extracts.definitions);
+
+        for language in [Language::Scss, Language::Sass, Language::Less] {
+            let capability = language.capability();
+            assert_eq!(capability.parser, ParserKind::Scanner);
+            assert_eq!(capability.support, SupportLevel::Partial);
+            assert!(capability.extracts.definitions);
+            assert!(language.is_stylesheet_scanner());
+        }
+
+        let html = Language::Html.capability();
+        assert_eq!(html.parser, ParserKind::Scanner);
+        assert_eq!(html.support, SupportLevel::Partial);
+        assert!(html.extracts.definitions);
+        assert!(Language::Html.is_markup_scanner());
+
+        for language in [Language::Vue, Language::Svelte] {
+            let capability = language.capability();
+            assert_eq!(capability.parser, ParserKind::Scanner);
+            assert_eq!(capability.support, SupportLevel::Partial);
+            assert!(capability.extracts.definitions);
+            assert!(language.is_markup_scanner());
+        }
+
+        for language in [Language::Json, Language::Yaml, Language::Toml] {
+            let capability = language.capability();
+            assert_eq!(capability.parser, ParserKind::Scanner);
+            assert_eq!(capability.support, SupportLevel::Partial);
+            assert!(capability.extracts.definitions);
+            assert!(language.is_config_scanner());
+        }
+    }
+
+    #[test]
+    fn test_parser_manager_initializes_only_tree_sitter_backed_languages() {
+        let parser = TreeSitterParser::new().unwrap();
+        for capability in Language::all_capabilities() {
+            let expected = matches!(capability.parser, ParserKind::TreeSitter(_));
+            assert_eq!(
+                parser.supports_language(capability.language),
+                expected,
+                "{} parser availability should match capability strategy",
+                capability.display_name
+            );
+        }
     }
 
     #[test]

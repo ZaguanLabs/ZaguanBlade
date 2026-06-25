@@ -1,0 +1,30 @@
+:root {
+  --fixture-accent: #4cc9f0;
+}
+
+.fixture-card,
+#fixture-shell {
+  color: var(--fixture-accent);
+}
+
+@keyframes fixture-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@layer fixture-components {
+  .layered-card { display: grid; }
+}
+
+@media (min-width: 720px) {
+  .wide-card { display: block; }
+}
+
+@container fixture-card (inline-size > 32rem) {
+  .container-title { font-weight: 700; }
+}
+
+@font-face {
+  font-family: "Fixture Sans";
+  src: url("/fonts/fixture.woff2");
+}

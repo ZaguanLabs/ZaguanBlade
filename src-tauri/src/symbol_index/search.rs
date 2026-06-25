@@ -144,11 +144,11 @@ pub fn execute_search(
 
     // Search by text
     if let Some(ref text) = query.text {
-        let symbols = store.search_by_name_like(text, limit * 2)?;
+        let symbols = search_symbol_candidates(store, text, limit)?;
         let mut results: Vec<SearchResult> = symbols
             .into_iter()
             .map(|s| {
-                let score = calculate_relevance(&s.name, text);
+                let score = calculate_symbol_relevance(&s, text);
                 SearchResult::with_score(s, score)
             })
             .collect();
@@ -192,6 +192,35 @@ pub fn execute_search(
     }
 
     Ok(vec![])
+}
+
+fn search_symbol_candidates(
+    store: &SymbolStore,
+    text: &str,
+    limit: usize,
+) -> Result<Vec<Symbol>, SymbolStoreError> {
+    let candidate_limit = limit.saturating_mul(4).max(limit).max(20);
+    let mut symbols = Vec::new();
+    let mut seen = HashSet::new();
+
+    for symbol in store.search_by_name(text, candidate_limit)? {
+        if seen.insert(symbol.id.clone()) {
+            symbols.push(symbol);
+        }
+    }
+
+    if symbols.len() < candidate_limit {
+        for symbol in store.search_by_name_like(text, candidate_limit)? {
+            if seen.insert(symbol.id.clone()) {
+                symbols.push(symbol);
+            }
+            if symbols.len() >= candidate_limit {
+                break;
+            }
+        }
+    }
+
+    Ok(symbols)
 }
 
 fn apply_contextual_boosts(results: &mut [SearchResult], query: &SearchQuery) {
@@ -282,6 +311,12 @@ fn filter_by_type(symbols: Vec<Symbol>, types: Option<&[SymbolType]>) -> Vec<Sym
     }
 }
 
+fn calculate_symbol_relevance(symbol: &Symbol, query: &str) -> f32 {
+    let name_score = calculate_relevance(&symbol.name, query);
+    let qualified_score = calculate_relevance(&symbol.qualified_name, query) * 0.92;
+    name_score.max(qualified_score)
+}
+
 /// Calculate relevance score between query and symbol name
 fn calculate_relevance(name: &str, query: &str) -> f32 {
     let name_lower = name.to_lowercase();
@@ -321,6 +356,7 @@ fn calculate_relevance(name: &str, query: &str) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::symbol_index::store::SymbolStore;
     use crate::tree_sitter::{Position, Range};
 
     fn create_test_symbol(name: &str, symbol_type: SymbolType) -> Symbol {
@@ -384,5 +420,29 @@ mod tests {
 
         assert_eq!(result.symbol.name, "test");
         assert_eq!(result.score, 0.85);
+    }
+
+    #[test]
+    fn test_execute_search_merges_fts_and_like_candidates() {
+        let store = SymbolStore::in_memory().unwrap();
+        let symbols = vec![
+            create_test_symbol("--accent-ai", SymbolType::CssCustomProperty),
+            create_test_symbol(".chat-message", SymbolType::CssSelector),
+            create_test_symbol("GitCommitMessage", SymbolType::Function),
+        ];
+        store.upsert_symbols(&symbols).unwrap();
+
+        let accent_results =
+            execute_search(&store, &SearchQuery::text("--accent").with_limit(10)).unwrap();
+        assert!(accent_results
+            .iter()
+            .any(|result| result.symbol.name == "--accent-ai"));
+
+        let git_results = execute_search(
+            &store,
+            &SearchQuery::text("GitCommitMessage").with_limit(10),
+        )
+        .unwrap();
+        assert_eq!(git_results[0].symbol.name, "GitCommitMessage");
     }
 }

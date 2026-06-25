@@ -32,6 +32,12 @@ pub enum SymbolType {
     Trait,
     Impl,
     Heading,
+    CssSelector,
+    CssCustomProperty,
+    CssKeyframes,
+    CssAtRule,
+    CssLayer,
+    CssFontFace,
 }
 
 impl std::fmt::Display for SymbolType {
@@ -55,6 +61,12 @@ impl std::fmt::Display for SymbolType {
             SymbolType::Trait => "trait",
             SymbolType::Impl => "impl",
             SymbolType::Heading => "heading",
+            SymbolType::CssSelector => "css_selector",
+            SymbolType::CssCustomProperty => "css_custom_property",
+            SymbolType::CssKeyframes => "css_keyframes",
+            SymbolType::CssAtRule => "css_at_rule",
+            SymbolType::CssLayer => "css_layer",
+            SymbolType::CssFontFace => "css_font_face",
         };
         write!(f, "{}", s)
     }
@@ -114,6 +126,12 @@ impl std::str::FromStr for SymbolType {
             "trait" => Ok(SymbolType::Trait),
             "impl" => Ok(SymbolType::Impl),
             "heading" => Ok(SymbolType::Heading),
+            "css_selector" => Ok(SymbolType::CssSelector),
+            "css_custom_property" => Ok(SymbolType::CssCustomProperty),
+            "css_keyframes" => Ok(SymbolType::CssKeyframes),
+            "css_at_rule" => Ok(SymbolType::CssAtRule),
+            "css_layer" => Ok(SymbolType::CssLayer),
+            "css_font_face" => Ok(SymbolType::CssFontFace),
             _ => Err(format!("Unknown symbol type: {}", s)),
         }
     }
@@ -226,6 +244,7 @@ pub enum SymbolRelationshipType {
     Extends,
     Implements,
     Contains,
+    Usage,
 }
 
 impl std::fmt::Display for SymbolRelationshipType {
@@ -237,6 +256,7 @@ impl std::fmt::Display for SymbolRelationshipType {
             SymbolRelationshipType::Extends => "extends",
             SymbolRelationshipType::Implements => "implements",
             SymbolRelationshipType::Contains => "contains",
+            SymbolRelationshipType::Usage => "usage",
         };
         write!(f, "{}", s)
     }
@@ -253,6 +273,7 @@ impl std::str::FromStr for SymbolRelationshipType {
             "extends" => Ok(SymbolRelationshipType::Extends),
             "implements" => Ok(SymbolRelationshipType::Implements),
             "contains" => Ok(SymbolRelationshipType::Contains),
+            "usage" | "uses" => Ok(SymbolRelationshipType::Usage),
             _ => Err(format!("Unknown relationship type: {}", s)),
         }
     }
@@ -373,7 +394,17 @@ impl SymbolExtractor {
             Language::Python => self.python_node_to_symbol(node, source),
             Language::Rust => self.rust_node_to_symbol(node, source),
             Language::Go => self.go_node_to_symbol(node, source),
-            Language::Markdown => None,
+            Language::Markdown
+            | Language::Css
+            | Language::Scss
+            | Language::Sass
+            | Language::Less
+            | Language::Html
+            | Language::Vue
+            | Language::Svelte
+            | Language::Json
+            | Language::Yaml
+            | Language::Toml => None,
         }
     }
 
@@ -947,7 +978,17 @@ impl SymbolExtractor {
                     return Some(format!("{}{}", params_text, return_type));
                 }
             }
-            Language::Markdown => {}
+            Language::Markdown
+            | Language::Css
+            | Language::Scss
+            | Language::Sass
+            | Language::Less
+            | Language::Html
+            | Language::Vue
+            | Language::Svelte
+            | Language::Json
+            | Language::Yaml
+            | Language::Toml => {}
         }
         None
     }
@@ -1033,7 +1074,18 @@ fn extract_structural_relationships_from_node(
             relationships,
             seen,
         ),
-        Language::Go | Language::Markdown => {}
+        Language::Go
+        | Language::Markdown
+        | Language::Css
+        | Language::Scss
+        | Language::Sass
+        | Language::Less
+        | Language::Html
+        | Language::Vue
+        | Language::Svelte
+        | Language::Json
+        | Language::Yaml
+        | Language::Toml => {}
     }
 
     for i in 0..node.child_count() {
@@ -1442,7 +1494,17 @@ fn extract_relationship_target_name(
             let callee = node.child_by_field_name("function")?;
             extract_callable_name(&callee, source)
         }
-        Language::Markdown => None,
+        Language::Markdown
+        | Language::Css
+        | Language::Scss
+        | Language::Sass
+        | Language::Less
+        | Language::Html
+        | Language::Vue
+        | Language::Svelte
+        | Language::Json
+        | Language::Yaml
+        | Language::Toml => None,
     }
 }
 

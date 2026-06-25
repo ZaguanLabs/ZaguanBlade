@@ -2086,6 +2086,8 @@ mod tests {
             last_incremental_update_ms: None,
             current_file: None,
             message: "stale".to_string(),
+            timings: crate::language_service::IndexTimingSnapshot::default(),
+            discovery: crate::language_service::IndexDiscoverySnapshot::default(),
         };
         let queries = vec!["refactor helperName".to_string()];
 
@@ -2235,6 +2237,8 @@ mod tests {
             last_incremental_update_ms: None,
             current_file: None,
             message: "ready".to_string(),
+            timings: crate::language_service::IndexTimingSnapshot::default(),
+            discovery: crate::language_service::IndexDiscoverySnapshot::default(),
         };
         let open_files = vec!["src/main.tsx".to_string()];
 

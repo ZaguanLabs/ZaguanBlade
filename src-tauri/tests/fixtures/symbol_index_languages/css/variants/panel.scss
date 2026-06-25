@@ -1,0 +1,7 @@
+:root {
+  --panel-gap: 8px;
+}
+
+.panelShell {
+  gap: var(--panel-gap);
+}

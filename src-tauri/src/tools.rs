@@ -230,6 +230,7 @@ const SYMBOL_OUTLINE_DEFAULT_MAX_NODES: usize = 120;
 const SYMBOL_OUTLINE_MAX_NODES_CAP: usize = 500;
 const SYMBOL_OUTLINE_DEFAULT_MAX_DEPTH: usize = 4;
 const SYMBOL_OUTLINE_MAX_DEPTH_CAP: usize = 12;
+const SYMBOL_SEARCH_MAX_OFFSET: usize = 1000;
 const SYMBOL_TEXT_PREVIEW_CHARS: usize = 240;
 
 #[derive(Default, Clone)]
@@ -534,9 +535,11 @@ mod tests {
         apply_multi_patch_to_string, apply_patch_to_string, apply_patch_to_string_with_line_hint,
         apply_semantic_patch_with_service, apply_semantic_patch_writes_with_service,
         compact_outline_nodes_for_parent, execute_tool, fast_context_tool, grep_search,
-        impact_confidence, impact_risk_level, is_batch_read_only_tool, parse_grep_timeout_ms,
-        parse_relationship_types_arg, related_test_files_for_paths, stage_semantic_patch_writes,
-        symbol_inventory_entries, symbol_inventory_summary, symbol_reference_resolution_json,
+        impact_confidence, impact_risk_level, is_batch_read_only_tool,
+        language_support_for_path_json, language_support_meta_json, paginate_tool_results,
+        parse_grep_timeout_ms, parse_relationship_types_arg, related_test_files_for_paths,
+        stage_semantic_patch_writes, symbol_inventory_entries, symbol_inventory_summary,
+        symbol_language_diagnostics, symbol_outline_diagnostics, symbol_reference_resolution_json,
         PatchHunk, SemanticPatchWrite, ToolResult, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS,
         GREP_TIMEOUT_MIN_MS,
     };
@@ -569,6 +572,204 @@ mod tests {
     }
 
     #[test]
+    fn language_support_metadata_marks_known_language() {
+        let metadata = language_support_for_path_json("src/main.ts");
+        assert_eq!(metadata["supported"], true);
+        assert_eq!(metadata["display_name"], "TypeScript");
+        assert_eq!(metadata["support_level"], "full");
+        assert_eq!(metadata["parser"], "tree_sitter");
+        assert_eq!(metadata["extracts"]["definitions"], true);
+    }
+
+    #[test]
+    fn language_support_metadata_marks_css_partial_support() {
+        let metadata = language_support_for_path_json("src/styles/app.css");
+        assert_eq!(metadata["supported"], true);
+        assert_eq!(metadata["display_name"], "CSS");
+        assert_eq!(metadata["support_level"], "partial");
+        assert_eq!(metadata["parser"], "scanner");
+
+        let diagnostics = symbol_language_diagnostics(Some("src/styles/app.css"), 0);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("partial symbol support")),
+            "expected partial-support diagnostic, got {diagnostics:?}"
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("No indexed symbols matched")),
+            "expected fallback guidance, got {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn language_support_metadata_marks_stylesheet_variants_partial_support() {
+        for (path, display_name) in [
+            ("src/styles/app.scss", "SCSS"),
+            ("src/styles/app.sass", "Sass"),
+            ("src/styles/app.less", "Less"),
+            ("src/styles/Button.module.scss", "SCSS"),
+        ] {
+            let metadata = language_support_for_path_json(path);
+            assert_eq!(metadata["supported"], true, "{path}");
+            assert_eq!(metadata["display_name"], display_name, "{path}");
+            assert_eq!(metadata["support_level"], "partial", "{path}");
+            assert_eq!(metadata["parser"], "scanner", "{path}");
+        }
+    }
+
+    #[test]
+    fn language_support_metadata_marks_markup_variants_partial_support() {
+        for (path, display_name) in [
+            ("public/index.html", "HTML"),
+            ("public/index.htm", "HTML"),
+            ("src/App.vue", "Vue"),
+            ("src/App.svelte", "Svelte"),
+        ] {
+            let metadata = language_support_for_path_json(path);
+            assert_eq!(metadata["supported"], true, "{path}");
+            assert_eq!(metadata["display_name"], display_name, "{path}");
+            assert_eq!(metadata["support_level"], "partial", "{path}");
+            assert_eq!(metadata["parser"], "scanner", "{path}");
+            assert_eq!(metadata["extracts"]["definitions"], true, "{path}");
+            assert_eq!(metadata["extracts"]["relationships"], false, "{path}");
+        }
+    }
+
+    #[test]
+    fn language_support_metadata_marks_config_variants_partial_support() {
+        for (path, display_name) in [
+            ("package.json", "JSON"),
+            ("config/app.yaml", "YAML"),
+            ("config/app.yml", "YAML"),
+            ("Cargo.toml", "TOML"),
+            ("pyproject.toml", "TOML"),
+        ] {
+            let metadata = language_support_for_path_json(path);
+            assert_eq!(metadata["supported"], true, "{path}");
+            assert_eq!(metadata["display_name"], display_name, "{path}");
+            assert_eq!(metadata["support_level"], "partial", "{path}");
+            assert_eq!(metadata["parser"], "scanner", "{path}");
+            assert_eq!(metadata["extracts"]["definitions"], true, "{path}");
+            assert_eq!(metadata["extracts"]["imports"], false, "{path}");
+        }
+    }
+
+    #[test]
+    fn language_support_meta_includes_file_and_supported_languages() {
+        let metadata = language_support_meta_json(Some("src/styles/app.css"));
+        assert_eq!(metadata["file"]["display_name"], "CSS");
+        assert_eq!(metadata["file"]["support_level"], "partial");
+        let supported_languages = metadata["supported_languages"]
+            .as_array()
+            .expect("expected supported language list");
+        assert!(!supported_languages.is_empty());
+        for display_name in ["CSS", "HTML", "Vue", "Svelte", "JSON", "YAML", "TOML"] {
+            assert!(
+                supported_languages
+                    .iter()
+                    .any(|language| language["display_name"] == display_name),
+                "expected supported language list to include {display_name}"
+            );
+        }
+
+        let metadata = language_support_meta_json(None);
+        assert!(metadata["file"].is_null());
+        assert!(metadata["supported_languages"]
+            .as_array()
+            .is_some_and(|languages| !languages.is_empty()));
+    }
+
+    #[test]
+    fn language_support_metadata_marks_unsupported_file_type() {
+        let metadata = language_support_for_path_json("src/native/widget.swift");
+        assert_eq!(metadata["supported"], false);
+        assert_eq!(metadata["support_level"], "unsupported");
+        assert_eq!(metadata["parser"], serde_json::Value::Null);
+        assert_eq!(metadata["extracts"]["definitions"], false);
+
+        let diagnostics = symbol_language_diagnostics(Some("src/native/widget.swift"), 0);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("not supported by the Symbols Index")),
+            "expected unsupported diagnostic, got {diagnostics:?}"
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("semantic_anchor_search")),
+            "expected fallback tool guidance, got {diagnostics:?}"
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("No indexed symbols matched")),
+            "expected empty-result diagnostic, got {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn language_support_diagnostics_do_not_emit_empty_warning_when_results_exist() {
+        let diagnostics = symbol_language_diagnostics(Some("src/App.vue"), 3);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("partial symbol support")),
+            "expected partial-support diagnostic, got {diagnostics:?}"
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| !diagnostic.contains("No indexed symbols matched")),
+            "did not expect empty-result diagnostic, got {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn symbol_outline_diagnostics_report_partial_support() {
+        let diagnostics = symbol_outline_diagnostics("README.md", 0);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("partial symbol support")),
+            "expected partial-support diagnostic, got {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn symbol_outline_diagnostics_report_unsupported_file_type() {
+        let diagnostics = symbol_outline_diagnostics("src/native/widget.swift", 0);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("not supported by the Symbols Index")),
+            "expected unsupported diagnostic, got {diagnostics:?}"
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("grep_search or codebase_search")),
+            "expected fallback search guidance, got {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn paginate_tool_results_reports_has_more() {
+        let (page, has_more, total_available) = paginate_tool_results(vec![1, 2, 3, 4], 1, 2);
+        assert_eq!(page, vec![2, 3]);
+        assert!(has_more);
+        assert_eq!(total_available, 4);
+
+        let (page, has_more, total_available) = paginate_tool_results(vec![1, 2, 3], 3, 2);
+        assert!(page.is_empty());
+        assert!(!has_more);
+        assert_eq!(total_available, 3);
+    }
+
+    #[test]
     fn apply_patch_rejects_ambiguous_exact_matches() {
         let content = "A\nTARGET\nB\nTARGET\nC\n";
         let err = apply_patch_to_string(content, "TARGET", "REPLACED").unwrap_err();
@@ -598,8 +799,17 @@ mod tests {
             "export function buildContextPack() { return true; }",
         )
         .unwrap();
+        fs::write(
+            temp_dir.path().join("src/service.css"),
+            ".contextCard { color: var(--accent); }",
+        )
+        .unwrap();
         let mut args = HashMap::new();
         args.insert("query".to_string(), serde_json::json!("build context pack"));
+        args.insert(
+            "active_file".to_string(),
+            serde_json::json!("src/service.css"),
+        );
         args.insert("include_memory".to_string(), serde_json::json!(false));
         args.insert(
             "include_project_index_min".to_string(),
@@ -612,6 +822,18 @@ mod tests {
         assert!(result.success);
         assert_eq!(payload["queries_used"][0], "build context pack");
         assert!(payload.get("confidence").is_some());
+
+        let language_support = &payload["_meta"]["language_support"];
+        assert_eq!(language_support["file"]["display_name"], "CSS");
+        assert_eq!(language_support["file"]["support_level"], "partial");
+        assert!(language_support["supported_languages"]
+            .as_array()
+            .is_some_and(|languages| !languages.is_empty()));
+        let metadata_len = serde_json::to_string(language_support).unwrap().len();
+        assert!(
+            metadata_len < 8_000,
+            "fast_context language-support metadata should stay compact, got {metadata_len} bytes"
+        );
     }
 
     #[test]
@@ -2227,6 +2449,11 @@ fn fast_context_tool(
         &open_files,
         &request,
     );
+    let mut payload = serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
+    payload["_meta"] = serde_json::json!({
+        "tool": "fast_context",
+        "language_support": language_support_meta_json(active_file.as_deref()),
+    });
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
 }
 
@@ -2742,6 +2969,141 @@ fn symbol_to_json(symbol: &crate::tree_sitter::Symbol) -> serde_json::Value {
     })
 }
 
+fn support_level_name(level: crate::tree_sitter::SupportLevel) -> &'static str {
+    match level {
+        crate::tree_sitter::SupportLevel::Full => "full",
+        crate::tree_sitter::SupportLevel::Partial => "partial",
+        crate::tree_sitter::SupportLevel::AnchorOnly => "anchor_only",
+    }
+}
+
+fn parser_kind_name(parser: crate::tree_sitter::ParserKind) -> &'static str {
+    match parser {
+        crate::tree_sitter::ParserKind::TreeSitter(_) => "tree_sitter",
+        crate::tree_sitter::ParserKind::Projection { .. } => "projection",
+        crate::tree_sitter::ParserKind::Scanner => "scanner",
+        crate::tree_sitter::ParserKind::MarkdownHeadings => "markdown_headings",
+        crate::tree_sitter::ParserKind::AnchorOnly => "anchor_only",
+    }
+}
+
+fn language_capability_json(
+    capability: &crate::tree_sitter::LanguageCapability,
+) -> serde_json::Value {
+    serde_json::json!({
+        "language": format!("{:?}", capability.language).to_lowercase(),
+        "display_name": capability.display_name,
+        "extensions": capability.extensions,
+        "support_level": support_level_name(capability.support),
+        "parser": parser_kind_name(capability.parser),
+        "extractor_version": capability.extractor_version,
+        "extracts": {
+            "definitions": capability.extracts.definitions,
+            "imports": capability.extracts.imports,
+            "relationships": capability.extracts.relationships,
+            "semantic_anchors": capability.extracts.semantic_anchors,
+            "markdown_headings": capability.extracts.markdown_headings,
+        }
+    })
+}
+
+fn supported_symbol_language_capabilities_json() -> Vec<serde_json::Value> {
+    crate::tree_sitter::Language::all_capabilities()
+        .iter()
+        .map(language_capability_json)
+        .collect()
+}
+
+fn supported_symbol_extensions() -> Vec<&'static str> {
+    crate::tree_sitter::Language::all_capabilities()
+        .iter()
+        .flat_map(|capability| capability.extensions.iter().copied())
+        .collect()
+}
+
+fn language_support_for_path_json(path: &str) -> serde_json::Value {
+    match crate::tree_sitter::Language::capability_for_path(path) {
+        Some(capability) => {
+            let mut value = language_capability_json(capability);
+            value["supported"] = serde_json::json!(true);
+            value
+        }
+        None => serde_json::json!({
+            "supported": false,
+            "language": null,
+            "display_name": null,
+            "extensions": [],
+            "support_level": "unsupported",
+            "parser": null,
+            "extractor_version": null,
+            "extracts": {
+                "definitions": false,
+                "imports": false,
+                "relationships": false,
+                "semantic_anchors": false,
+                "markdown_headings": false,
+            }
+        }),
+    }
+}
+
+fn language_support_meta_json(path: Option<&str>) -> serde_json::Value {
+    serde_json::json!({
+        "file": path
+            .map(language_support_for_path_json)
+            .unwrap_or(serde_json::Value::Null),
+        "supported_languages": supported_symbol_language_capabilities_json(),
+    })
+}
+
+fn symbol_language_diagnostics(path: Option<&str>, result_count: usize) -> Vec<String> {
+    let supported_extensions = supported_symbol_extensions().join(", ");
+    let mut diagnostics = Vec::new();
+
+    if let Some(path) = path {
+        match crate::tree_sitter::Language::capability_for_path(path) {
+            Some(capability) if capability.support != crate::tree_sitter::SupportLevel::Full => {
+                diagnostics.push(format!(
+                    "{} has {} symbol support via {}. Empty or sparse symbol results may reflect partial extraction rather than absence in source.",
+                    path,
+                    support_level_name(capability.support),
+                    parser_kind_name(capability.parser),
+                ));
+            }
+            Some(_) => {}
+            None => diagnostics.push(format!(
+                "{} is not supported by the Symbols Index. Supported structural extensions: {}. Use grep_search or codebase_search for arbitrary text, and semantic_anchor_search for routes, config keys, translation keys, CSS/theme tokens, and other literals.",
+                path, supported_extensions
+            )),
+        }
+    }
+
+    if result_count == 0 {
+        diagnostics.push(
+            "No indexed symbols matched. Confirm the target file type is supported and the index is fresh; for unsupported files or literal tokens, use semantic_anchor_search, grep_search, or codebase_search.".to_string(),
+        );
+    }
+
+    diagnostics
+}
+
+fn symbol_outline_diagnostics(path: &str, total_symbols: usize) -> Vec<String> {
+    let mut diagnostics = symbol_language_diagnostics(Some(path), usize::MAX);
+    if total_symbols == 0 && crate::tree_sitter::Language::capability_for_path(path).is_some() {
+        diagnostics.push(
+            "No indexed symbols are available for this file. For partial languages this may be expected; otherwise confirm the index is fresh or fall back to read_file_range.".to_string(),
+        );
+    }
+    diagnostics
+}
+
+fn paginate_tool_results<T>(items: Vec<T>, offset: usize, limit: usize) -> (Vec<T>, bool, usize) {
+    let total_available = items.len();
+    let has_more = total_available > offset.saturating_add(limit);
+    let page = items.into_iter().skip(offset).take(limit).collect();
+    (page, has_more, total_available)
+}
+
 fn truncate_chars(value: &str, max_chars: usize) -> String {
     if value.chars().count() <= max_chars {
         return value.to_string();
@@ -2918,6 +3280,7 @@ fn relationship_type_values() -> Vec<crate::tree_sitter::SymbolRelationshipType>
         crate::tree_sitter::SymbolRelationshipType::Export,
         crate::tree_sitter::SymbolRelationshipType::Extends,
         crate::tree_sitter::SymbolRelationshipType::Implements,
+        crate::tree_sitter::SymbolRelationshipType::Usage,
     ]
 }
 
@@ -3162,6 +3525,8 @@ fn symbol_search_tool<R: tauri::Runtime>(
         return ToolResult::err("symbol_search requires 'query'");
     };
     let limit = parse_bounded_usize_arg(args, "limit", 20, 100);
+    let offset = parse_bounded_usize_arg(args, "offset", 0, SYMBOL_SEARCH_MAX_OFFSET);
+    let fetch_limit = offset.saturating_add(limit).saturating_add(1);
     let file_path = get_str_arg(args, &["path", "file", "file_path"]);
     let symbol_types = match get_str_arg(args, &["kind", "symbol_type"]) {
         Some(kind) => match kind.parse::<crate::tree_sitter::SymbolType>() {
@@ -3182,34 +3547,45 @@ fn symbol_search_tool<R: tauri::Runtime>(
         Err(err) => return ToolResult::err(err),
     };
     let started = Instant::now();
-    let results = match service.search_symbols_filtered(
-        &query,
-        file_filter.as_deref(),
-        symbol_types,
-        limit,
-    ) {
-        Ok(results) => results,
-        Err(err) => return ToolResult::err(err.to_string()),
+    let file_is_unsupported = file_filter
+        .as_deref()
+        .is_some_and(|path| crate::tree_sitter::Language::capability_for_path(path).is_none());
+    let results = if file_is_unsupported {
+        Vec::new()
+    } else {
+        match service.search_symbols_filtered(
+            &query,
+            file_filter.as_deref(),
+            symbol_types,
+            fetch_limit,
+        ) {
+            Ok(results) => results,
+            Err(err) => return ToolResult::err(err.to_string()),
+        }
     };
-    let result_count = results.len();
+    let available_count = results.len();
     let initial_top_score = results.first().map(|result| result.score);
+    let (results, has_more, total_available) = paginate_tool_results(results, offset, limit);
+    let result_count = results.len();
+    let total_lower_bound = offset
+        .saturating_add(result_count)
+        .saturating_add(usize::from(has_more));
+    let diagnostic_result_count = if available_count > 0 { 1 } else { 0 };
+    let search_diagnostics =
+        symbol_language_diagnostics(file_filter.as_deref(), diagnostic_result_count);
     let search_health = serde_json::json!({
         "enabled": false,
         "triggered": false,
         "reason": null,
-        "confidence": symbol_search_confidence(result_count, initial_top_score),
-        "initial_result_count": result_count,
+        "confidence": symbol_search_confidence(available_count, initial_top_score),
+        "initial_result_count": available_count,
         "initial_top_score": initial_top_score,
         "reran_after_reindex": false,
         "reindexed_files": [],
         "removed_files": [],
         "literal_matches": [],
         "semantic_anchor_matches": [],
-        "diagnostics": if result_count == 0 {
-            vec!["No indexed symbols matched. Try fast_context or a targeted file/path search if the index is still warming.".to_string()]
-        } else {
-            Vec::new()
-        },
+        "diagnostics": search_diagnostics,
         "health_before": null,
         "health_after": null,
     });
@@ -3223,10 +3599,17 @@ fn symbol_search_tool<R: tauri::Runtime>(
         "_meta": {
             "tool": "symbol_search",
             "count": result_count,
+            "offset": offset,
+            "limit": limit,
+            "has_more": has_more,
+            "total_known": false,
+            "total_lower_bound": total_lower_bound,
+            "candidate_count": total_available,
             "timing_ms": started.elapsed().as_millis(),
             "source": "language_service",
             "index_health": service.index_health_snapshot(),
             "search_health": search_health,
+            "language_support": language_support_meta_json(file_filter.as_deref()),
             "truncated": false
         }
     });
@@ -3283,6 +3666,7 @@ fn semantic_anchor_search_tool<R: tauri::Runtime>(
             "timing_ms": started.elapsed().as_millis(),
             "source": "language_service",
             "index_health": service.index_health_snapshot(),
+            "language_support": language_support_meta_json(file_filter.as_deref()),
             "truncated": false
         }
     });
@@ -3338,7 +3722,8 @@ fn symbol_resolve_tool<R: tauri::Runtime>(
     payload["_meta"] = serde_json::json!({
         "tool": "symbol_resolve",
         "timing_ms": started.elapsed().as_millis(),
-        "source": "language_service"
+        "source": "language_service",
+        "language_support": language_support_meta_json(Some(&resolved.file_path)),
     });
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
 }
@@ -3360,6 +3745,36 @@ fn symbol_outline_tool<R: tauri::Runtime>(
         Err(err) => return ToolResult::err(err),
     };
     let started = Instant::now();
+    if crate::tree_sitter::Language::capability_for_path(&path).is_none() {
+        let payload = serde_json::json!({
+            "path": path,
+            "summary": {},
+            "symbols": [],
+            "outline": serde_json::Value::Null,
+            "_meta": {
+                "tool": "symbol_outline",
+                "source": "language_service",
+                "timing_ms": started.elapsed().as_millis(),
+                "index_health": service.index_health_snapshot(),
+                "language_support": language_support_meta_json(Some(&path)),
+                "diagnostics": symbol_outline_diagnostics(&path, 0),
+                "line_count": null,
+                "total_symbols": 0,
+                "returned_symbols": 0,
+                "truncated": false,
+                "symbols_truncated": false,
+                "outline_nodes_returned": 0,
+                "outline_truncated": false,
+                "include_outline": false,
+                "include_docstrings": false,
+                "max_symbols": 0,
+                "max_outline_nodes": 0,
+                "max_outline_depth": 0,
+                "guidance": "Use grep_search or codebase_search for unsupported file types. Use semantic_anchor_search for indexed literals such as routes, config keys, translation keys, and CSS/theme tokens."
+            }
+        });
+        return ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default());
+    }
     let include_outline = get_bool_arg(args, &["include_outline"], false);
     let include_docstrings = get_bool_arg(args, &["include_docstrings", "include_docs"], false);
     let max_symbols = get_bounded_usize_arg(
@@ -3413,6 +3828,7 @@ fn symbol_outline_tool<R: tauri::Runtime>(
         serde_json::Value::Null
     };
     let outline_truncated = include_outline && outline_nodes_returned < total_symbols;
+    let diagnostics = symbol_outline_diagnostics(&path, total_symbols);
     let payload = serde_json::json!({
         "path": path,
         "summary": summary,
@@ -3423,6 +3839,8 @@ fn symbol_outline_tool<R: tauri::Runtime>(
             "source": "language_service",
             "timing_ms": started.elapsed().as_millis(),
             "index_health": service.index_health_snapshot(),
+            "language_support": language_support_meta_json(Some(&path)),
+            "diagnostics": diagnostics,
             "line_count": indexed_file.as_ref().and_then(|record| record.line_count),
             "total_symbols": total_symbols,
             "returned_symbols": total_symbols.min(max_symbols),
@@ -3474,6 +3892,7 @@ fn symbol_related_tool<R: tauri::Runtime>(
             "timing_ms": started.elapsed().as_millis(),
             "source": "language_service",
             "index_health": service.index_health_snapshot(),
+            "language_support": language_support_meta_json(Some(&symbol.file_path)),
             "truncated": related.len() >= limit,
         }
     });
@@ -3621,6 +4040,9 @@ fn symbol_references_tool<R: tauri::Runtime>(
             "relationship_types": relationships.iter().map(ToString::to_string).collect::<Vec<_>>(),
             "limit_per_relationship": limit,
             "max_symbols": max_symbols,
+            "language_support": language_support_meta_json(
+                target_symbols.first().map(|symbol| symbol.file_path.as_str())
+            ),
             "truncated_symbols": target_symbols.len() >= max_symbols,
         }
     });
@@ -3815,6 +4237,11 @@ fn edit_impact_tool<R: tauri::Runtime>(
         "Run or inspect likely_tests after the change".to_string(),
         "Use symbol_references on high-risk symbols if the impact surface is unclear".to_string(),
     ];
+    let language_support_path = target_path.as_deref().or_else(|| {
+        target_symbols
+            .first()
+            .map(|symbol| symbol.file_path.as_str())
+    });
 
     let payload = serde_json::json!({
         "target": {
@@ -3837,6 +4264,7 @@ fn edit_impact_tool<R: tauri::Runtime>(
             "limit": limit,
             "max_symbols": max_symbols,
             "relationship_types": relationship_types.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "language_support": language_support_meta_json(language_support_path),
             "truncated_files": impacted_paths.len() >= limit,
         }
     });
@@ -3865,6 +4293,7 @@ fn symbol_graph_tool<R: tauri::Runtime>(
         None => crate::tree_sitter::SymbolRelationshipType::Call,
     };
     let limit = parse_bounded_usize_arg(args, "limit", 20, 100);
+    let started = Instant::now();
     let graph = match service.get_symbol_graph(&symbol, relationship, limit) {
         Ok(graph) => graph,
         Err(err) => return ToolResult::err(err.to_string()),
@@ -3874,6 +4303,15 @@ fn symbol_graph_tool<R: tauri::Runtime>(
         "incoming": graph.incoming.iter().map(symbol_reference_to_json).collect::<Vec<_>>(),
         "outgoing": graph.outgoing.iter().map(symbol_reference_to_json).collect::<Vec<_>>(),
         "relationship_type": relationship.to_string(),
+        "_meta": {
+            "tool": "symbol_graph",
+            "source": "language_service",
+            "timing_ms": started.elapsed().as_millis(),
+            "index_health": service.index_health_snapshot(),
+            "language_support": language_support_meta_json(Some(&graph.symbol.file_path)),
+            "limit": limit,
+            "truncated": graph.incoming.len() >= limit || graph.outgoing.len() >= limit,
+        }
     });
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
 }

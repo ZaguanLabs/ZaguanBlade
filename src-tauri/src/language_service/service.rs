@@ -70,6 +70,55 @@ pub struct IndexHealthSnapshot {
     pub last_incremental_update_ms: Option<u64>,
     pub current_file: Option<String>,
     pub message: String,
+    pub timings: IndexTimingSnapshot,
+    pub discovery: IndexDiscoverySnapshot,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IndexTimingSnapshot {
+    pub last_discovery_ms: Option<u64>,
+    pub last_file_path: Option<String>,
+    pub last_file_total_ms: Option<u64>,
+    pub last_file_load_ms: Option<u64>,
+    pub last_file_freshness_check_ms: Option<u64>,
+    pub last_file_parse_extract_ms: Option<u64>,
+    pub last_file_relationship_enrichment_ms: Option<u64>,
+    pub last_file_db_write_ms: Option<u64>,
+    pub last_file_cache_update_ms: Option<u64>,
+    pub last_batch_load_ms: Option<u64>,
+    pub last_batch_freshness_check_ms: Option<u64>,
+    pub last_batch_parse_extract_ms: Option<u64>,
+    pub last_batch_relationship_enrichment_ms: Option<u64>,
+    pub last_batch_db_write_ms: Option<u64>,
+    pub last_batch_cache_update_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IndexLanguageCount {
+    pub language: String,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IndexSkipCount {
+    pub reason: String,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IndexDiscoverySnapshot {
+    pub last_scope: Option<String>,
+    pub last_discovered_files: usize,
+    pub last_supported_files: usize,
+    pub last_indexed_files: usize,
+    pub last_failed_files: usize,
+    pub last_fresh_files: usize,
+    pub last_reindexed_files: usize,
+    pub last_symbols_extracted: usize,
+    pub last_anchors_extracted: usize,
+    pub last_relationships_extracted: usize,
+    pub supported_by_language: Vec<IndexLanguageCount>,
+    pub skipped_by_reason: Vec<IndexSkipCount>,
 }
 
 impl Default for IndexHealthSnapshot {
@@ -88,6 +137,8 @@ impl Default for IndexHealthSnapshot {
             last_incremental_update_ms: None,
             current_file: None,
             message: "Code intelligence status unknown".to_string(),
+            timings: IndexTimingSnapshot::default(),
+            discovery: IndexDiscoverySnapshot::default(),
         }
     }
 }
@@ -211,6 +262,45 @@ struct StagedFileIndex {
     extraction_language: Language,
     source_language: Language,
     snapshot: Arc<BufferSnapshot>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct DiscoveryReport {
+    files: Vec<String>,
+    discovered_files: usize,
+    skipped_by_reason: BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct IndexFileMetrics {
+    anchors: usize,
+    relationships: usize,
+    total_ms: u64,
+    load_ms: u64,
+    freshness_check_ms: u64,
+    parse_extract_ms: u64,
+    relationship_enrichment_ms: u64,
+    db_write_ms: u64,
+    cache_update_ms: u64,
+}
+
+struct IndexFileOutcome {
+    symbols: Vec<Symbol>,
+    metrics: IndexFileMetrics,
+}
+
+struct StagedFileIndexOutcome {
+    staged: StagedFileIndex,
+    metrics: IndexFileMetrics,
+}
+
+#[derive(Debug, Clone, Default)]
+struct CommitStagedFileMetrics {
+    suppressed_external_relationships: usize,
+    relationship_count: usize,
+    relationship_enrichment_ms: u64,
+    db_write_ms: u64,
+    cache_update_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -743,6 +833,19 @@ impl LanguageService {
         *self.index_health.write().unwrap() = health;
     }
 
+    fn update_index_timings<F>(&self, update: F)
+    where
+        F: FnOnce(&mut IndexTimingSnapshot),
+    {
+        let mut health = self.index_health.write().unwrap();
+        update(&mut health.timings);
+    }
+
+    fn update_index_discovery(&self, discovery: IndexDiscoverySnapshot) {
+        let mut health = self.index_health.write().unwrap();
+        health.discovery = discovery;
+    }
+
     fn indexed_file_needs_refresh(
         &self,
         file_path: &str,
@@ -792,6 +895,9 @@ impl LanguageService {
 
     pub fn audit_index_health(&self) -> Result<IndexHealthSnapshot, LanguageError> {
         let started = std::time::Instant::now();
+        let current_health = self.index_health_snapshot();
+        let timings = current_health.timings;
+        let discovery = current_health.discovery;
         let supported_files = self.supported_language_files(".");
         let supported_set = supported_files.iter().cloned().collect::<HashSet<_>>();
         let indexed_files = self.symbol_store.list_all_indexed_files()?;
@@ -857,6 +963,8 @@ impl LanguageService {
             last_incremental_update_ms: None,
             current_file: None,
             message,
+            timings,
+            discovery,
         })
     }
 
@@ -1266,6 +1374,30 @@ impl LanguageService {
                 language,
             });
         }
+        if language.is_stylesheet_scanner() {
+            return Ok(SymbolExtraction {
+                symbols: extract_css_symbols(file_path, content),
+                relationships: Vec::new(),
+                content: Cow::Borrowed(content),
+                language,
+            });
+        }
+        if language.is_markup_scanner() {
+            return Ok(SymbolExtraction {
+                symbols: extract_markup_symbols(file_path, content),
+                relationships: Vec::new(),
+                content: Cow::Borrowed(content),
+                language,
+            });
+        }
+        if language.is_config_scanner() {
+            return Ok(SymbolExtraction {
+                symbols: extract_config_symbols(file_path, content, language),
+                relationships: Vec::new(),
+                content: Cow::Borrowed(content),
+                language,
+            });
+        }
 
         let (extraction_content, extraction_language) = if matches!(language, Language::Astro) {
             (Cow::Owned(astro_script_projection(content)), Language::Tsx)
@@ -1302,8 +1434,63 @@ impl LanguageService {
         })
     }
 
+    fn enrich_symbol_relationships(
+        &self,
+        file_path: &str,
+        extraction_content: &str,
+        extraction_language: Language,
+        source_language: Language,
+        symbols: &[Symbol],
+        relationships: &mut Vec<SymbolRelationship>,
+    ) -> Result<usize, LanguageError> {
+        self.canonicalize_import_relationships(file_path, relationships);
+        self.append_stylesheet_usage_relationships(
+            file_path,
+            extraction_content,
+            extraction_language,
+            symbols,
+            relationships,
+        );
+        self.append_stylesheet_custom_property_usage_relationships(
+            file_path,
+            extraction_content,
+            extraction_language,
+            symbols,
+            relationships,
+        );
+        self.append_module_export_relationships(
+            file_path,
+            extraction_content,
+            extraction_language,
+            symbols,
+            relationships,
+        );
+        if matches!(source_language, Language::Astro) {
+            self.append_astro_component_export_relationship(file_path, symbols, relationships);
+        }
+        let translation_call_aliases = extract_translation_call_aliases(extraction_content);
+        self.resolve_relationship_targets(
+            file_path,
+            extraction_language,
+            symbols,
+            relationships,
+            &translation_call_aliases,
+        )?;
+        Ok(Self::suppress_known_external_relationships(
+            extraction_language,
+            relationships,
+            &translation_call_aliases,
+        ))
+    }
+
     /// Index a single file
     pub fn index_file(&self, file_path: &str) -> Result<Vec<Symbol>, LanguageError> {
+        Ok(self.index_file_with_metrics(file_path)?.symbols)
+    }
+
+    fn index_file_with_metrics(&self, file_path: &str) -> Result<IndexFileOutcome, LanguageError> {
+        let total_start = std::time::Instant::now();
+        let load_start = std::time::Instant::now();
         let disk_metadata = file_index_metadata(&self.resolve_path(file_path)).ok();
         let snapshot = self.load_snapshot_for_indexing(file_path)?;
         let content = snapshot.content();
@@ -1313,21 +1500,53 @@ impl LanguageService {
         } else {
             disk_metadata
         };
+        let load_ms = load_start.elapsed().as_millis() as u64;
 
         // Check if reindexing is needed
+        let freshness_start = std::time::Instant::now();
         if !self.symbol_store.needs_reindex(file_path, &hash)? {
+            let mut db_write_ms = None;
             if self
                 .symbol_store
                 .get_semantic_anchors_in_file(file_path, 1)?
                 .is_empty()
             {
                 let anchors = extract_semantic_anchors(file_path, &content);
+                let db_write_start = std::time::Instant::now();
                 self.symbol_store
                     .replace_semantic_anchors_for_file(file_path, &anchors)?;
+                db_write_ms = Some(db_write_start.elapsed().as_millis() as u64);
             }
             let symbols = self.get_file_symbols_raw(file_path)?;
-            return Ok(self.filter_visible_symbols(file_path, symbols));
+            self.update_index_timings(|timings| {
+                timings.last_file_path = Some(file_path.to_string());
+                timings.last_file_total_ms = Some(total_start.elapsed().as_millis() as u64);
+                timings.last_file_load_ms = Some(load_ms);
+                timings.last_file_freshness_check_ms =
+                    Some(freshness_start.elapsed().as_millis() as u64);
+                timings.last_file_parse_extract_ms = Some(0);
+                timings.last_file_relationship_enrichment_ms = Some(0);
+                timings.last_file_db_write_ms = db_write_ms.or(Some(0));
+                timings.last_file_cache_update_ms = Some(0);
+            });
+            let visible_symbols = self.filter_visible_symbols(file_path, symbols);
+            let metrics = IndexFileMetrics {
+                anchors: 0,
+                relationships: 0,
+                total_ms: total_start.elapsed().as_millis() as u64,
+                load_ms,
+                freshness_check_ms: freshness_start.elapsed().as_millis() as u64,
+                parse_extract_ms: 0,
+                relationship_enrichment_ms: 0,
+                db_write_ms: db_write_ms.unwrap_or(0),
+                cache_update_ms: 0,
+            };
+            return Ok(IndexFileOutcome {
+                symbols: visible_symbols,
+                metrics,
+            });
         }
+        let freshness_ms = freshness_start.elapsed().as_millis() as u64;
 
         // Detect language and parse
         let Some(language) = snapshot
@@ -1335,12 +1554,19 @@ impl LanguageService {
             .or_else(|| Language::from_path(file_path))
         else {
             if is_anchor_only_index_file(file_path) {
+                let metrics = IndexFileMetrics {
+                    load_ms,
+                    freshness_check_ms: freshness_ms,
+                    ..IndexFileMetrics::default()
+                };
                 return self.index_anchor_only_file(
                     file_path,
                     &hash,
                     index_metadata,
                     snapshot.clone(),
                     content,
+                    total_start,
+                    metrics,
                 );
             }
             return Err(LanguageError::NotSupported(format!(
@@ -1349,6 +1575,7 @@ impl LanguageService {
             )));
         };
 
+        let parse_extract_start = std::time::Instant::now();
         let SymbolExtraction {
             symbols: extracted_symbols,
             mut relationships,
@@ -1356,38 +1583,23 @@ impl LanguageService {
             language: extraction_language,
         } = self.extract_file_symbols_and_relationships(file_path, &content, language)?;
         let symbols = self.with_file_root_symbol(file_path, &content, extracted_symbols);
-        self.canonicalize_import_relationships(file_path, &mut relationships);
-        self.append_module_export_relationships(
+        let parse_extract_ms = parse_extract_start.elapsed().as_millis() as u64;
+
+        let relationship_start = std::time::Instant::now();
+        self.enrich_symbol_relationships(
             file_path,
             extraction_content.as_ref(),
             extraction_language,
+            language,
             &symbols,
             &mut relationships,
-        );
-        if matches!(language, Language::Astro) {
-            self.append_astro_component_export_relationship(
-                file_path,
-                &symbols,
-                &mut relationships,
-            );
-        }
+        )?;
 
         // Delete old symbols and insert new ones
         let semantic_anchors = extract_semantic_anchors(file_path, &content);
-        let translation_call_aliases =
-            extract_translation_call_aliases(extraction_content.as_ref());
-        self.resolve_relationship_targets(
-            file_path,
-            extraction_language,
-            &symbols,
-            &mut relationships,
-            &translation_call_aliases,
-        )?;
-        Self::suppress_known_external_relationships(
-            extraction_language,
-            &mut relationships,
-            &translation_call_aliases,
-        );
+        let relationship_ms = relationship_start.elapsed().as_millis() as u64;
+
+        let db_write_start = std::time::Instant::now();
         self.symbol_store.replace_file_index(
             file_path,
             &hash,
@@ -1398,8 +1610,10 @@ impl LanguageService {
             &semantic_anchors,
             &relationships,
         )?;
+        let db_write_ms = db_write_start.elapsed().as_millis() as u64;
 
         // Update cache
+        let cache_start = std::time::Instant::now();
         {
             let mut cache = self.file_cache.write().unwrap();
             cache.insert(
@@ -1411,8 +1625,35 @@ impl LanguageService {
                 },
             );
         }
+        let cache_update_ms = cache_start.elapsed().as_millis() as u64;
+        self.update_index_timings(|timings| {
+            timings.last_file_path = Some(file_path.to_string());
+            timings.last_file_total_ms = Some(total_start.elapsed().as_millis() as u64);
+            timings.last_file_load_ms = Some(load_ms);
+            timings.last_file_freshness_check_ms = Some(freshness_ms);
+            timings.last_file_parse_extract_ms = Some(parse_extract_ms);
+            timings.last_file_relationship_enrichment_ms = Some(relationship_ms);
+            timings.last_file_db_write_ms = Some(db_write_ms);
+            timings.last_file_cache_update_ms = Some(cache_update_ms);
+        });
 
-        Ok(self.filter_visible_symbols(file_path, symbols))
+        let visible_symbols = self.filter_visible_symbols(file_path, symbols);
+        let metrics = IndexFileMetrics {
+            anchors: semantic_anchors.len(),
+            relationships: relationships.len(),
+            total_ms: total_start.elapsed().as_millis() as u64,
+            load_ms,
+            freshness_check_ms: freshness_ms,
+            parse_extract_ms,
+            relationship_enrichment_ms: relationship_ms,
+            db_write_ms,
+            cache_update_ms,
+        };
+
+        Ok(IndexFileOutcome {
+            symbols: visible_symbols,
+            metrics,
+        })
     }
 
     fn index_anchor_only_file(
@@ -1422,8 +1663,11 @@ impl LanguageService {
         index_metadata: Option<FileIndexMetadata>,
         snapshot: Arc<BufferSnapshot>,
         content: &str,
-    ) -> Result<Vec<Symbol>, LanguageError> {
+        total_start: std::time::Instant,
+        mut metrics: IndexFileMetrics,
+    ) -> Result<IndexFileOutcome, LanguageError> {
         let anchors = extract_semantic_anchors(file_path, content);
+        let db_write_start = std::time::Instant::now();
         self.symbol_store.replace_file_index(
             file_path,
             hash,
@@ -1434,7 +1678,9 @@ impl LanguageService {
             &anchors,
             &[],
         )?;
+        metrics.db_write_ms = db_write_start.elapsed().as_millis() as u64;
 
+        let cache_start = std::time::Instant::now();
         let mut cache = self.file_cache.write().unwrap();
         cache.insert(
             file_path.to_string(),
@@ -1444,11 +1690,37 @@ impl LanguageService {
                 symbols: Vec::new(),
             },
         );
+        metrics.cache_update_ms = cache_start.elapsed().as_millis() as u64;
+        metrics.anchors = anchors.len();
+        metrics.total_ms = total_start.elapsed().as_millis() as u64;
 
-        Ok(Vec::new())
+        self.update_index_timings(|timings| {
+            timings.last_file_path = Some(file_path.to_string());
+            timings.last_file_total_ms = Some(metrics.total_ms);
+            timings.last_file_load_ms = Some(metrics.load_ms);
+            timings.last_file_freshness_check_ms = Some(metrics.freshness_check_ms);
+            timings.last_file_parse_extract_ms = Some(metrics.parse_extract_ms);
+            timings.last_file_relationship_enrichment_ms = Some(metrics.relationship_enrichment_ms);
+            timings.last_file_db_write_ms = Some(metrics.db_write_ms);
+            timings.last_file_cache_update_ms = Some(metrics.cache_update_ms);
+        });
+
+        Ok(IndexFileOutcome {
+            symbols: Vec::new(),
+            metrics,
+        })
     }
 
     fn stage_file_index(&self, file_path: &str) -> Result<StagedFileIndex, LanguageError> {
+        Ok(self.stage_file_index_with_metrics(file_path)?.staged)
+    }
+
+    fn stage_file_index_with_metrics(
+        &self,
+        file_path: &str,
+    ) -> Result<StagedFileIndexOutcome, LanguageError> {
+        let total_start = std::time::Instant::now();
+        let load_start = std::time::Instant::now();
         let disk_metadata = file_index_metadata(&self.resolve_path(file_path)).ok();
         let snapshot = self.load_snapshot_for_indexing(file_path)?;
         let content = snapshot.content().to_string();
@@ -1458,14 +1730,17 @@ impl LanguageService {
         } else {
             disk_metadata
         };
+        let load_ms = load_start.elapsed().as_millis() as u64;
 
         let Some(language) = snapshot
             .language()
             .or_else(|| Language::from_path(file_path))
         else {
             if is_anchor_only_index_file(file_path) {
+                let parse_extract_start = std::time::Instant::now();
                 let anchors = extract_semantic_anchors(file_path, &content);
-                return Ok(StagedFileIndex {
+                let parse_extract_ms = parse_extract_start.elapsed().as_millis() as u64;
+                let staged = StagedFileIndex {
                     file_path: file_path.to_string(),
                     hash,
                     file_size: index_metadata.map(|metadata| metadata.file_size),
@@ -1478,6 +1753,16 @@ impl LanguageService {
                     extraction_language: Language::Markdown,
                     source_language: Language::Markdown,
                     snapshot,
+                };
+                return Ok(StagedFileIndexOutcome {
+                    metrics: IndexFileMetrics {
+                        anchors: staged.anchors.len(),
+                        total_ms: total_start.elapsed().as_millis() as u64,
+                        load_ms,
+                        parse_extract_ms,
+                        ..IndexFileMetrics::default()
+                    },
+                    staged,
                 });
             }
             return Err(LanguageError::NotSupported(format!(
@@ -1486,6 +1771,7 @@ impl LanguageService {
             )));
         };
 
+        let parse_extract_start = std::time::Instant::now();
         let SymbolExtraction {
             symbols: extracted_symbols,
             mut relationships,
@@ -1495,8 +1781,9 @@ impl LanguageService {
         let symbols = self.with_file_root_symbol(file_path, &content, extracted_symbols);
         self.canonicalize_import_relationships(file_path, &mut relationships);
         let anchors = extract_semantic_anchors(file_path, &content);
+        let parse_extract_ms = parse_extract_start.elapsed().as_millis() as u64;
 
-        Ok(StagedFileIndex {
+        let staged = StagedFileIndex {
             file_path: file_path.to_string(),
             hash,
             file_size: index_metadata.map(|metadata| metadata.file_size),
@@ -1509,6 +1796,17 @@ impl LanguageService {
             extraction_language,
             source_language: language,
             snapshot,
+        };
+        Ok(StagedFileIndexOutcome {
+            metrics: IndexFileMetrics {
+                anchors: staged.anchors.len(),
+                relationships: staged.relationships.len(),
+                total_ms: total_start.elapsed().as_millis() as u64,
+                load_ms,
+                parse_extract_ms,
+                ..IndexFileMetrics::default()
+            },
+            staged,
         })
     }
 
@@ -1516,8 +1814,17 @@ impl LanguageService {
         &self,
         staged_files: &[StagedFileIndex],
     ) -> Result<usize, LanguageError> {
+        Ok(self
+            .commit_staged_file_indexes_with_metrics(staged_files)?
+            .suppressed_external_relationships)
+    }
+
+    fn commit_staged_file_indexes_with_metrics(
+        &self,
+        staged_files: &[StagedFileIndex],
+    ) -> Result<CommitStagedFileMetrics, LanguageError> {
         if staged_files.is_empty() {
-            return Ok(0);
+            return Ok(CommitStagedFileMetrics::default());
         }
 
         let initial_records = staged_files
@@ -1552,49 +1859,40 @@ impl LanguageService {
             })
             .collect::<Vec<_>>();
 
+        let initial_db_write_start = std::time::Instant::now();
         self.symbol_store.replace_file_indexes(&initial_records)?;
+        let mut db_write_ms = initial_db_write_start.elapsed().as_millis() as u64;
 
         let mut final_relationship_records = Vec::with_capacity(staged_files.len());
         let mut suppressed_external_relationships = 0usize;
+        let relationship_start = std::time::Instant::now();
         for file in staged_files {
             let mut relationships = file.relationships.clone();
-            self.append_module_export_relationships(
+            suppressed_external_relationships += self.enrich_symbol_relationships(
                 &file.file_path,
                 &file.extraction_content,
                 file.extraction_language,
+                file.source_language,
                 &file.symbols,
                 &mut relationships,
-            );
-            if matches!(file.source_language, Language::Astro) {
-                self.append_astro_component_export_relationship(
-                    &file.file_path,
-                    &file.symbols,
-                    &mut relationships,
-                );
-            }
-            let translation_call_aliases =
-                extract_translation_call_aliases(&file.extraction_content);
-            self.resolve_relationship_targets(
-                &file.file_path,
-                file.extraction_language,
-                &file.symbols,
-                &mut relationships,
-                &translation_call_aliases,
             )?;
-            suppressed_external_relationships += Self::suppress_known_external_relationships(
-                file.extraction_language,
-                &mut relationships,
-                &translation_call_aliases,
-            );
             final_relationship_records.push(FileRelationshipRecord {
                 file_path: file.file_path.clone(),
                 relationships,
             });
         }
+        let relationship_enrichment_ms = relationship_start.elapsed().as_millis() as u64;
+        let relationship_count = final_relationship_records
+            .iter()
+            .map(|record| record.relationships.len())
+            .sum::<usize>();
 
+        let relationship_db_write_start = std::time::Instant::now();
         self.symbol_store
             .replace_relationships_for_files(&final_relationship_records)?;
+        db_write_ms += relationship_db_write_start.elapsed().as_millis() as u64;
 
+        let cache_start = std::time::Instant::now();
         let mut cache = self.file_cache.write().unwrap();
         for file in staged_files {
             cache.insert(
@@ -1606,37 +1904,120 @@ impl LanguageService {
                 },
             );
         }
+        let cache_update_ms = cache_start.elapsed().as_millis() as u64;
 
-        Ok(suppressed_external_relationships)
+        Ok(CommitStagedFileMetrics {
+            suppressed_external_relationships,
+            relationship_count,
+            relationship_enrichment_ms,
+            db_write_ms,
+            cache_update_ms,
+        })
     }
 
     /// Index an entire directory recursively
     pub fn index_directory(&self, dir_path: &str) -> Result<IndexStats, LanguageError> {
         let mut stats = IndexStats::default();
         let start = std::time::Instant::now();
+        let discovery_start = std::time::Instant::now();
+        let discovery_report = self.supported_language_discovery(dir_path);
+        let discovery_ms = discovery_start.elapsed().as_millis() as u64;
+        let files = discovery_report.files;
 
-        if let Some(store) = self.worktree_store.read().unwrap().clone() {
-            for relative_path in store.supported_language_files(dir_path) {
-                match self.index_file(&relative_path) {
-                    Ok(symbols) => {
+        self.update_index_timings(|timings| {
+            timings.last_discovery_ms = Some(discovery_ms);
+        });
+
+        stats.files_discovered = discovery_report.discovered_files;
+        stats.supported_files = files.len();
+        stats.supported_by_language = language_counts_for_paths(&files);
+        stats.skipped_by_reason = skip_counts_from_map(&discovery_report.skipped_by_reason);
+        let indexed_files = self.symbol_store.list_all_indexed_files()?;
+        let indexed_map = indexed_files
+            .iter()
+            .map(|record| (record.file_path.clone(), record.clone()))
+            .collect::<HashMap<_, _>>();
+        let mut staged_files = Vec::new();
+
+        for relative_path in &files {
+            let needs_index = match indexed_map.get(relative_path) {
+                Some(record) => self.indexed_file_needs_refresh(relative_path, record, true)?,
+                None => true,
+            };
+
+            if !needs_index {
+                match self.index_file_with_metrics(relative_path) {
+                    Ok(outcome) => {
                         stats.files_indexed += 1;
-                        stats.symbols_extracted += symbols.len();
+                        stats.symbols_extracted += outcome.symbols.len();
+                        stats.files_fresh += 1;
+                        stats.anchors_extracted += outcome.metrics.anchors;
+                        stats.relationships_extracted += outcome.metrics.relationships;
+                        stats.load_ms += outcome.metrics.load_ms;
+                        stats.freshness_check_ms += outcome.metrics.freshness_check_ms;
+                        stats.parse_extract_ms += outcome.metrics.parse_extract_ms;
+                        stats.relationship_enrichment_ms +=
+                            outcome.metrics.relationship_enrichment_ms;
+                        stats.db_write_ms += outcome.metrics.db_write_ms;
+                        stats.cache_update_ms += outcome.metrics.cache_update_ms;
                     }
                     Err(_) => {
                         stats.files_failed += 1;
                     }
                 }
+                continue;
             }
-        } else {
-            let full_path = self.resolve_path(dir_path);
 
-            // Create gitignore filter if enabled
-            let gitignore_filter = self.create_gitignore_filter();
+            match self.stage_file_index_with_metrics(relative_path) {
+                Ok(outcome) => {
+                    stats.files_indexed += 1;
+                    stats.symbols_extracted += self
+                        .filter_visible_symbols(relative_path, outcome.staged.symbols.clone())
+                        .len();
+                    stats.files_reindexed += 1;
+                    stats.anchors_extracted += outcome.metrics.anchors;
+                    stats.load_ms += outcome.metrics.load_ms;
+                    stats.freshness_check_ms += outcome.metrics.freshness_check_ms;
+                    stats.parse_extract_ms += outcome.metrics.parse_extract_ms;
+                    staged_files.push(outcome.staged);
+                }
+                Err(_) => {
+                    stats.files_failed += 1;
+                }
+            }
+        }
 
-            self.index_directory_recursive(&full_path, "", &mut stats, gitignore_filter.as_ref())?;
+        if !staged_files.is_empty() {
+            let commit_metrics = self.commit_staged_file_indexes_with_metrics(&staged_files)?;
+            stats.relationships_extracted += commit_metrics.relationship_count;
+            stats.relationship_enrichment_ms += commit_metrics.relationship_enrichment_ms;
+            stats.db_write_ms += commit_metrics.db_write_ms;
+            stats.cache_update_ms += commit_metrics.cache_update_ms;
         }
 
         stats.duration_ms = start.elapsed().as_millis() as u64;
+        self.update_index_discovery(IndexDiscoverySnapshot {
+            last_scope: Some(dir_path.to_string()),
+            last_discovered_files: stats.files_discovered,
+            last_supported_files: stats.supported_files,
+            last_indexed_files: stats.files_indexed,
+            last_failed_files: stats.files_failed,
+            last_fresh_files: stats.files_fresh,
+            last_reindexed_files: stats.files_reindexed,
+            last_symbols_extracted: stats.symbols_extracted,
+            last_anchors_extracted: stats.anchors_extracted,
+            last_relationships_extracted: stats.relationships_extracted,
+            supported_by_language: stats.supported_by_language.clone(),
+            skipped_by_reason: stats.skipped_by_reason.clone(),
+        });
+        self.update_index_timings(|timings| {
+            timings.last_batch_load_ms = Some(stats.load_ms);
+            timings.last_batch_freshness_check_ms = Some(stats.freshness_check_ms);
+            timings.last_batch_parse_extract_ms = Some(stats.parse_extract_ms);
+            timings.last_batch_relationship_enrichment_ms = Some(stats.relationship_enrichment_ms);
+            timings.last_batch_db_write_ms = Some(stats.db_write_ms);
+            timings.last_batch_cache_update_ms = Some(stats.cache_update_ms);
+        });
         Ok(stats)
     }
 
@@ -1651,67 +2032,6 @@ impl LanguageService {
 
         // Create filter to respect .gitignore
         Some(GitignoreFilter::new(&self.workspace_root))
-    }
-
-    fn index_directory_recursive(
-        &self,
-        base_path: &Path,
-        relative_path: &str,
-        stats: &mut IndexStats,
-        gitignore_filter: Option<&GitignoreFilter>,
-    ) -> Result<(), LanguageError> {
-        let dir_path = if relative_path.is_empty() {
-            base_path.to_path_buf()
-        } else {
-            base_path.join(relative_path)
-        };
-
-        if !dir_path.exists() || !dir_path.is_dir() {
-            return Ok(());
-        }
-
-        for entry in std::fs::read_dir(&dir_path)? {
-            let entry = entry?;
-            let path = entry.path();
-            let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-
-            // Skip hidden files/dirs (always skip .git regardless of gitignore setting)
-            if file_name.starts_with('.') {
-                continue;
-            }
-
-            // Check gitignore filter
-            if let Some(filter) = gitignore_filter {
-                if filter.should_ignore(&path) {
-                    continue;
-                }
-            }
-
-            let relative = if relative_path.is_empty() {
-                file_name.to_string()
-            } else {
-                format!("{}/{}", relative_path, file_name)
-            };
-
-            if path.is_dir() {
-                self.index_directory_recursive(base_path, &relative, stats, gitignore_filter)?;
-            } else if path.is_file() {
-                // Check if it's a supported language
-                if is_supported_index_file(&relative) {
-                    match self.index_file(&relative) {
-                        Ok(symbols) => {
-                            stats.files_indexed += 1;
-                            stats.symbols_extracted += symbols.len();
-                        }
-                        Err(_) => {
-                            stats.files_failed += 1;
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(())
     }
 
     /// Search symbols by query
@@ -2048,6 +2368,7 @@ impl LanguageService {
             SymbolRelationshipType::Extends,
             SymbolRelationshipType::Implements,
             SymbolRelationshipType::Contains,
+            SymbolRelationshipType::Usage,
         ] {
             let graph = self.get_symbol_graph(&seed, relationship, per_relationship_limit)?;
 
@@ -2321,6 +2642,110 @@ impl LanguageService {
         }
     }
 
+    fn append_stylesheet_usage_relationships(
+        &self,
+        file_path: &str,
+        content: &str,
+        language: Language,
+        symbols: &[Symbol],
+        relationships: &mut Vec<SymbolRelationship>,
+    ) {
+        if !matches!(
+            language,
+            Language::TypeScript | Language::Tsx | Language::JavaScript | Language::Jsx
+        ) {
+            return;
+        }
+
+        let css_module_aliases = stylesheet_module_aliases(content);
+        let mut seen = relationships
+            .iter()
+            .map(|relationship| {
+                (
+                    relationship.source_symbol_id.clone(),
+                    relationship.target_name.clone(),
+                    relationship.relationship_type,
+                    relationship.line,
+                )
+            })
+            .collect::<HashSet<_>>();
+
+        for usage in stylesheet_class_usages(content, &css_module_aliases) {
+            let Some(source_symbol) = source_symbol_for_usage_line(symbols, usage.line) else {
+                continue;
+            };
+            let key = (
+                source_symbol.id.clone(),
+                usage.selector.clone(),
+                SymbolRelationshipType::Usage,
+                usage.line,
+            );
+            if seen.insert(key) {
+                relationships.push(SymbolRelationship {
+                    source_symbol_id: source_symbol.id.clone(),
+                    source_file_path: file_path.to_string(),
+                    target_name: usage.selector,
+                    target_symbol_id: None,
+                    relationship_type: SymbolRelationshipType::Usage,
+                    line: usage.line,
+                });
+            }
+        }
+    }
+
+    fn append_stylesheet_custom_property_usage_relationships(
+        &self,
+        file_path: &str,
+        content: &str,
+        language: Language,
+        symbols: &[Symbol],
+        relationships: &mut Vec<SymbolRelationship>,
+    ) {
+        if !language.is_stylesheet_scanner() {
+            return;
+        }
+
+        let mut seen = relationships
+            .iter()
+            .map(|relationship| {
+                (
+                    relationship.source_symbol_id.clone(),
+                    relationship.target_name.clone(),
+                    relationship.relationship_type,
+                    relationship.line,
+                )
+            })
+            .collect::<HashSet<_>>();
+
+        for usage in stylesheet_custom_property_usages(content) {
+            let Some(source_symbol) =
+                stylesheet_source_symbol_for_usage_line(symbols, usage.line, &usage.name)
+            else {
+                continue;
+            };
+            if source_symbol.name == usage.name {
+                continue;
+            }
+
+            let key = (
+                source_symbol.id.clone(),
+                usage.name.clone(),
+                SymbolRelationshipType::Usage,
+                usage.line,
+            );
+            if seen.insert(key) {
+                relationships.push(SymbolRelationship {
+                    source_symbol_id: source_symbol.id.clone(),
+                    source_file_path: file_path.to_string(),
+                    target_name: usage.name,
+                    target_symbol_id: None,
+                    relationship_type: SymbolRelationshipType::Usage,
+                    line: usage.line,
+                });
+            }
+        }
+    }
+
     fn resolve_import_target(&self, file_path: &str, import_target: &str) -> Option<String> {
         if import_target.is_empty() {
             return None;
@@ -2362,7 +2787,9 @@ impl LanguageService {
         if base_path.extension().is_some() {
             candidates.push(base_path.to_path_buf());
         } else {
-            for extension in ["ts", "tsx", "astro", "js", "jsx", "py", "rs", "go"] {
+            for extension in [
+                "ts", "tsx", "astro", "js", "jsx", "py", "rs", "go", "css", "scss", "sass", "less",
+            ] {
                 candidates.push(base_path.with_extension(extension));
             }
 
@@ -2450,10 +2877,20 @@ impl LanguageService {
     }
 
     fn supported_language_files(&self, scope: &str) -> Vec<String> {
+        self.supported_language_discovery(scope).files
+    }
+
+    fn supported_language_discovery(&self, scope: &str) -> DiscoveryReport {
         if let Some(store) = self.worktree_store.read().unwrap().clone() {
-            return store.supported_language_files(scope);
+            let files = store.supported_language_files(scope);
+            return DiscoveryReport {
+                discovered_files: files.len(),
+                files,
+                skipped_by_reason: BTreeMap::new(),
+            };
         }
 
+        let mut report = DiscoveryReport::default();
         let mut files = Vec::new();
         let root = self.resolve_path(scope);
         let scope_prefix = if scope.is_empty() || scope == "." {
@@ -2467,8 +2904,10 @@ impl LanguageService {
             &scope_prefix,
             gitignore_filter.as_ref(),
             &mut files,
+            &mut report,
         );
-        files
+        report.files = files;
+        report
     }
 
     fn collect_supported_language_files_recursive(
@@ -2477,8 +2916,13 @@ impl LanguageService {
         relative_path: &str,
         gitignore_filter: Option<&GitignoreFilter>,
         files: &mut Vec<String>,
+        report: &mut DiscoveryReport,
     ) {
         let Ok(entries) = std::fs::read_dir(dir_path) else {
+            *report
+                .skipped_by_reason
+                .entry("read_dir_failed".to_string())
+                .or_default() += 1;
             return;
         };
 
@@ -2491,10 +2935,18 @@ impl LanguageService {
                     "node_modules" | "target" | "dist" | "build" | "vendor"
                 )
             {
+                *report
+                    .skipped_by_reason
+                    .entry("ignored_directory".to_string())
+                    .or_default() += 1;
                 continue;
             }
             if let Some(filter) = gitignore_filter {
                 if filter.should_ignore(&path) {
+                    *report
+                        .skipped_by_reason
+                        .entry("gitignored".to_string())
+                        .or_default() += 1;
                     continue;
                 }
             }
@@ -2511,9 +2963,18 @@ impl LanguageService {
                     &relative,
                     gitignore_filter,
                     files,
+                    report,
                 );
-            } else if path.is_file() && is_supported_index_file(&relative) {
-                files.push(relative);
+            } else if path.is_file() {
+                report.discovered_files += 1;
+                if is_supported_index_file(&relative) {
+                    files.push(relative);
+                } else {
+                    *report
+                        .skipped_by_reason
+                        .entry("unsupported_language".to_string())
+                        .or_default() += 1;
+                }
             }
         }
     }
@@ -2626,7 +3087,8 @@ impl LanguageService {
             SymbolRelationshipType::Call
             | SymbolRelationshipType::Export
             | SymbolRelationshipType::Extends
-            | SymbolRelationshipType::Implements => {
+            | SymbolRelationshipType::Implements
+            | SymbolRelationshipType::Usage => {
                 if reference.target_symbol_id.as_deref() == Some(symbol.id.as_str()) {
                     return Ok(true);
                 }
@@ -3068,7 +3530,17 @@ impl LanguageService {
                     | "strip"
                     | "values"
             ),
-            Language::Markdown => false,
+            Language::Markdown
+            | Language::Css
+            | Language::Scss
+            | Language::Sass
+            | Language::Less
+            | Language::Html
+            | Language::Vue
+            | Language::Svelte
+            | Language::Json
+            | Language::Yaml
+            | Language::Toml => false,
         }
     }
 
@@ -3150,7 +3622,17 @@ impl LanguageService {
                     | "set"
                     | "str"
             ),
-            Language::Markdown => false,
+            Language::Markdown
+            | Language::Css
+            | Language::Scss
+            | Language::Sass
+            | Language::Less
+            | Language::Html
+            | Language::Vue
+            | Language::Svelte
+            | Language::Json
+            | Language::Yaml
+            | Language::Toml => false,
         }
     }
 
@@ -3190,39 +3672,18 @@ impl LanguageService {
             language: extraction_language,
         } = self.extract_file_symbols_and_relationships(file_path, snapshot.content(), language)?;
         let symbols = self.with_file_root_symbol(file_path, snapshot.content(), extracted_symbols);
-        self.canonicalize_import_relationships(file_path, &mut relationships);
-        self.append_module_export_relationships(
+        self.enrich_symbol_relationships(
             file_path,
             extraction_content.as_ref(),
             extraction_language,
+            language,
             &symbols,
             &mut relationships,
-        );
-        if matches!(language, Language::Astro) {
-            self.append_astro_component_export_relationship(
-                file_path,
-                &symbols,
-                &mut relationships,
-            );
-        }
+        )?;
 
         // Delete old symbols and insert new ones
         self.symbol_store.delete_file_symbols(file_path)?;
         self.symbol_store.upsert_symbols(&symbols)?;
-        let translation_call_aliases =
-            extract_translation_call_aliases(extraction_content.as_ref());
-        self.resolve_relationship_targets(
-            file_path,
-            extraction_language,
-            &symbols,
-            &mut relationships,
-            &translation_call_aliases,
-        )?;
-        Self::suppress_known_external_relationships(
-            extraction_language,
-            &mut relationships,
-            &translation_call_aliases,
-        );
         self.symbol_store
             .replace_relationships_for_file(file_path, &relationships)?;
         self.symbol_store.mark_file_indexed_with_metadata(
@@ -3290,11 +3751,26 @@ impl LanguageService {
 
     /// Get statistics about the index
     pub fn stats(&self) -> Result<IndexStats, LanguageError> {
+        let supported_files = self.supported_language_files(".");
         Ok(IndexStats {
             files_indexed: self.symbol_store.file_count()?,
             symbols_extracted: self.symbol_store.count()?,
             files_failed: 0,
             duration_ms: 0,
+            files_discovered: supported_files.len(),
+            supported_files: supported_files.len(),
+            files_fresh: 0,
+            files_reindexed: 0,
+            anchors_extracted: 0,
+            relationships_extracted: 0,
+            load_ms: 0,
+            freshness_check_ms: 0,
+            parse_extract_ms: 0,
+            relationship_enrichment_ms: 0,
+            db_write_ms: 0,
+            cache_update_ms: 0,
+            supported_by_language: language_counts_for_paths(&supported_files),
+            skipped_by_reason: Vec::new(),
         })
     }
 
@@ -3533,7 +4009,8 @@ impl LanguageService {
             )?,
             SymbolRelationshipType::Export
             | SymbolRelationshipType::Extends
-            | SymbolRelationshipType::Implements => {
+            | SymbolRelationshipType::Implements
+            | SymbolRelationshipType::Usage => {
                 self.find_relationship_references_to_symbol(symbol, relationship_type, limit)?
             }
             SymbolRelationshipType::Contains => self.get_containment_incoming(symbol)?,
@@ -4315,7 +4792,17 @@ impl LanguageService {
                 python_is_exported_name(content, &symbol.name).then(|| symbol.name.clone())
             }
             Language::Go => go_is_exported_name(&symbol.name).then(|| symbol.name.clone()),
-            Language::Markdown => None,
+            Language::Markdown
+            | Language::Css
+            | Language::Scss
+            | Language::Sass
+            | Language::Less
+            | Language::Html
+            | Language::Vue
+            | Language::Svelte
+            | Language::Json
+            | Language::Yaml
+            | Language::Toml => None,
         }
     }
 }
@@ -4343,6 +4830,20 @@ pub struct IndexStats {
     pub symbols_extracted: usize,
     pub files_failed: usize,
     pub duration_ms: u64,
+    pub files_discovered: usize,
+    pub supported_files: usize,
+    pub files_fresh: usize,
+    pub files_reindexed: usize,
+    pub anchors_extracted: usize,
+    pub relationships_extracted: usize,
+    pub load_ms: u64,
+    pub freshness_check_ms: u64,
+    pub parse_extract_ms: u64,
+    pub relationship_enrichment_ms: u64,
+    pub db_write_ms: u64,
+    pub cache_update_ms: u64,
+    pub supported_by_language: Vec<IndexLanguageCount>,
+    pub skipped_by_reason: Vec<IndexSkipCount>,
 }
 
 /// Compute a simple hash of content for change detection
@@ -5100,11 +5601,14 @@ fn is_semantic_anchor_value(value: &str) -> bool {
 }
 
 fn is_supported_index_file(file_path: &str) -> bool {
-    Language::from_path(file_path).is_some() || is_anchor_only_index_file(file_path)
+    if Language::capability_for_path(file_path).is_some() {
+        return !is_known_non_config_resource_path(&file_path.replace('\\', "/").to_lowercase());
+    }
+    is_anchor_only_index_file(file_path)
 }
 
 fn is_anchor_only_index_file(file_path: &str) -> bool {
-    Language::from_path(file_path).is_none() && is_translation_resource_path(file_path)
+    Language::capability_for_path(file_path).is_none() && is_translation_resource_path(file_path)
 }
 
 fn is_translation_resource_path(file_path: &str) -> bool {
@@ -5163,6 +5667,22 @@ fn is_known_non_translation_resource_path(lower_path: &str) -> bool {
         "deno.json",
         "deno.lock",
         "bun.lockb",
+    ]
+    .iter()
+    .any(|suffix| lower_path.ends_with(suffix))
+}
+
+fn is_known_non_config_resource_path(lower_path: &str) -> bool {
+    [
+        "package-lock.json",
+        "npm-shrinkwrap.json",
+        "composer.lock",
+        "deno.lock",
+        "bun.lock",
+        "bun.lockb",
+        "pnpm-lock.yaml",
+        "pnpm-lock.yml",
+        "yarn.lock",
     ]
     .iter()
     .any(|suffix| lower_path.ends_with(suffix))
@@ -5244,6 +5764,393 @@ fn search_confidence(results: &[SearchResult]) -> String {
     }
 }
 
+#[derive(Debug, Clone)]
+struct StylesheetClassUsage {
+    selector: String,
+    line: u32,
+}
+
+#[derive(Debug, Clone)]
+struct StylesheetCustomPropertyUsage {
+    name: String,
+    line: u32,
+}
+
+fn stylesheet_module_aliases(content: &str) -> HashSet<String> {
+    let mut aliases = HashSet::new();
+    for line in content.lines() {
+        if !line.contains(".module.") || !line.contains(" from ") {
+            continue;
+        }
+        let trimmed = line.trim_start();
+        let Some(import_tail) = trimmed.strip_prefix("import ") else {
+            continue;
+        };
+        let Some((binding, _)) = import_tail.split_once(" from ") else {
+            continue;
+        };
+        let binding = binding.trim();
+        if let Some(alias) = binding.strip_prefix("* as ") {
+            if let Some(alias) = css_module_alias_token(alias) {
+                aliases.insert(alias.to_string());
+            }
+        } else if let Some(alias) =
+            css_module_alias_token(binding.split(',').next().unwrap_or(binding))
+        {
+            aliases.insert(alias.to_string());
+        }
+    }
+    aliases
+}
+
+fn css_module_alias_token(value: &str) -> Option<&str> {
+    let token = value.trim();
+    let end = token
+        .char_indices()
+        .find_map(|(index, ch)| {
+            (!ch.is_ascii_alphanumeric() && ch != '_' && ch != '$').then_some(index)
+        })
+        .unwrap_or(token.len());
+    let token = &token[..end];
+    (!token.is_empty()).then_some(token)
+}
+
+fn stylesheet_class_usages(
+    content: &str,
+    css_module_aliases: &HashSet<String>,
+) -> Vec<StylesheetClassUsage> {
+    let mut usages = Vec::new();
+    let mut seen = HashSet::<(String, u32)>::new();
+
+    for (line_index, line) in content.lines().enumerate() {
+        let line_number = line_index as u32;
+        for class_name in class_name_literal_tokens(line) {
+            let selector = format!(".{}", class_name.trim_start_matches('.'));
+            if seen.insert((selector.clone(), line_number)) {
+                usages.push(StylesheetClassUsage {
+                    selector,
+                    line: line_number,
+                });
+            }
+        }
+
+        for alias in css_module_aliases {
+            for class_name in css_module_member_tokens(line, alias) {
+                let selector = format!(".{}", class_name);
+                if seen.insert((selector.clone(), line_number)) {
+                    usages.push(StylesheetClassUsage {
+                        selector,
+                        line: line_number,
+                    });
+                }
+            }
+        }
+
+        for class_name in class_composition_helper_tokens(line) {
+            let selector = format!(".{}", class_name.trim_start_matches('.'));
+            if seen.insert((selector.clone(), line_number)) {
+                usages.push(StylesheetClassUsage {
+                    selector,
+                    line: line_number,
+                });
+            }
+        }
+    }
+
+    usages
+}
+
+fn stylesheet_custom_property_usages(content: &str) -> Vec<StylesheetCustomPropertyUsage> {
+    let mut usages = Vec::new();
+    let mut seen = HashSet::<(String, u32)>::new();
+
+    for (line_index, line) in content.lines().enumerate() {
+        let line_number = line_index as u32;
+        for name in css_var_function_tokens(line) {
+            if seen.insert((name.clone(), line_number)) {
+                usages.push(StylesheetCustomPropertyUsage {
+                    name,
+                    line: line_number,
+                });
+            }
+        }
+    }
+
+    usages
+}
+
+fn css_var_function_tokens(line: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut search_start = 0usize;
+
+    while let Some(relative_index) = line[search_start..].find("var(") {
+        let value_start = search_start + relative_index + "var(".len();
+        let Some(value_end_relative) = line[value_start..].find(')') else {
+            break;
+        };
+        let value = &line[value_start..value_start + value_end_relative];
+        let token = value
+            .split(',')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .trim_matches(['\'', '"']);
+        if is_css_custom_property_token(token) {
+            tokens.push(token.to_string());
+        }
+        search_start = value_start + value_end_relative + 1;
+    }
+
+    tokens
+}
+
+fn class_name_literal_tokens(line: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut search_start = 0usize;
+    while let Some(relative_index) = line[search_start..].find("className") {
+        let class_name_index = search_start + relative_index;
+        let Some(equals_relative) = line[class_name_index..].find('=') else {
+            break;
+        };
+        let after_equals = class_name_index + equals_relative + 1;
+        let Some((quote_index, quote)) = first_quote_after(&line[after_equals..]) else {
+            search_start = after_equals;
+            continue;
+        };
+        let value_start = after_equals + quote_index + quote.len_utf8();
+        let Some(value_end_relative) = line[value_start..].find(quote) else {
+            search_start = value_start;
+            continue;
+        };
+        let value = &line[value_start..value_start + value_end_relative];
+        for token in value
+            .split_whitespace()
+            .filter(|token| is_css_class_token(token))
+        {
+            tokens.push(token.trim_start_matches('.').to_string());
+        }
+        search_start = value_start + value_end_relative + quote.len_utf8();
+    }
+    tokens
+}
+
+fn first_quote_after(value: &str) -> Option<(usize, char)> {
+    value
+        .char_indices()
+        .find_map(|(index, ch)| (ch == '\'' || ch == '"' || ch == '`').then_some((index, ch)))
+}
+
+fn class_composition_helper_tokens(line: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    for helper in ["clsx", "classNames", "cn"] {
+        let call_prefix = format!("{helper}(");
+        let mut search_start = 0usize;
+        while let Some(relative_index) = line[search_start..].find(&call_prefix) {
+            let args_start = search_start + relative_index + call_prefix.len();
+            let args_end = matching_call_end(line, args_start).unwrap_or(line.len());
+            let args = &line[args_start..args_end];
+            for value in quoted_values(args) {
+                for token in value
+                    .split_whitespace()
+                    .filter(|token| is_css_class_token(token))
+                {
+                    tokens.push(token.trim_start_matches('.').to_string());
+                }
+            }
+            tokens.extend(class_composition_object_key_tokens(args));
+            search_start = args_end;
+        }
+    }
+    tokens
+}
+
+fn matching_call_end(line: &str, args_start: usize) -> Option<usize> {
+    let mut depth = 1usize;
+    let mut quote: Option<char> = None;
+
+    for (relative_index, ch) in line[args_start..].char_indices() {
+        if let Some(active_quote) = quote {
+            if ch == active_quote {
+                quote = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' | '"' | '`' => quote = Some(ch),
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(args_start + relative_index);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
+fn quoted_values(value: &str) -> Vec<&str> {
+    let mut values = Vec::new();
+    let mut remainder = value;
+
+    while let Some((quote_index, quote)) = first_quote_after(remainder) {
+        let value_start = quote_index + quote.len_utf8();
+        let Some(value_end_relative) = remainder[value_start..].find(quote) else {
+            break;
+        };
+        values.push(&remainder[value_start..value_start + value_end_relative]);
+        remainder = &remainder[value_start + value_end_relative + quote.len_utf8()..];
+    }
+
+    values
+}
+
+fn class_composition_object_key_tokens(args: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut search_start = 0usize;
+
+    while let Some(open_relative) = args[search_start..].find('{') {
+        let object_start = search_start + open_relative + 1;
+        let Some(close_relative) = args[object_start..].find('}') else {
+            break;
+        };
+        let object = &args[object_start..object_start + close_relative];
+        for entry in object.split(',') {
+            let Some((key, _)) = entry.split_once(':') else {
+                continue;
+            };
+            let key = key.trim().trim_matches(['\'', '"', '`']);
+            if is_css_class_token(key) {
+                tokens.push(key.trim_start_matches('.').to_string());
+            }
+        }
+        search_start = object_start + close_relative + 1;
+    }
+
+    tokens
+}
+
+fn css_module_member_tokens(line: &str, alias: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let dot_prefix = format!("{alias}.");
+    let mut search_start = 0usize;
+    while let Some(relative_index) = line[search_start..].find(&dot_prefix) {
+        let token_start = search_start + relative_index + dot_prefix.len();
+        let token_end = token_start
+            + line[token_start..]
+                .char_indices()
+                .find_map(|(index, ch)| (!is_css_identifier_char(ch)).then_some(index))
+                .unwrap_or(line[token_start..].len());
+        let token = &line[token_start..token_end];
+        if is_css_class_token(token) {
+            tokens.push(token.to_string());
+        }
+        search_start = token_end;
+    }
+
+    for quote in ['\'', '"'] {
+        let bracket_prefix = format!("{alias}[{quote}");
+        let mut search_start = 0usize;
+        while let Some(relative_index) = line[search_start..].find(&bracket_prefix) {
+            let token_start = search_start + relative_index + bracket_prefix.len();
+            let Some(token_end_relative) = line[token_start..].find(quote) else {
+                break;
+            };
+            let token = &line[token_start..token_start + token_end_relative];
+            if is_css_class_token(token) {
+                tokens.push(token.to_string());
+            }
+            search_start = token_start + token_end_relative + quote.len_utf8();
+        }
+    }
+
+    tokens
+}
+
+fn is_css_class_token(token: &str) -> bool {
+    let token = token.trim().trim_start_matches('.');
+    !token.is_empty()
+        && token.chars().any(|ch| ch.is_ascii_alphabetic())
+        && token.chars().all(is_css_identifier_char)
+        && !token.contains("${")
+}
+
+fn is_css_custom_property_token(token: &str) -> bool {
+    let Some(name) = token.strip_prefix("--") else {
+        return false;
+    };
+    name.len() >= 2
+        && name.chars().any(|ch| ch.is_ascii_alphabetic())
+        && name.chars().all(is_css_identifier_char)
+}
+
+fn is_css_identifier_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'
+}
+
+fn stylesheet_source_symbol_for_usage_line<'a>(
+    symbols: &'a [Symbol],
+    line: u32,
+    target_name: &str,
+) -> Option<&'a Symbol> {
+    if let Some(symbol) = symbols.iter().find(|symbol| {
+        symbol.symbol_type == SymbolType::CssCustomProperty
+            && symbol.name != target_name
+            && symbol.range.start.line == line
+    }) {
+        return Some(symbol);
+    }
+
+    symbols
+        .iter()
+        .filter(|symbol| {
+            matches!(
+                symbol.symbol_type,
+                SymbolType::CssSelector
+                    | SymbolType::CssKeyframes
+                    | SymbolType::CssAtRule
+                    | SymbolType::CssLayer
+                    | SymbolType::CssFontFace
+            ) && symbol.range.start.line <= line
+        })
+        .max_by_key(|symbol| (symbol.range.start.line, symbol.range.start.character))
+        .or_else(|| {
+            symbols
+                .iter()
+                .find(|symbol| LanguageService::is_synthetic_file_root_symbol(symbol))
+        })
+}
+
+fn source_symbol_for_usage_line(symbols: &[Symbol], line: u32) -> Option<&Symbol> {
+    let mut candidates = symbols
+        .iter()
+        .filter(|symbol| {
+            symbol.symbol_type != SymbolType::Import
+                && !LanguageService::is_synthetic_file_root_symbol(symbol)
+                && symbol.range.start.line <= line
+                && symbol.range.end.line >= line
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|symbol| {
+        (
+            symbol
+                .range
+                .end
+                .line
+                .saturating_sub(symbol.range.start.line),
+            symbol.range.start.character,
+        )
+    });
+    candidates.into_iter().next().or_else(|| {
+        symbols
+            .iter()
+            .find(|symbol| LanguageService::is_synthetic_file_root_symbol(symbol))
+    })
+}
+
 fn compute_hash(content: &str) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -5255,6 +6162,31 @@ fn compute_hash(content: &str) -> String {
 
 fn source_line_count(content: &str) -> usize {
     content.lines().count()
+}
+
+fn language_counts_for_paths(paths: &[String]) -> Vec<IndexLanguageCount> {
+    let mut counts = BTreeMap::<String, usize>::new();
+    for path in paths {
+        let language = Language::capability_for_path(path)
+            .map(|capability| capability.display_name)
+            .unwrap_or("Anchor-only")
+            .to_string();
+        *counts.entry(language).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .map(|(language, count)| IndexLanguageCount { language, count })
+        .collect()
+}
+
+fn skip_counts_from_map(counts: &BTreeMap<String, usize>) -> Vec<IndexSkipCount> {
+    counts
+        .iter()
+        .map(|(reason, count)| IndexSkipCount {
+            reason: reason.clone(),
+            count: *count,
+        })
+        .collect()
 }
 
 fn file_index_metadata(path: &Path) -> std::io::Result<FileIndexMetadata> {
@@ -5341,6 +6273,815 @@ fn extract_markdown_header_symbols(file_path: &str, content: &str) -> Vec<Symbol
     }
 
     symbols
+}
+
+fn extract_css_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
+    let mut symbols = Vec::new();
+    let mut seen = HashSet::new();
+    let mut byte_offset = 0usize;
+    let mut pending_selector = String::new();
+    let mut pending_selector_start_line = 0u32;
+    let mut pending_selector_start_byte = 0usize;
+    let mut brace_depth = 0i32;
+    let mut font_face_depth = 0i32;
+    let sass_indented = file_path.to_ascii_lowercase().ends_with(".sass");
+
+    for (line_index, segment) in content.split_inclusive('\n').enumerate() {
+        let line_start = byte_offset;
+        byte_offset += segment.len();
+
+        let line_without_lf = segment.strip_suffix('\n').unwrap_or(segment);
+        let line = line_without_lf
+            .strip_suffix('\r')
+            .unwrap_or(line_without_lf);
+        let line_number = line_index as u32;
+
+        for (name, start_char, end_char) in css_custom_properties_in_line(line) {
+            push_css_symbol(
+                &mut symbols,
+                &mut seen,
+                file_path,
+                name,
+                SymbolType::CssCustomProperty,
+                line_number,
+                start_char,
+                end_char,
+                line_start,
+                line,
+            );
+        }
+
+        if let Some((name, start_char, end_char)) = css_keyframes_in_line(line) {
+            push_css_symbol(
+                &mut symbols,
+                &mut seen,
+                file_path,
+                name,
+                SymbolType::CssKeyframes,
+                line_number,
+                start_char,
+                end_char,
+                line_start,
+                line,
+            );
+        }
+
+        if let Some((name, start_char, end_char)) = css_layer_in_line(line) {
+            push_css_symbol(
+                &mut symbols,
+                &mut seen,
+                file_path,
+                name,
+                SymbolType::CssLayer,
+                line_number,
+                start_char,
+                end_char,
+                line_start,
+                line,
+            );
+        }
+
+        if let Some((name, start_char, end_char)) = css_at_rule_anchor_in_line(line) {
+            push_css_symbol(
+                &mut symbols,
+                &mut seen,
+                file_path,
+                name,
+                SymbolType::CssAtRule,
+                line_number,
+                start_char,
+                end_char,
+                line_start,
+                line,
+            );
+        }
+
+        let starts_font_face = css_font_face_starts_in_line(line);
+        if starts_font_face || font_face_depth > 0 {
+            if let Some((name, start_char, end_char)) = css_font_family_in_line(line) {
+                push_css_symbol(
+                    &mut symbols,
+                    &mut seen,
+                    file_path,
+                    name,
+                    SymbolType::CssFontFace,
+                    line_number,
+                    start_char,
+                    end_char,
+                    line_start,
+                    line,
+                );
+            }
+        }
+        if starts_font_face {
+            font_face_depth = css_next_brace_depth(0, line);
+        } else if font_face_depth > 0 {
+            font_face_depth = css_next_brace_depth(font_face_depth, line);
+        }
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+            brace_depth = css_next_brace_depth(brace_depth, line);
+            continue;
+        }
+
+        if sass_indented && (trimmed.starts_with('.') || trimmed.starts_with('#')) {
+            let indent_chars = line.len().saturating_sub(line.trim_start().len());
+            for (name, start_char, end_char) in css_selectors_in_text(trimmed) {
+                push_css_symbol(
+                    &mut symbols,
+                    &mut seen,
+                    file_path,
+                    name,
+                    SymbolType::CssSelector,
+                    line_number,
+                    indent_chars.saturating_add(start_char),
+                    indent_chars.saturating_add(end_char),
+                    line_start,
+                    line,
+                );
+            }
+            continue;
+        }
+
+        if brace_depth == 0 {
+            if pending_selector.is_empty() {
+                pending_selector_start_line = line_number;
+                pending_selector_start_byte = line_start;
+            } else {
+                pending_selector.push(' ');
+            }
+            pending_selector.push_str(trimmed);
+
+            if let Some(open_brace_index) = pending_selector.find('{') {
+                let selector_text = pending_selector[..open_brace_index].to_string();
+                for (name, start_char, end_char) in css_selectors_in_text(&selector_text) {
+                    push_css_symbol(
+                        &mut symbols,
+                        &mut seen,
+                        file_path,
+                        name,
+                        SymbolType::CssSelector,
+                        pending_selector_start_line,
+                        start_char,
+                        end_char,
+                        pending_selector_start_byte,
+                        &selector_text,
+                    );
+                }
+                pending_selector.clear();
+            }
+        }
+
+        brace_depth = css_next_brace_depth(brace_depth, line);
+    }
+
+    symbols
+}
+
+fn extract_markup_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
+    let mut symbols = Vec::new();
+    let mut seen = HashSet::new();
+    let mut byte_offset = 0usize;
+
+    for (line_index, segment) in content.split_inclusive('\n').enumerate() {
+        let line_start = byte_offset;
+        byte_offset += segment.len();
+
+        let line_without_lf = segment.strip_suffix('\n').unwrap_or(segment);
+        let line = line_without_lf
+            .strip_suffix('\r')
+            .unwrap_or(line_without_lf);
+        let line_number = line_index as u32;
+
+        for (name, start_char, end_char) in markup_selector_attributes_in_line(line, "class", '.') {
+            push_css_symbol(
+                &mut symbols,
+                &mut seen,
+                file_path,
+                name,
+                SymbolType::CssSelector,
+                line_number,
+                start_char,
+                end_char,
+                line_start,
+                line,
+            );
+        }
+
+        for (name, start_char, end_char) in markup_selector_attributes_in_line(line, "id", '#') {
+            push_css_symbol(
+                &mut symbols,
+                &mut seen,
+                file_path,
+                name,
+                SymbolType::CssSelector,
+                line_number,
+                start_char,
+                end_char,
+                line_start,
+                line,
+            );
+        }
+    }
+
+    symbols
+}
+
+fn markup_selector_attributes_in_line(
+    line: &str,
+    attribute: &str,
+    selector_prefix: char,
+) -> Vec<(String, usize, usize)> {
+    let mut values = Vec::new();
+    let mut search_start = 0usize;
+
+    while let Some(relative_index) = line[search_start..].find(attribute) {
+        let attribute_start = search_start + relative_index;
+        let attribute_end = attribute_start + attribute.len();
+
+        if !is_markup_attribute_boundary(line, attribute_start, attribute_end) {
+            search_start = attribute_end;
+            continue;
+        }
+
+        let mut cursor = attribute_end;
+        while cursor < line.len() && line.as_bytes()[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor >= line.len() || line.as_bytes()[cursor] != b'=' {
+            search_start = attribute_end;
+            continue;
+        }
+        cursor += 1;
+        while cursor < line.len() && line.as_bytes()[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor >= line.len() {
+            break;
+        }
+
+        let quote = line.as_bytes()[cursor];
+        if quote != b'\'' && quote != b'"' {
+            search_start = cursor + 1;
+            continue;
+        }
+        let value_start = cursor + 1;
+        let Some(value_end_relative) = line[value_start..].find(quote as char) else {
+            break;
+        };
+        let value_end = value_start + value_end_relative;
+        values.extend(markup_selector_tokens(
+            &line[value_start..value_end],
+            value_start,
+            selector_prefix,
+        ));
+        search_start = value_end + 1;
+    }
+
+    values
+}
+
+fn is_markup_attribute_boundary(line: &str, start: usize, end: usize) -> bool {
+    let before_valid = start == 0
+        || !line.as_bytes()[start - 1].is_ascii_alphanumeric()
+            && line.as_bytes()[start - 1] != b'-'
+            && line.as_bytes()[start - 1] != b'_';
+    let after_valid = end >= line.len()
+        || line.as_bytes()[end].is_ascii_whitespace()
+        || line.as_bytes()[end] == b'=';
+    before_valid && after_valid
+}
+
+fn markup_selector_tokens(
+    value: &str,
+    value_start: usize,
+    selector_prefix: char,
+) -> Vec<(String, usize, usize)> {
+    let mut tokens = Vec::new();
+    let mut token_start = None;
+
+    for (index, ch) in value.char_indices() {
+        if ch.is_whitespace() {
+            if let Some(start) = token_start.take() {
+                push_markup_selector_token(
+                    &mut tokens,
+                    value,
+                    value_start,
+                    selector_prefix,
+                    start,
+                    index,
+                );
+            }
+        } else if token_start.is_none() {
+            token_start = Some(index);
+        }
+    }
+
+    if let Some(start) = token_start {
+        push_markup_selector_token(
+            &mut tokens,
+            value,
+            value_start,
+            selector_prefix,
+            start,
+            value.len(),
+        );
+    }
+
+    tokens
+}
+
+fn push_markup_selector_token(
+    tokens: &mut Vec<(String, usize, usize)>,
+    value: &str,
+    value_start: usize,
+    selector_prefix: char,
+    start: usize,
+    end: usize,
+) {
+    let token = &value[start..end];
+    if is_css_class_token(token) {
+        tokens.push((
+            format!("{selector_prefix}{}", token.trim_start_matches(['.', '#'])),
+            value_start + start,
+            value_start + end,
+        ));
+    }
+}
+
+#[derive(Debug)]
+struct ConfigKeyEntry {
+    key_path: String,
+    leaf_key: String,
+}
+
+const CONFIG_SYMBOL_LIMIT: usize = 2048;
+
+fn extract_config_symbols(file_path: &str, content: &str, language: Language) -> Vec<Symbol> {
+    let mut entries = Vec::with_capacity(CONFIG_SYMBOL_LIMIT.min(256));
+    match language {
+        Language::Json => {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(content) {
+                collect_json_config_keys(&value, &mut Vec::new(), &mut entries);
+            }
+        }
+        Language::Yaml => {
+            if let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(content) {
+                collect_yaml_config_keys(&value, &mut Vec::new(), &mut entries);
+            }
+        }
+        Language::Toml => {
+            collect_toml_config_keys(content, &mut entries);
+        }
+        _ => {}
+    }
+
+    let mut symbols = Vec::new();
+    let mut seen = HashSet::new();
+    let lines = content.lines().collect::<Vec<_>>();
+    let line_start_offsets = line_start_offsets(content);
+    for entry in entries {
+        let location = locate_config_key(content, &entry.key_path, &entry.leaf_key);
+        let line_text = lines
+            .get(location.line as usize)
+            .copied()
+            .unwrap_or_default();
+        let line_start_byte = line_start_offsets
+            .get(location.line as usize)
+            .copied()
+            .unwrap_or(0);
+        push_config_symbol(
+            &mut symbols,
+            &mut seen,
+            file_path,
+            &entry.key_path,
+            location.line,
+            location.character as usize,
+            line_start_byte,
+            line_text,
+        );
+    }
+    symbols
+}
+
+fn collect_json_config_keys(
+    value: &serde_json::Value,
+    path: &mut Vec<String>,
+    entries: &mut Vec<ConfigKeyEntry>,
+) {
+    if entries.len() >= CONFIG_SYMBOL_LIMIT {
+        return;
+    }
+
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, value) in map {
+                if entries.len() >= CONFIG_SYMBOL_LIMIT {
+                    break;
+                }
+                if !is_config_key_segment(key) {
+                    continue;
+                }
+                path.push(key.clone());
+                push_config_key_entry(path, key, entries);
+                collect_json_config_keys(value, path, entries);
+                path.pop();
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for value in items {
+                if entries.len() >= CONFIG_SYMBOL_LIMIT {
+                    break;
+                }
+                collect_json_config_keys(value, path, entries);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_yaml_config_keys(
+    value: &serde_yaml::Value,
+    path: &mut Vec<String>,
+    entries: &mut Vec<ConfigKeyEntry>,
+) {
+    if entries.len() >= CONFIG_SYMBOL_LIMIT {
+        return;
+    }
+
+    match value {
+        serde_yaml::Value::Mapping(map) => {
+            for (key, value) in map {
+                if entries.len() >= CONFIG_SYMBOL_LIMIT {
+                    break;
+                }
+                let Some(key) = key.as_str() else {
+                    continue;
+                };
+                if !is_config_key_segment(key) {
+                    continue;
+                }
+                path.push(key.to_string());
+                push_config_key_entry(path, key, entries);
+                collect_yaml_config_keys(value, path, entries);
+                path.pop();
+            }
+        }
+        serde_yaml::Value::Sequence(items) => {
+            for value in items {
+                if entries.len() >= CONFIG_SYMBOL_LIMIT {
+                    break;
+                }
+                collect_yaml_config_keys(value, path, entries);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_toml_config_keys(content: &str, entries: &mut Vec<ConfigKeyEntry>) {
+    let mut table_path = Vec::<String>::new();
+    for line in content.lines() {
+        if entries.len() >= CONFIG_SYMBOL_LIMIT {
+            break;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        if let Some(table) = toml_table_path(trimmed) {
+            table_path = table;
+            continue;
+        }
+
+        let Some((raw_key, _)) = trimmed.split_once('=') else {
+            continue;
+        };
+        let key_segments = toml_key_segments(raw_key);
+        if key_segments.is_empty() {
+            continue;
+        }
+
+        let mut path = table_path.clone();
+        path.extend(key_segments);
+        let Some(leaf_key) = path.last().cloned() else {
+            continue;
+        };
+        push_config_key_entry(&path, &leaf_key, entries);
+    }
+}
+
+fn push_config_key_entry(path: &[String], leaf_key: &str, entries: &mut Vec<ConfigKeyEntry>) {
+    if entries.len() >= CONFIG_SYMBOL_LIMIT || path.is_empty() {
+        return;
+    }
+
+    entries.push(ConfigKeyEntry {
+        key_path: path.join("."),
+        leaf_key: leaf_key.to_string(),
+    });
+}
+
+fn toml_table_path(line: &str) -> Option<Vec<String>> {
+    let inner = line
+        .strip_prefix("[[")
+        .and_then(|value| value.strip_suffix("]]"))
+        .or_else(|| {
+            line.strip_prefix('[')
+                .and_then(|value| value.strip_suffix(']'))
+        })?;
+    let path = toml_key_segments(inner);
+    (!path.is_empty()).then_some(path)
+}
+
+fn toml_key_segments(raw_key: &str) -> Vec<String> {
+    raw_key
+        .split('.')
+        .map(|segment| segment.trim().trim_matches(['"', '\'']))
+        .filter(|segment| is_config_key_segment(segment))
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn is_config_key_segment(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= 120
+        && !key.chars().any(|ch| ch.is_control())
+        && key.chars().any(|ch| ch.is_ascii_alphabetic())
+}
+
+fn locate_config_key(content: &str, key_path: &str, leaf_key: &str) -> AnchorLocation {
+    let quoted_leaf = format!("\"{}\"", leaf_key);
+    let quoted_leaf_single = format!("'{}'", leaf_key);
+    for (line_index, line) in content.lines().enumerate() {
+        if line.contains(&quoted_leaf)
+            || line.contains(&quoted_leaf_single)
+            || line.trim_start().starts_with(&format!("{leaf_key}:"))
+            || line.contains(key_path)
+        {
+            let character = line
+                .find(leaf_key)
+                .or_else(|| line.find(key_path))
+                .unwrap_or(0);
+            return AnchorLocation {
+                line: line_index as u32,
+                character: character as u32,
+            };
+        }
+    }
+    AnchorLocation {
+        line: 0,
+        character: 0,
+    }
+}
+
+fn push_config_symbol(
+    symbols: &mut Vec<Symbol>,
+    seen: &mut HashSet<(String, SymbolType, u32)>,
+    file_path: &str,
+    key_path: &str,
+    line_number: u32,
+    start_char: usize,
+    line_start_byte: usize,
+    line_text: &str,
+) {
+    if key_path.is_empty()
+        || !seen.insert((key_path.to_string(), SymbolType::Property, line_number))
+    {
+        return;
+    }
+
+    let end_char = start_char.saturating_add(key_path.len());
+    symbols.push(Symbol {
+        id: format!("{}::{}#{}", file_path, key_path, SymbolType::Property),
+        name: key_path.to_string(),
+        qualified_name: key_path.to_string(),
+        symbol_type: SymbolType::Property,
+        file_path: file_path.to_string(),
+        range: Range {
+            start: Position::new(line_number, start_char as u32),
+            end: Position::new(line_number, end_char as u32),
+        },
+        byte_offset: line_start_byte.saturating_add(start_char),
+        byte_length: key_path.len(),
+        parent_id: None,
+        docstring: None,
+        signature: None,
+        content_hash: compute_hash(line_text),
+    });
+}
+
+fn line_start_offsets(content: &str) -> Vec<usize> {
+    let mut offsets = Vec::new();
+    let mut byte_offset = 0usize;
+    for segment in content.split_inclusive('\n') {
+        offsets.push(byte_offset);
+        byte_offset += segment.len();
+    }
+    if content.is_empty() {
+        offsets.push(0);
+    }
+    offsets
+}
+
+fn css_next_brace_depth(current_depth: i32, line: &str) -> i32 {
+    let opens = line.bytes().filter(|byte| *byte == b'{').count() as i32;
+    let closes = line.bytes().filter(|byte| *byte == b'}').count() as i32;
+    current_depth
+        .saturating_add(opens)
+        .saturating_sub(closes)
+        .max(0)
+}
+
+fn push_css_symbol(
+    symbols: &mut Vec<Symbol>,
+    seen: &mut HashSet<(String, SymbolType, u32)>,
+    file_path: &str,
+    name: String,
+    symbol_type: SymbolType,
+    line_number: u32,
+    start_char: usize,
+    end_char: usize,
+    line_start_byte: usize,
+    line_text: &str,
+) {
+    if name.len() < 2 || !seen.insert((name.clone(), symbol_type, line_number)) {
+        return;
+    }
+
+    let start_char_u32 = start_char as u32;
+    let end_char_u32 = end_char.max(start_char + name.len()) as u32;
+    let qualified_name = name.clone();
+    let byte_offset = line_start_byte.saturating_add(start_char);
+    let byte_length = end_char.saturating_sub(start_char).max(name.len());
+
+    symbols.push(Symbol {
+        id: format!("{}::{}#{}", file_path, qualified_name, symbol_type),
+        name,
+        qualified_name,
+        symbol_type,
+        file_path: file_path.to_string(),
+        range: Range {
+            start: Position::new(line_number, start_char_u32),
+            end: Position::new(line_number, end_char_u32),
+        },
+        byte_offset,
+        byte_length,
+        parent_id: None,
+        docstring: None,
+        signature: None,
+        content_hash: compute_hash(line_text),
+    });
+}
+
+fn css_custom_properties_in_line(line: &str) -> Vec<(String, usize, usize)> {
+    let mut values = Vec::new();
+    let bytes = line.as_bytes();
+    let mut index = 0usize;
+    while index + 2 < bytes.len() {
+        if bytes[index] == b'-' && bytes[index + 1] == b'-' {
+            let start = index;
+            index += 2;
+            while index < bytes.len()
+                && (bytes[index].is_ascii_alphanumeric()
+                    || bytes[index] == b'-'
+                    || bytes[index] == b'_')
+            {
+                index += 1;
+            }
+            if index > start + 3 && line[index..].trim_start().starts_with(':') {
+                values.push((line[start..index].to_string(), start, index));
+            }
+        } else {
+            index += 1;
+        }
+    }
+    values
+}
+
+fn css_layer_in_line(line: &str) -> Option<(String, usize, usize)> {
+    let marker = "@layer";
+    let marker_index = line.find(marker)?;
+    let mut start = marker_index + marker.len();
+    while start < line.len() && line.as_bytes()[start].is_ascii_whitespace() {
+        start += 1;
+    }
+    if start >= line.len() || line.as_bytes()[start] == b'{' || line.as_bytes()[start] == b';' {
+        return None;
+    }
+
+    let mut end = start;
+    while end < line.len() {
+        let byte = line.as_bytes()[end];
+        if byte == b'{' || byte == b';' || byte == b',' || byte.is_ascii_whitespace() {
+            break;
+        }
+        end += 1;
+    }
+    (end > start).then(|| (line[start..end].trim().to_string(), start, end))
+}
+
+fn css_at_rule_anchor_in_line(line: &str) -> Option<(String, usize, usize)> {
+    let trimmed = line.trim_start();
+    let indent = line.len().saturating_sub(trimmed.len());
+    for marker in ["@media", "@container"] {
+        if let Some(rest) = trimmed.strip_prefix(marker) {
+            let rest_start = indent + marker.len();
+            let query_end = rest
+                .find('{')
+                .or_else(|| rest.find(';'))
+                .map(|index| rest_start + index)
+                .unwrap_or(line.len());
+            let query = line[rest_start..query_end].trim();
+            if query.is_empty() {
+                return Some((marker.to_string(), indent, indent + marker.len()));
+            }
+            return Some((format!("{} {}", marker, query), indent, query_end));
+        }
+    }
+    None
+}
+
+fn css_font_face_starts_in_line(line: &str) -> bool {
+    line.trim_start().starts_with("@font-face")
+}
+
+fn css_font_family_in_line(line: &str) -> Option<(String, usize, usize)> {
+    let property_index = line.find("font-family")?;
+    let colon_index = line[property_index..].find(':')? + property_index;
+    let mut start = colon_index + 1;
+    while start < line.len()
+        && (line.as_bytes()[start].is_ascii_whitespace()
+            || line.as_bytes()[start] == b'\''
+            || line.as_bytes()[start] == b'"')
+    {
+        start += 1;
+    }
+    let mut end = start;
+    while end < line.len() {
+        let byte = line.as_bytes()[end];
+        if byte == b';' || byte == b'\'' || byte == b'"' {
+            break;
+        }
+        end += 1;
+    }
+    let name = line[start..end].trim();
+    (!name.is_empty()).then(|| (name.to_string(), start, end))
+}
+
+fn css_keyframes_in_line(line: &str) -> Option<(String, usize, usize)> {
+    let trimmed_start = line.find("@keyframes")?;
+    let after = trimmed_start + "@keyframes".len();
+    let name_start = after
+        + line[after..]
+            .chars()
+            .take_while(|ch| ch.is_whitespace())
+            .count();
+    let mut name_end = name_start;
+    for ch in line[name_start..].chars() {
+        if ch.is_alphanumeric() || ch == '-' || ch == '_' {
+            name_end += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    (name_end > name_start).then(|| (line[name_start..name_end].to_string(), name_start, name_end))
+}
+
+fn css_selectors_in_text(selector_text: &str) -> Vec<(String, usize, usize)> {
+    let bytes = selector_text.as_bytes();
+    let mut values = Vec::new();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        let marker = bytes[index];
+        if marker != b'.' && marker != b'#' {
+            index += 1;
+            continue;
+        }
+        if index > 0 {
+            let previous = bytes[index - 1];
+            if previous.is_ascii_alphanumeric() || previous == b'-' || previous == b'_' {
+                index += 1;
+                continue;
+            }
+        }
+
+        let start = index;
+        index += 1;
+        while index < bytes.len()
+            && (bytes[index].is_ascii_alphanumeric()
+                || bytes[index] == b'-'
+                || bytes[index] == b'_')
+        {
+            index += 1;
+        }
+        if index > start + 1 {
+            values.push((selector_text[start..index].to_string(), start, index));
+        }
+    }
+    values
 }
 
 fn parse_markdown_header(line: &str) -> Option<(usize, String)> {
@@ -5491,7 +7232,7 @@ fn is_config_path(file_path: &str) -> bool {
 }
 
 fn should_allow_non_indexed_live_sync(file_path: &str) -> bool {
-    if Language::from_path(file_path).is_some() {
+    if Language::capability_for_path(file_path).is_some() {
         return false;
     }
 
@@ -5524,6 +7265,7 @@ fn direct_relationship_score(relationship_type: SymbolRelationshipType) -> u32 {
         SymbolRelationshipType::Extends | SymbolRelationshipType::Implements => 88,
         SymbolRelationshipType::Contains => 82,
         SymbolRelationshipType::Export => 78,
+        SymbolRelationshipType::Usage => 76,
         SymbolRelationshipType::Import => 74,
     }
 }
@@ -5551,6 +7293,7 @@ fn file_end_position(content: &str) -> (u32, u32) {
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::Path;
     use tempfile::TempDir;
 
     fn create_test_service() -> (LanguageService, TempDir) {
@@ -5561,12 +7304,60 @@ mod tests {
         (service, temp_dir)
     }
 
+    struct ExpectedSymbol {
+        name: &'static str,
+        symbol_type: SymbolType,
+    }
+
+    struct SymbolFixture {
+        path: &'static str,
+        expected_symbols: &'static [ExpectedSymbol],
+    }
+
+    const SCANNER_LANGUAGE_FIXTURE_PATHS: &[&str] = &[
+        "css/basic.css",
+        "css/modules/button.module.css",
+        "css/variants/panel.scss",
+        "css/variants/legacy.sass",
+        "css/variants/theme.less",
+        "html/basic.html",
+        "vue/component.vue",
+        "svelte/component.svelte",
+        "config/package.json",
+        "config/github-action.yml",
+        "config/app.toml",
+    ];
+
+    fn write_symbol_fixture(workspace_root: &Path, relative_path: &str) {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/symbol_index_languages")
+            .join(relative_path);
+        let destination = workspace_root.join(relative_path);
+        fs::create_dir_all(destination.parent().expect("fixture path has parent")).unwrap();
+        fs::copy(&source, &destination)
+            .unwrap_or_else(|error| panic!("failed to copy fixture {}: {error}", source.display()));
+    }
+
+    fn write_all_scanner_language_fixtures(workspace_root: &Path) {
+        for path in SCANNER_LANGUAGE_FIXTURE_PATHS {
+            write_symbol_fixture(workspace_root, path);
+        }
+    }
+
     #[test]
     fn test_dot_files_allow_non_indexed_live_sync() {
         assert!(should_allow_non_indexed_live_sync(".gitignore"));
         assert!(should_allow_non_indexed_live_sync("config/.env.local"));
         assert!(should_allow_non_indexed_live_sync("nested/.dockerignore"));
         assert!(!should_allow_non_indexed_live_sync("src/main.rs"));
+    }
+
+    #[test]
+    fn test_config_capability_skips_known_lockfiles_for_directory_indexing() {
+        assert!(is_supported_index_file("package.json"));
+        assert!(is_supported_index_file("config/app.yaml"));
+        assert!(!is_supported_index_file("package-lock.json"));
+        assert!(!is_supported_index_file("pnpm-lock.yaml"));
     }
 
     #[test]
@@ -5581,7 +7372,7 @@ mod tests {
             function authenticate(token: string): boolean {
                 return token.length > 0;
             }
-            
+
             class UserService {
                 getUser(id: string): User | undefined {
                     return undefined;
@@ -5615,6 +7406,923 @@ mod tests {
         assert!(symbols.iter().any(|s| s.name == "Details"));
         assert!(!symbols.iter().any(|s| s.name == "Body text"));
         assert!(!symbols.iter().any(|s| s.name == "Not a symbol"));
+    }
+
+    #[test]
+    fn test_symbol_index_language_fixtures_cover_scanner_languages() {
+        let (service, temp_dir) = create_test_service();
+        let fixtures = [
+            SymbolFixture {
+                path: "css/basic.css",
+                expected_symbols: &[
+                    ExpectedSymbol {
+                        name: "--fixture-accent",
+                        symbol_type: SymbolType::CssCustomProperty,
+                    },
+                    ExpectedSymbol {
+                        name: ".fixture-card",
+                        symbol_type: SymbolType::CssSelector,
+                    },
+                    ExpectedSymbol {
+                        name: "#fixture-shell",
+                        symbol_type: SymbolType::CssSelector,
+                    },
+                    ExpectedSymbol {
+                        name: "fixture-fade",
+                        symbol_type: SymbolType::CssKeyframes,
+                    },
+                    ExpectedSymbol {
+                        name: "fixture-components",
+                        symbol_type: SymbolType::CssLayer,
+                    },
+                    ExpectedSymbol {
+                        name: "@media (min-width: 720px)",
+                        symbol_type: SymbolType::CssAtRule,
+                    },
+                    ExpectedSymbol {
+                        name: "@container fixture-card (inline-size > 32rem)",
+                        symbol_type: SymbolType::CssAtRule,
+                    },
+                    ExpectedSymbol {
+                        name: "Fixture Sans",
+                        symbol_type: SymbolType::CssFontFace,
+                    },
+                ],
+            },
+            SymbolFixture {
+                path: "css/modules/button.module.css",
+                expected_symbols: &[
+                    ExpectedSymbol {
+                        name: ".buttonPrimary",
+                        symbol_type: SymbolType::CssSelector,
+                    },
+                    ExpectedSymbol {
+                        name: ".button-secondary",
+                        symbol_type: SymbolType::CssSelector,
+                    },
+                    ExpectedSymbol {
+                        name: "--button-accent",
+                        symbol_type: SymbolType::CssCustomProperty,
+                    },
+                ],
+            },
+            SymbolFixture {
+                path: "css/variants/panel.scss",
+                expected_symbols: &[
+                    ExpectedSymbol {
+                        name: "--panel-gap",
+                        symbol_type: SymbolType::CssCustomProperty,
+                    },
+                    ExpectedSymbol {
+                        name: ".panelShell",
+                        symbol_type: SymbolType::CssSelector,
+                    },
+                ],
+            },
+            SymbolFixture {
+                path: "css/variants/legacy.sass",
+                expected_symbols: &[ExpectedSymbol {
+                    name: ".legacyPanel",
+                    symbol_type: SymbolType::CssSelector,
+                }],
+            },
+            SymbolFixture {
+                path: "css/variants/theme.less",
+                expected_symbols: &[ExpectedSymbol {
+                    name: "#themeShell",
+                    symbol_type: SymbolType::CssSelector,
+                }],
+            },
+            SymbolFixture {
+                path: "html/basic.html",
+                expected_symbols: &[
+                    ExpectedSymbol {
+                        name: "#fixture-shell",
+                        symbol_type: SymbolType::CssSelector,
+                    },
+                    ExpectedSymbol {
+                        name: ".fixture-page",
+                        symbol_type: SymbolType::CssSelector,
+                    },
+                    ExpectedSymbol {
+                        name: ".fixtureGrid",
+                        symbol_type: SymbolType::CssSelector,
+                    },
+                ],
+            },
+            SymbolFixture {
+                path: "vue/component.vue",
+                expected_symbols: &[
+                    ExpectedSymbol {
+                        name: "#vue-fixture",
+                        symbol_type: SymbolType::CssSelector,
+                    },
+                    ExpectedSymbol {
+                        name: ".saveButton",
+                        symbol_type: SymbolType::CssSelector,
+                    },
+                ],
+            },
+            SymbolFixture {
+                path: "svelte/component.svelte",
+                expected_symbols: &[
+                    ExpectedSymbol {
+                        name: "#svelte-fixture",
+                        symbol_type: SymbolType::CssSelector,
+                    },
+                    ExpectedSymbol {
+                        name: ".dense-grid",
+                        symbol_type: SymbolType::CssSelector,
+                    },
+                ],
+            },
+            SymbolFixture {
+                path: "config/package.json",
+                expected_symbols: &[
+                    ExpectedSymbol {
+                        name: "scripts.build",
+                        symbol_type: SymbolType::Property,
+                    },
+                    ExpectedSymbol {
+                        name: "scripts.tauri:build",
+                        symbol_type: SymbolType::Property,
+                    },
+                    ExpectedSymbol {
+                        name: "dependencies.@tauri-apps/api",
+                        symbol_type: SymbolType::Property,
+                    },
+                ],
+            },
+            SymbolFixture {
+                path: "config/github-action.yml",
+                expected_symbols: &[
+                    ExpectedSymbol {
+                        name: "jobs.build",
+                        symbol_type: SymbolType::Property,
+                    },
+                    ExpectedSymbol {
+                        name: "jobs.build.runs-on",
+                        symbol_type: SymbolType::Property,
+                    },
+                    ExpectedSymbol {
+                        name: "jobs.build.steps.name",
+                        symbol_type: SymbolType::Property,
+                    },
+                ],
+            },
+            SymbolFixture {
+                path: "config/app.toml",
+                expected_symbols: &[
+                    ExpectedSymbol {
+                        name: "package.name",
+                        symbol_type: SymbolType::Property,
+                    },
+                    ExpectedSymbol {
+                        name: "profile.release.lto",
+                        symbol_type: SymbolType::Property,
+                    },
+                ],
+            },
+        ];
+
+        for fixture in fixtures {
+            write_symbol_fixture(temp_dir.path(), fixture.path);
+            let symbols = service.index_file(fixture.path).unwrap();
+            for expected in fixture.expected_symbols {
+                assert!(
+                    symbols.iter().any(|symbol| {
+                        symbol.name == expected.name && symbol.symbol_type == expected.symbol_type
+                    }),
+                    "expected {} {:?} in {}",
+                    expected.name,
+                    expected.symbol_type,
+                    fixture.path
+                );
+            }
+        }
+
+        for (query, path, name) in [
+            ("fixture-accent", "css/basic.css", "--fixture-accent"),
+            (
+                "buttonPrimary",
+                "css/modules/button.module.css",
+                ".buttonPrimary",
+            ),
+            ("fixtureGrid", "html/basic.html", ".fixtureGrid"),
+            ("saveButton", "vue/component.vue", ".saveButton"),
+            ("dense-grid", "svelte/component.svelte", ".dense-grid"),
+            ("scripts.build", "config/package.json", "scripts.build"),
+            (
+                "jobs.build.runs-on",
+                "config/github-action.yml",
+                "jobs.build.runs-on",
+            ),
+            (
+                "profile.release.lto",
+                "config/app.toml",
+                "profile.release.lto",
+            ),
+        ] {
+            let results = service.search_symbols(query, 10).unwrap();
+            assert!(
+                results
+                    .iter()
+                    .any(|result| result.symbol.file_path == path && result.symbol.name == name),
+                "expected search for {query} to find {path}::{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_symbol_index_language_fixtures_record_indexing_measurement() {
+        let (service, temp_dir) = create_test_service();
+        write_all_scanner_language_fixtures(temp_dir.path());
+
+        let stats = service.index_directory("").unwrap();
+        let health = service.index_health_snapshot();
+
+        assert_eq!(stats.files_failed, 0);
+        assert_eq!(stats.supported_files, SCANNER_LANGUAGE_FIXTURE_PATHS.len());
+        assert_eq!(stats.files_indexed, SCANNER_LANGUAGE_FIXTURE_PATHS.len());
+        assert!(stats.symbols_extracted >= 24);
+        assert!(stats.files_discovered >= SCANNER_LANGUAGE_FIXTURE_PATHS.len());
+        assert!(stats.duration_ms <= 30_000);
+        assert!(stats.parse_extract_ms <= 30_000);
+        assert!(stats.db_write_ms <= 30_000);
+
+        assert!(health.timings.last_discovery_ms.is_some());
+        assert!(health.timings.last_batch_load_ms.is_some());
+        assert!(health.timings.last_batch_freshness_check_ms.is_some());
+        assert!(health.timings.last_batch_parse_extract_ms.is_some());
+        assert!(health.timings.last_batch_db_write_ms.is_some());
+        assert!(health.timings.last_batch_cache_update_ms.is_some());
+        assert_eq!(health.discovery.last_scope.as_deref(), Some(""));
+        assert_eq!(
+            health.discovery.last_supported_files,
+            SCANNER_LANGUAGE_FIXTURE_PATHS.len()
+        );
+        assert_eq!(
+            health.discovery.last_indexed_files,
+            SCANNER_LANGUAGE_FIXTURE_PATHS.len()
+        );
+        assert!(health.discovery.last_symbols_extracted >= stats.symbols_extracted);
+
+        for (language, count) in [
+            ("CSS", 2),
+            ("SCSS", 1),
+            ("Sass", 1),
+            ("Less", 1),
+            ("HTML", 1),
+            ("Vue", 1),
+            ("Svelte", 1),
+            ("JSON", 1),
+            ("YAML", 1),
+            ("TOML", 1),
+        ] {
+            assert!(
+                stats
+                    .supported_by_language
+                    .iter()
+                    .any(|entry| entry.language == language && entry.count == count),
+                "expected {count} indexed {language} fixture(s), got {:?}",
+                stats.supported_by_language
+            );
+        }
+    }
+
+    #[test]
+    fn test_index_css_symbols() {
+        let (service, temp_dir) = create_test_service();
+        fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+
+        fs::write(
+            temp_dir.path().join("src/index.css"),
+            r#"
+:root {
+    --accent-ai: #62d6ff;
+}
+
+.chat-message, #app-shell {
+    color: var(--accent-ai);
+}
+
+@keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@layer components {
+    .layered { color: red; }
+}
+
+@media (min-width: 720px) {
+    .wide { display: block; }
+}
+
+@container card (inline-size > 32rem) {
+    .cardTitle { font-weight: 700; }
+}
+
+@font-face {
+    font-family: "Blade Sans";
+    src: url("/fonts/blade.woff2");
+}
+"#,
+        )
+        .unwrap();
+
+        let symbols = service.index_file("src/index.css").unwrap();
+
+        assert!(symbols.iter().any(|symbol| {
+            symbol.name == "--accent-ai" && symbol.symbol_type == SymbolType::CssCustomProperty
+        }));
+        assert!(symbols.iter().any(|symbol| symbol.name == ".chat-message"
+            && symbol.symbol_type == SymbolType::CssSelector));
+        assert!(symbols.iter().any(|symbol| {
+            symbol.name == "#app-shell" && symbol.symbol_type == SymbolType::CssSelector
+        }));
+        assert!(symbols.iter().any(
+            |symbol| symbol.name == "fade-in" && symbol.symbol_type == SymbolType::CssKeyframes
+        ));
+        assert!(symbols.iter().any(
+            |symbol| symbol.name == "components" && symbol.symbol_type == SymbolType::CssLayer
+        ));
+        assert!(symbols.iter().any(|symbol| {
+            symbol.name == "@media (min-width: 720px)"
+                && symbol.symbol_type == SymbolType::CssAtRule
+        }));
+        assert!(symbols.iter().any(|symbol| {
+            symbol.name == "@container card (inline-size > 32rem)"
+                && symbol.symbol_type == SymbolType::CssAtRule
+        }));
+        assert!(symbols.iter().any(|symbol| {
+            symbol.name == "Blade Sans" && symbol.symbol_type == SymbolType::CssFontFace
+        }));
+
+        let results = service.search_symbols("accent", 10).unwrap();
+        assert!(results
+            .iter()
+            .any(|result| result.symbol.name == "--accent-ai"));
+    }
+
+    #[test]
+    fn test_index_markup_class_and_id_symbols() {
+        let (service, temp_dir) = create_test_service();
+        fs::create_dir_all(temp_dir.path().join("public")).unwrap();
+        fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+
+        fs::write(
+            temp_dir.path().join("public/index.html"),
+            r#"
+<!doctype html>
+<html>
+  <body id="app-shell" class="landing-page has-nav">
+    <main class='hero-panel featureGrid'>Hello</main>
+  </body>
+</html>
+"#,
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("src/App.vue"),
+            r#"
+<template>
+  <section id="vue-shell" class="vue-layout">
+    <button class="saveButton">Save</button>
+  </section>
+</template>
+"#,
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("src/App.svelte"),
+            r#"
+<script>
+  export let title = "Dashboard";
+</script>
+
+<main id="svelte-shell" class="svelteLayout dense-grid">
+  <h1>{title}</h1>
+</main>
+"#,
+        )
+        .unwrap();
+
+        let symbols = service.index_file("public/index.html").unwrap();
+
+        for selector in [
+            "#app-shell",
+            ".landing-page",
+            ".has-nav",
+            ".hero-panel",
+            ".featureGrid",
+        ] {
+            assert!(
+                symbols.iter().any(|symbol| {
+                    symbol.name == selector && symbol.symbol_type == SymbolType::CssSelector
+                }),
+                "expected HTML selector symbol {selector}"
+            );
+        }
+
+        let results = service.search_symbols("featureGrid", 10).unwrap();
+        assert!(results.iter().any(|result| {
+            result.symbol.file_path == "public/index.html" && result.symbol.name == ".featureGrid"
+        }));
+
+        let vue_symbols = service.index_file("src/App.vue").unwrap();
+        assert!(vue_symbols.iter().any(|symbol| {
+            symbol.name == "#vue-shell" && symbol.symbol_type == SymbolType::CssSelector
+        }));
+        assert!(vue_symbols.iter().any(|symbol| {
+            symbol.name == ".saveButton" && symbol.symbol_type == SymbolType::CssSelector
+        }));
+
+        let svelte_symbols = service.index_file("src/App.svelte").unwrap();
+        assert!(svelte_symbols.iter().any(|symbol| {
+            symbol.name == "#svelte-shell" && symbol.symbol_type == SymbolType::CssSelector
+        }));
+        assert!(svelte_symbols.iter().any(|symbol| {
+            symbol.name == ".dense-grid" && symbol.symbol_type == SymbolType::CssSelector
+        }));
+
+        let results = service.search_symbols("saveButton", 10).unwrap();
+        assert!(results.iter().any(|result| {
+            result.symbol.file_path == "src/App.vue" && result.symbol.name == ".saveButton"
+        }));
+        let results = service.search_symbols("dense-grid", 10).unwrap();
+        assert!(results.iter().any(|result| {
+            result.symbol.file_path == "src/App.svelte" && result.symbol.name == ".dense-grid"
+        }));
+    }
+
+    #[test]
+    fn test_index_config_key_symbols() {
+        let (service, temp_dir) = create_test_service();
+        fs::create_dir_all(temp_dir.path().join("config")).unwrap();
+
+        fs::write(
+            temp_dir.path().join("package.json"),
+            r#"
+{
+  "name": "blade-test",
+  "scripts": {
+    "build": "vite build",
+    "tauri:build": "tauri build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.0.0"
+  }
+}
+"#,
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("config/app.yaml"),
+            r#"
+server:
+  port: 5882
+features:
+  symbolsIndex: true
+"#,
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("Cargo.toml"),
+            r#"
+[package]
+name = "zblade"
+version = "0.8.3"
+
+[dependencies]
+serde = "1.0"
+"tree-sitter" = "0.24"
+
+[profile.release]
+lto = "fat"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("pyproject.toml"),
+            r#"
+[tool.poetry]
+name = "blade-tools"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+"#,
+        )
+        .unwrap();
+
+        let json_symbols = service.index_file("package.json").unwrap();
+        assert!(json_symbols.iter().any(|symbol| {
+            symbol.name == "scripts.build" && symbol.symbol_type == SymbolType::Property
+        }));
+        assert!(json_symbols.iter().any(|symbol| {
+            symbol.name == "dependencies.@tauri-apps/api"
+                && symbol.symbol_type == SymbolType::Property
+        }));
+
+        let yaml_symbols = service.index_file("config/app.yaml").unwrap();
+        assert!(yaml_symbols.iter().any(|symbol| {
+            symbol.name == "server.port" && symbol.symbol_type == SymbolType::Property
+        }));
+        assert!(yaml_symbols.iter().any(|symbol| {
+            symbol.name == "features.symbolsIndex" && symbol.symbol_type == SymbolType::Property
+        }));
+
+        let cargo_symbols = service.index_file("Cargo.toml").unwrap();
+        assert!(cargo_symbols.iter().any(|symbol| {
+            symbol.name == "package.name" && symbol.symbol_type == SymbolType::Property
+        }));
+        assert!(cargo_symbols.iter().any(|symbol| {
+            symbol.name == "dependencies.serde" && symbol.symbol_type == SymbolType::Property
+        }));
+        assert!(cargo_symbols.iter().any(|symbol| {
+            symbol.name == "dependencies.tree-sitter" && symbol.symbol_type == SymbolType::Property
+        }));
+        assert!(cargo_symbols.iter().any(|symbol| {
+            symbol.name == "profile.release.lto" && symbol.symbol_type == SymbolType::Property
+        }));
+
+        let pyproject_symbols = service.index_file("pyproject.toml").unwrap();
+        assert!(pyproject_symbols.iter().any(|symbol| {
+            symbol.name == "tool.poetry.name" && symbol.symbol_type == SymbolType::Property
+        }));
+        assert!(pyproject_symbols.iter().any(|symbol| {
+            symbol.name == "tool.pytest.ini_options.testpaths"
+                && symbol.symbol_type == SymbolType::Property
+        }));
+
+        let results = service.search_symbols("scripts.build", 10).unwrap();
+        assert!(results.iter().any(|result| {
+            result.symbol.file_path == "package.json" && result.symbol.name == "scripts.build"
+        }));
+        let results = service.search_symbols("server.port", 10).unwrap();
+        assert!(results.iter().any(|result| {
+            result.symbol.file_path == "config/app.yaml" && result.symbol.name == "server.port"
+        }));
+        let results = service.search_symbols("profile.release.lto", 10).unwrap();
+        assert!(results.iter().any(|result| {
+            result.symbol.file_path == "Cargo.toml" && result.symbol.name == "profile.release.lto"
+        }));
+    }
+
+    #[test]
+    fn test_config_symbol_extraction_is_bounded() {
+        let mut content = String::from("{\n");
+        for index in 0..(CONFIG_SYMBOL_LIMIT + 128) {
+            if index > 0 {
+                content.push_str(",\n");
+            }
+            content.push_str(&format!("  \"key_{index}\": {index}"));
+        }
+        content.push_str("\n}\n");
+
+        let symbols = extract_config_symbols("large.json", &content, Language::Json);
+        assert!(symbols.len() <= CONFIG_SYMBOL_LIMIT);
+    }
+
+    #[test]
+    fn test_css_custom_property_usage_relationships_resolve_to_tokens() {
+        let (service, temp_dir) = create_test_service();
+        fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+
+        fs::write(
+            temp_dir.path().join("src/theme.css"),
+            r#"
+:root {
+    --accent-ai: #62d6ff;
+    --accent-strong: var(--accent-ai);
+}
+
+.button {
+    color: var(--accent-strong);
+}
+"#,
+        )
+        .unwrap();
+
+        service.index_file("src/theme.css").unwrap();
+
+        let symbols = service.get_file_symbols("src/theme.css").unwrap();
+        let accent_symbol = symbols
+            .iter()
+            .find(|symbol| symbol.name == "--accent-ai")
+            .expect("expected base custom property");
+        let strong_symbol = symbols
+            .iter()
+            .find(|symbol| symbol.name == "--accent-strong")
+            .expect("expected derived custom property");
+
+        let accent_graph = service
+            .get_symbol_graph(accent_symbol, SymbolRelationshipType::Usage, 10)
+            .unwrap();
+        assert!(accent_graph.incoming.iter().any(|reference| {
+            reference.source_symbol.name == "--accent-strong"
+                && reference.relationship_type == SymbolRelationshipType::Usage
+                && reference.target_symbol_id.as_deref() == Some(accent_symbol.id.as_str())
+        }));
+
+        let strong_graph = service
+            .get_symbol_graph(strong_symbol, SymbolRelationshipType::Usage, 10)
+            .unwrap();
+        assert!(strong_graph.incoming.iter().any(|reference| {
+            reference.source_symbol.name == ".button"
+                && reference.relationship_type == SymbolRelationshipType::Usage
+                && reference.target_symbol_id.as_deref() == Some(strong_symbol.id.as_str())
+        }));
+    }
+
+    #[test]
+    fn test_index_stylesheet_variant_symbols() {
+        let (service, temp_dir) = create_test_service();
+        fs::create_dir_all(temp_dir.path().join("src/styles")).unwrap();
+
+        fs::write(
+            temp_dir.path().join("src/styles/Button.module.scss"),
+            r#"
+:root {
+    --button-gap: 8px;
+}
+
+.buttonPrimary {
+    color: var(--button-gap);
+}
+"#,
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("src/styles/legacy.sass"),
+            r#"
+.legacyButton
+  color: red
+"#,
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("src/styles/theme.less"),
+            r#"
+#appShell {
+    color: blue;
+}
+"#,
+        )
+        .unwrap();
+
+        let scss_symbols = service.index_file("src/styles/Button.module.scss").unwrap();
+        assert!(scss_symbols.iter().any(|symbol| {
+            symbol.name == "--button-gap" && symbol.symbol_type == SymbolType::CssCustomProperty
+        }));
+        assert!(scss_symbols.iter().any(|symbol| {
+            symbol.name == ".buttonPrimary" && symbol.symbol_type == SymbolType::CssSelector
+        }));
+
+        let sass_symbols = service.index_file("src/styles/legacy.sass").unwrap();
+        assert!(sass_symbols.iter().any(|symbol| {
+            symbol.name == ".legacyButton" && symbol.symbol_type == SymbolType::CssSelector
+        }));
+
+        let less_symbols = service.index_file("src/styles/theme.less").unwrap();
+        assert!(less_symbols.iter().any(|symbol| {
+            symbol.name == "#appShell" && symbol.symbol_type == SymbolType::CssSelector
+        }));
+
+        let results = service.search_symbols("buttonPrimary", 10).unwrap();
+        assert!(results.iter().any(|result| result.symbol.file_path
+            == "src/styles/Button.module.scss"
+            && result.symbol.name == ".buttonPrimary"));
+    }
+
+    #[test]
+    fn test_css_module_usage_relationships_resolve_to_stylesheet_symbols() {
+        let (service, temp_dir) = create_test_service();
+        fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+
+        fs::write(
+            temp_dir.path().join("src/Button.module.css"),
+            r#"
+.buttonPrimary {
+    color: red;
+}
+.button-secondary {
+    color: blue;
+}
+"#,
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("src/global.css"),
+            r#"
+.globalShell {
+    display: grid;
+}
+.extraShell {
+    align-items: center;
+}
+.isActive {
+    opacity: 1;
+}
+.conditionalShell {
+    visibility: visible;
+}
+"#,
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("src/Button.tsx"),
+            r#"
+import clsx from "clsx";
+import styles from "./Button.module.css";
+import "./global.css";
+
+export function Button() {
+    return <button className={clsx(`${styles.buttonPrimary} globalShell`, styles["button-secondary"], "extraShell", isActive && "isActive", { conditionalShell: isActive })}>Save</button>;
+}
+"#,
+        )
+        .unwrap();
+
+        service.index_directory("src").unwrap();
+
+        let css_symbol = service
+            .get_file_symbols("src/Button.module.css")
+            .unwrap()
+            .into_iter()
+            .find(|symbol| symbol.name == ".buttonPrimary")
+            .expect("expected indexed CSS selector");
+        let graph = service
+            .get_symbol_graph(&css_symbol, SymbolRelationshipType::Usage, 10)
+            .unwrap();
+
+        assert!(graph.incoming.iter().any(|reference| {
+            reference.source_symbol.file_path == "src/Button.tsx"
+                && reference.source_symbol.name == "Button"
+                && reference.relationship_type == SymbolRelationshipType::Usage
+                && reference.target_symbol_id.as_deref() == Some(css_symbol.id.as_str())
+        }));
+
+        let button_symbol = service
+            .get_file_symbols("src/Button.tsx")
+            .unwrap()
+            .into_iter()
+            .find(|symbol| symbol.name == "Button")
+            .expect("expected indexed component");
+        let graph = service
+            .get_symbol_graph(&button_symbol, SymbolRelationshipType::Usage, 10)
+            .unwrap();
+
+        assert!(graph.outgoing.iter().any(|reference| {
+            reference
+                .target_symbol
+                .as_ref()
+                .is_some_and(|symbol| symbol.id == css_symbol.id)
+        }));
+
+        let global_symbol = service
+            .get_file_symbols("src/global.css")
+            .unwrap()
+            .into_iter()
+            .find(|symbol| symbol.name == ".globalShell")
+            .expect("expected indexed global CSS selector");
+        let graph = service
+            .get_symbol_graph(&global_symbol, SymbolRelationshipType::Usage, 10)
+            .unwrap();
+
+        assert!(graph.incoming.iter().any(|reference| {
+            reference.source_symbol.file_path == "src/Button.tsx"
+                && reference.source_symbol.name == "Button"
+                && reference.relationship_type == SymbolRelationshipType::Usage
+                && reference.target_symbol_id.as_deref() == Some(global_symbol.id.as_str())
+        }));
+
+        for selector in [
+            ".button-secondary",
+            ".extraShell",
+            ".isActive",
+            ".conditionalShell",
+        ] {
+            let symbol = service
+                .search_symbols(selector, 10)
+                .unwrap()
+                .into_iter()
+                .map(|result| result.symbol)
+                .find(|symbol| symbol.name == selector)
+                .unwrap_or_else(|| panic!("expected indexed selector {selector}"));
+            let graph = service
+                .get_symbol_graph(&symbol, SymbolRelationshipType::Usage, 10)
+                .unwrap();
+            assert!(
+                graph.incoming.iter().any(|reference| {
+                    reference.source_symbol.file_path == "src/Button.tsx"
+                        && reference.source_symbol.name == "Button"
+                        && reference.relationship_type == SymbolRelationshipType::Usage
+                        && reference.target_symbol_id.as_deref() == Some(symbol.id.as_str())
+                }),
+                "expected Button to use {selector}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_index_file_records_timing_snapshot() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("timed.ts"),
+            "export function timed() { return 1; }\n",
+        )
+        .unwrap();
+
+        service.index_file("timed.ts").unwrap();
+        let health = service.index_health_snapshot();
+
+        assert_eq!(health.timings.last_file_path.as_deref(), Some("timed.ts"));
+        assert!(health.timings.last_file_total_ms.is_some());
+        assert!(health.timings.last_file_load_ms.is_some());
+        assert!(health.timings.last_file_freshness_check_ms.is_some());
+        assert!(health.timings.last_file_parse_extract_ms.is_some());
+        assert!(health
+            .timings
+            .last_file_relationship_enrichment_ms
+            .is_some());
+        assert!(health.timings.last_file_db_write_ms.is_some());
+        assert!(health.timings.last_file_cache_update_ms.is_some());
+    }
+
+    #[test]
+    fn test_index_directory_records_discovery_timing() {
+        let (service, temp_dir) = create_test_service();
+        fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+
+        fs::write(
+            temp_dir.path().join("src/one.ts"),
+            "export function one() { return 1; }\n",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("src/two.ts"),
+            "export function two() { return 2; }\n",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("src/theme.css"),
+            ".button { --accent-ai: red; }\n",
+        )
+        .unwrap();
+        fs::write(temp_dir.path().join("src/notes.txt"), "not indexed\n").unwrap();
+
+        let stats = service.index_directory("src").unwrap();
+        let health = service.index_health_snapshot();
+
+        assert_eq!(stats.files_discovered, 4);
+        assert_eq!(stats.supported_files, 3);
+        assert_eq!(stats.files_indexed, 3);
+        assert_eq!(stats.files_reindexed, 3);
+        assert_eq!(stats.files_fresh, 0);
+        assert!(stats.symbols_extracted >= 3);
+        assert!(stats.anchors_extracted >= 1);
+        assert!(stats.parse_extract_ms <= stats.duration_ms);
+        assert!(health.timings.last_discovery_ms.is_some());
+        assert!(health.timings.last_batch_load_ms.is_some());
+        assert!(health.timings.last_batch_parse_extract_ms.is_some());
+        assert!(health.timings.last_batch_db_write_ms.is_some());
+        assert_eq!(health.discovery.last_scope.as_deref(), Some("src"));
+        assert_eq!(health.discovery.last_discovered_files, 4);
+        assert_eq!(health.discovery.last_supported_files, 3);
+        assert_eq!(health.discovery.last_indexed_files, 3);
+        assert_eq!(health.discovery.last_reindexed_files, 3);
+        assert_eq!(health.discovery.last_fresh_files, 0);
+        assert!(health.discovery.last_anchors_extracted >= 1);
+        assert_eq!(
+            health.discovery.last_relationships_extracted,
+            stats.relationships_extracted
+        );
+        assert!(health
+            .discovery
+            .supported_by_language
+            .iter()
+            .any(|entry| entry.language == "TypeScript" && entry.count == 2));
+        assert!(health
+            .discovery
+            .supported_by_language
+            .iter()
+            .any(|entry| entry.language == "CSS" && entry.count == 1));
+        assert!(health
+            .discovery
+            .skipped_by_reason
+            .iter()
+            .any(|entry| entry.reason == "unsupported_language" && entry.count == 1));
+
+        let stats = service.index_directory("src").unwrap();
+        let health = service.index_health_snapshot();
+
+        assert_eq!(stats.files_indexed, 3);
+        assert_eq!(stats.files_fresh, 3);
+        assert_eq!(stats.files_reindexed, 0);
+        assert_eq!(health.discovery.last_fresh_files, 3);
+        assert_eq!(health.discovery.last_reindexed_files, 0);
     }
 
     #[test]

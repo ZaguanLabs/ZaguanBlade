@@ -455,7 +455,7 @@ impl WorktreeSnapshot {
 }
 
 fn is_supported_index_path(path: &str) -> bool {
-    Language::from_path(path).is_some() || is_translation_resource_path(path)
+    Language::capability_for_path(path).is_some() || is_translation_resource_path(path)
 }
 
 fn is_translation_resource_path(path: &str) -> bool {

@@ -1,0 +1,11 @@
+.buttonPrimary {
+  color: var(--button-accent);
+}
+
+.button-secondary {
+  color: blue;
+}
+
+:root {
+  --button-accent: #62d6ff;
+}

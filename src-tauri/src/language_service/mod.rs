@@ -15,5 +15,6 @@ mod service;
 pub use handler::LanguageHandler;
 pub use indexer::{FileIndexer, IndexEvent};
 pub use service::{
-    IndexHealthSnapshot, IndexHealthStatus, LanguageService, RelatedSymbol, SymbolGraph,
+    IndexDiscoverySnapshot, IndexHealthSnapshot, IndexHealthStatus, IndexLanguageCount,
+    IndexSkipCount, IndexTimingSnapshot, LanguageService, RelatedSymbol, SymbolGraph,
 };

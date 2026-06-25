@@ -42,7 +42,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "fast_context",
             "function": {
                 "name": "fast_context",
-                "description": "Plan broad or uncertain code tasks before reading many files. Returns targeted symbol-aware context: structured project context, ranked primary files, enriched symbol and semantic-anchor metadata, indexed Markdown sections, related files, optional impact hints, index health, confidence, suggested read ranges, and next steps. Legacy project-index Markdown is excluded unless explicitly requested for fallback compatibility.",
+                "description": "Plan broad or uncertain code tasks before reading many files. Returns targeted symbol-aware context: structured project context, ranked primary files, enriched symbol and semantic-anchor metadata, language-support capability metadata, indexed Markdown sections, related files, optional impact hints, index health, confidence, suggested read ranges, and next steps. Legacy project-index Markdown is excluded unless explicitly requested for fallback compatibility.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -66,7 +66,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "symbol_search",
             "function": {
                 "name": "symbol_search",
-                "description": "Search indexed symbols by name or qualified name. Returns lightweight search_health metadata and index health. If results are empty or low confidence, use fast_context or a targeted file/path search rather than retrying broad symbol_search repeatedly.",
+                "description": "Search indexed symbols by name or qualified name. Returns search_health, index_health, and language_support metadata. Empty results are trustworthy only when the target file type is supported and the index is fresh; for unsupported files, literal/theme tokens, routes, config keys, translation keys, or arbitrary text use semantic_anchor_search, grep_search, or codebase_search.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -74,7 +74,8 @@ pub fn get_tool_definitions() -> Vec<Value> {
                         "query": { "type": "string", "description": "Symbol name or qualified-name query" },
                         "path": { "type": "string", "description": "Optional file path filter" },
                         "kind": { "type": "string", "description": "Optional symbol kind filter" },
-                        "limit": { "type": "integer", "description": "Optional max results" }
+                        "limit": { "type": "integer", "description": "Optional max results" },
+                        "offset": { "type": "integer", "description": "Optional zero-based result offset for pagination. Use only after checking has_more in a prior response." }
                     },
                     "required": ["query"],
                     "additionalProperties": false
@@ -86,7 +87,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "semantic_anchor_search",
             "function": {
                 "name": "semantic_anchor_search",
-                "description": "Search indexed semantic anchors such as protocol tags, command names, event names, route-like strings, config keys, translation keys/text, and CSS/theme tokens.",
+                "description": "Search indexed semantic anchors such as protocol tags, command names, event names, route-like strings, config keys, translation keys/text, and CSS/theme tokens. Returns language_support metadata for the optional file filter.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -105,7 +106,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "symbol_resolve",
             "function": {
                 "name": "symbol_resolve",
-                "description": "Resolve one symbol to its exact current structural record using a stable symbol ID or file-scoped name",
+                "description": "Resolve one symbol to its exact current structural record using a stable symbol ID or file-scoped name. Returns language_support metadata for the resolved symbol file.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -125,7 +126,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "symbol_related",
             "function": {
                 "name": "symbol_related",
-                "description": "Return evidence-backed symbols related to a seed symbol, including direct graph edges, same-module exports, module importers, and consumers of sibling exports from the same module.",
+                "description": "Return evidence-backed symbols related to a seed symbol, including direct graph edges, same-module exports, module importers, and consumers of sibling exports from the same module. Returns language_support metadata for the seed file.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -146,7 +147,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "symbol_outline",
             "function": {
                 "name": "symbol_outline",
-                "description": "Return a compact symbol inventory and optional hierarchical outline for one file using the local code-intelligence index",
+                "description": "Return a compact symbol inventory and optional hierarchical outline for one file using the local code-intelligence index. Returns language_support diagnostics so unsupported or partial file types can be handled with read_file_range, semantic_anchor_search, grep_search, or codebase_search.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -169,7 +170,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "symbol_references",
             "function": {
                 "name": "symbol_references",
-                "description": "Expand inbound and outbound relationships for one symbol or important symbols in a file, including resolved-symbol confidence and name-fallback metadata",
+                "description": "Expand inbound and outbound relationships for one symbol or important symbols in a file, including resolved-symbol confidence, name-fallback metadata, and language_support metadata.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -178,7 +179,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
                         "path": { "type": "string", "description": "File path for resolving by name, or file-wide expansion when no name is provided" },
                         "qualified_name": { "type": "string", "description": "Optional exact qualified name" },
                         "name": { "type": "string", "description": "Optional simple symbol name" },
-                        "relationship": { "type": "string", "description": "Optional single relationship type: call, import, export, extends, implements, contains" },
+                        "relationship": { "type": "string", "description": "Optional single relationship type: call, import, export, extends, implements, contains, usage" },
                         "relationships": { "type": "array", "items": { "type": "string" }, "description": "Optional relationship type list" },
                         "limit": { "type": "integer", "description": "Optional max references per relationship type" },
                         "max_symbols": { "type": "integer", "description": "For file-wide expansion, maximum important symbols to expand" }
@@ -193,7 +194,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "edit_impact",
             "function": {
                 "name": "edit_impact",
-                "description": "Analyze likely edit impact before changing a file or symbol, including impacted files, related tests, reference counts, risk, confidence, and suggested read ranges.",
+                "description": "Analyze likely edit impact before changing a file or symbol, including impacted files, related tests, reference counts, risk, confidence, suggested read ranges, and language_support metadata.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -215,7 +216,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "symbol_graph",
             "function": {
                 "name": "symbol_graph",
-                "description": "Return incoming and outgoing graph edges for one symbol using the local code-intelligence index, including call, import, export, extends, implements, and contains relationships",
+                "description": "Return incoming and outgoing graph edges for one symbol using the local code-intelligence index, including call, import, export, extends, implements, contains, and usage relationships. Returns language_support metadata for the seed file.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -224,7 +225,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
                         "path": { "type": "string", "description": "Optional file path when resolving by name" },
                         "qualified_name": { "type": "string", "description": "Optional exact qualified name" },
                         "name": { "type": "string", "description": "Optional simple symbol name" },
-                        "relationship_type": { "type": "string", "description": "Optional edge kind: call, import, export, extends, implements, or contains" },
+                        "relationship_type": { "type": "string", "description": "Optional edge kind: call, import, export, extends, implements, contains, or usage" },
                         "limit": { "type": "integer", "description": "Optional max incoming/outgoing edges" }
                     },
                     "required": [],

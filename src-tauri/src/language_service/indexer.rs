@@ -97,7 +97,7 @@ impl FileIndexer {
 
             if path.is_dir() {
                 self.discover_files_recursive(base, &rel_path, files);
-            } else if path.is_file() && Language::from_path(&rel_path).is_some() {
+            } else if path.is_file() && Language::capability_for_path(&rel_path).is_some() {
                 files.push(rel_path);
             }
         }
@@ -118,7 +118,7 @@ impl FileIndexer {
 
     /// Check if a path is a supported language file
     pub fn is_supported(&self, path: &str) -> bool {
-        Language::from_path(path).is_some()
+        Language::capability_for_path(path).is_some()
     }
 
     /// Check if a file change should be processed (debouncing)
