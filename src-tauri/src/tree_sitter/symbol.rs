@@ -409,7 +409,8 @@ impl SymbolExtractor {
             | Language::Java
             | Language::CSharp
             | Language::Kotlin
-            | Language::Ruby => None,
+            | Language::Ruby
+            | Language::Cpp => None,
         }
     }
 
@@ -998,7 +999,8 @@ impl SymbolExtractor {
             | Language::Java
             | Language::CSharp
             | Language::Kotlin
-            | Language::Ruby => {}
+            | Language::Ruby
+            | Language::Cpp => {}
         }
         None
     }
@@ -1100,7 +1102,8 @@ fn extract_structural_relationships_from_node(
         | Language::Java
         | Language::CSharp
         | Language::Kotlin
-        | Language::Ruby => {}
+        | Language::Ruby
+        | Language::Cpp => {}
     }
 
     for i in 0..node.child_count() {
@@ -1524,7 +1527,8 @@ fn extract_relationship_target_name(
         | Language::Java
         | Language::CSharp
         | Language::Kotlin
-        | Language::Ruby => None,
+        | Language::Ruby
+        | Language::Cpp => None,
     }
 }
 

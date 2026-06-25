@@ -33,6 +33,7 @@ pub enum Language {
     CSharp,
     Kotlin,
     Ruby,
+    Cpp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -332,6 +333,15 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extractor_version: 1,
         extracts: ExtractionCapabilities::scanner(true),
     },
+    LanguageCapability {
+        language: Language::Cpp,
+        display_name: "C/C++",
+        extensions: &["c", "h", "cc", "cxx", "cpp", "hpp", "hxx"],
+        parser: ParserKind::Scanner,
+        support: SupportLevel::Partial,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::scanner(true),
+    },
 ];
 
 impl Language {
@@ -394,6 +404,10 @@ impl Language {
 
     pub fn is_kotlin_scanner(self) -> bool {
         matches!(self, Language::Kotlin)
+    }
+
+    pub fn is_cpp_scanner(self) -> bool {
+        matches!(self, Language::Cpp)
     }
 
     pub fn is_ruby_scanner(self) -> bool {
@@ -598,13 +612,9 @@ mod tests {
             Language::from_path("tasks/deploy.rake"),
             Some(Language::Ruby)
         );
-        for path in ["main.cpp", "main.c"] {
-            assert_eq!(
-                Language::from_path(path),
-                None,
-                "{path} should not be claimed before it has an explicit capability entry"
-            );
-        }
+        assert_eq!(Language::from_path("main.c"), Some(Language::Cpp));
+        assert_eq!(Language::from_path("main.cpp"), Some(Language::Cpp));
+        assert_eq!(Language::from_path("include/user.hpp"), Some(Language::Cpp));
     }
 
     #[test]
