@@ -37,6 +37,7 @@ pub enum Language {
     Shell,
     Dockerfile,
     Sql,
+    BuildScript,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -372,6 +373,15 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extractor_version: 1,
         extracts: ExtractionCapabilities::scanner(true),
     },
+    LanguageCapability {
+        language: Language::BuildScript,
+        display_name: "Make/CMake",
+        extensions: &["mk", "make", "cmake"],
+        parser: ParserKind::Scanner,
+        support: SupportLevel::Partial,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::scanner(true),
+    },
 ];
 
 impl Language {
@@ -381,6 +391,11 @@ impl Language {
         let file_name_lower = file_name.to_lowercase();
         if file_name_lower == "dockerfile" || file_name_lower.starts_with("dockerfile.") {
             return Some(Language::Dockerfile);
+        }
+        if matches!(file_name_lower.as_str(), "makefile" | "gnumakefile")
+            || file_name_lower == "cmakelists.txt"
+        {
+            return Some(Language::BuildScript);
         }
         let ext = path.rsplit('.').next()?;
         Self::from_extension(ext)
@@ -450,6 +465,10 @@ impl Language {
 
     pub fn is_sql_scanner(self) -> bool {
         matches!(self, Language::Sql)
+    }
+
+    pub fn is_build_script_scanner(self) -> bool {
+        matches!(self, Language::BuildScript)
     }
 
     pub fn is_shell_scanner(self) -> bool {
@@ -683,6 +702,20 @@ mod tests {
         );
         assert_eq!(Language::from_path("schema.sql"), Some(Language::Sql));
         assert_eq!(Language::from_path("migration.psql"), Some(Language::Sql));
+        assert_eq!(Language::from_path("Makefile"), Some(Language::BuildScript));
+        assert_eq!(
+            Language::from_path("GNUmakefile"),
+            Some(Language::BuildScript)
+        );
+        assert_eq!(
+            Language::from_path("CMakeLists.txt"),
+            Some(Language::BuildScript)
+        );
+        assert_eq!(Language::from_path("rules.mk"), Some(Language::BuildScript));
+        assert_eq!(
+            Language::from_path("cmake/helpers.cmake"),
+            Some(Language::BuildScript)
+        );
     }
 
     #[test]

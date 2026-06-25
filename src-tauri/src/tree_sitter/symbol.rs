@@ -413,7 +413,8 @@ impl SymbolExtractor {
             | Language::Cpp
             | Language::Shell
             | Language::Dockerfile
-            | Language::Sql => None,
+            | Language::Sql
+            | Language::BuildScript => None,
         }
     }
 
@@ -1006,7 +1007,8 @@ impl SymbolExtractor {
             | Language::Cpp
             | Language::Shell
             | Language::Dockerfile
-            | Language::Sql => {}
+            | Language::Sql
+            | Language::BuildScript => {}
         }
         None
     }
@@ -1112,7 +1114,8 @@ fn extract_structural_relationships_from_node(
         | Language::Cpp
         | Language::Shell
         | Language::Dockerfile
-        | Language::Sql => {}
+        | Language::Sql
+        | Language::BuildScript => {}
     }
 
     for i in 0..node.child_count() {
@@ -1540,7 +1543,8 @@ fn extract_relationship_target_name(
         | Language::Cpp
         | Language::Shell
         | Language::Dockerfile
-        | Language::Sql => None,
+        | Language::Sql
+        | Language::BuildScript => None,
     }
 }
 

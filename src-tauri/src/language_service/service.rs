@@ -1620,6 +1620,14 @@ impl LanguageService {
                 language,
             });
         }
+        if language.is_build_script_scanner() {
+            return Ok(SymbolExtraction {
+                symbols: extract_build_script_symbols(file_path, content),
+                relationships: Vec::new(),
+                content: Cow::Borrowed(content),
+                language,
+            });
+        }
 
         let (extraction_content, extraction_language) = if matches!(language, Language::Astro) {
             (Cow::Owned(astro_script_projection(content)), Language::Tsx)
@@ -3855,7 +3863,8 @@ impl LanguageService {
             | Language::Cpp
             | Language::Shell
             | Language::Dockerfile
-            | Language::Sql => false,
+            | Language::Sql
+            | Language::BuildScript => false,
         }
     }
 
@@ -3956,7 +3965,8 @@ impl LanguageService {
             | Language::Cpp
             | Language::Shell
             | Language::Dockerfile
-            | Language::Sql => false,
+            | Language::Sql
+            | Language::BuildScript => false,
         }
     }
 
@@ -5294,7 +5304,8 @@ impl LanguageService {
             | Language::Cpp
             | Language::Shell
             | Language::Dockerfile
-            | Language::Sql => None,
+            | Language::Sql
+            | Language::BuildScript => None,
         }
     }
 }
@@ -9661,6 +9672,134 @@ fn sql_read_identifier_at(text: &str, cursor: usize) -> Option<(String, usize, u
     })
 }
 
+fn extract_build_script_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
+    extract_line_scanner_symbols(file_path, content, build_script_declarations_in_line)
+}
+
+fn build_script_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
+    let code = build_script_line_code(line);
+    if code.is_empty() {
+        return Vec::new();
+    }
+    let code_start = line.find(code).unwrap_or(0);
+
+    if let Some(declaration) = cmake_declaration(code, code_start) {
+        return vec![declaration];
+    }
+    make_declaration(code, code_start).into_iter().collect()
+}
+
+fn build_script_line_code(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with('#') || trimmed.starts_with('\t') {
+        ""
+    } else {
+        trimmed.split('#').next().unwrap_or(trimmed).trim_end()
+    }
+}
+
+fn cmake_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
+    let paren_index = code.find('(')?;
+    let command = code[..paren_index].trim();
+    if command.is_empty() || command.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let rest = code[paren_index + 1..].trim_start();
+    let command_lower = command.to_ascii_lowercase();
+    let symbol_type = match command_lower.as_str() {
+        "project" => SymbolType::Module,
+        "include" => SymbolType::Import,
+        "set" | "option" => SymbolType::Constant,
+        "function" | "macro" | "add_executable" => SymbolType::Function,
+        "add_library" => SymbolType::Struct,
+        _ => return None,
+    };
+    let (name, name_len) = build_script_read_word(rest)?;
+    let leading_ws = code[paren_index + 1..].len().saturating_sub(rest.len());
+    let start_char = code_start + paren_index + 1 + leading_ws;
+    Some(LineScannerDeclaration {
+        name,
+        symbol_type,
+        start_char,
+        end_char: start_char + name_len,
+    })
+}
+
+fn make_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
+    if let Some(rest) = code
+        .strip_prefix("include ")
+        .or_else(|| code.strip_prefix("-include "))
+        .or_else(|| code.strip_prefix("sinclude "))
+    {
+        let rest = rest.trim_start();
+        let (name, name_len) = build_script_read_word(rest)?;
+        let leading_ws = code.len().saturating_sub(rest.len());
+        return Some(LineScannerDeclaration {
+            name,
+            symbol_type: SymbolType::Import,
+            start_char: code_start + leading_ws,
+            end_char: code_start + leading_ws + name_len,
+        });
+    }
+
+    if let Some((operator_start, _operator_len)) = make_assignment_operator(code) {
+        let name = code[..operator_start].trim();
+        if !name.is_empty() && name.chars().all(|ch| !ch.is_whitespace()) {
+            let leading_ws = code.len().saturating_sub(code.trim_start().len());
+            return Some(LineScannerDeclaration {
+                name: name.to_string(),
+                symbol_type: SymbolType::Constant,
+                start_char: code_start + leading_ws,
+                end_char: code_start + operator_start,
+            });
+        }
+    }
+
+    let colon_index = code.find(':')?;
+    let target = code[..colon_index].trim();
+    if target.is_empty()
+        || target.starts_with('.')
+        || target.contains('=')
+        || target.contains('$')
+        || target.contains('%')
+    {
+        return None;
+    }
+    let first_target = target.split_whitespace().next()?;
+    let start_char = code_start + code.find(first_target).unwrap_or(0);
+    Some(LineScannerDeclaration {
+        name: first_target.to_string(),
+        symbol_type: SymbolType::Function,
+        start_char,
+        end_char: start_char + first_target.len(),
+    })
+}
+
+fn make_assignment_operator(code: &str) -> Option<(usize, usize)> {
+    [":=", "?=", "+=", "="]
+        .iter()
+        .filter_map(|operator| code.find(operator).map(|index| (index, operator.len())))
+        .min_by_key(|(index, _len)| *index)
+}
+
+fn build_script_read_word(text: &str) -> Option<(String, usize)> {
+    let quote = text.chars().next().filter(|ch| *ch == '"' || *ch == '\'');
+    if let Some(quote) = quote {
+        let after_quote = &text[quote.len_utf8()..];
+        let end = after_quote.find(quote)?;
+        return Some((after_quote[..end].to_string(), end + quote.len_utf8() * 2));
+    }
+
+    let mut end = 0usize;
+    for (index, ch) in text.char_indices() {
+        if ch.is_whitespace() || matches!(ch, ')' | ';' | ',') {
+            break;
+        }
+        end = index + ch.len_utf8();
+    }
+    (end > 0).then(|| (text[..end].to_string(), end))
+}
+
 fn push_line_scanner_symbol(
     symbols: &mut Vec<Symbol>,
     seen: &mut HashSet<(String, SymbolType, u32)>,
@@ -10165,6 +10304,8 @@ mod tests {
         "shell/deploy.sh",
         "docker/Dockerfile",
         "sql/001_users.sql",
+        "make/Makefile",
+        "cmake/CMakeLists.txt",
     ];
 
     fn write_symbol_fixture(workspace_root: &Path, relative_path: &str) {
@@ -10804,6 +10945,64 @@ mod tests {
                     },
                 ],
             },
+            SymbolFixture {
+                path: "make/Makefile",
+                expected_symbols: &[
+                    ExpectedSymbol {
+                        name: "config.mk",
+                        symbol_type: SymbolType::Import,
+                    },
+                    ExpectedSymbol {
+                        name: "APP_NAME",
+                        symbol_type: SymbolType::Constant,
+                    },
+                    ExpectedSymbol {
+                        name: "CFLAGS",
+                        symbol_type: SymbolType::Constant,
+                    },
+                    ExpectedSymbol {
+                        name: "build",
+                        symbol_type: SymbolType::Function,
+                    },
+                    ExpectedSymbol {
+                        name: "clean",
+                        symbol_type: SymbolType::Function,
+                    },
+                ],
+            },
+            SymbolFixture {
+                path: "cmake/CMakeLists.txt",
+                expected_symbols: &[
+                    ExpectedSymbol {
+                        name: "ZBladeFixture",
+                        symbol_type: SymbolType::Module,
+                    },
+                    ExpectedSymbol {
+                        name: "GNUInstallDirs",
+                        symbol_type: SymbolType::Import,
+                    },
+                    ExpectedSymbol {
+                        name: "ZBLADE_FEATURES",
+                        symbol_type: SymbolType::Constant,
+                    },
+                    ExpectedSymbol {
+                        name: "zblade_core",
+                        symbol_type: SymbolType::Struct,
+                    },
+                    ExpectedSymbol {
+                        name: "zblade_cli",
+                        symbol_type: SymbolType::Function,
+                    },
+                    ExpectedSymbol {
+                        name: "configure_zblade",
+                        symbol_type: SymbolType::Function,
+                    },
+                    ExpectedSymbol {
+                        name: "register_zblade_test",
+                        symbol_type: SymbolType::Function,
+                    },
+                ],
+            },
         ];
 
         for fixture in fixtures {
@@ -10863,6 +11062,12 @@ mod tests {
                 "app.normalize_user_id",
                 "sql/001_users.sql",
                 "app.normalize_user_id",
+            ),
+            ("APP_NAME", "make/Makefile", "APP_NAME"),
+            (
+                "configure_zblade",
+                "cmake/CMakeLists.txt",
+                "configure_zblade",
             ),
         ] {
             let results = service.search_symbols(query, 10).unwrap();
@@ -10929,6 +11134,7 @@ mod tests {
             ("Shell", 1),
             ("Dockerfile", 1),
             ("SQL", 1),
+            ("Make/CMake", 2),
         ] {
             assert!(
                 stats
