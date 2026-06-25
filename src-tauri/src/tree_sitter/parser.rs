@@ -270,7 +270,7 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["yaml", "yml"],
         parser: ParserKind::Scanner,
         support: SupportLevel::Partial,
-        extractor_version: 1,
+        extractor_version: 2,
         extracts: ExtractionCapabilities::scanner(true),
     },
     LanguageCapability {

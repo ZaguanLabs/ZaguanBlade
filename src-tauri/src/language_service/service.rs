@@ -7045,7 +7045,11 @@ fn extract_config_symbols(file_path: &str, content: &str, language: Language) ->
         }
         Language::Yaml => {
             if let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(content) {
-                collect_yaml_config_keys(&value, &mut Vec::new(), &mut entries);
+                if is_github_actions_workflow_path(file_path) {
+                    collect_github_actions_workflow_config_keys(&value, &mut entries);
+                } else {
+                    collect_yaml_config_keys(&value, &mut Vec::new(), &mut entries);
+                }
             }
         }
         Language::Toml => {
@@ -7292,6 +7296,125 @@ fn collect_yaml_config_keys(
     }
 }
 
+fn collect_github_actions_workflow_config_keys(
+    value: &serde_yaml::Value,
+    entries: &mut Vec<ConfigKeyEntry>,
+) {
+    let Some(root) = value.as_mapping() else {
+        return;
+    };
+
+    for key in ["name", "on", "permissions", "concurrency"] {
+        if yaml_mapping_get(root, key).is_some() {
+            push_config_key_entry(&[key.to_string()], key, entries);
+        }
+    }
+
+    if let Some(triggers) = yaml_mapping_get(root, "on") {
+        collect_github_actions_triggers(triggers, entries);
+    }
+
+    let Some(jobs) = yaml_mapping_get(root, "jobs").and_then(serde_yaml::Value::as_mapping) else {
+        return;
+    };
+
+    for (job_key, job_value) in jobs {
+        let Some(job_id) = job_key.as_str().filter(|key| is_config_key_segment(key)) else {
+            continue;
+        };
+        push_config_key_entry(&["jobs".to_string(), job_id.to_string()], job_id, entries);
+
+        let Some(job) = job_value.as_mapping() else {
+            continue;
+        };
+        for key in [
+            "name",
+            "runs-on",
+            "needs",
+            "if",
+            "uses",
+            "permissions",
+            "strategy",
+            "environment",
+        ] {
+            if yaml_mapping_get(job, key).is_some() {
+                push_config_key_entry(
+                    &["jobs".to_string(), job_id.to_string(), key.to_string()],
+                    key,
+                    entries,
+                );
+            }
+        }
+
+        if let Some(steps) = yaml_mapping_get(job, "steps").and_then(serde_yaml::Value::as_sequence)
+        {
+            collect_github_actions_step_keys(job_id, steps, entries);
+        }
+    }
+}
+
+fn collect_github_actions_triggers(value: &serde_yaml::Value, entries: &mut Vec<ConfigKeyEntry>) {
+    match value {
+        serde_yaml::Value::Mapping(map) => {
+            for (trigger_key, _) in map {
+                let Some(trigger) = trigger_key
+                    .as_str()
+                    .filter(|key| is_config_key_segment(key))
+                else {
+                    continue;
+                };
+                push_config_key_entry(&["on".to_string(), trigger.to_string()], trigger, entries);
+            }
+        }
+        serde_yaml::Value::Sequence(items) => {
+            for trigger in items.iter().filter_map(serde_yaml::Value::as_str) {
+                if is_config_key_segment(trigger) {
+                    push_config_key_entry(
+                        &["on".to_string(), trigger.to_string()],
+                        trigger,
+                        entries,
+                    );
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_github_actions_step_keys(
+    job_id: &str,
+    steps: &[serde_yaml::Value],
+    entries: &mut Vec<ConfigKeyEntry>,
+) {
+    for step in steps {
+        let Some(step_map) = step.as_mapping() else {
+            continue;
+        };
+        let step_name = yaml_mapping_get(step_map, "name")
+            .and_then(serde_yaml::Value::as_str)
+            .or_else(|| yaml_mapping_get(step_map, "uses").and_then(serde_yaml::Value::as_str))
+            .or_else(|| yaml_mapping_get(step_map, "run").and_then(serde_yaml::Value::as_str));
+        let Some(step_name) = step_name.filter(|value| is_workflow_step_symbol_segment(value))
+        else {
+            continue;
+        };
+        push_config_key_entry(
+            &[
+                "jobs".to_string(),
+                job_id.to_string(),
+                "steps".to_string(),
+                step_name.to_string(),
+            ],
+            step_name,
+            entries,
+        );
+    }
+}
+
+fn yaml_mapping_get<'a>(map: &'a serde_yaml::Mapping, key: &str) -> Option<&'a serde_yaml::Value> {
+    map.get(&serde_yaml::Value::String(key.to_string()))
+}
+
 fn collect_toml_config_keys(content: &str, entries: &mut Vec<ConfigKeyEntry>) {
     let mut table_path = Vec::<String>::new();
     for line in content.lines() {
@@ -7364,6 +7487,13 @@ fn is_config_key_segment(key: &str) -> bool {
         && key.chars().any(|ch| ch.is_ascii_alphabetic())
 }
 
+fn is_workflow_step_symbol_segment(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 120
+        && !value.chars().any(|ch| ch.is_control())
+        && value.chars().any(|ch| ch.is_ascii_alphabetic())
+}
+
 fn is_package_json_path(file_path: &str) -> bool {
     config_file_name(file_path) == "package.json"
 }
@@ -7382,6 +7512,12 @@ fn config_file_name(file_path: &str) -> String {
         .next()
         .unwrap_or_default()
         .to_ascii_lowercase()
+}
+
+fn is_github_actions_workflow_path(file_path: &str) -> bool {
+    let lower = file_path.replace('\\', "/").to_ascii_lowercase();
+    (lower.ends_with(".yml") || lower.ends_with(".yaml"))
+        && (lower.starts_with(".github/workflows/") || lower.contains("/.github/workflows/"))
 }
 
 fn locate_config_key(content: &str, key_path: &str, leaf_key: &str) -> AnchorLocation {
@@ -8471,6 +8607,7 @@ mod tests {
     fn test_index_config_key_symbols() {
         let (service, temp_dir) = create_test_service();
         fs::create_dir_all(temp_dir.path().join("config")).unwrap();
+        fs::create_dir_all(temp_dir.path().join(".github/workflows")).unwrap();
 
         fs::write(
             temp_dir.path().join("package.json"),
@@ -8512,6 +8649,31 @@ mod tests {
     }
   }
 }
+"#,
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join(".github/workflows/ci.yml"),
+            r#"
+name: CI
+on:
+  push:
+  pull_request:
+jobs:
+  build:
+    name: Build app
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build frontend
+        run: bun run build
+  lint:
+    runs-on: ubuntu-latest
+    needs: build
+    custom:
+      deep:
+        noise: true
 "#,
         )
         .unwrap();
@@ -8579,6 +8741,27 @@ testpaths = ["tests"]
         assert!(!tsconfig_symbols
             .iter()
             .any(|symbol| symbol.name == "random.deep.noise"));
+
+        let workflow_symbols = service.index_file(".github/workflows/ci.yml").unwrap();
+        assert!(workflow_symbols.iter().any(|symbol| {
+            symbol.name == "on.push" && symbol.symbol_type == SymbolType::Property
+        }));
+        assert!(workflow_symbols.iter().any(|symbol| {
+            symbol.name == "jobs.build" && symbol.symbol_type == SymbolType::Property
+        }));
+        assert!(workflow_symbols.iter().any(|symbol| {
+            symbol.name == "jobs.build.runs-on" && symbol.symbol_type == SymbolType::Property
+        }));
+        assert!(workflow_symbols.iter().any(|symbol| {
+            symbol.name == "jobs.build.steps.Build frontend"
+                && symbol.symbol_type == SymbolType::Property
+        }));
+        assert!(workflow_symbols.iter().any(|symbol| {
+            symbol.name == "jobs.lint.needs" && symbol.symbol_type == SymbolType::Property
+        }));
+        assert!(!workflow_symbols
+            .iter()
+            .any(|symbol| symbol.name == "jobs.lint.custom.deep.noise"));
 
         let yaml_symbols = service.index_file("config/app.yaml").unwrap();
         assert!(yaml_symbols.iter().any(|symbol| {
