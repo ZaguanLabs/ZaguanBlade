@@ -5421,6 +5421,11 @@ fn extract_semantic_anchors(file_path: &str, content: &str) -> Vec<SemanticAncho
         return anchors;
     }
 
+    extract_yaml_route_config_anchors(file_path, content, &mut anchors, &mut seen, limit);
+    if anchors.len() >= limit {
+        return anchors;
+    }
+
     for (line_index, line) in content.lines().enumerate() {
         let preview = line.trim().chars().take(240).collect::<String>();
         for (value, character) in extract_quoted_values(line)
@@ -5453,6 +5458,120 @@ fn extract_semantic_anchors(file_path: &str, content: &str) -> Vec<SemanticAncho
     }
 
     anchors
+}
+
+fn extract_yaml_route_config_anchors(
+    file_path: &str,
+    content: &str,
+    anchors: &mut Vec<SemanticAnchor>,
+    seen: &mut HashSet<(String, String, u32, u32)>,
+    limit: usize,
+) {
+    if !matches!(Language::from_path(file_path), Some(Language::Yaml)) {
+        return;
+    }
+    let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(content) else {
+        return;
+    };
+
+    collect_yaml_route_config_anchor_values(file_path, content, &value, None, anchors, seen, limit);
+}
+
+fn collect_yaml_route_config_anchor_values(
+    file_path: &str,
+    content: &str,
+    value: &serde_yaml::Value,
+    key_hint: Option<&str>,
+    anchors: &mut Vec<SemanticAnchor>,
+    seen: &mut HashSet<(String, String, u32, u32)>,
+    limit: usize,
+) {
+    if anchors.len() >= limit {
+        return;
+    }
+
+    match value {
+        serde_yaml::Value::Mapping(map) => {
+            for (key, value) in map {
+                if anchors.len() >= limit {
+                    return;
+                }
+                let key_hint = key.as_str();
+                collect_yaml_route_config_anchor_values(
+                    file_path, content, value, key_hint, anchors, seen, limit,
+                );
+            }
+        }
+        serde_yaml::Value::Sequence(items) => {
+            for item in items {
+                if anchors.len() >= limit {
+                    return;
+                }
+                collect_yaml_route_config_anchor_values(
+                    file_path, content, item, key_hint, anchors, seen, limit,
+                );
+            }
+        }
+        serde_yaml::Value::String(text)
+            if key_hint.is_some_and(is_route_config_key) && is_route_anchor_value(text) =>
+        {
+            let location = locate_anchor_value(content, text);
+            let preview = content
+                .lines()
+                .nth(location.line as usize)
+                .unwrap_or_default()
+                .trim()
+                .chars()
+                .take(240)
+                .collect::<String>();
+            push_semantic_anchor(
+                anchors,
+                seen,
+                file_path,
+                "route",
+                text,
+                location.line,
+                location.character,
+                preview,
+                0.95,
+                limit,
+            );
+        }
+        _ => {}
+    }
+}
+
+fn is_route_config_key(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "path" | "route" | "source" | "destination" | "redirect" | "rewrite" | "url"
+    )
+}
+
+fn is_route_anchor_value(value: &str) -> bool {
+    value.starts_with('/') && !value.contains(char::is_whitespace) && value.len() <= 160
+}
+
+fn locate_anchor_value(content: &str, value: &str) -> AnchorLocation {
+    let quoted = format!("\"{value}\"");
+    let single_quoted = format!("'{value}'");
+    for (line_index, line) in content.lines().enumerate() {
+        if let Some(character) = line
+            .find(&quoted)
+            .map(|idx| idx + 1)
+            .or_else(|| line.find(&single_quoted).map(|idx| idx + 1))
+            .or_else(|| line.find(value))
+        {
+            return AnchorLocation {
+                line: line_index as u32,
+                character: character as u32,
+            };
+        }
+    }
+    AnchorLocation {
+        line: 0,
+        character: 0,
+    }
 }
 
 fn semantic_anchor_limit_for_file(file_path: &str) -> usize {
@@ -9852,8 +9971,20 @@ export function loadPosts() {
             "#,
         )
         .unwrap();
+        fs::write(
+            temp_dir.path().join("routes.yaml"),
+            r#"
+routes:
+  - path: /api/blade/events
+    destination: /internal/blade/events
+metadata:
+  label: ignored
+"#,
+        )
+        .unwrap();
 
         service.index_file("anchors.ts").unwrap();
+        service.index_file("routes.yaml").unwrap();
         let anchors = service
             .search_semantic_anchors("BladeProtocolGateway", None, 10)
             .unwrap();
@@ -9867,6 +9998,13 @@ export function loadPosts() {
             .unwrap()
             .iter()
             .any(|result| result.anchor.kind == "route"));
+        assert!(service
+            .search_semantic_anchors("/internal/blade/events", None, 10)
+            .unwrap()
+            .iter()
+            .any(
+                |result| result.anchor.kind == "route" && result.anchor.file_path == "routes.yaml"
+            ));
         assert!(service
             .search_semantic_anchors("--accent-ai", None, 10)
             .unwrap()
