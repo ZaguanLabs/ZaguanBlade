@@ -7047,6 +7047,8 @@ fn extract_config_symbols(file_path: &str, content: &str, language: Language) ->
             if let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(content) {
                 if is_github_actions_workflow_path(file_path) {
                     collect_github_actions_workflow_config_keys(&value, &mut entries);
+                } else if is_docker_compose_path(file_path) {
+                    collect_docker_compose_config_keys(&value, &mut entries);
                 } else {
                     collect_yaml_config_keys(&value, &mut Vec::new(), &mut entries);
                 }
@@ -7353,6 +7355,92 @@ fn collect_github_actions_workflow_config_keys(
     }
 }
 
+fn collect_docker_compose_config_keys(
+    value: &serde_yaml::Value,
+    entries: &mut Vec<ConfigKeyEntry>,
+) {
+    let Some(root) = value.as_mapping() else {
+        return;
+    };
+
+    for key in ["name", "version"] {
+        if yaml_mapping_get(root, key).is_some() {
+            push_config_key_entry(&[key.to_string()], key, entries);
+        }
+    }
+
+    for section in ["networks", "volumes", "secrets", "configs"] {
+        collect_yaml_top_level_child_keys(root, section, entries);
+    }
+
+    let Some(services) = yaml_mapping_get(root, "services").and_then(serde_yaml::Value::as_mapping)
+    else {
+        return;
+    };
+
+    for (service_key, service_value) in services {
+        let Some(service_name) = service_key
+            .as_str()
+            .filter(|key| is_config_key_segment(key))
+        else {
+            continue;
+        };
+        push_config_key_entry(
+            &["services".to_string(), service_name.to_string()],
+            service_name,
+            entries,
+        );
+
+        let Some(service) = service_value.as_mapping() else {
+            continue;
+        };
+        for key in [
+            "image",
+            "build",
+            "command",
+            "ports",
+            "environment",
+            "env_file",
+            "depends_on",
+            "volumes",
+            "networks",
+            "profiles",
+            "healthcheck",
+        ] {
+            if yaml_mapping_get(service, key).is_some() {
+                push_config_key_entry(
+                    &[
+                        "services".to_string(),
+                        service_name.to_string(),
+                        key.to_string(),
+                    ],
+                    key,
+                    entries,
+                );
+            }
+        }
+    }
+}
+
+fn collect_yaml_top_level_child_keys(
+    root: &serde_yaml::Mapping,
+    section: &str,
+    entries: &mut Vec<ConfigKeyEntry>,
+) {
+    let Some(section_value) =
+        yaml_mapping_get(root, section).and_then(serde_yaml::Value::as_mapping)
+    else {
+        return;
+    };
+    for key in section_value
+        .keys()
+        .filter_map(serde_yaml::Value::as_str)
+        .filter(|key| is_config_key_segment(key))
+    {
+        push_config_key_entry(&[section.to_string(), key.to_string()], key, entries);
+    }
+}
+
 fn collect_github_actions_triggers(value: &serde_yaml::Value, entries: &mut Vec<ConfigKeyEntry>) {
     match value {
         serde_yaml::Value::Mapping(map) => {
@@ -7518,6 +7606,13 @@ fn is_github_actions_workflow_path(file_path: &str) -> bool {
     let lower = file_path.replace('\\', "/").to_ascii_lowercase();
     (lower.ends_with(".yml") || lower.ends_with(".yaml"))
         && (lower.starts_with(".github/workflows/") || lower.contains("/.github/workflows/"))
+}
+
+fn is_docker_compose_path(file_path: &str) -> bool {
+    matches!(
+        config_file_name(file_path).as_str(),
+        "compose.yaml" | "compose.yml" | "docker-compose.yaml" | "docker-compose.yml"
+    )
 }
 
 fn locate_config_key(content: &str, key_path: &str, leaf_key: &str) -> AnchorLocation {
@@ -8678,6 +8773,31 @@ jobs:
         )
         .unwrap();
         fs::write(
+            temp_dir.path().join("docker-compose.yml"),
+            r#"
+name: blade-stack
+services:
+  web:
+    image: zblade/web:latest
+    ports:
+      - "3000:3000"
+    depends_on:
+      - db
+    custom:
+      deep:
+        noise: true
+  db:
+    image: postgres:16
+    volumes:
+      - db-data:/var/lib/postgresql/data
+volumes:
+  db-data:
+networks:
+  app-net:
+"#,
+        )
+        .unwrap();
+        fs::write(
             temp_dir.path().join("config/app.yaml"),
             r#"
 server:
@@ -8762,6 +8882,29 @@ testpaths = ["tests"]
         assert!(!workflow_symbols
             .iter()
             .any(|symbol| symbol.name == "jobs.lint.custom.deep.noise"));
+
+        let compose_symbols = service.index_file("docker-compose.yml").unwrap();
+        assert!(compose_symbols.iter().any(|symbol| {
+            symbol.name == "services.web" && symbol.symbol_type == SymbolType::Property
+        }));
+        assert!(compose_symbols.iter().any(|symbol| {
+            symbol.name == "services.web.ports" && symbol.symbol_type == SymbolType::Property
+        }));
+        assert!(compose_symbols.iter().any(|symbol| {
+            symbol.name == "services.web.depends_on" && symbol.symbol_type == SymbolType::Property
+        }));
+        assert!(compose_symbols.iter().any(|symbol| {
+            symbol.name == "services.db.volumes" && symbol.symbol_type == SymbolType::Property
+        }));
+        assert!(compose_symbols.iter().any(|symbol| {
+            symbol.name == "volumes.db-data" && symbol.symbol_type == SymbolType::Property
+        }));
+        assert!(compose_symbols.iter().any(|symbol| {
+            symbol.name == "networks.app-net" && symbol.symbol_type == SymbolType::Property
+        }));
+        assert!(!compose_symbols
+            .iter()
+            .any(|symbol| symbol.name == "services.web.custom.deep.noise"));
 
         let yaml_symbols = service.index_file("config/app.yaml").unwrap();
         assert!(yaml_symbols.iter().any(|symbol| {
