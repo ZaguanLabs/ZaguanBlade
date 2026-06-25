@@ -309,7 +309,6 @@ struct DiscoveryReport {
 #[derive(Debug, Clone, Default)]
 struct IndexFileMetrics {
     anchors: usize,
-    relationships: usize,
     total_ms: u64,
     load_ms: u64,
     freshness_check_ms: u64,
@@ -317,11 +316,6 @@ struct IndexFileMetrics {
     relationship_enrichment_ms: u64,
     db_write_ms: u64,
     cache_update_ms: u64,
-}
-
-struct IndexFileOutcome {
-    symbols: Vec<Symbol>,
-    metrics: IndexFileMetrics,
 }
 
 struct StagedFileIndexOutcome {
@@ -1755,10 +1749,10 @@ impl LanguageService {
 
     /// Index a single file
     pub fn index_file(&self, file_path: &str) -> Result<Vec<Symbol>, LanguageError> {
-        Ok(self.index_file_with_metrics(file_path)?.symbols)
+        self.index_file_with_timings(file_path)
     }
 
-    fn index_file_with_metrics(&self, file_path: &str) -> Result<IndexFileOutcome, LanguageError> {
+    fn index_file_with_timings(&self, file_path: &str) -> Result<Vec<Symbol>, LanguageError> {
         let total_start = std::time::Instant::now();
         let load_start = std::time::Instant::now();
         let disk_metadata = file_index_metadata(&self.resolve_path(file_path)).ok();
@@ -1806,21 +1800,7 @@ impl LanguageService {
                 timings.last_file_cache_update_ms = Some(0);
             });
             let visible_symbols = self.filter_visible_symbols(file_path, symbols);
-            let metrics = IndexFileMetrics {
-                anchors: 0,
-                relationships: 0,
-                total_ms: total_start.elapsed().as_millis() as u64,
-                load_ms,
-                freshness_check_ms: freshness_start.elapsed().as_millis() as u64,
-                parse_extract_ms: 0,
-                relationship_enrichment_ms: 0,
-                db_write_ms: db_write_ms.unwrap_or(0),
-                cache_update_ms: 0,
-            };
-            return Ok(IndexFileOutcome {
-                symbols: visible_symbols,
-                metrics,
-            });
+            return Ok(visible_symbols);
         }
         let freshness_ms = freshness_start.elapsed().as_millis() as u64;
 
@@ -1915,22 +1895,7 @@ impl LanguageService {
         });
 
         let visible_symbols = self.filter_visible_symbols(file_path, symbols);
-        let metrics = IndexFileMetrics {
-            anchors: semantic_anchors.len(),
-            relationships: relationships.len(),
-            total_ms: total_start.elapsed().as_millis() as u64,
-            load_ms,
-            freshness_check_ms: freshness_ms,
-            parse_extract_ms,
-            relationship_enrichment_ms: relationship_ms,
-            db_write_ms,
-            cache_update_ms,
-        };
-
-        Ok(IndexFileOutcome {
-            symbols: visible_symbols,
-            metrics,
-        })
+        Ok(visible_symbols)
     }
 
     fn index_anchor_only_file(
@@ -1942,7 +1907,7 @@ impl LanguageService {
         content: &str,
         total_start: std::time::Instant,
         mut metrics: IndexFileMetrics,
-    ) -> Result<IndexFileOutcome, LanguageError> {
+    ) -> Result<Vec<Symbol>, LanguageError> {
         let anchors = extract_semantic_anchors(file_path, content);
         let db_write_start = std::time::Instant::now();
         self.symbol_store.replace_file_index(
@@ -1983,10 +1948,7 @@ impl LanguageService {
             timings.last_file_cache_update_ms = Some(metrics.cache_update_ms);
         });
 
-        Ok(IndexFileOutcome {
-            symbols: Vec::new(),
-            metrics,
-        })
+        Ok(Vec::new())
     }
 
     fn stage_file_index(&self, file_path: &str) -> Result<StagedFileIndex, LanguageError> {
@@ -2080,7 +2042,6 @@ impl LanguageService {
         Ok(StagedFileIndexOutcome {
             metrics: IndexFileMetrics {
                 anchors: staged.anchors.len(),
-                relationships: staged.relationships.len(),
                 total_ms: total_start.elapsed().as_millis() as u64,
                 load_ms,
                 parse_extract_ms,
@@ -2221,32 +2182,15 @@ impl LanguageService {
         let mut staged_files = Vec::new();
 
         for relative_path in &files {
-            let needs_index = match indexed_map.get(relative_path) {
-                Some(record) => self.indexed_file_needs_refresh(relative_path, record, true)?,
-                None => true,
-            };
-
-            if !needs_index {
-                match self.index_file_with_metrics(relative_path) {
-                    Ok(outcome) => {
-                        stats.files_indexed += 1;
-                        stats.symbols_extracted += outcome.symbols.len();
-                        stats.files_fresh += 1;
-                        stats.anchors_extracted += outcome.metrics.anchors;
-                        stats.relationships_extracted += outcome.metrics.relationships;
-                        stats.load_ms += outcome.metrics.load_ms;
-                        stats.freshness_check_ms += outcome.metrics.freshness_check_ms;
-                        stats.parse_extract_ms += outcome.metrics.parse_extract_ms;
-                        stats.relationship_enrichment_ms +=
-                            outcome.metrics.relationship_enrichment_ms;
-                        stats.db_write_ms += outcome.metrics.db_write_ms;
-                        stats.cache_update_ms += outcome.metrics.cache_update_ms;
-                    }
-                    Err(_) => {
-                        stats.files_failed += 1;
-                    }
+            if let Some(record) = indexed_map.get(relative_path) {
+                let freshness_start = std::time::Instant::now();
+                if !self.indexed_file_needs_refresh(relative_path, record, true)? {
+                    stats.files_indexed += 1;
+                    stats.symbols_extracted += record.symbol_count;
+                    stats.files_fresh += 1;
+                    stats.freshness_check_ms += freshness_start.elapsed().as_millis() as u64;
+                    continue;
                 }
-                continue;
             }
 
             match self.stage_file_index_with_metrics(relative_path) {
@@ -11982,6 +11926,8 @@ export function Button() {
         assert_eq!(stats.files_indexed, 3);
         assert_eq!(stats.files_fresh, 3);
         assert_eq!(stats.files_reindexed, 0);
+        assert_eq!(stats.parse_extract_ms, 0);
+        assert_eq!(stats.db_write_ms, 0);
         assert_eq!(health.discovery.last_fresh_files, 3);
         assert_eq!(health.discovery.last_reindexed_files, 0);
     }
