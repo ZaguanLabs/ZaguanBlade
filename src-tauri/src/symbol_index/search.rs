@@ -16,6 +16,12 @@ pub struct SearchQuery {
     pub text: Option<String>,
     /// Filter by file path
     pub file_path: Option<String>,
+    /// Filter by file path glob or substring
+    pub file_pattern: Option<String>,
+    /// Filter by symbol name glob or substring
+    pub name_pattern: Option<String>,
+    /// Filter by qualified-name glob or substring
+    pub qualified_name_pattern: Option<String>,
     /// Filter by symbol types
     pub symbol_types: Option<Vec<SymbolType>>,
     /// Maximum results to return
@@ -67,6 +73,24 @@ impl SearchQuery {
     /// Add file filter
     pub fn with_file(mut self, file_path: &str) -> Self {
         self.file_path = Some(file_path.to_string());
+        self
+    }
+
+    /// Add file-pattern filter
+    pub fn with_file_pattern(mut self, pattern: &str) -> Self {
+        self.file_pattern = Some(pattern.to_string());
+        self
+    }
+
+    /// Add symbol-name-pattern filter
+    pub fn with_name_pattern(mut self, pattern: &str) -> Self {
+        self.name_pattern = Some(pattern.to_string());
+        self
+    }
+
+    /// Add qualified-name-pattern filter
+    pub fn with_qualified_name_pattern(mut self, pattern: &str) -> Self {
+        self.qualified_name_pattern = Some(pattern.to_string());
         self
     }
 
@@ -134,7 +158,7 @@ pub fn execute_search(
     // Simple case: get symbols in a specific file
     if query.text.is_none() && query.file_path.is_some() {
         let symbols = store.get_symbols_in_file(query.file_path.as_ref().unwrap())?;
-        let results = filter_by_type(symbols, query.symbol_types.as_deref())
+        let results = filter_symbols(symbols, query)
             .into_iter()
             .take(limit)
             .map(SearchResult::new)
@@ -153,19 +177,7 @@ pub fn execute_search(
             })
             .collect();
 
-        // Filter by type if specified
-        if let Some(ref types) = query.symbol_types {
-            results.retain(|r| types.contains(&r.symbol.symbol_type));
-        }
-
-        // Filter by file if specified
-        if let Some(ref file_path) = query.file_path {
-            if query.recursive {
-                results.retain(|r| r.symbol.file_path.starts_with(file_path));
-            } else {
-                results.retain(|r| &r.symbol.file_path == file_path);
-            }
-        }
+        apply_result_filters(&mut results, query);
 
         apply_contextual_boosts(&mut results, query);
 
@@ -187,11 +199,97 @@ pub fn execute_search(
             let symbols = store.get_symbols_by_type(*sym_type, limit)?;
             all_results.extend(symbols.into_iter().map(SearchResult::new));
         }
+        apply_result_filters(&mut all_results, query);
         all_results.truncate(limit);
         return Ok(all_results);
     }
 
     Ok(vec![])
+}
+
+fn apply_result_filters(results: &mut Vec<SearchResult>, query: &SearchQuery) {
+    results.retain(|result| symbol_matches_query_filters(&result.symbol, query));
+}
+
+fn filter_symbols(symbols: Vec<Symbol>, query: &SearchQuery) -> Vec<Symbol> {
+    symbols
+        .into_iter()
+        .filter(|symbol| symbol_matches_query_filters(symbol, query))
+        .collect()
+}
+
+fn symbol_matches_query_filters(symbol: &Symbol, query: &SearchQuery) -> bool {
+    if !query
+        .symbol_types
+        .as_deref()
+        .map(|types| types.is_empty() || types.contains(&symbol.symbol_type))
+        .unwrap_or(true)
+    {
+        return false;
+    }
+
+    if let Some(ref file_path) = query.file_path {
+        let matches_file = if query.recursive {
+            symbol.file_path.starts_with(file_path)
+        } else {
+            &symbol.file_path == file_path
+        };
+        if !matches_file {
+            return false;
+        }
+    }
+
+    if !query
+        .file_pattern
+        .as_deref()
+        .map(|pattern| path_or_text_matches_pattern(&symbol.file_path, pattern))
+        .unwrap_or(true)
+    {
+        return false;
+    }
+
+    if !query
+        .name_pattern
+        .as_deref()
+        .map(|pattern| path_or_text_matches_pattern(&symbol.name, pattern))
+        .unwrap_or(true)
+    {
+        return false;
+    }
+
+    query
+        .qualified_name_pattern
+        .as_deref()
+        .map(|pattern| path_or_text_matches_pattern(&symbol.qualified_name, pattern))
+        .unwrap_or(true)
+}
+
+fn path_or_text_matches_pattern(value: &str, pattern: &str) -> bool {
+    pattern
+        .split(',')
+        .map(str::trim)
+        .filter(|pattern| !pattern.is_empty())
+        .any(|pattern| single_pattern_matches(value, pattern))
+}
+
+fn single_pattern_matches(value: &str, pattern: &str) -> bool {
+    let pattern = pattern.trim_start_matches('/');
+    if pattern.contains(['*', '?', '[', ']']) {
+        return glob::Pattern::new(pattern)
+            .map(|compiled| {
+                compiled.matches_with(
+                    value,
+                    glob::MatchOptions {
+                        case_sensitive: false,
+                        require_literal_separator: false,
+                        require_literal_leading_dot: false,
+                    },
+                )
+            })
+            .unwrap_or(false);
+    }
+
+    value.to_lowercase().contains(&pattern.to_lowercase())
 }
 
 fn search_symbol_candidates(
@@ -300,17 +398,6 @@ fn same_directory(directory: &str, file_path: &str) -> bool {
     parent_directory(file_path).is_some_and(|candidate| candidate == directory)
 }
 
-/// Filter symbols by type
-fn filter_by_type(symbols: Vec<Symbol>, types: Option<&[SymbolType]>) -> Vec<Symbol> {
-    match types {
-        Some(types) if !types.is_empty() => symbols
-            .into_iter()
-            .filter(|s| types.contains(&s.symbol_type))
-            .collect(),
-        _ => symbols,
-    }
-}
-
 fn calculate_symbol_relevance(symbol: &Symbol, query: &str) -> f32 {
     let name_score = calculate_relevance(&symbol.name, query);
     let qualified_score = calculate_relevance(&symbol.qualified_name, query) * 0.92;
@@ -360,12 +447,16 @@ mod tests {
     use crate::tree_sitter::{Position, Range};
 
     fn create_test_symbol(name: &str, symbol_type: SymbolType) -> Symbol {
+        create_test_symbol_in_file(name, symbol_type, "test.ts")
+    }
+
+    fn create_test_symbol_in_file(name: &str, symbol_type: SymbolType, file_path: &str) -> Symbol {
         Symbol {
-            id: format!("test.ts::{}#{}", name, symbol_type),
+            id: format!("{}::{}#{}", file_path, name, symbol_type),
             name: name.to_string(),
-            qualified_name: name.to_string(),
+            qualified_name: format!("{}::{}", file_path, name),
             symbol_type,
-            file_path: "test.ts".to_string(),
+            file_path: file_path.to_string(),
             range: Range {
                 start: Position {
                     line: 1,
@@ -420,6 +511,52 @@ mod tests {
 
         assert_eq!(result.symbol.name, "test");
         assert_eq!(result.score, 0.85);
+    }
+
+    #[test]
+    fn test_execute_search_filters_by_file_name_and_qualified_patterns() {
+        let store = SymbolStore::in_memory().unwrap();
+        let symbols = vec![
+            create_test_symbol_in_file("buttonPrimary", SymbolType::CssSelector, "src/button.css"),
+            create_test_symbol_in_file("buttonPrimary", SymbolType::Function, "src/button.tsx"),
+            create_test_symbol_in_file(
+                "buttonSecondary",
+                SymbolType::CssSelector,
+                "src/legacy.css",
+            ),
+            create_test_symbol_in_file("cardPrimary", SymbolType::CssSelector, "src/card.css"),
+        ];
+        store.upsert_symbols(&symbols).unwrap();
+
+        let css_results = execute_search(
+            &store,
+            &SearchQuery::text("button")
+                .with_file_pattern("src/*.css")
+                .with_name_pattern("button*")
+                .with_qualified_name_pattern("*button.css::*")
+                .with_limit(10),
+        )
+        .unwrap();
+
+        assert_eq!(css_results.len(), 1);
+        assert_eq!(css_results[0].symbol.file_path, "src/button.css");
+        assert_eq!(css_results[0].symbol.name, "buttonPrimary");
+
+        let comma_results = execute_search(
+            &store,
+            &SearchQuery::text("button")
+                .with_file_pattern("src/button.tsx,src/legacy.css")
+                .with_limit(10),
+        )
+        .unwrap();
+
+        assert_eq!(comma_results.len(), 2);
+        assert!(comma_results
+            .iter()
+            .any(|result| result.symbol.file_path == "src/button.tsx"));
+        assert!(comma_results
+            .iter()
+            .any(|result| result.symbol.file_path == "src/legacy.css"));
     }
 
     #[test]

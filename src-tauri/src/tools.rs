@@ -3516,6 +3516,91 @@ fn compact_outline_nodes_for_parent(
     nodes
 }
 
+const SYMBOL_SEARCH_CONNECTED_RESULT_CAP: usize = 10;
+const SYMBOL_SEARCH_CONNECTED_DIRECTION_CAP: usize = 3;
+
+fn symbol_search_connected_preview(
+    service: &crate::language_service::LanguageService,
+    symbol: &crate::tree_sitter::Symbol,
+) -> serde_json::Value {
+    let mut incoming = Vec::new();
+    let mut outgoing = Vec::new();
+    let mut errors = Vec::new();
+    let mut incoming_truncated = false;
+    let mut outgoing_truncated = false;
+
+    for relationship in relationship_type_values() {
+        match service.get_symbol_graph(symbol, relationship, SYMBOL_SEARCH_CONNECTED_DIRECTION_CAP)
+        {
+            Ok(graph) => {
+                for reference in graph.incoming {
+                    if incoming.len() >= SYMBOL_SEARCH_CONNECTED_DIRECTION_CAP {
+                        incoming_truncated = true;
+                        break;
+                    }
+                    incoming.push(symbol_search_connection_json(&reference, "incoming"));
+                }
+
+                for reference in graph.outgoing {
+                    if outgoing.len() >= SYMBOL_SEARCH_CONNECTED_DIRECTION_CAP {
+                        outgoing_truncated = true;
+                        break;
+                    }
+                    outgoing.push(symbol_search_connection_json(&reference, "outgoing"));
+                }
+            }
+            Err(err) => errors.push(serde_json::json!({
+                "relationship_type": relationship.to_string(),
+                "error": err.to_string(),
+            })),
+        }
+
+        if incoming.len() >= SYMBOL_SEARCH_CONNECTED_DIRECTION_CAP
+            && outgoing.len() >= SYMBOL_SEARCH_CONNECTED_DIRECTION_CAP
+        {
+            incoming_truncated = true;
+            outgoing_truncated = true;
+            break;
+        }
+    }
+
+    serde_json::json!({
+        "incoming": incoming,
+        "outgoing": outgoing,
+        "incoming_count_returned": incoming.len(),
+        "outgoing_count_returned": outgoing.len(),
+        "truncated": incoming_truncated || outgoing_truncated,
+        "errors": errors,
+    })
+}
+
+fn symbol_search_connection_json(
+    reference: &crate::symbol_index::SymbolReference,
+    direction: &str,
+) -> serde_json::Value {
+    let connected_symbol = if direction == "incoming" {
+        Some(&reference.source_symbol)
+    } else {
+        reference.target_symbol.as_ref()
+    };
+
+    serde_json::json!({
+        "direction": direction,
+        "relationship_type": reference.relationship_type.to_string(),
+        "target_name": &reference.target_name,
+        "target_symbol_id": &reference.target_symbol_id,
+        "line": reference.line,
+        "symbol": connected_symbol.map(|symbol| serde_json::json!({
+            "id": &symbol.id,
+            "name": &symbol.name,
+            "qualified_name": &symbol.qualified_name,
+            "symbol_type": symbol.symbol_type.to_string(),
+            "file_path": &symbol.file_path,
+            "line": symbol.range.start.line,
+        })),
+    })
+}
+
 fn symbol_search_tool<R: tauri::Runtime>(
     workspace_root: &Path,
     args: &HashMap<String, serde_json::Value>,
@@ -3528,6 +3613,11 @@ fn symbol_search_tool<R: tauri::Runtime>(
     let offset = parse_bounded_usize_arg(args, "offset", 0, SYMBOL_SEARCH_MAX_OFFSET);
     let fetch_limit = offset.saturating_add(limit).saturating_add(1);
     let file_path = get_str_arg(args, &["path", "file", "file_path"]);
+    let file_pattern = get_str_arg(args, &["file_pattern", "path_pattern"]);
+    let name_pattern = get_str_arg(args, &["name_pattern"]);
+    let qualified_name_pattern =
+        get_str_arg(args, &["qualified_name_pattern", "qualified_pattern"]);
+    let include_connected = get_bool_arg(args, &["include_connected"], false);
     let symbol_types = match get_str_arg(args, &["kind", "symbol_type"]) {
         Some(kind) => match kind.parse::<crate::tree_sitter::SymbolType>() {
             Ok(symbol_type) => Some(vec![symbol_type]),
@@ -3553,10 +3643,13 @@ fn symbol_search_tool<R: tauri::Runtime>(
     let results = if file_is_unsupported {
         Vec::new()
     } else {
-        match service.search_symbols_filtered(
+        match service.search_symbols_filtered_with_patterns(
             &query,
             file_filter.as_deref(),
             symbol_types,
+            file_pattern.as_deref(),
+            name_pattern.as_deref(),
+            qualified_name_pattern.as_deref(),
             fetch_limit,
         ) {
             Ok(results) => results,
@@ -3589,11 +3682,18 @@ fn symbol_search_tool<R: tauri::Runtime>(
         "health_before": null,
         "health_after": null,
     });
+    let language_support = language_support_meta_json(file_filter.as_deref());
     let payload = serde_json::json!({
         "query": query,
-        "results": results.into_iter().map(|result| {
+        "results": results.iter().enumerate().map(|(index, result)| {
             let mut value = symbol_to_json(&result.symbol);
             value["score"] = serde_json::json!(result.score);
+            if include_connected && index < SYMBOL_SEARCH_CONNECTED_RESULT_CAP {
+                value["connected"] = symbol_search_connected_preview(&service, &result.symbol);
+            } else if include_connected {
+                value["connected"] = serde_json::Value::Null;
+                value["connected_truncated"] = serde_json::json!(true);
+            }
             value
         }).collect::<Vec<_>>(),
         "_meta": {
@@ -3605,11 +3705,20 @@ fn symbol_search_tool<R: tauri::Runtime>(
             "total_known": false,
             "total_lower_bound": total_lower_bound,
             "candidate_count": total_available,
+            "filters": {
+                "path": file_filter.clone(),
+                "file_pattern": file_pattern.clone(),
+                "name_pattern": name_pattern.clone(),
+                "qualified_name_pattern": qualified_name_pattern.clone(),
+                "include_connected": include_connected,
+                "connected_result_cap": if include_connected { Some(SYMBOL_SEARCH_CONNECTED_RESULT_CAP) } else { None::<usize> },
+                "connected_direction_cap": if include_connected { Some(SYMBOL_SEARCH_CONNECTED_DIRECTION_CAP) } else { None::<usize> },
+            },
             "timing_ms": started.elapsed().as_millis(),
             "source": "language_service",
             "index_health": service.index_health_snapshot(),
             "search_health": search_health,
-            "language_support": language_support_meta_json(file_filter.as_deref()),
+            "language_support": language_support,
             "truncated": false
         }
     });

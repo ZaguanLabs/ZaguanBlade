@@ -66,16 +66,20 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "symbol_search",
             "function": {
                 "name": "symbol_search",
-                "description": "Search indexed symbols by name or qualified name. Returns search_health, index_health, and language_support metadata. Empty results are trustworthy only when the target file type is supported and the index is fresh; for unsupported files, literal/theme tokens, routes, config keys, translation keys, or arbitrary text use semantic_anchor_search, grep_search, or codebase_search.",
+                "description": "Search indexed symbols by name or qualified name. Supports exact path, file_pattern, name_pattern, qualified_name_pattern, symbol kind, pagination, and compact opt-in connected-symbol previews. Returns search_health, index_health, and language_support metadata. Empty results are trustworthy only when the target file type is supported and the index is fresh; for unsupported files, literal/theme tokens, routes, config keys, translation keys, or arbitrary text use semantic_anchor_search, grep_search, or codebase_search.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "query": { "type": "string", "description": "Symbol name or qualified-name query" },
                         "path": { "type": "string", "description": "Optional file path filter" },
+                        "file_pattern": { "type": "string", "description": "Optional comma-separated file path glob or substring filter, for example src/**/*.css" },
+                        "name_pattern": { "type": "string", "description": "Optional comma-separated symbol-name glob or substring filter" },
+                        "qualified_name_pattern": { "type": "string", "description": "Optional comma-separated qualified-name glob or substring filter" },
                         "kind": { "type": "string", "description": "Optional symbol kind filter" },
                         "limit": { "type": "integer", "description": "Optional max results" },
-                        "offset": { "type": "integer", "description": "Optional zero-based result offset for pagination. Use only after checking has_more in a prior response." }
+                        "offset": { "type": "integer", "description": "Optional zero-based result offset for pagination. Use only after checking has_more in a prior response." },
+                        "include_connected": { "type": "boolean", "description": "Optional compact one-hop connected-symbol preview for returned results; use symbol_references or symbol_graph for deeper traversal." }
                     },
                     "required": ["query"],
                     "additionalProperties": false

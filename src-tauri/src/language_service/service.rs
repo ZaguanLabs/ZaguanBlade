@@ -2084,6 +2084,27 @@ impl LanguageService {
         symbol_types: Option<Vec<SymbolType>>,
         limit: usize,
     ) -> Result<Vec<SearchResult>, LanguageError> {
+        self.search_symbols_filtered_with_patterns(
+            query,
+            file_path,
+            symbol_types,
+            None,
+            None,
+            None,
+            limit,
+        )
+    }
+
+    pub fn search_symbols_filtered_with_patterns(
+        &self,
+        query: &str,
+        file_path: Option<&str>,
+        symbol_types: Option<Vec<SymbolType>>,
+        file_pattern: Option<&str>,
+        name_pattern: Option<&str>,
+        qualified_name_pattern: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>, LanguageError> {
         if let Some(path) = file_path {
             self.ensure_file_fresh(path)?;
         } else {
@@ -2099,6 +2120,18 @@ impl LanguageService {
 
         if let Some(types) = symbol_types {
             search_query = search_query.with_types(types);
+        }
+
+        if let Some(pattern) = file_pattern {
+            search_query = search_query.with_file_pattern(pattern);
+        }
+
+        if let Some(pattern) = name_pattern {
+            search_query = search_query.with_name_pattern(pattern);
+        }
+
+        if let Some(pattern) = qualified_name_pattern {
+            search_query = search_query.with_qualified_name_pattern(pattern);
         }
 
         let results =
@@ -8391,6 +8424,46 @@ export function loadPosts() {
 
         // Should find authenticate and authorize
         assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_search_symbols_filtered_with_patterns() {
+        let (service, temp_dir) = create_test_service();
+        fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+
+        fs::write(
+            temp_dir.path().join("src/button.css"),
+            ".buttonPrimary { color: red; }\n.cardPrimary { color: blue; }\n",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("src/button.tsx"),
+            "export function buttonPrimary() { return null; }\n",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("src/legacy.css"),
+            ".buttonSecondary { color: green; }\n",
+        )
+        .unwrap();
+
+        service.index_directory("src").unwrap();
+
+        let results = service
+            .search_symbols_filtered_with_patterns(
+                "button",
+                None,
+                None,
+                Some("src/button.css"),
+                Some("*.button*"),
+                Some("*.button*"),
+                10,
+            )
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].symbol.file_path, "src/button.css");
+        assert_eq!(results[0].symbol.name, ".buttonPrimary");
     }
 
     #[test]

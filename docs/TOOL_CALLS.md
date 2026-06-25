@@ -348,7 +348,7 @@ Parameters:
 
 Searches indexed symbols by name or qualified name. Results include code definitions plus partial scanner symbols such as CSS selectors/custom properties, markup `class`/`id` selectors, and JSON/YAML/TOML config key paths.
 
-Responses include `_meta.language_support`, `_meta.search_health`, `_meta.index_health`, and pagination fields such as `_meta.offset`, `_meta.limit`, `_meta.has_more`, and `_meta.total_lower_bound`. Empty results should only be treated as trustworthy when language support says the relevant file type is supported and the index is fresh enough for the task.
+Responses include `_meta.language_support`, `_meta.search_health`, `_meta.index_health`, `_meta.filters`, and pagination fields such as `_meta.offset`, `_meta.limit`, `_meta.has_more`, and `_meta.total_lower_bound`. Empty results should only be treated as trustworthy when language support says the relevant file type is supported and the index is fresh enough for the task. Pagination totals are lower-bound counts over the bounded candidate set, not an expensive exact workspace-wide total.
 
 Parameters:
 
@@ -356,9 +356,13 @@ Parameters:
 |------|------|----------|---------|
 | `query` | string | Yes | |
 | `path` | string | No | `file`, `file_path` |
+| `file_pattern` | string | No | comma-separated file path glob or substring filter; alias `path_pattern` |
+| `name_pattern` | string | No | comma-separated symbol-name glob or substring filter |
+| `qualified_name_pattern` | string | No | comma-separated qualified-name glob or substring filter; alias `qualified_pattern` |
 | `kind` | string | No | `symbol_type` |
 | `limit` | integer | No | cap `100` |
 | `offset` | integer | No | zero-based pagination offset; cap `1000` |
+| `include_connected` | boolean | No | compact one-hop connected-symbol preview for returned results; use `symbol_references` or `symbol_graph` for deeper traversal |
 
 ### `semantic_anchor_search`
 
