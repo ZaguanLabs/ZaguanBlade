@@ -1040,18 +1040,21 @@ impl LanguageService {
         let timings = current_health.timings;
         let discovery = current_health.discovery;
         let supported_files = self.supported_language_files(".");
-        let supported_set = supported_files.iter().cloned().collect::<HashSet<_>>();
+        let supported_set = supported_files
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
         let indexed_files = self.symbol_store.list_all_indexed_files()?;
         let indexed_map = indexed_files
             .iter()
-            .map(|record| (record.file_path.clone(), record.clone()))
+            .map(|record| (record.file_path.as_str(), record))
             .collect::<HashMap<_, _>>();
         let mut stale_files = 0usize;
         let mut missing_files = 0usize;
         let mut orphaned_files = 0usize;
 
         for file_path in &supported_files {
-            let Some(record) = indexed_map.get(file_path) else {
+            let Some(record) = indexed_map.get(file_path.as_str()) else {
                 missing_files += 1;
                 continue;
             };
@@ -1061,7 +1064,7 @@ impl LanguageService {
         }
 
         for record in &indexed_files {
-            if !supported_set.contains(&record.file_path) {
+            if !supported_set.contains(record.file_path.as_str()) {
                 orphaned_files += 1;
             }
         }
@@ -1163,24 +1166,27 @@ impl LanguageService {
         progress(&health);
 
         let supported_files = self.supported_language_files(".");
-        let supported_set = supported_files.iter().cloned().collect::<HashSet<_>>();
+        let supported_set = supported_files
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
         let indexed_files = self.symbol_store.list_all_indexed_files()?;
         let indexed_map = indexed_files
             .iter()
-            .map(|record| (record.file_path.clone(), record.clone()))
+            .map(|record| (record.file_path.as_str(), record))
             .collect::<HashMap<_, _>>();
         let mut queued_files = Vec::new();
         let mut files_removed = 0usize;
 
         for record in &indexed_files {
-            if !supported_set.contains(&record.file_path) {
+            if !supported_set.contains(record.file_path.as_str()) {
                 self.remove_file(&record.file_path)?;
                 files_removed += 1;
             }
         }
 
         for file_path in supported_files {
-            let needs_index = match indexed_map.get(&file_path) {
+            let needs_index = match indexed_map.get(file_path.as_str()) {
                 Some(record) => self.indexed_file_needs_refresh(&file_path, record, true)?,
                 None => true,
             };
@@ -2177,12 +2183,12 @@ impl LanguageService {
         let indexed_files = self.symbol_store.list_all_indexed_files()?;
         let indexed_map = indexed_files
             .iter()
-            .map(|record| (record.file_path.clone(), record.clone()))
+            .map(|record| (record.file_path.as_str(), record))
             .collect::<HashMap<_, _>>();
         let mut staged_files = Vec::new();
 
         for relative_path in &files {
-            if let Some(record) = indexed_map.get(relative_path) {
+            if let Some(record) = indexed_map.get(relative_path.as_str()) {
                 let freshness_start = std::time::Instant::now();
                 if !self.indexed_file_needs_refresh(relative_path, record, true)? {
                     stats.files_indexed += 1;
@@ -3277,7 +3283,7 @@ impl LanguageService {
         let indexed_files = self.symbol_store.list_all_indexed_files()?;
         let indexed_map = indexed_files
             .iter()
-            .map(|record| (record.file_path.clone(), record.clone()))
+            .map(|record| (record.file_path.as_str(), record))
             .collect::<HashMap<_, _>>();
         let mut candidates = Vec::new();
 
@@ -3293,7 +3299,7 @@ impl LanguageService {
                 continue;
             }
 
-            let needs_reindex = match indexed_map.get(&file_path) {
+            let needs_reindex = match indexed_map.get(file_path.as_str()) {
                 Some(record) => compute_hash(&content) != record.file_hash,
                 None => true,
             };
