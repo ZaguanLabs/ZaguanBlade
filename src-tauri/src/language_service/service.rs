@@ -1556,6 +1556,14 @@ impl LanguageService {
                 language,
             });
         }
+        if language.is_java_scanner() {
+            return Ok(SymbolExtraction {
+                symbols: extract_java_symbols(file_path, content),
+                relationships: Vec::new(),
+                content: Cow::Borrowed(content),
+                language,
+            });
+        }
 
         let (extraction_content, extraction_language) = if matches!(language, Language::Astro) {
             (Cow::Owned(astro_script_projection(content)), Language::Tsx)
@@ -3783,7 +3791,8 @@ impl LanguageService {
             | Language::Json
             | Language::Yaml
             | Language::Toml
-            | Language::Php => false,
+            | Language::Php
+            | Language::Java => false,
         }
     }
 
@@ -3876,7 +3885,8 @@ impl LanguageService {
             | Language::Json
             | Language::Yaml
             | Language::Toml
-            | Language::Php => false,
+            | Language::Php
+            | Language::Java => false,
         }
     }
 
@@ -5206,7 +5216,8 @@ impl LanguageService {
             | Language::Json
             | Language::Yaml
             | Language::Toml
-            | Language::Php => None,
+            | Language::Php
+            | Language::Java => None,
         }
     }
 }
@@ -8007,7 +8018,7 @@ fn extract_php_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
         let line_number = line_index as u32;
 
         for declaration in php_declarations_in_line(line) {
-            push_php_symbol(
+            push_line_scanner_symbol(
                 &mut symbols,
                 &mut seen,
                 file_path,
@@ -8023,14 +8034,14 @@ fn extract_php_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
 }
 
 #[derive(Debug, Clone)]
-struct PhpDeclaration {
+struct LineScannerDeclaration {
     name: String,
     symbol_type: SymbolType,
     start_char: usize,
     end_char: usize,
 }
 
-fn php_declarations_in_line(line: &str) -> Vec<PhpDeclaration> {
+fn php_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
     let code = php_line_code(line);
     if code.is_empty() {
         return Vec::new();
@@ -8073,13 +8084,13 @@ fn php_line_code(line: &str) -> &str {
     }
 }
 
-fn php_namespace_declaration(code: &str, code_start: usize) -> Option<PhpDeclaration> {
+fn php_namespace_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
     let rest = code.strip_prefix("namespace ")?;
     let name_start = code.len().saturating_sub(rest.len());
     let (name, name_len) = php_read_qualified_name(rest.trim_start())?;
     let leading_ws = rest.len().saturating_sub(rest.trim_start().len());
     let start_char = code_start + name_start + leading_ws;
-    Some(PhpDeclaration {
+    Some(LineScannerDeclaration {
         name,
         symbol_type: SymbolType::Namespace,
         start_char,
@@ -8087,7 +8098,7 @@ fn php_namespace_declaration(code: &str, code_start: usize) -> Option<PhpDeclara
     })
 }
 
-fn php_import_declaration(code: &str, code_start: usize) -> Option<PhpDeclaration> {
+fn php_import_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
     let rest = code.strip_prefix("use ")?;
     if rest.trim_start().starts_with('(') {
         return None;
@@ -8099,7 +8110,7 @@ fn php_import_declaration(code: &str, code_start: usize) -> Option<PhpDeclaratio
         .unwrap_or(rest.trim_start());
     let leading_ws = code.len().saturating_sub(rest.len());
     let (name, name_len) = php_read_qualified_name(rest)?;
-    Some(PhpDeclaration {
+    Some(LineScannerDeclaration {
         name,
         symbol_type: SymbolType::Import,
         start_char: code_start + leading_ws,
@@ -8112,14 +8123,14 @@ fn php_keyword_declaration(
     code_start: usize,
     keyword: &str,
     symbol_type: SymbolType,
-) -> Option<PhpDeclaration> {
+) -> Option<LineScannerDeclaration> {
     let keyword_start = php_find_keyword(code, keyword)?;
     let after_keyword = keyword_start + keyword.len();
     let rest = code[after_keyword..].trim_start();
     let leading_ws = code[after_keyword..].len().saturating_sub(rest.len());
     let (name, name_len) = php_read_identifier(rest)?;
     let start_char = code_start + after_keyword + leading_ws;
-    Some(PhpDeclaration {
+    Some(LineScannerDeclaration {
         name,
         symbol_type,
         start_char,
@@ -8127,7 +8138,7 @@ fn php_keyword_declaration(
     })
 }
 
-fn php_function_declaration(code: &str, code_start: usize) -> Option<PhpDeclaration> {
+fn php_function_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
     let keyword_start = php_find_keyword(code, "function")?;
     let after_keyword = keyword_start + "function".len();
     let mut rest = code[after_keyword..].trim_start();
@@ -8146,7 +8157,7 @@ fn php_function_declaration(code: &str, code_start: usize) -> Option<PhpDeclarat
         SymbolType::Function
     };
     let start_char = code_start + after_keyword + leading_ws;
-    Some(PhpDeclaration {
+    Some(LineScannerDeclaration {
         name,
         symbol_type,
         start_char,
@@ -8209,11 +8220,264 @@ fn is_php_identifier_char(ch: char) -> bool {
     ch == '_' || ch.is_ascii_alphanumeric()
 }
 
-fn push_php_symbol(
+fn extract_java_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
+    let mut symbols = Vec::new();
+    let mut seen = HashSet::new();
+    let mut byte_offset = 0usize;
+
+    for (line_index, segment) in content.split_inclusive('\n').enumerate() {
+        let line_start = byte_offset;
+        byte_offset += segment.len();
+
+        let line_without_lf = segment.strip_suffix('\n').unwrap_or(segment);
+        let line = line_without_lf
+            .strip_suffix('\r')
+            .unwrap_or(line_without_lf);
+        let line_number = line_index as u32;
+
+        for declaration in java_declarations_in_line(line) {
+            push_line_scanner_symbol(
+                &mut symbols,
+                &mut seen,
+                file_path,
+                declaration,
+                line_number,
+                line_start,
+                line,
+            );
+        }
+    }
+
+    symbols
+}
+
+fn java_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
+    let code = java_line_code(line);
+    if code.is_empty() {
+        return Vec::new();
+    }
+    let code_start = line.find(code).unwrap_or(0);
+
+    if let Some(declaration) = java_package_declaration(code, code_start) {
+        return vec![declaration];
+    }
+    if let Some(declaration) = java_import_declaration(code, code_start) {
+        return vec![declaration];
+    }
+
+    let mut declarations = Vec::new();
+    for (keyword, symbol_type) in [
+        ("class", SymbolType::Class),
+        ("interface", SymbolType::Interface),
+        ("enum", SymbolType::Enum),
+        ("record", SymbolType::Struct),
+    ] {
+        if let Some(declaration) = java_keyword_declaration(code, code_start, keyword, symbol_type)
+        {
+            declarations.push(declaration);
+        }
+    }
+
+    if declarations.is_empty() {
+        if let Some(declaration) = java_method_declaration(code, code_start) {
+            declarations.push(declaration);
+        }
+    }
+
+    declarations
+}
+
+fn java_line_code(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("//")
+        || trimmed.starts_with('*')
+        || trimmed.starts_with("/*")
+        || trimmed.starts_with('@')
+    {
+        ""
+    } else {
+        trimmed.split("//").next().unwrap_or(trimmed).trim_end()
+    }
+}
+
+fn java_package_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
+    let rest = code.strip_prefix("package ")?;
+    let name_start = code.len().saturating_sub(rest.len());
+    let rest = rest.trim_start();
+    let leading_ws = code[name_start..].len().saturating_sub(rest.len());
+    let (name, name_len) = java_read_qualified_name(rest, false)?;
+    let start_char = code_start + name_start + leading_ws;
+    Some(LineScannerDeclaration {
+        name,
+        symbol_type: SymbolType::Namespace,
+        start_char,
+        end_char: start_char + name_len,
+    })
+}
+
+fn java_import_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
+    let rest = code.strip_prefix("import ")?;
+    let rest = rest.trim_start();
+    let rest = rest.strip_prefix("static ").unwrap_or(rest).trim_start();
+    let leading_ws = code.len().saturating_sub(rest.len());
+    let (name, name_len) = java_read_qualified_name(rest, true)?;
+    Some(LineScannerDeclaration {
+        name,
+        symbol_type: SymbolType::Import,
+        start_char: code_start + leading_ws,
+        end_char: code_start + leading_ws + name_len,
+    })
+}
+
+fn java_keyword_declaration(
+    code: &str,
+    code_start: usize,
+    keyword: &str,
+    symbol_type: SymbolType,
+) -> Option<LineScannerDeclaration> {
+    let keyword_start = java_find_keyword(code, keyword)?;
+    let after_keyword = keyword_start + keyword.len();
+    let rest = code[after_keyword..].trim_start();
+    let leading_ws = code[after_keyword..].len().saturating_sub(rest.len());
+    let (name, name_len) = java_read_identifier(rest)?;
+    let start_char = code_start + after_keyword + leading_ws;
+    Some(LineScannerDeclaration {
+        name,
+        symbol_type,
+        start_char,
+        end_char: start_char + name_len,
+    })
+}
+
+fn java_method_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
+    let paren_index = code.find('(')?;
+    let before_paren = code[..paren_index].trim_end();
+    if before_paren.contains('=')
+        || before_paren.contains(" -> ")
+        || java_starts_with_statement_keyword(before_paren)
+    {
+        return None;
+    }
+
+    let (name, name_start) = java_read_identifier_before(before_paren)?;
+    if matches!(
+        name.as_str(),
+        "if" | "for"
+            | "while"
+            | "switch"
+            | "catch"
+            | "return"
+            | "new"
+            | "throw"
+            | "assert"
+            | "synchronized"
+    ) {
+        return None;
+    }
+
+    let before_name = before_paren[..name_start].trim_end();
+    if before_name.is_empty() || before_name.ends_with('.') {
+        return None;
+    }
+
+    let start_char = code_start + name_start;
+    Some(LineScannerDeclaration {
+        name,
+        symbol_type: SymbolType::Method,
+        start_char,
+        end_char: start_char + before_paren[name_start..].len(),
+    })
+}
+
+fn java_find_keyword(code: &str, keyword: &str) -> Option<usize> {
+    let mut search_start = 0usize;
+    while let Some(relative_index) = code[search_start..].find(keyword) {
+        let start = search_start + relative_index;
+        let end = start + keyword.len();
+        let before_ok = code[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|ch| !is_java_identifier_char(ch));
+        let after_ok = code[end..]
+            .chars()
+            .next()
+            .is_none_or(|ch| !is_java_identifier_char(ch));
+        if before_ok && after_ok {
+            return Some(start);
+        }
+        search_start = end;
+    }
+    None
+}
+
+fn java_read_identifier(text: &str) -> Option<(String, usize)> {
+    let mut end = 0usize;
+    for (index, ch) in text.char_indices() {
+        if index == 0 && !(ch == '_' || ch == '$' || ch.is_ascii_alphabetic()) {
+            return None;
+        }
+        if is_java_identifier_char(ch) {
+            end = index + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    (end > 0).then(|| (text[..end].to_string(), end))
+}
+
+fn java_read_identifier_before(text: &str) -> Option<(String, usize)> {
+    let trimmed_len = text.trim_end().len();
+    let trimmed = &text[..trimmed_len];
+    let mut start = trimmed.len();
+    for (index, ch) in trimmed.char_indices().rev() {
+        if is_java_identifier_char(ch) {
+            start = index;
+        } else {
+            break;
+        }
+    }
+    if start == trimmed.len() {
+        return None;
+    }
+    let name = &trimmed[start..];
+    name.chars()
+        .next()
+        .filter(|ch| *ch == '_' || *ch == '$' || ch.is_ascii_alphabetic())?;
+    Some((name.to_string(), start))
+}
+
+fn java_read_qualified_name(text: &str, allow_wildcard: bool) -> Option<(String, usize)> {
+    let mut end = 0usize;
+    for (index, ch) in text.char_indices() {
+        if index == 0 && !(ch == '_' || ch == '$' || ch.is_ascii_alphabetic()) {
+            return None;
+        }
+        if is_java_identifier_char(ch) || ch == '.' || (allow_wildcard && ch == '*') {
+            end = index + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    (end > 0).then(|| (text[..end].to_string(), end))
+}
+
+fn java_starts_with_statement_keyword(text: &str) -> bool {
+    [
+        "if", "for", "while", "switch", "catch", "return", "throw", "assert", "new",
+    ]
+    .iter()
+    .any(|keyword| text.trim_start().starts_with(keyword))
+}
+
+fn is_java_identifier_char(ch: char) -> bool {
+    ch == '_' || ch == '$' || ch.is_ascii_alphanumeric()
+}
+
+fn push_line_scanner_symbol(
     symbols: &mut Vec<Symbol>,
     seen: &mut HashSet<(String, SymbolType, u32)>,
     file_path: &str,
-    declaration: PhpDeclaration,
+    declaration: LineScannerDeclaration,
     line_number: u32,
     line_start_byte: usize,
     line_text: &str,
@@ -8704,6 +8968,7 @@ mod tests {
         "config/github-action.yml",
         "config/app.toml",
         "php/service.php",
+        "java/UserService.java",
     ];
 
     fn write_symbol_fixture(workspace_root: &Path, relative_path: &str) {
@@ -9018,6 +9283,47 @@ mod tests {
                     },
                 ],
             },
+            SymbolFixture {
+                path: "java/UserService.java",
+                expected_symbols: &[
+                    ExpectedSymbol {
+                        name: "com.example.users",
+                        symbol_type: SymbolType::Namespace,
+                    },
+                    ExpectedSymbol {
+                        name: "java.util.Optional",
+                        symbol_type: SymbolType::Import,
+                    },
+                    ExpectedSymbol {
+                        name: "java.util.Collections.emptyList",
+                        symbol_type: SymbolType::Import,
+                    },
+                    ExpectedSymbol {
+                        name: "UserService",
+                        symbol_type: SymbolType::Class,
+                    },
+                    ExpectedSymbol {
+                        name: "findUser",
+                        symbol_type: SymbolType::Method,
+                    },
+                    ExpectedSymbol {
+                        name: "UserFormatter",
+                        symbol_type: SymbolType::Interface,
+                    },
+                    ExpectedSymbol {
+                        name: "format",
+                        symbol_type: SymbolType::Method,
+                    },
+                    ExpectedSymbol {
+                        name: "UserStatus",
+                        symbol_type: SymbolType::Enum,
+                    },
+                    ExpectedSymbol {
+                        name: "UserView",
+                        symbol_type: SymbolType::Struct,
+                    },
+                ],
+            },
         ];
 
         for fixture in fixtures {
@@ -9057,6 +9363,7 @@ mod tests {
                 "config/app.toml",
                 "profile.release.lto",
             ),
+            ("findUser", "java/UserService.java", "findUser"),
         ] {
             let results = service.search_symbols(query, 10).unwrap();
             assert!(
@@ -9114,6 +9421,7 @@ mod tests {
             ("YAML", 1),
             ("TOML", 1),
             ("PHP", 1),
+            ("Java", 1),
         ] {
             assert!(
                 stats

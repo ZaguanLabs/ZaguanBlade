@@ -405,7 +405,8 @@ impl SymbolExtractor {
             | Language::Json
             | Language::Yaml
             | Language::Toml
-            | Language::Php => None,
+            | Language::Php
+            | Language::Java => None,
         }
     }
 
@@ -990,7 +991,8 @@ impl SymbolExtractor {
             | Language::Json
             | Language::Yaml
             | Language::Toml
-            | Language::Php => {}
+            | Language::Php
+            | Language::Java => {}
         }
         None
     }
@@ -1088,7 +1090,8 @@ fn extract_structural_relationships_from_node(
         | Language::Json
         | Language::Yaml
         | Language::Toml
-        | Language::Php => {}
+        | Language::Php
+        | Language::Java => {}
     }
 
     for i in 0..node.child_count() {
@@ -1508,7 +1511,8 @@ fn extract_relationship_target_name(
         | Language::Json
         | Language::Yaml
         | Language::Toml
-        | Language::Php => None,
+        | Language::Php
+        | Language::Java => None,
     }
 }
 
