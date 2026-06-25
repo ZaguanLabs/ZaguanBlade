@@ -401,7 +401,20 @@ fn same_directory(directory: &str, file_path: &str) -> bool {
 fn calculate_symbol_relevance(symbol: &Symbol, query: &str) -> f32 {
     let name_score = calculate_relevance(&symbol.name, query);
     let qualified_score = calculate_relevance(&symbol.qualified_name, query) * 0.92;
-    name_score.max(qualified_score)
+    let signature_score = symbol
+        .signature
+        .as_deref()
+        .map(|signature| calculate_relevance(signature, query) * 0.62)
+        .unwrap_or(0.0);
+    let docstring_score = symbol
+        .docstring
+        .as_deref()
+        .map(|docstring| calculate_relevance(docstring, query) * 0.48)
+        .unwrap_or(0.0);
+    name_score
+        .max(qualified_score)
+        .max(signature_score)
+        .max(docstring_score)
 }
 
 /// Calculate relevance score between query and symbol name
@@ -557,6 +570,21 @@ mod tests {
         assert!(comma_results
             .iter()
             .any(|result| result.symbol.file_path == "src/legacy.css"));
+    }
+
+    #[test]
+    fn test_execute_search_uses_signature_metadata_candidates() {
+        let store = SymbolStore::in_memory().unwrap();
+        let mut symbol =
+            create_test_symbol_in_file("findUser", SymbolType::Function, "src/user_service.ts");
+        symbol.signature = Some("function findUser(id: string): UserDto".to_string());
+        store.upsert_symbols(&[symbol]).unwrap();
+
+        let results = execute_search(&store, &SearchQuery::text("UserDto").with_limit(10)).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].symbol.name, "findUser");
+        assert!(results[0].score > 0.0);
     }
 
     #[test]

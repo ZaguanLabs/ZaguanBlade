@@ -1125,10 +1125,12 @@ impl SymbolStore {
             }
         }
 
-        let where_clause = std::iter::repeat("(name LIKE ? OR qualified_name LIKE ?)")
-            .take(search_patterns.len())
-            .collect::<Vec<_>>()
-            .join(" OR ");
+        let where_clause = std::iter::repeat(
+            "(name LIKE ? OR qualified_name LIKE ? OR signature LIKE ? OR docstring LIKE ?)",
+        )
+        .take(search_patterns.len())
+        .collect::<Vec<_>>()
+        .join(" OR ");
         let sql = format!(
             r#"
             SELECT id, name, qualified_name, symbol_type, file_path, start_line, start_char,
@@ -1140,15 +1142,19 @@ impl SymbolStore {
                 WHEN lower(name) = lower(?) THEN 1
                 WHEN lower(qualified_name) LIKE lower(?) THEN 2
                 WHEN lower(name) LIKE lower(?) THEN 3
-                ELSE 4
+                WHEN lower(signature) LIKE lower(?) THEN 4
+                WHEN lower(docstring) LIKE lower(?) THEN 5
+                ELSE 6
             END, length(name), name
             LIMIT ?
             "#,
             where_clause
         );
 
-        let mut values = Vec::with_capacity(search_patterns.len() * 2 + 5);
+        let mut values = Vec::with_capacity(search_patterns.len() * 4 + 7);
         for search_pattern in search_patterns {
+            values.push(Value::Text(search_pattern.clone()));
+            values.push(Value::Text(search_pattern.clone()));
             values.push(Value::Text(search_pattern.clone()));
             values.push(Value::Text(search_pattern));
         }
@@ -1156,6 +1162,8 @@ impl SymbolStore {
         values.push(Value::Text(trimmed.to_string()));
         values.push(Value::Text(format!("{}%", trimmed)));
         values.push(Value::Text(format!("{}%", trimmed)));
+        values.push(Value::Text(format!("%{}%", trimmed)));
+        values.push(Value::Text(format!("%{}%", trimmed)));
         values.push(Value::Integer(limit as i64));
 
         append_symbol_query_results(&conn, &sql, values, &mut symbols, &mut seen, limit)?;
