@@ -1518,6 +1518,42 @@ impl SymbolStore {
         })
     }
 
+    pub fn symbol_type_counts(&self) -> Result<Vec<(String, usize)>, SymbolStoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT symbol_type, COUNT(*)
+            FROM symbols
+            GROUP BY symbol_type
+            ORDER BY COUNT(*) DESC, symbol_type ASC
+            "#,
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn semantic_anchor_kind_counts(&self) -> Result<Vec<(String, usize)>, SymbolStoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT kind, COUNT(*)
+            FROM semantic_anchors
+            GROUP BY kind
+            ORDER BY COUNT(*) DESC, kind ASC
+            "#,
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     fn hydrate_symbol_references(
         &self,
         rows: Vec<(Symbol, String, String, Option<String>, u32)>,

@@ -42,7 +42,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "fast_context",
             "function": {
                 "name": "fast_context",
-                "description": "Plan broad or uncertain code tasks before reading many files. Returns targeted symbol-aware context: structured project context, ranked primary files, enriched symbol and semantic-anchor metadata, language-support capability metadata, indexed Markdown sections, related files, optional impact hints, index health, confidence, suggested read ranges, and next steps. Legacy project-index Markdown is excluded unless explicitly requested for fallback compatibility.",
+                "description": "Plan broad or uncertain code tasks before reading many files. Returns targeted symbol-aware context: structured project context, ranked primary files, enriched symbol and semantic-anchor metadata, language-support capability metadata, compact index schema summary, indexed Markdown sections, related files, optional impact hints, index health, confidence, suggested read ranges, and next steps. Legacy project-index Markdown is excluded unless explicitly requested for fallback compatibility.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -424,6 +424,21 @@ pub fn get_tool_definitions() -> Vec<Value> {
                         }
                     },
                     "required": ["calls"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "name": "symbol_schema",
+            "function": {
+                "name": "symbol_schema",
+                "description": "Return compact Symbols Index coverage and schema counts: indexed files by extension/language/support level, symbols by type, relationship integrity stats, unresolved relationship targets, and semantic anchor counts. Use before trusting broad or empty symbol searches.",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
                     "additionalProperties": false
                 }
             }

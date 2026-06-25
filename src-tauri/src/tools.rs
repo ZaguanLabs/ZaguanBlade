@@ -181,6 +181,7 @@ fn is_batch_read_only_tool(tool_name: &str) -> bool {
         | "symbol_references"
         | "edit_impact"
         | "symbol_graph"
+        | "symbol_schema"
         | "symbol_outline"
         | "read_file"
         | "read_file_range"
@@ -833,6 +834,14 @@ mod tests {
         assert!(
             metadata_len < 8_000,
             "fast_context language-support metadata should stay compact, got {metadata_len} bytes"
+        );
+
+        let schema_summary = &payload["_meta"]["index_schema_summary"];
+        assert!(schema_summary["totals"]["indexed_files"].is_number());
+        let schema_summary_len = serde_json::to_string(schema_summary).unwrap().len();
+        assert!(
+            schema_summary_len < 4_000,
+            "fast_context schema summary should stay compact, got {schema_summary_len} bytes"
         );
     }
 
@@ -1686,6 +1695,7 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
         "symbol_references" => symbol_references_tool(workspace_root, &args, app_handle),
         "edit_impact" => edit_impact_tool(workspace_root, &args, app_handle),
         "symbol_graph" => symbol_graph_tool(workspace_root, &args, app_handle),
+        "symbol_schema" => symbol_schema_tool(app_handle),
         "symbol_outline" => symbol_outline_tool(workspace_root, &args, app_handle),
         "read_file_range" => read_file_range(workspace_root, &args),
         "load_skill" => load_skill_tool(workspace_root, &args),
@@ -2453,8 +2463,32 @@ fn fast_context_tool(
     payload["_meta"] = serde_json::json!({
         "tool": "fast_context",
         "language_support": language_support_meta_json(active_file.as_deref()),
+        "index_schema_summary": compact_index_schema_summary_for_workspace(workspace_root),
     });
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
+}
+
+fn compact_index_schema_summary_for_workspace(workspace_root: &Path) -> serde_json::Value {
+    let Ok(service) = crate::context_pack::language_service_for_workspace(workspace_root) else {
+        return serde_json::Value::Null;
+    };
+    let Ok(schema) = service.index_schema_snapshot() else {
+        return serde_json::Value::Null;
+    };
+
+    serde_json::json!({
+        "totals": schema.totals,
+        "files_by_support_level": schema.files_by_support_level,
+        "files_by_language": schema.files_by_language.into_iter().take(8).collect::<Vec<_>>(),
+        "symbols_by_type": schema.symbols_by_type.into_iter().take(8).collect::<Vec<_>>(),
+        "relationships": {
+            "total_relationships": schema.relationships.total_relationships,
+            "resolved_relationships": schema.relationships.resolved_relationships,
+            "unresolved_symbol_relationships": schema.relationships.unresolved_symbol_relationships,
+            "missing_source_symbols": schema.relationships.missing_source_symbols,
+            "missing_target_symbols": schema.relationships.missing_target_symbols,
+        }
+    })
 }
 
 fn get_editor_state(editor_state: Option<&EditorState>) -> ToolResult {
@@ -4420,6 +4454,29 @@ fn symbol_graph_tool<R: tauri::Runtime>(
             "language_support": language_support_meta_json(Some(&graph.symbol.file_path)),
             "limit": limit,
             "truncated": graph.incoming.len() >= limit || graph.outgoing.len() >= limit,
+        }
+    });
+    ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
+}
+
+fn symbol_schema_tool<R: tauri::Runtime>(app_handle: Option<&tauri::AppHandle<R>>) -> ToolResult {
+    let service = match language_service_from_app_handle(app_handle) {
+        Ok(service) => service,
+        Err(err) => return ToolResult::err(err),
+    };
+    let started = Instant::now();
+    let schema = match service.index_schema_snapshot() {
+        Ok(schema) => schema,
+        Err(err) => return ToolResult::err(err.to_string()),
+    };
+    let payload = serde_json::json!({
+        "schema": schema,
+        "_meta": {
+            "tool": "symbol_schema",
+            "source": "language_service",
+            "timing_ms": started.elapsed().as_millis(),
+            "index_health": service.index_health_snapshot(),
+            "language_support": language_support_meta_json(None),
         }
     });
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())

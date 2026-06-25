@@ -121,6 +121,38 @@ pub struct IndexDiscoverySnapshot {
     pub skipped_by_reason: Vec<IndexSkipCount>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IndexSchemaCount {
+    pub name: String,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IndexSchemaLanguageCount {
+    pub language: String,
+    pub support_level: String,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IndexSchemaTotals {
+    pub indexed_files: usize,
+    pub symbols: usize,
+    pub relationships: usize,
+    pub semantic_anchors: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IndexSchemaSnapshot {
+    pub totals: IndexSchemaTotals,
+    pub files_by_extension: Vec<IndexSchemaCount>,
+    pub files_by_language: Vec<IndexSchemaLanguageCount>,
+    pub files_by_support_level: Vec<IndexSchemaCount>,
+    pub symbols_by_type: Vec<IndexSchemaCount>,
+    pub relationships: RelationshipIntegrityStats,
+    pub semantic_anchors_by_kind: Vec<IndexSchemaCount>,
+}
+
 impl Default for IndexHealthSnapshot {
     fn default() -> Self {
         Self {
@@ -831,6 +863,89 @@ impl LanguageService {
 
     pub fn set_index_health(&self, health: IndexHealthSnapshot) {
         *self.index_health.write().unwrap() = health;
+    }
+
+    pub fn index_schema_snapshot(&self) -> Result<IndexSchemaSnapshot, LanguageError> {
+        let indexed_files = self.symbol_store.list_all_indexed_files()?;
+        let symbols_by_type = self
+            .symbol_store
+            .symbol_type_counts()?
+            .into_iter()
+            .map(|(name, count)| IndexSchemaCount { name, count })
+            .collect::<Vec<_>>();
+        let semantic_anchors_by_kind = self
+            .symbol_store
+            .semantic_anchor_kind_counts()?
+            .into_iter()
+            .map(|(name, count)| IndexSchemaCount { name, count })
+            .collect::<Vec<_>>();
+        let relationships = self.symbol_store.relationship_integrity_stats()?;
+
+        let mut extension_counts = BTreeMap::<String, usize>::new();
+        let mut language_counts = BTreeMap::<(String, String), usize>::new();
+        let mut support_counts = BTreeMap::<String, usize>::new();
+
+        for record in &indexed_files {
+            let extension = Path::new(&record.file_path)
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .filter(|extension| !extension.is_empty())
+                .map(|extension| extension.to_ascii_lowercase())
+                .unwrap_or_else(|| "(none)".to_string());
+            *extension_counts.entry(extension).or_default() += 1;
+
+            match Language::capability_for_path(&record.file_path) {
+                Some(capability) => {
+                    let support_level = support_level_label(capability.support).to_string();
+                    *language_counts
+                        .entry((capability.display_name.to_string(), support_level.clone()))
+                        .or_default() += 1;
+                    *support_counts.entry(support_level).or_default() += 1;
+                }
+                None => {
+                    *language_counts
+                        .entry(("Unsupported/unknown".to_string(), "unsupported".to_string()))
+                        .or_default() += 1;
+                    *support_counts.entry("unsupported".to_string()).or_default() += 1;
+                }
+            }
+        }
+
+        let symbol_total = symbols_by_type.iter().map(|entry| entry.count).sum();
+        let semantic_anchor_total = semantic_anchors_by_kind
+            .iter()
+            .map(|entry| entry.count)
+            .sum();
+
+        Ok(IndexSchemaSnapshot {
+            totals: IndexSchemaTotals {
+                indexed_files: indexed_files.len(),
+                symbols: symbol_total,
+                relationships: relationships.total_relationships,
+                semantic_anchors: semantic_anchor_total,
+            },
+            files_by_extension: extension_counts
+                .into_iter()
+                .map(|(name, count)| IndexSchemaCount { name, count })
+                .collect(),
+            files_by_language: language_counts
+                .into_iter()
+                .map(
+                    |((language, support_level), count)| IndexSchemaLanguageCount {
+                        language,
+                        support_level,
+                        count,
+                    },
+                )
+                .collect(),
+            files_by_support_level: support_counts
+                .into_iter()
+                .map(|(name, count)| IndexSchemaCount { name, count })
+                .collect(),
+            symbols_by_type,
+            relationships,
+            semantic_anchors_by_kind,
+        })
     }
 
     fn update_index_timings<F>(&self, update: F)
@@ -6212,6 +6327,14 @@ fn language_counts_for_paths(paths: &[String]) -> Vec<IndexLanguageCount> {
         .collect()
 }
 
+fn support_level_label(level: crate::tree_sitter::SupportLevel) -> &'static str {
+    match level {
+        crate::tree_sitter::SupportLevel::Full => "full",
+        crate::tree_sitter::SupportLevel::Partial => "partial",
+        crate::tree_sitter::SupportLevel::AnchorOnly => "anchor_only",
+    }
+}
+
 fn skip_counts_from_map(counts: &BTreeMap<String, usize>) -> Vec<IndexSkipCount> {
     counts
         .iter()
@@ -7721,6 +7844,45 @@ mod tests {
                 stats.supported_by_language
             );
         }
+    }
+
+    #[test]
+    fn test_index_schema_snapshot_reports_counts_and_coverage() {
+        let (service, temp_dir) = create_test_service();
+        write_all_scanner_language_fixtures(temp_dir.path());
+
+        service.index_directory("").unwrap();
+        let schema = service.index_schema_snapshot().unwrap();
+
+        assert_eq!(
+            schema.totals.indexed_files,
+            SCANNER_LANGUAGE_FIXTURE_PATHS.len()
+        );
+        assert!(schema.totals.symbols >= 24);
+        assert_eq!(
+            schema.totals.relationships,
+            schema.relationships.total_relationships
+        );
+        assert!(schema
+            .files_by_extension
+            .iter()
+            .any(|entry| entry.name == "css" && entry.count == 2));
+        assert!(schema.files_by_language.iter().any(|entry| {
+            entry.language == "CSS" && entry.support_level == "partial" && entry.count == 2
+        }));
+        assert!(schema
+            .files_by_support_level
+            .iter()
+            .any(|entry| entry.name == "partial"
+                && entry.count == SCANNER_LANGUAGE_FIXTURE_PATHS.len()));
+        assert!(schema
+            .symbols_by_type
+            .iter()
+            .any(|entry| entry.name == "css_selector" && entry.count >= 12));
+        assert!(schema
+            .symbols_by_type
+            .iter()
+            .any(|entry| entry.name == "property" && entry.count >= 6));
     }
 
     #[test]

@@ -228,7 +228,9 @@ pub fn error_payload(code: &str, message: &str) -> ContextPackPayload {
     }
 }
 
-fn language_service_for_workspace(workspace_root: &Path) -> Result<LanguageService, String> {
+pub(crate) fn language_service_for_workspace(
+    workspace_root: &Path,
+) -> Result<LanguageService, String> {
     let db_path = get_zblade_dir(workspace_root)
         .join("index")
         .join("symbols.db");

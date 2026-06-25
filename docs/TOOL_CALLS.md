@@ -329,7 +329,7 @@ These tools require the language service and local code index to be available.
 
 ### `fast_context`
 
-Plans broad or uncertain code tasks and returns targeted context, ranked files, symbol and semantic-anchor metadata, related files, index health, language-support metadata, confidence, suggested ranges, and next steps.
+Plans broad or uncertain code tasks and returns targeted context, ranked files, symbol and semantic-anchor metadata, related files, index health, language-support metadata, a compact index schema summary, confidence, suggested ranges, and next steps.
 
 Parameters:
 
@@ -463,6 +463,14 @@ Parameters:
 | `limit` | integer | No |
 
 Relationship types include `call`, `import`, `export`, `extends`, `implements`, `contains`, and `usage`.
+
+### `symbol_schema`
+
+Returns compact Symbols Index coverage and schema counts. Use this before trusting broad searches, investigating empty search results, or deciding whether a language/file type has enough indexed coverage.
+
+The response includes indexed file counts by extension, language, and support level; symbol counts by type; relationship integrity stats including unresolved targets; semantic anchor counts by kind; `_meta.index_health`; and `_meta.language_support`.
+
+Parameters: none.
 
 ### `edit_impact`
 
