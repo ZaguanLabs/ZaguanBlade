@@ -1612,6 +1612,14 @@ impl LanguageService {
                 language,
             });
         }
+        if language.is_sql_scanner() {
+            return Ok(SymbolExtraction {
+                symbols: extract_sql_symbols(file_path, content),
+                relationships: Vec::new(),
+                content: Cow::Borrowed(content),
+                language,
+            });
+        }
 
         let (extraction_content, extraction_language) = if matches!(language, Language::Astro) {
             (Cow::Owned(astro_script_projection(content)), Language::Tsx)
@@ -3846,7 +3854,8 @@ impl LanguageService {
             | Language::Ruby
             | Language::Cpp
             | Language::Shell
-            | Language::Dockerfile => false,
+            | Language::Dockerfile
+            | Language::Sql => false,
         }
     }
 
@@ -3946,7 +3955,8 @@ impl LanguageService {
             | Language::Ruby
             | Language::Cpp
             | Language::Shell
-            | Language::Dockerfile => false,
+            | Language::Dockerfile
+            | Language::Sql => false,
         }
     }
 
@@ -5283,7 +5293,8 @@ impl LanguageService {
             | Language::Ruby
             | Language::Cpp
             | Language::Shell
-            | Language::Dockerfile => None,
+            | Language::Dockerfile
+            | Language::Sql => None,
         }
     }
 }
@@ -9493,6 +9504,163 @@ fn dockerfile_read_key(text: &str) -> Option<(String, usize)> {
     (end > 0).then(|| (text[..end].to_string(), end))
 }
 
+fn extract_sql_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
+    extract_line_scanner_symbols(file_path, content, sql_declarations_in_line)
+}
+
+fn sql_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
+    let code = sql_line_code(line);
+    if code.is_empty() {
+        return Vec::new();
+    }
+    let code_start = line.find(code).unwrap_or(0);
+
+    if let Some(declaration) = sql_include_declaration(code, code_start) {
+        return vec![declaration];
+    }
+    sql_create_declaration(code, code_start)
+        .into_iter()
+        .collect()
+}
+
+fn sql_line_code(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("--") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+        ""
+    } else {
+        trimmed.split("--").next().unwrap_or(trimmed).trim_end()
+    }
+}
+
+fn sql_include_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
+    let rest = code
+        .strip_prefix("\\i ")
+        .or_else(|| code.strip_prefix("\\include "))
+        .or_else(|| code.strip_prefix(".read "))?;
+    let rest = rest.trim_start();
+    let (name, name_len) = shell_read_word(rest)?;
+    let leading_ws = code.len().saturating_sub(rest.len());
+    Some(LineScannerDeclaration {
+        name,
+        symbol_type: SymbolType::Import,
+        start_char: code_start + leading_ws,
+        end_char: code_start + leading_ws + name_len,
+    })
+}
+
+fn sql_create_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
+    let create_start = sql_find_keyword(code, "create")?;
+    let mut cursor = create_start + "create".len();
+    let (kind, kind_end) = loop {
+        let (word, _start, end) = sql_read_word_at(code, cursor)?;
+        let normalized = word.to_ascii_lowercase();
+        cursor = end;
+        if matches!(
+            normalized.as_str(),
+            "or" | "replace" | "temporary" | "temp" | "unlogged" | "unique" | "materialized"
+        ) {
+            continue;
+        }
+        if matches!(
+            normalized.as_str(),
+            "schema" | "table" | "view" | "function" | "procedure" | "trigger" | "index"
+        ) {
+            break (normalized, end);
+        }
+        return None;
+    };
+
+    cursor = sql_skip_if_not_exists(code, kind_end);
+    let (name, name_start, name_end) = sql_read_identifier_at(code, cursor)?;
+    let symbol_type = match kind.as_str() {
+        "schema" => SymbolType::Namespace,
+        "table" => SymbolType::Struct,
+        "view" => SymbolType::Type,
+        "function" | "procedure" => SymbolType::Function,
+        "trigger" => SymbolType::Method,
+        "index" => SymbolType::Property,
+        _ => return None,
+    };
+
+    Some(LineScannerDeclaration {
+        name,
+        symbol_type,
+        start_char: code_start + name_start,
+        end_char: code_start + name_end,
+    })
+}
+
+fn sql_skip_if_not_exists(code: &str, cursor: usize) -> usize {
+    let Some((first, _first_start, first_end)) = sql_read_word_at(code, cursor) else {
+        return cursor;
+    };
+    if !first.eq_ignore_ascii_case("if") {
+        return cursor;
+    }
+    let Some((second, _second_start, second_end)) = sql_read_word_at(code, first_end) else {
+        return cursor;
+    };
+    if !second.eq_ignore_ascii_case("not") {
+        return cursor;
+    }
+    let Some((third, _third_start, third_end)) = sql_read_word_at(code, second_end) else {
+        return cursor;
+    };
+    if third.eq_ignore_ascii_case("exists") {
+        third_end
+    } else {
+        cursor
+    }
+}
+
+fn sql_find_keyword(code: &str, keyword: &str) -> Option<usize> {
+    let lower = code.to_ascii_lowercase();
+    java_find_keyword(&lower, keyword)
+}
+
+fn sql_read_word_at(text: &str, cursor: usize) -> Option<(String, usize, usize)> {
+    let rest = text.get(cursor..)?;
+    let leading_ws = rest.len().saturating_sub(rest.trim_start().len());
+    let start = cursor + leading_ws;
+    let rest = text.get(start..)?;
+    let mut end = 0usize;
+    for (index, ch) in rest.char_indices() {
+        if ch == '_' || ch == '$' || ch.is_ascii_alphanumeric() {
+            end = index + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    (end > 0).then(|| (rest[..end].to_string(), start, start + end))
+}
+
+fn sql_read_identifier_at(text: &str, cursor: usize) -> Option<(String, usize, usize)> {
+    let rest = text.get(cursor..)?;
+    let leading_ws = rest.len().saturating_sub(rest.trim_start().len());
+    let start = cursor + leading_ws;
+    let rest = text.get(start..)?;
+    if let Some(after_quote) = rest.strip_prefix('"') {
+        let end = after_quote.find('"')? + 2;
+        return Some((after_quote[..end - 2].to_string(), start, start + end));
+    }
+
+    let mut end = 0usize;
+    for (index, ch) in rest.char_indices() {
+        if ch == '_' || ch == '$' || ch == '.' || ch.is_ascii_alphanumeric() {
+            end = index + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    (end > 0).then(|| {
+        (
+            rest[..end].trim_end_matches('.').to_string(),
+            start,
+            start + end,
+        )
+    })
+}
+
 fn push_line_scanner_symbol(
     symbols: &mut Vec<Symbol>,
     seen: &mut HashSet<(String, SymbolType, u32)>,
@@ -9996,6 +10164,7 @@ mod tests {
         "c/user_service.c",
         "shell/deploy.sh",
         "docker/Dockerfile",
+        "sql/001_users.sql",
     ];
 
     fn write_symbol_fixture(workspace_root: &Path, relative_path: &str) {
@@ -10602,6 +10771,39 @@ mod tests {
                     },
                 ],
             },
+            SymbolFixture {
+                path: "sql/001_users.sql",
+                expected_symbols: &[
+                    ExpectedSymbol {
+                        name: "./extensions.sql",
+                        symbol_type: SymbolType::Import,
+                    },
+                    ExpectedSymbol {
+                        name: "app",
+                        symbol_type: SymbolType::Namespace,
+                    },
+                    ExpectedSymbol {
+                        name: "app.users",
+                        symbol_type: SymbolType::Struct,
+                    },
+                    ExpectedSymbol {
+                        name: "app.active_users",
+                        symbol_type: SymbolType::Type,
+                    },
+                    ExpectedSymbol {
+                        name: "idx_users_email",
+                        symbol_type: SymbolType::Property,
+                    },
+                    ExpectedSymbol {
+                        name: "app.normalize_user_id",
+                        symbol_type: SymbolType::Function,
+                    },
+                    ExpectedSymbol {
+                        name: "users_updated_at",
+                        symbol_type: SymbolType::Method,
+                    },
+                ],
+            },
         ];
 
         for fixture in fixtures {
@@ -10657,6 +10859,11 @@ mod tests {
             ("user_is_active", "c/user_service.c", "user_is_active"),
             ("cleanup-trap", "shell/deploy.sh", "cleanup-trap"),
             ("APP_VERSION", "docker/Dockerfile", "APP_VERSION"),
+            (
+                "app.normalize_user_id",
+                "sql/001_users.sql",
+                "app.normalize_user_id",
+            ),
         ] {
             let results = service.search_symbols(query, 10).unwrap();
             assert!(
@@ -10721,6 +10928,7 @@ mod tests {
             ("C/C++", 2),
             ("Shell", 1),
             ("Dockerfile", 1),
+            ("SQL", 1),
         ] {
             assert!(
                 stats

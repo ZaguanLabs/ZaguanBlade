@@ -412,7 +412,8 @@ impl SymbolExtractor {
             | Language::Ruby
             | Language::Cpp
             | Language::Shell
-            | Language::Dockerfile => None,
+            | Language::Dockerfile
+            | Language::Sql => None,
         }
     }
 
@@ -1004,7 +1005,8 @@ impl SymbolExtractor {
             | Language::Ruby
             | Language::Cpp
             | Language::Shell
-            | Language::Dockerfile => {}
+            | Language::Dockerfile
+            | Language::Sql => {}
         }
         None
     }
@@ -1109,7 +1111,8 @@ fn extract_structural_relationships_from_node(
         | Language::Ruby
         | Language::Cpp
         | Language::Shell
-        | Language::Dockerfile => {}
+        | Language::Dockerfile
+        | Language::Sql => {}
     }
 
     for i in 0..node.child_count() {
@@ -1536,7 +1539,8 @@ fn extract_relationship_target_name(
         | Language::Ruby
         | Language::Cpp
         | Language::Shell
-        | Language::Dockerfile => None,
+        | Language::Dockerfile
+        | Language::Sql => None,
     }
 }
 

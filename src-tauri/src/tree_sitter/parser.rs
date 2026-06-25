@@ -36,6 +36,7 @@ pub enum Language {
     Cpp,
     Shell,
     Dockerfile,
+    Sql,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -362,6 +363,15 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extractor_version: 1,
         extracts: ExtractionCapabilities::scanner(true),
     },
+    LanguageCapability {
+        language: Language::Sql,
+        display_name: "SQL",
+        extensions: &["sql", "psql"],
+        parser: ParserKind::Scanner,
+        support: SupportLevel::Partial,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::scanner(true),
+    },
 ];
 
 impl Language {
@@ -436,6 +446,10 @@ impl Language {
 
     pub fn is_dockerfile_scanner(self) -> bool {
         matches!(self, Language::Dockerfile)
+    }
+
+    pub fn is_sql_scanner(self) -> bool {
+        matches!(self, Language::Sql)
     }
 
     pub fn is_shell_scanner(self) -> bool {
@@ -667,6 +681,8 @@ mod tests {
             Language::from_path("Dockerfile.prod"),
             Some(Language::Dockerfile)
         );
+        assert_eq!(Language::from_path("schema.sql"), Some(Language::Sql));
+        assert_eq!(Language::from_path("migration.psql"), Some(Language::Sql));
     }
 
     #[test]
