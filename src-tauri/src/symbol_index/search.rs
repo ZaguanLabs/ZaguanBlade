@@ -440,6 +440,11 @@ fn calculate_relevance(name: &str, query: &str) -> f32 {
         return 0.7 - (pos / len) * 0.3;
     }
 
+    let token_score = calculate_token_relevance(name, query);
+    if token_score > 0.0 {
+        return token_score;
+    }
+
     // Fuzzy match using character overlap
     let query_chars: std::collections::HashSet<char> = query_lower.chars().collect();
     let name_chars: std::collections::HashSet<char> = name_lower.chars().collect();
@@ -450,6 +455,78 @@ fn calculate_relevance(name: &str, query: &str) -> f32 {
         0.5 * (intersection / union)
     } else {
         0.0
+    }
+}
+
+fn calculate_token_relevance(name: &str, query: &str) -> f32 {
+    let name_tokens = text_tokens(name);
+    let query_tokens = text_tokens(query);
+    if name_tokens.is_empty() || query_tokens.is_empty() {
+        return 0.0;
+    }
+
+    let mut used_name_tokens = vec![false; name_tokens.len()];
+    let mut score = 0.0f32;
+    for query_token in &query_tokens {
+        if let Some(index) = name_tokens
+            .iter()
+            .enumerate()
+            .position(|(index, name_token)| !used_name_tokens[index] && name_token == query_token)
+        {
+            used_name_tokens[index] = true;
+            score += 1.0;
+            continue;
+        }
+
+        if let Some(index) = name_tokens
+            .iter()
+            .enumerate()
+            .position(|(index, name_token)| {
+                !used_name_tokens[index]
+                    && (name_token.starts_with(query_token) || query_token.starts_with(name_token))
+            })
+        {
+            used_name_tokens[index] = true;
+            score += 0.82;
+        }
+    }
+
+    let coverage = score / query_tokens.len() as f32;
+    if coverage >= 1.0 {
+        0.86
+    } else if coverage >= 0.5 {
+        0.65 * coverage
+    } else {
+        0.0
+    }
+}
+
+fn text_tokens(text: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut previous_was_lower_or_digit = false;
+
+    for ch in text.chars() {
+        if !ch.is_ascii_alphanumeric() {
+            push_token(&mut tokens, &mut current);
+            previous_was_lower_or_digit = false;
+            continue;
+        }
+
+        if ch.is_ascii_uppercase() && previous_was_lower_or_digit && !current.is_empty() {
+            push_token(&mut tokens, &mut current);
+        }
+        current.push(ch.to_ascii_lowercase());
+        previous_was_lower_or_digit = ch.is_ascii_lowercase() || ch.is_ascii_digit();
+    }
+
+    push_token(&mut tokens, &mut current);
+    tokens
+}
+
+fn push_token(tokens: &mut Vec<String>, current: &mut String) {
+    if !current.is_empty() {
+        tokens.push(std::mem::take(current));
     }
 }
 
@@ -504,6 +581,13 @@ mod tests {
     fn test_relevance_contains_match() {
         let score = calculate_relevance("doAuthenticate", "auth");
         assert!(score > 0.4 && score < 0.7);
+    }
+
+    #[test]
+    fn test_relevance_matches_tokenized_phrases() {
+        assert!(calculate_relevance("UserService", "user service") > 0.8);
+        assert!(calculate_relevance("normalize_user_id", "normalize user id") > 0.8);
+        assert!(calculate_relevance(".button-primary", "button primary") > 0.8);
     }
 
     #[test]
@@ -585,6 +669,22 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].symbol.name, "findUser");
         assert!(results[0].score > 0.0);
+    }
+
+    #[test]
+    fn test_execute_search_ranks_tokenized_name_matches() {
+        let store = SymbolStore::in_memory().unwrap();
+        let symbols = vec![
+            create_test_symbol_in_file("UserService", SymbolType::Class, "src/user_service.ts"),
+            create_test_symbol_in_file("UserSettings", SymbolType::Class, "src/user_settings.ts"),
+        ];
+        store.upsert_symbols(&symbols).unwrap();
+
+        let results =
+            execute_search(&store, &SearchQuery::text("user service").with_limit(10)).unwrap();
+
+        assert_eq!(results[0].symbol.name, "UserService");
+        assert!(results[0].score > results[1].score);
     }
 
     #[test]
