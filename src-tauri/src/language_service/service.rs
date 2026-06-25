@@ -7033,7 +7033,7 @@ fn extract_config_symbols(file_path: &str, content: &str, language: Language) ->
     let mut entries = Vec::with_capacity(CONFIG_SYMBOL_LIMIT.min(256));
     match language {
         Language::Json => {
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(content) {
+            if let Some(value) = parse_json_config_value(file_path, content) {
                 if is_package_json_path(file_path) {
                     collect_package_json_config_keys(&value, &mut entries);
                 } else if is_tsconfig_json_path(file_path) {
@@ -7086,6 +7086,120 @@ fn extract_config_symbols(file_path: &str, content: &str, language: Language) ->
         );
     }
     symbols
+}
+
+fn parse_json_config_value(file_path: &str, content: &str) -> Option<serde_json::Value> {
+    serde_json::from_str::<serde_json::Value>(content)
+        .ok()
+        .or_else(|| {
+            is_jsonc_path(file_path).then(|| {
+                let without_comments = strip_json_comments(content);
+                let without_trailing_commas = strip_json_trailing_commas(&without_comments);
+                serde_json::from_str::<serde_json::Value>(&without_trailing_commas).ok()
+            })?
+        })
+}
+
+fn strip_json_comments(content: &str) -> String {
+    let mut output = String::with_capacity(content.len());
+    let mut chars = content.chars().peekable();
+    let mut in_string = false;
+    let mut escaped = false;
+
+    while let Some(ch) = chars.next() {
+        if in_string {
+            output.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => {
+                in_string = true;
+                output.push(ch);
+            }
+            '/' if chars.peek() == Some(&'/') => {
+                chars.next();
+                output.push(' ');
+                output.push(' ');
+                for comment_ch in chars.by_ref() {
+                    if comment_ch == '\n' {
+                        output.push('\n');
+                        break;
+                    }
+                    output.push(' ');
+                }
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                output.push(' ');
+                output.push(' ');
+                let mut previous = '\0';
+                for comment_ch in chars.by_ref() {
+                    if comment_ch == '\n' {
+                        output.push('\n');
+                    } else {
+                        output.push(' ');
+                    }
+                    if previous == '*' && comment_ch == '/' {
+                        break;
+                    }
+                    previous = comment_ch;
+                }
+            }
+            _ => output.push(ch),
+        }
+    }
+
+    output
+}
+
+fn strip_json_trailing_commas(content: &str) -> String {
+    let mut output = String::with_capacity(content.len());
+    let mut chars = content.chars().peekable();
+    let mut in_string = false;
+    let mut escaped = false;
+
+    while let Some(ch) = chars.next() {
+        if in_string {
+            output.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => {
+                in_string = true;
+                output.push(ch);
+            }
+            ',' => {
+                let mut lookahead = chars.clone();
+                while matches!(lookahead.peek(), Some(next) if next.is_whitespace()) {
+                    lookahead.next();
+                }
+                if matches!(lookahead.peek(), Some('}' | ']')) {
+                    output.push(' ');
+                } else {
+                    output.push(ch);
+                }
+            }
+            _ => output.push(ch),
+        }
+    }
+
+    output
 }
 
 fn collect_json_config_keys(
@@ -7589,7 +7703,7 @@ fn is_package_json_path(file_path: &str) -> bool {
 fn is_tsconfig_json_path(file_path: &str) -> bool {
     matches!(
         config_file_name(file_path).as_str(),
-        "tsconfig.json" | "jsconfig.json"
+        "tsconfig.json" | "tsconfig.jsonc" | "jsconfig.json" | "jsconfig.jsonc"
     )
 }
 
@@ -7613,6 +7727,10 @@ fn is_docker_compose_path(file_path: &str) -> bool {
         config_file_name(file_path).as_str(),
         "compose.yaml" | "compose.yml" | "docker-compose.yaml" | "docker-compose.yml"
     )
+}
+
+fn is_jsonc_path(file_path: &str) -> bool {
+    config_file_name(file_path).ends_with(".jsonc")
 }
 
 fn locate_config_key(content: &str, key_path: &str, leaf_key: &str) -> AnchorLocation {
@@ -8748,6 +8866,21 @@ mod tests {
         )
         .unwrap();
         fs::write(
+            temp_dir.path().join("tsconfig.jsonc"),
+            r#"
+{
+  // Shared compiler options
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@shared/*": ["src/shared/*"], // alias used by app code
+    },
+  },
+}
+"#,
+        )
+        .unwrap();
+        fs::write(
             temp_dir.path().join(".github/workflows/ci.yml"),
             r#"
 name: CI
@@ -8861,6 +8994,12 @@ testpaths = ["tests"]
         assert!(!tsconfig_symbols
             .iter()
             .any(|symbol| symbol.name == "random.deep.noise"));
+
+        let tsconfig_jsonc_symbols = service.index_file("tsconfig.jsonc").unwrap();
+        assert!(tsconfig_jsonc_symbols.iter().any(|symbol| {
+            symbol.name == "compilerOptions.paths.@shared/*"
+                && symbol.symbol_type == SymbolType::Property
+        }));
 
         let workflow_symbols = service.index_file(".github/workflows/ci.yml").unwrap();
         assert!(workflow_symbols.iter().any(|symbol| {

@@ -258,10 +258,10 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
     LanguageCapability {
         language: Language::Json,
         display_name: "JSON",
-        extensions: &["json"],
+        extensions: &["json", "jsonc"],
         parser: ParserKind::Scanner,
         support: SupportLevel::Partial,
-        extractor_version: 2,
+        extractor_version: 3,
         extracts: ExtractionCapabilities::scanner(true),
     },
     LanguageCapability {
@@ -504,17 +504,12 @@ mod tests {
             Some(Language::Svelte)
         );
         assert_eq!(Language::from_path("data.json"), Some(Language::Json));
+        assert_eq!(Language::from_path("tsconfig.jsonc"), Some(Language::Json));
         assert_eq!(Language::from_path("config.yaml"), Some(Language::Yaml));
         assert_eq!(Language::from_path("config.yml"), Some(Language::Yaml));
         assert_eq!(Language::from_path("Cargo.toml"), Some(Language::Toml));
         assert_eq!(Language::from_path("pyproject.toml"), Some(Language::Toml));
-        for path in [
-            "app.php",
-            "Main.java",
-            "main.cpp",
-            "main.c",
-            "tsconfig.jsonc",
-        ] {
+        for path in ["app.php", "Main.java", "main.cpp", "main.c"] {
             assert_eq!(
                 Language::from_path(path),
                 None,
