@@ -1529,6 +1529,9 @@ impl LanguageService {
                 language,
             });
         }
+        if matches!(language, Language::Vue | Language::Svelte) {
+            return self.extract_component_file_symbols_and_relationships(file_path, content);
+        }
         if language.is_markup_scanner() {
             return Ok(SymbolExtraction {
                 symbols: extract_markup_symbols(file_path, content),
@@ -1578,6 +1581,46 @@ impl LanguageService {
             relationships,
             content: extraction_content,
             language: extraction_language,
+        })
+    }
+
+    fn extract_component_file_symbols_and_relationships<'a>(
+        &self,
+        file_path: &str,
+        content: &'a str,
+    ) -> Result<SymbolExtraction<'a>, LanguageError> {
+        let mut symbols = extract_markup_symbols(file_path, content);
+
+        if let Some(style_projection) = tag_body_projection(content, "style") {
+            symbols.extend(extract_css_symbols(file_path, &style_projection));
+        }
+
+        let Some(script_projection) = tag_body_projection(content, "script") else {
+            return Ok(SymbolExtraction {
+                symbols,
+                relationships: Vec::new(),
+                content: Cow::Borrowed(content),
+                language: Language::Html,
+            });
+        };
+
+        let tree = parse_with_thread_local_parser(&script_projection, Language::Tsx)?;
+        let mut script_symbols =
+            extract_symbols(&tree, &script_projection, Language::Tsx, file_path);
+        let relationships = extract_symbol_relationships(
+            &tree,
+            &script_projection,
+            Language::Tsx,
+            file_path,
+            &script_symbols,
+        );
+        symbols.append(&mut script_symbols);
+
+        Ok(SymbolExtraction {
+            symbols,
+            relationships,
+            content: Cow::Owned(script_projection),
+            language: Language::Tsx,
         })
     }
 
@@ -5314,24 +5357,48 @@ fn astro_frontmatter_body_range(content: &str) -> Option<(usize, usize)> {
 }
 
 fn astro_script_body_ranges(content: &str) -> Vec<(usize, usize)> {
+    tag_body_ranges(content, "script")
+}
+
+fn tag_body_projection(content: &str, tag_name: &str) -> Option<String> {
+    let ranges = tag_body_ranges(content, tag_name);
+    if ranges.is_empty() {
+        return None;
+    }
+
+    let mut projected = content
+        .bytes()
+        .map(|byte| if byte == b'\n' { b'\n' } else { b' ' })
+        .collect::<Vec<_>>();
+
+    for (start, end) in ranges {
+        projected[start..end].copy_from_slice(&content.as_bytes()[start..end]);
+    }
+
+    String::from_utf8(projected).ok()
+}
+
+fn tag_body_ranges(content: &str, tag_name: &str) -> Vec<(usize, usize)> {
     let lower = content.to_ascii_lowercase();
     let mut ranges = Vec::new();
     let mut search_start = 0usize;
+    let open_tag = format!("<{tag_name}");
+    let close_tag = format!("</{tag_name}>");
 
-    while let Some(relative_start) = lower[search_start..].find("<script") {
+    while let Some(relative_start) = lower[search_start..].find(&open_tag) {
         let tag_start = search_start + relative_start;
         let Some(relative_tag_end) = lower[tag_start..].find('>') else {
             break;
         };
         let body_start = tag_start + relative_tag_end + 1;
-        let Some(relative_body_end) = lower[body_start..].find("</script>") else {
+        let Some(relative_body_end) = lower[body_start..].find(&close_tag) else {
             break;
         };
         let body_end = body_start + relative_body_end;
         if body_start < body_end {
             ranges.push((body_start, body_end));
         }
-        search_start = body_end.saturating_add("</script>".len());
+        search_start = body_end.saturating_add(close_tag.len());
     }
 
     ranges
@@ -8442,6 +8509,18 @@ mod tests {
                         name: ".saveButton",
                         symbol_type: SymbolType::CssSelector,
                     },
+                    ExpectedSymbol {
+                        name: ".vue-panel",
+                        symbol_type: SymbolType::CssSelector,
+                    },
+                    ExpectedSymbol {
+                        name: "--vue-accent",
+                        symbol_type: SymbolType::CssCustomProperty,
+                    },
+                    ExpectedSymbol {
+                        name: "saveProfile",
+                        symbol_type: SymbolType::Function,
+                    },
                 ],
             },
             SymbolFixture {
@@ -8454,6 +8533,18 @@ mod tests {
                     ExpectedSymbol {
                         name: ".dense-grid",
                         symbol_type: SymbolType::CssSelector,
+                    },
+                    ExpectedSymbol {
+                        name: ".svelte-action",
+                        symbol_type: SymbolType::CssSelector,
+                    },
+                    ExpectedSymbol {
+                        name: "--svelte-gap",
+                        symbol_type: SymbolType::CssCustomProperty,
+                    },
+                    ExpectedSymbol {
+                        name: "openPanel",
+                        symbol_type: SymbolType::Function,
                     },
                 ],
             },

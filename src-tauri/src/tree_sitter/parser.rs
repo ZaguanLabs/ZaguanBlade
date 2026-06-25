@@ -243,7 +243,7 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["vue"],
         parser: ParserKind::Scanner,
         support: SupportLevel::Partial,
-        extractor_version: 1,
+        extractor_version: 2,
         extracts: ExtractionCapabilities::scanner(true),
     },
     LanguageCapability {
@@ -252,7 +252,7 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["svelte"],
         parser: ParserKind::Scanner,
         support: SupportLevel::Partial,
-        extractor_version: 1,
+        extractor_version: 2,
         extracts: ExtractionCapabilities::scanner(true),
     },
     LanguageCapability {

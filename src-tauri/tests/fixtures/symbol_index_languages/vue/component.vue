@@ -6,4 +6,14 @@
 
 <script setup lang="ts">
 const label = "Save";
+
+function saveProfile() {
+  return label;
+}
 </script>
+
+<style scoped>
+.vue-panel {
+  --vue-accent: #42b883;
+}
+</style>
