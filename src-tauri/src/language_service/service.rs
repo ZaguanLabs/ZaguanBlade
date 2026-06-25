@@ -1596,6 +1596,14 @@ impl LanguageService {
                 language,
             });
         }
+        if language.is_shell_scanner() {
+            return Ok(SymbolExtraction {
+                symbols: extract_shell_symbols(file_path, content),
+                relationships: Vec::new(),
+                content: Cow::Borrowed(content),
+                language,
+            });
+        }
 
         let (extraction_content, extraction_language) = if matches!(language, Language::Astro) {
             (Cow::Owned(astro_script_projection(content)), Language::Tsx)
@@ -3828,7 +3836,8 @@ impl LanguageService {
             | Language::CSharp
             | Language::Kotlin
             | Language::Ruby
-            | Language::Cpp => false,
+            | Language::Cpp
+            | Language::Shell => false,
         }
     }
 
@@ -3926,7 +3935,8 @@ impl LanguageService {
             | Language::CSharp
             | Language::Kotlin
             | Language::Ruby
-            | Language::Cpp => false,
+            | Language::Cpp
+            | Language::Shell => false,
         }
     }
 
@@ -5261,7 +5271,8 @@ impl LanguageService {
             | Language::CSharp
             | Language::Kotlin
             | Language::Ruby
-            | Language::Cpp => None,
+            | Language::Cpp
+            | Language::Shell => None,
         }
     }
 }
@@ -9209,6 +9220,133 @@ fn cpp_is_control_or_builtin(name: &str) -> bool {
     )
 }
 
+fn extract_shell_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
+    extract_line_scanner_symbols(file_path, content, shell_declarations_in_line)
+}
+
+fn shell_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
+    let code = shell_line_code(line);
+    if code.is_empty() {
+        return Vec::new();
+    }
+    let code_start = line.find(code).unwrap_or(0);
+
+    if let Some(declaration) = shell_source_declaration(code, code_start) {
+        return vec![declaration];
+    }
+    shell_function_declaration(code, code_start)
+        .into_iter()
+        .collect()
+}
+
+fn shell_line_code(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with('#') {
+        ""
+    } else {
+        trimmed.split('#').next().unwrap_or(trimmed).trim_end()
+    }
+}
+
+fn shell_source_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
+    let rest = code
+        .strip_prefix("source ")
+        .or_else(|| code.strip_prefix(". "))?;
+    let rest = rest.trim_start();
+    let (name, name_len) = shell_read_word(rest)?;
+    let leading_ws = code.len().saturating_sub(rest.len());
+    Some(LineScannerDeclaration {
+        name,
+        symbol_type: SymbolType::Import,
+        start_char: code_start + leading_ws,
+        end_char: code_start + leading_ws + name_len,
+    })
+}
+
+fn shell_function_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
+    if let Some(rest) = code.strip_prefix("function ") {
+        let rest = rest.trim_start();
+        let (name, name_len) = shell_read_identifier(rest)?;
+        let leading_ws = code.len().saturating_sub(rest.len());
+        return Some(LineScannerDeclaration {
+            name,
+            symbol_type: SymbolType::Function,
+            start_char: code_start + leading_ws,
+            end_char: code_start + leading_ws + name_len,
+        });
+    }
+
+    let paren_index = code.find("()")?;
+    let before_paren = code[..paren_index].trim_end();
+    let (name, name_start) = shell_read_identifier_before(before_paren)?;
+    if matches!(
+        name.as_str(),
+        "if" | "for" | "while" | "case" | "until" | "then" | "do"
+    ) {
+        return None;
+    }
+    Some(LineScannerDeclaration {
+        name,
+        symbol_type: SymbolType::Function,
+        start_char: code_start + name_start,
+        end_char: code_start + before_paren.len(),
+    })
+}
+
+fn shell_read_word(text: &str) -> Option<(String, usize)> {
+    let quote = text.chars().next().filter(|ch| *ch == '"' || *ch == '\'');
+    if let Some(quote) = quote {
+        let after_quote = &text[quote.len_utf8()..];
+        let end = after_quote.find(quote)?;
+        return Some((after_quote[..end].to_string(), end + quote.len_utf8() * 2));
+    }
+
+    let mut end = 0usize;
+    for (index, ch) in text.char_indices() {
+        if ch.is_whitespace() || ch == ';' {
+            break;
+        }
+        end = index + ch.len_utf8();
+    }
+    (end > 0).then(|| (text[..end].to_string(), end))
+}
+
+fn shell_read_identifier(text: &str) -> Option<(String, usize)> {
+    let mut end = 0usize;
+    for (index, ch) in text.char_indices() {
+        if index == 0 && !(ch == '_' || ch.is_ascii_alphabetic()) {
+            return None;
+        }
+        if ch == '_' || ch == '-' || ch.is_ascii_alphanumeric() {
+            end = index + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    (end > 0).then(|| (text[..end].to_string(), end))
+}
+
+fn shell_read_identifier_before(text: &str) -> Option<(String, usize)> {
+    let trimmed_len = text.trim_end().len();
+    let trimmed = &text[..trimmed_len];
+    let mut start = trimmed.len();
+    for (index, ch) in trimmed.char_indices().rev() {
+        if ch == '_' || ch == '-' || ch.is_ascii_alphanumeric() {
+            start = index;
+        } else {
+            break;
+        }
+    }
+    if start == trimmed.len() {
+        return None;
+    }
+    let name = &trimmed[start..];
+    name.chars()
+        .next()
+        .filter(|ch| *ch == '_' || ch.is_ascii_alphabetic())?;
+    Some((name.to_string(), start))
+}
+
 fn push_line_scanner_symbol(
     symbols: &mut Vec<Symbol>,
     seen: &mut HashSet<(String, SymbolType, u32)>,
@@ -9710,6 +9848,7 @@ mod tests {
         "ruby/user_service.rb",
         "cpp/user_service.cpp",
         "c/user_service.c",
+        "shell/deploy.sh",
     ];
 
     fn write_symbol_fixture(workspace_root: &Path, relative_path: &str) {
@@ -10262,6 +10401,31 @@ mod tests {
                     },
                 ],
             },
+            SymbolFixture {
+                path: "shell/deploy.sh",
+                expected_symbols: &[
+                    ExpectedSymbol {
+                        name: "./lib/common.sh",
+                        symbol_type: SymbolType::Import,
+                    },
+                    ExpectedSymbol {
+                        name: "./env.sh",
+                        symbol_type: SymbolType::Import,
+                    },
+                    ExpectedSymbol {
+                        name: "deploy_app",
+                        symbol_type: SymbolType::Function,
+                    },
+                    ExpectedSymbol {
+                        name: "rollback_app",
+                        symbol_type: SymbolType::Function,
+                    },
+                    ExpectedSymbol {
+                        name: "cleanup-trap",
+                        symbol_type: SymbolType::Function,
+                    },
+                ],
+            },
         ];
 
         for fixture in fixtures {
@@ -10315,6 +10479,7 @@ mod tests {
                 "normalize_user_id",
             ),
             ("user_is_active", "c/user_service.c", "user_is_active"),
+            ("cleanup-trap", "shell/deploy.sh", "cleanup-trap"),
         ] {
             let results = service.search_symbols(query, 10).unwrap();
             assert!(
@@ -10377,6 +10542,7 @@ mod tests {
             ("Kotlin", 1),
             ("Ruby", 1),
             ("C/C++", 2),
+            ("Shell", 1),
         ] {
             assert!(
                 stats

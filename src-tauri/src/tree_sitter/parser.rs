@@ -34,6 +34,7 @@ pub enum Language {
     Kotlin,
     Ruby,
     Cpp,
+    Shell,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -342,6 +343,15 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extractor_version: 1,
         extracts: ExtractionCapabilities::scanner(true),
     },
+    LanguageCapability {
+        language: Language::Shell,
+        display_name: "Shell",
+        extensions: &["sh", "bash", "zsh", "fish"],
+        parser: ParserKind::Scanner,
+        support: SupportLevel::Partial,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::scanner(true),
+    },
 ];
 
 impl Language {
@@ -408,6 +418,10 @@ impl Language {
 
     pub fn is_cpp_scanner(self) -> bool {
         matches!(self, Language::Cpp)
+    }
+
+    pub fn is_shell_scanner(self) -> bool {
+        matches!(self, Language::Shell)
     }
 
     pub fn is_ruby_scanner(self) -> bool {
@@ -615,6 +629,14 @@ mod tests {
         assert_eq!(Language::from_path("main.c"), Some(Language::Cpp));
         assert_eq!(Language::from_path("main.cpp"), Some(Language::Cpp));
         assert_eq!(Language::from_path("include/user.hpp"), Some(Language::Cpp));
+        assert_eq!(
+            Language::from_path("scripts/deploy.sh"),
+            Some(Language::Shell)
+        );
+        assert_eq!(
+            Language::from_path("scripts/deploy.bash"),
+            Some(Language::Shell)
+        );
     }
 
     #[test]
