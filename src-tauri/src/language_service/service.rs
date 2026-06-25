@@ -2185,6 +2185,7 @@ impl LanguageService {
             .iter()
             .map(|record| (record.file_path.as_str(), record))
             .collect::<HashMap<_, _>>();
+        let mut files_to_stage = Vec::new();
         let mut staged_files = Vec::new();
 
         for relative_path in &files {
@@ -2199,23 +2200,70 @@ impl LanguageService {
                 }
             }
 
-            match self.stage_file_index_with_metrics(relative_path) {
-                Ok(outcome) => {
-                    stats.files_indexed += 1;
-                    stats.symbols_extracted += self
-                        .filter_visible_symbols(relative_path, outcome.staged.symbols.clone())
-                        .len();
-                    stats.files_reindexed += 1;
-                    stats.anchors_extracted += outcome.metrics.anchors;
-                    stats.load_ms += outcome.metrics.load_ms;
-                    stats.freshness_check_ms += outcome.metrics.freshness_check_ms;
-                    stats.parse_extract_ms += outcome.metrics.parse_extract_ms;
-                    staged_files.push(outcome.staged);
-                }
-                Err(_) => {
-                    stats.files_failed += 1;
-                }
+            files_to_stage.push(relative_path.clone());
+        }
+
+        if !files_to_stage.is_empty() {
+            enum IndexDirectoryStageEvent {
+                Finished(String, Result<StagedFileIndexOutcome, String>),
             }
+
+            let worker_count = indexing_worker_count(files_to_stage.len());
+            let (tx, rx) = mpsc::channel::<IndexDirectoryStageEvent>();
+            let mut completed_files = 0usize;
+
+            std::thread::scope(|scope| {
+                for worker_index in 0..worker_count {
+                    let tx = tx.clone();
+                    let worker_files = files_to_stage
+                        .iter()
+                        .skip(worker_index)
+                        .step_by(worker_count)
+                        .cloned()
+                        .collect::<Vec<_>>();
+
+                    scope.spawn(move || {
+                        for file_path in worker_files {
+                            let result = self
+                                .stage_file_index_with_metrics(&file_path)
+                                .map_err(|error| error.to_string());
+                            let _ = tx.send(IndexDirectoryStageEvent::Finished(file_path, result));
+                        }
+                    });
+                }
+                drop(tx);
+
+                while completed_files < files_to_stage.len() {
+                    let Ok(event) = rx.recv() else {
+                        break;
+                    };
+                    match event {
+                        IndexDirectoryStageEvent::Finished(relative_path, result) => {
+                            completed_files += 1;
+                            match result {
+                                Ok(outcome) => {
+                                    stats.files_indexed += 1;
+                                    stats.symbols_extracted += self
+                                        .filter_visible_symbols(
+                                            &relative_path,
+                                            outcome.staged.symbols.clone(),
+                                        )
+                                        .len();
+                                    stats.files_reindexed += 1;
+                                    stats.anchors_extracted += outcome.metrics.anchors;
+                                    stats.load_ms += outcome.metrics.load_ms;
+                                    stats.freshness_check_ms += outcome.metrics.freshness_check_ms;
+                                    stats.parse_extract_ms += outcome.metrics.parse_extract_ms;
+                                    staged_files.push(outcome.staged);
+                                }
+                                Err(_) => {
+                                    stats.files_failed += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
         }
 
         if !staged_files.is_empty() {
