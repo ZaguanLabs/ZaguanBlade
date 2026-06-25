@@ -28,6 +28,8 @@ thread_local! {
     static INDEXING_PARSER: RefCell<Option<TreeSitterParser>> = RefCell::new(None);
 }
 
+const ANCHOR_ONLY_EXTRACTOR_VERSION: u32 = 1;
+
 /// Unified language service
 pub struct LanguageService {
     /// Workspace root path
@@ -287,6 +289,7 @@ struct StagedFileIndex {
     file_size: Option<u64>,
     line_count: usize,
     modified_at: Option<i64>,
+    extractor_version: Option<u32>,
     symbols: Vec<Symbol>,
     anchors: Vec<SemanticAnchor>,
     relationships: Vec<SymbolRelationship>,
@@ -979,6 +982,11 @@ impl LanguageService {
             return Ok(true);
         };
 
+        let extractor_version = Self::extractor_version_for_index_file(file_path);
+        if !Self::indexed_extractor_version_matches(record, extractor_version) {
+            return Ok(true);
+        }
+
         if record.file_size == Some(metadata.file_size)
             && record.modified_at == Some(metadata.modified_at)
             && record.line_count.is_some()
@@ -995,17 +1003,41 @@ impl LanguageService {
         }
 
         if refresh_metadata_when_hash_matches {
-            self.symbol_store.mark_file_indexed_with_metadata(
-                file_path,
-                &record.file_hash,
-                record.symbol_count,
-                Some(metadata.file_size),
-                Some(source_line_count(&content)),
-                Some(metadata.modified_at),
-            )?;
+            self.symbol_store
+                .mark_file_indexed_with_metadata_and_extractor_version(
+                    file_path,
+                    &record.file_hash,
+                    record.symbol_count,
+                    Some(metadata.file_size),
+                    Some(source_line_count(&content)),
+                    Some(metadata.modified_at),
+                    extractor_version,
+                )?;
         }
 
         Ok(false)
+    }
+
+    fn indexed_extractor_version_matches(
+        record: &crate::symbol_index::store::IndexedFileRecord,
+        expected: Option<u32>,
+    ) -> bool {
+        match expected {
+            Some(version) => record.extractor_version == Some(version),
+            None => true,
+        }
+    }
+
+    fn extractor_version_for_index_file(file_path: &str) -> Option<u32> {
+        Language::capability_for_path(file_path)
+            .map(|capability| capability.extractor_version)
+            .or_else(|| {
+                if is_anchor_only_index_file(file_path) {
+                    Some(ANCHOR_ONLY_EXTRACTOR_VERSION)
+                } else {
+                    None
+                }
+            })
     }
 
     pub fn audit_index_health(&self) -> Result<IndexHealthSnapshot, LanguageError> {
@@ -1619,7 +1651,13 @@ impl LanguageService {
 
         // Check if reindexing is needed
         let freshness_start = std::time::Instant::now();
-        if !self.symbol_store.needs_reindex(file_path, &hash)? {
+        let extractor_version = Self::extractor_version_for_index_file(file_path);
+        let existing_index_record = self.symbol_store.indexed_file_record(file_path)?;
+        let is_fresh = existing_index_record.as_ref().is_some_and(|record| {
+            record.file_hash == hash
+                && Self::indexed_extractor_version_matches(record, extractor_version)
+        });
+        if is_fresh {
             let mut db_write_ms = None;
             if self
                 .symbol_store
@@ -1721,6 +1759,7 @@ impl LanguageService {
             index_metadata.map(|metadata| metadata.file_size),
             Some(source_line_count(&content)),
             index_metadata.map(|metadata| metadata.modified_at),
+            extractor_version,
             &symbols,
             &semantic_anchors,
             &relationships,
@@ -1789,6 +1828,7 @@ impl LanguageService {
             index_metadata.as_ref().map(|metadata| metadata.file_size),
             Some(source_line_count(content)),
             index_metadata.as_ref().map(|metadata| metadata.modified_at),
+            Self::extractor_version_for_index_file(file_path),
             &[],
             &anchors,
             &[],
@@ -1861,6 +1901,7 @@ impl LanguageService {
                     file_size: index_metadata.map(|metadata| metadata.file_size),
                     line_count: source_line_count(&content),
                     modified_at: index_metadata.map(|metadata| metadata.modified_at),
+                    extractor_version: Self::extractor_version_for_index_file(file_path),
                     symbols: Vec::new(),
                     anchors,
                     relationships: Vec::new(),
@@ -1904,6 +1945,7 @@ impl LanguageService {
             file_size: index_metadata.map(|metadata| metadata.file_size),
             line_count: source_line_count(&content),
             modified_at: index_metadata.map(|metadata| metadata.modified_at),
+            extractor_version: Self::extractor_version_for_index_file(file_path),
             symbols,
             anchors,
             relationships,
@@ -1967,6 +2009,7 @@ impl LanguageService {
                     file_size: file.file_size,
                     line_count: Some(file.line_count),
                     modified_at: file.modified_at,
+                    extractor_version: file.extractor_version,
                     symbols: file.symbols.clone(),
                     anchors: file.anchors.clone(),
                     relationships,
@@ -3834,14 +3877,16 @@ impl LanguageService {
         self.symbol_store.upsert_symbols(&symbols)?;
         self.symbol_store
             .replace_relationships_for_file(file_path, &relationships)?;
-        self.symbol_store.mark_file_indexed_with_metadata(
-            file_path,
-            &hash,
-            symbols.len(),
-            None,
-            Some(source_line_count(snapshot.content())),
-            None,
-        )?;
+        self.symbol_store
+            .mark_file_indexed_with_metadata_and_extractor_version(
+                file_path,
+                &hash,
+                symbols.len(),
+                None,
+                Some(source_line_count(snapshot.content())),
+                None,
+                Self::extractor_version_for_index_file(file_path),
+            )?;
 
         // Update cache
         {
@@ -9045,6 +9090,51 @@ export function loadPosts() {
     }
 
     #[test]
+    fn index_file_refreshes_when_extractor_version_changes() {
+        let (service, temp_dir) = create_test_service();
+        let content = "export function versionedSymbol() { return 42; }\n";
+        fs::write(temp_dir.path().join("versioned.ts"), content).unwrap();
+
+        service.index_file("versioned.ts").unwrap();
+        let initial_record = service
+            .symbol_store
+            .indexed_file_record("versioned.ts")
+            .unwrap()
+            .unwrap();
+        assert_eq!(initial_record.extractor_version, Some(1));
+
+        service
+            .symbol_store
+            .mark_file_indexed_with_metadata_and_extractor_version(
+                "versioned.ts",
+                &initial_record.file_hash,
+                initial_record.symbol_count,
+                initial_record.file_size,
+                initial_record.line_count,
+                initial_record.modified_at,
+                Some(0),
+            )
+            .unwrap();
+
+        let stale_record = service
+            .symbol_store
+            .indexed_file_record("versioned.ts")
+            .unwrap()
+            .unwrap();
+        assert!(service
+            .indexed_file_needs_refresh("versioned.ts", &stale_record, false)
+            .unwrap());
+
+        service.index_file("versioned.ts").unwrap();
+        let refreshed_record = service
+            .symbol_store
+            .indexed_file_record("versioned.ts")
+            .unwrap()
+            .unwrap();
+        assert_eq!(refreshed_record.extractor_version, Some(1));
+    }
+
+    #[test]
     fn reconcile_index_rebuilds_once_when_graph_integrity_is_hard_broken() {
         let (service, temp_dir) = create_test_service();
 
@@ -9057,6 +9147,7 @@ export function loadPosts() {
                 &compute_hash(content),
                 None,
                 Some(source_line_count(content)),
+                None,
                 None,
                 &[],
                 &[],
