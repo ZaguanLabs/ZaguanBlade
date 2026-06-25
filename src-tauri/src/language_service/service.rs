@@ -1580,6 +1580,14 @@ impl LanguageService {
                 language,
             });
         }
+        if language.is_ruby_scanner() {
+            return Ok(SymbolExtraction {
+                symbols: extract_ruby_symbols(file_path, content),
+                relationships: Vec::new(),
+                content: Cow::Borrowed(content),
+                language,
+            });
+        }
 
         let (extraction_content, extraction_language) = if matches!(language, Language::Astro) {
             (Cow::Owned(astro_script_projection(content)), Language::Tsx)
@@ -3810,7 +3818,8 @@ impl LanguageService {
             | Language::Php
             | Language::Java
             | Language::CSharp
-            | Language::Kotlin => false,
+            | Language::Kotlin
+            | Language::Ruby => false,
         }
     }
 
@@ -3906,7 +3915,8 @@ impl LanguageService {
             | Language::Php
             | Language::Java
             | Language::CSharp
-            | Language::Kotlin => false,
+            | Language::Kotlin
+            | Language::Ruby => false,
         }
     }
 
@@ -5239,7 +5249,8 @@ impl LanguageService {
             | Language::Php
             | Language::Java
             | Language::CSharp
-            | Language::Kotlin => None,
+            | Language::Kotlin
+            | Language::Ruby => None,
         }
     }
 }
@@ -8799,6 +8810,144 @@ fn kotlin_function_declaration(code: &str, code_start: usize) -> Option<LineScan
     })
 }
 
+fn extract_ruby_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
+    extract_line_scanner_symbols(file_path, content, ruby_declarations_in_line)
+}
+
+fn ruby_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
+    let code = ruby_line_code(line);
+    if code.is_empty() {
+        return Vec::new();
+    }
+    let code_start = line.find(code).unwrap_or(0);
+
+    if let Some(declaration) = ruby_require_declaration(code, code_start) {
+        return vec![declaration];
+    }
+
+    let mut declarations = Vec::new();
+    if let Some(declaration) = ruby_module_declaration(code, code_start) {
+        declarations.push(declaration);
+    }
+    if let Some(declaration) = ruby_class_declaration(code, code_start) {
+        declarations.push(declaration);
+    }
+    if declarations.is_empty() {
+        if let Some(declaration) = ruby_method_declaration(code, code_start) {
+            declarations.push(declaration);
+        }
+    }
+
+    declarations
+}
+
+fn ruby_line_code(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with('#') {
+        ""
+    } else {
+        trimmed.split('#').next().unwrap_or(trimmed).trim_end()
+    }
+}
+
+fn ruby_require_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
+    let rest = code
+        .strip_prefix("require_relative ")
+        .or_else(|| code.strip_prefix("require "))?;
+    let rest = rest.trim_start();
+    let quote = rest.chars().next().filter(|ch| *ch == '"' || *ch == '\'')?;
+    let name_start = rest.find(quote)? + quote.len_utf8();
+    let after_quote = &rest[name_start..];
+    let name_end = after_quote.find(quote)?;
+    let name = after_quote[..name_end].to_string();
+    let leading_ws = code.len().saturating_sub(rest.len());
+    let start_char = code_start + leading_ws + name_start;
+    Some(LineScannerDeclaration {
+        name,
+        symbol_type: SymbolType::Import,
+        start_char,
+        end_char: start_char + name_end,
+    })
+}
+
+fn ruby_module_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
+    ruby_keyword_declaration(code, code_start, "module", SymbolType::Namespace)
+}
+
+fn ruby_class_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
+    ruby_keyword_declaration(code, code_start, "class", SymbolType::Class)
+}
+
+fn ruby_keyword_declaration(
+    code: &str,
+    code_start: usize,
+    keyword: &str,
+    symbol_type: SymbolType,
+) -> Option<LineScannerDeclaration> {
+    let keyword_start = java_find_keyword(code, keyword)?;
+    let after_keyword = keyword_start + keyword.len();
+    let rest = code[after_keyword..].trim_start();
+    let leading_ws = code[after_keyword..].len().saturating_sub(rest.len());
+    let (name, name_len) = ruby_read_qualified_name(rest)?;
+    let start_char = code_start + after_keyword + leading_ws;
+    Some(LineScannerDeclaration {
+        name,
+        symbol_type,
+        start_char,
+        end_char: start_char + name_len,
+    })
+}
+
+fn ruby_method_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
+    let rest = code.strip_prefix("def ")?;
+    let rest = rest.trim_start();
+    let receiver_offset = rest.rfind('.').map_or(0, |index| index + 1);
+    let method_text = &rest[receiver_offset..];
+    let (name, name_len) = ruby_read_method_name(method_text)?;
+    let leading_ws = code.len().saturating_sub(rest.len());
+    let start_char = code_start + leading_ws + receiver_offset;
+    Some(LineScannerDeclaration {
+        name,
+        symbol_type: if code_start > 0 {
+            SymbolType::Method
+        } else {
+            SymbolType::Function
+        },
+        start_char,
+        end_char: start_char + name_len,
+    })
+}
+
+fn ruby_read_qualified_name(text: &str) -> Option<(String, usize)> {
+    let mut end = 0usize;
+    for (index, ch) in text.char_indices() {
+        if index == 0 && !(ch == '_' || ch.is_ascii_alphabetic()) {
+            return None;
+        }
+        if ch == ':' || ch == '_' || ch.is_ascii_alphanumeric() {
+            end = index + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    (end > 0).then(|| (text[..end].to_string(), end))
+}
+
+fn ruby_read_method_name(text: &str) -> Option<(String, usize)> {
+    let mut end = 0usize;
+    for (index, ch) in text.char_indices() {
+        if index == 0 && !(ch == '_' || ch.is_ascii_alphabetic()) {
+            return None;
+        }
+        if ch == '_' || ch.is_ascii_alphanumeric() || (index > 0 && matches!(ch, '?' | '!' | '=')) {
+            end = index + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    (end > 0).then(|| (text[..end].to_string(), end))
+}
+
 fn push_line_scanner_symbol(
     symbols: &mut Vec<Symbol>,
     seen: &mut HashSet<(String, SymbolType, u32)>,
@@ -9297,6 +9446,7 @@ mod tests {
         "java/UserService.java",
         "csharp/UserService.cs",
         "kotlin/UserService.kt",
+        "ruby/user_service.rb",
     ];
 
     fn write_symbol_fixture(workspace_root: &Path, relative_path: &str) {
@@ -9746,6 +9896,43 @@ mod tests {
                     },
                 ],
             },
+            SymbolFixture {
+                path: "ruby/user_service.rb",
+                expected_symbols: &[
+                    ExpectedSymbol {
+                        name: "json",
+                        symbol_type: SymbolType::Import,
+                    },
+                    ExpectedSymbol {
+                        name: "user_formatter",
+                        symbol_type: SymbolType::Import,
+                    },
+                    ExpectedSymbol {
+                        name: "Example::Users",
+                        symbol_type: SymbolType::Namespace,
+                    },
+                    ExpectedSymbol {
+                        name: "UserService",
+                        symbol_type: SymbolType::Class,
+                    },
+                    ExpectedSymbol {
+                        name: "find_user",
+                        symbol_type: SymbolType::Method,
+                    },
+                    ExpectedSymbol {
+                        name: "normalize_user_id",
+                        symbol_type: SymbolType::Method,
+                    },
+                    ExpectedSymbol {
+                        name: "active?",
+                        symbol_type: SymbolType::Method,
+                    },
+                    ExpectedSymbol {
+                        name: "format_user",
+                        symbol_type: SymbolType::Function,
+                    },
+                ],
+            },
         ];
 
         for fixture in fixtures {
@@ -9792,6 +9979,7 @@ mod tests {
                 "kotlin/UserService.kt",
                 "normalizeUserId",
             ),
+            ("active?", "ruby/user_service.rb", "active?"),
         ] {
             let results = service.search_symbols(query, 10).unwrap();
             assert!(
@@ -9852,6 +10040,7 @@ mod tests {
             ("Java", 1),
             ("C#", 1),
             ("Kotlin", 1),
+            ("Ruby", 1),
         ] {
             assert!(
                 stats

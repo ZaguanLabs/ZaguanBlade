@@ -32,6 +32,7 @@ pub enum Language {
     Java,
     CSharp,
     Kotlin,
+    Ruby,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -322,6 +323,15 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extractor_version: 1,
         extracts: ExtractionCapabilities::scanner(true),
     },
+    LanguageCapability {
+        language: Language::Ruby,
+        display_name: "Ruby",
+        extensions: &["rb", "rake"],
+        parser: ParserKind::Scanner,
+        support: SupportLevel::Partial,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::scanner(true),
+    },
 ];
 
 impl Language {
@@ -384,6 +394,10 @@ impl Language {
 
     pub fn is_kotlin_scanner(self) -> bool {
         matches!(self, Language::Kotlin)
+    }
+
+    pub fn is_ruby_scanner(self) -> bool {
+        matches!(self, Language::Ruby)
     }
 
     /// Get display name for the language
@@ -578,6 +592,11 @@ mod tests {
         assert_eq!(
             Language::from_path("build.gradle.kts"),
             Some(Language::Kotlin)
+        );
+        assert_eq!(Language::from_path("user_service.rb"), Some(Language::Ruby));
+        assert_eq!(
+            Language::from_path("tasks/deploy.rake"),
+            Some(Language::Ruby)
         );
         for path in ["main.cpp", "main.c"] {
             assert_eq!(
