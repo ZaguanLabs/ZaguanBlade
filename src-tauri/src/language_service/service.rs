@@ -1564,6 +1564,14 @@ impl LanguageService {
                 language,
             });
         }
+        if language.is_csharp_scanner() {
+            return Ok(SymbolExtraction {
+                symbols: extract_csharp_symbols(file_path, content),
+                relationships: Vec::new(),
+                content: Cow::Borrowed(content),
+                language,
+            });
+        }
 
         let (extraction_content, extraction_language) = if matches!(language, Language::Astro) {
             (Cow::Owned(astro_script_projection(content)), Language::Tsx)
@@ -3792,7 +3800,8 @@ impl LanguageService {
             | Language::Yaml
             | Language::Toml
             | Language::Php
-            | Language::Java => false,
+            | Language::Java
+            | Language::CSharp => false,
         }
     }
 
@@ -3886,7 +3895,8 @@ impl LanguageService {
             | Language::Yaml
             | Language::Toml
             | Language::Php
-            | Language::Java => false,
+            | Language::Java
+            | Language::CSharp => false,
         }
     }
 
@@ -5217,7 +5227,8 @@ impl LanguageService {
             | Language::Yaml
             | Language::Toml
             | Language::Php
-            | Language::Java => None,
+            | Language::Java
+            | Language::CSharp => None,
         }
     }
 }
@@ -8003,6 +8014,22 @@ fn push_config_symbol(
 }
 
 fn extract_php_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
+    extract_line_scanner_symbols(file_path, content, php_declarations_in_line)
+}
+
+#[derive(Debug, Clone)]
+struct LineScannerDeclaration {
+    name: String,
+    symbol_type: SymbolType,
+    start_char: usize,
+    end_char: usize,
+}
+
+fn extract_line_scanner_symbols(
+    file_path: &str,
+    content: &str,
+    declarations_in_line: fn(&str) -> Vec<LineScannerDeclaration>,
+) -> Vec<Symbol> {
     let mut symbols = Vec::new();
     let mut seen = HashSet::new();
     let mut byte_offset = 0usize;
@@ -8017,7 +8044,7 @@ fn extract_php_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
             .unwrap_or(line_without_lf);
         let line_number = line_index as u32;
 
-        for declaration in php_declarations_in_line(line) {
+        for declaration in declarations_in_line(line) {
             push_line_scanner_symbol(
                 &mut symbols,
                 &mut seen,
@@ -8031,14 +8058,6 @@ fn extract_php_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
     }
 
     symbols
-}
-
-#[derive(Debug, Clone)]
-struct LineScannerDeclaration {
-    name: String,
-    symbol_type: SymbolType,
-    start_char: usize,
-    end_char: usize,
 }
 
 fn php_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
@@ -8221,34 +8240,7 @@ fn is_php_identifier_char(ch: char) -> bool {
 }
 
 fn extract_java_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
-    let mut symbols = Vec::new();
-    let mut seen = HashSet::new();
-    let mut byte_offset = 0usize;
-
-    for (line_index, segment) in content.split_inclusive('\n').enumerate() {
-        let line_start = byte_offset;
-        byte_offset += segment.len();
-
-        let line_without_lf = segment.strip_suffix('\n').unwrap_or(segment);
-        let line = line_without_lf
-            .strip_suffix('\r')
-            .unwrap_or(line_without_lf);
-        let line_number = line_index as u32;
-
-        for declaration in java_declarations_in_line(line) {
-            push_line_scanner_symbol(
-                &mut symbols,
-                &mut seen,
-                file_path,
-                declaration,
-                line_number,
-                line_start,
-                line,
-            );
-        }
-    }
-
-    symbols
+    extract_line_scanner_symbols(file_path, content, java_declarations_in_line)
 }
 
 fn java_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
@@ -8471,6 +8463,151 @@ fn java_starts_with_statement_keyword(text: &str) -> bool {
 
 fn is_java_identifier_char(ch: char) -> bool {
     ch == '_' || ch == '$' || ch.is_ascii_alphanumeric()
+}
+
+fn extract_csharp_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
+    extract_line_scanner_symbols(file_path, content, csharp_declarations_in_line)
+}
+
+fn csharp_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
+    let code = csharp_line_code(line);
+    if code.is_empty() {
+        return Vec::new();
+    }
+    let code_start = line.find(code).unwrap_or(0);
+
+    if let Some(declaration) = csharp_namespace_declaration(code, code_start) {
+        return vec![declaration];
+    }
+    if let Some(declaration) = csharp_using_declaration(code, code_start) {
+        return vec![declaration];
+    }
+
+    let mut declarations = Vec::new();
+    for (keyword, symbol_type) in [
+        ("class", SymbolType::Class),
+        ("interface", SymbolType::Interface),
+        ("struct", SymbolType::Struct),
+        ("enum", SymbolType::Enum),
+    ] {
+        if let Some(declaration) =
+            csharp_keyword_declaration(code, code_start, keyword, symbol_type)
+        {
+            declarations.push(declaration);
+        }
+    }
+    if let Some(declaration) = csharp_record_declaration(code, code_start) {
+        declarations.push(declaration);
+    }
+
+    if declarations.is_empty() {
+        if let Some(declaration) = csharp_method_declaration(code, code_start) {
+            declarations.push(declaration);
+        }
+    }
+
+    declarations
+}
+
+fn csharp_line_code(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("//")
+        || trimmed.starts_with('*')
+        || trimmed.starts_with("/*")
+        || trimmed.starts_with('[')
+    {
+        ""
+    } else {
+        trimmed.split("//").next().unwrap_or(trimmed).trim_end()
+    }
+}
+
+fn csharp_namespace_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
+    let rest = code.strip_prefix("namespace ")?;
+    let name_start = code.len().saturating_sub(rest.len());
+    let rest = rest.trim_start();
+    let leading_ws = code[name_start..].len().saturating_sub(rest.len());
+    let (name, name_len) = java_read_qualified_name(rest, false)?;
+    let start_char = code_start + name_start + leading_ws;
+    Some(LineScannerDeclaration {
+        name,
+        symbol_type: SymbolType::Namespace,
+        start_char,
+        end_char: start_char + name_len,
+    })
+}
+
+fn csharp_using_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
+    let rest = code.strip_prefix("using ")?;
+    let mut rest = rest.trim_start();
+    if rest.starts_with('(') || rest.starts_with("var ") {
+        return None;
+    }
+    rest = rest.strip_prefix("static ").unwrap_or(rest).trim_start();
+    if let Some(alias_split) = rest.find('=') {
+        rest = rest[alias_split + 1..].trim_start();
+    }
+    let leading_ws = code.len().saturating_sub(rest.len());
+    let (name, name_len) = java_read_qualified_name(rest, false)?;
+    Some(LineScannerDeclaration {
+        name,
+        symbol_type: SymbolType::Import,
+        start_char: code_start + leading_ws,
+        end_char: code_start + leading_ws + name_len,
+    })
+}
+
+fn csharp_keyword_declaration(
+    code: &str,
+    code_start: usize,
+    keyword: &str,
+    symbol_type: SymbolType,
+) -> Option<LineScannerDeclaration> {
+    let keyword_start = java_find_keyword(code, keyword)?;
+    let after_keyword = keyword_start + keyword.len();
+    let rest = code[after_keyword..].trim_start();
+    let leading_ws = code[after_keyword..].len().saturating_sub(rest.len());
+    let (name, name_len) = java_read_identifier(rest)?;
+    let start_char = code_start + after_keyword + leading_ws;
+    Some(LineScannerDeclaration {
+        name,
+        symbol_type,
+        start_char,
+        end_char: start_char + name_len,
+    })
+}
+
+fn csharp_record_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
+    let keyword_start = java_find_keyword(code, "record")?;
+    let after_keyword = keyword_start + "record".len();
+    let mut rest = code[after_keyword..].trim_start();
+    if let Some(after_kind) = rest
+        .strip_prefix("class ")
+        .or_else(|| rest.strip_prefix("struct "))
+    {
+        rest = after_kind.trim_start();
+    }
+    let leading_ws = code[after_keyword..].len().saturating_sub(rest.len());
+    let (name, name_len) = java_read_identifier(rest)?;
+    let start_char = code_start + after_keyword + leading_ws;
+    Some(LineScannerDeclaration {
+        name,
+        symbol_type: SymbolType::Struct,
+        start_char,
+        end_char: start_char + name_len,
+    })
+}
+
+fn csharp_method_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
+    let mut declaration = java_method_declaration(code, code_start)?;
+    if matches!(
+        declaration.name.as_str(),
+        "nameof" | "typeof" | "sizeof" | "default"
+    ) {
+        return None;
+    }
+    declaration.symbol_type = SymbolType::Method;
+    Some(declaration)
 }
 
 fn push_line_scanner_symbol(
@@ -8969,6 +9106,7 @@ mod tests {
         "config/app.toml",
         "php/service.php",
         "java/UserService.java",
+        "csharp/UserService.cs",
     ];
 
     fn write_symbol_fixture(workspace_root: &Path, relative_path: &str) {
@@ -9324,6 +9462,51 @@ mod tests {
                     },
                 ],
             },
+            SymbolFixture {
+                path: "csharp/UserService.cs",
+                expected_symbols: &[
+                    ExpectedSymbol {
+                        name: "Example.Users",
+                        symbol_type: SymbolType::Namespace,
+                    },
+                    ExpectedSymbol {
+                        name: "System.Collections.Generic",
+                        symbol_type: SymbolType::Import,
+                    },
+                    ExpectedSymbol {
+                        name: "System.String",
+                        symbol_type: SymbolType::Import,
+                    },
+                    ExpectedSymbol {
+                        name: "System.Text.Json.JsonSerializer",
+                        symbol_type: SymbolType::Import,
+                    },
+                    ExpectedSymbol {
+                        name: "UserService",
+                        symbol_type: SymbolType::Class,
+                    },
+                    ExpectedSymbol {
+                        name: "FindUser",
+                        symbol_type: SymbolType::Method,
+                    },
+                    ExpectedSymbol {
+                        name: "IUserFormatter",
+                        symbol_type: SymbolType::Interface,
+                    },
+                    ExpectedSymbol {
+                        name: "Format",
+                        symbol_type: SymbolType::Method,
+                    },
+                    ExpectedSymbol {
+                        name: "UserStatus",
+                        symbol_type: SymbolType::Enum,
+                    },
+                    ExpectedSymbol {
+                        name: "UserDto",
+                        symbol_type: SymbolType::Struct,
+                    },
+                ],
+            },
         ];
 
         for fixture in fixtures {
@@ -9364,6 +9547,7 @@ mod tests {
                 "profile.release.lto",
             ),
             ("findUser", "java/UserService.java", "findUser"),
+            ("FindUser", "csharp/UserService.cs", "FindUser"),
         ] {
             let results = service.search_symbols(query, 10).unwrap();
             assert!(
@@ -9422,6 +9606,7 @@ mod tests {
             ("TOML", 1),
             ("PHP", 1),
             ("Java", 1),
+            ("C#", 1),
         ] {
             assert!(
                 stats
