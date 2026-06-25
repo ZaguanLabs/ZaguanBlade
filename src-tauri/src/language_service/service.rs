@@ -1604,6 +1604,14 @@ impl LanguageService {
                 language,
             });
         }
+        if language.is_dockerfile_scanner() {
+            return Ok(SymbolExtraction {
+                symbols: extract_dockerfile_symbols(file_path, content),
+                relationships: Vec::new(),
+                content: Cow::Borrowed(content),
+                language,
+            });
+        }
 
         let (extraction_content, extraction_language) = if matches!(language, Language::Astro) {
             (Cow::Owned(astro_script_projection(content)), Language::Tsx)
@@ -3837,7 +3845,8 @@ impl LanguageService {
             | Language::Kotlin
             | Language::Ruby
             | Language::Cpp
-            | Language::Shell => false,
+            | Language::Shell
+            | Language::Dockerfile => false,
         }
     }
 
@@ -3936,7 +3945,8 @@ impl LanguageService {
             | Language::Kotlin
             | Language::Ruby
             | Language::Cpp
-            | Language::Shell => false,
+            | Language::Shell
+            | Language::Dockerfile => false,
         }
     }
 
@@ -5272,7 +5282,8 @@ impl LanguageService {
             | Language::Kotlin
             | Language::Ruby
             | Language::Cpp
-            | Language::Shell => None,
+            | Language::Shell
+            | Language::Dockerfile => None,
         }
     }
 }
@@ -9347,6 +9358,141 @@ fn shell_read_identifier_before(text: &str) -> Option<(String, usize)> {
     Some((name.to_string(), start))
 }
 
+fn extract_dockerfile_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
+    extract_line_scanner_symbols(file_path, content, dockerfile_declarations_in_line)
+}
+
+fn dockerfile_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
+    let code = dockerfile_line_code(line);
+    if code.is_empty() {
+        return Vec::new();
+    }
+    let code_start = line.find(code).unwrap_or(0);
+    let mut parts = code.split_whitespace();
+    let Some(instruction) = parts.next() else {
+        return Vec::new();
+    };
+    let rest = code[instruction.len()..].trim_start();
+    match instruction.to_ascii_uppercase().as_str() {
+        "FROM" => dockerfile_from_declarations(rest, code_start + instruction.len()),
+        "ARG" => dockerfile_key_declaration(rest, code, code_start, SymbolType::Constant),
+        "ENV" => dockerfile_key_declaration(rest, code, code_start, SymbolType::Constant),
+        "EXPOSE" | "WORKDIR" => dockerfile_value_declaration(rest, code, code_start),
+        "COPY" | "ADD" => dockerfile_from_flag_declaration(rest, code, code_start),
+        _ => Vec::new(),
+    }
+}
+
+fn dockerfile_line_code(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with('#') {
+        ""
+    } else {
+        trimmed.split('#').next().unwrap_or(trimmed).trim_end()
+    }
+}
+
+fn dockerfile_from_declarations(rest: &str, rest_start: usize) -> Vec<LineScannerDeclaration> {
+    let mut declarations = Vec::new();
+    if let Some((image, image_len)) = shell_read_word(rest) {
+        let leading_ws = rest.len().saturating_sub(rest.trim_start().len());
+        declarations.push(LineScannerDeclaration {
+            name: image,
+            symbol_type: SymbolType::Import,
+            start_char: rest_start + leading_ws,
+            end_char: rest_start + leading_ws + image_len,
+        });
+    }
+
+    let words = rest.split_whitespace().collect::<Vec<_>>();
+    for pair in words.windows(2) {
+        if pair[0].eq_ignore_ascii_case("AS") {
+            let stage = pair[1].trim_matches('"').to_string();
+            if let Some(relative_start) = rest.find(pair[1]) {
+                declarations.push(LineScannerDeclaration {
+                    name: stage,
+                    symbol_type: SymbolType::Module,
+                    start_char: rest_start + relative_start,
+                    end_char: rest_start + relative_start + pair[1].len(),
+                });
+            }
+            break;
+        }
+    }
+
+    declarations
+}
+
+fn dockerfile_key_declaration(
+    rest: &str,
+    code: &str,
+    code_start: usize,
+    symbol_type: SymbolType,
+) -> Vec<LineScannerDeclaration> {
+    let rest = rest.trim_start();
+    let Some((name, name_len)) = dockerfile_read_key(rest) else {
+        return Vec::new();
+    };
+    let leading_ws = code.len().saturating_sub(rest.len());
+    vec![LineScannerDeclaration {
+        name,
+        symbol_type,
+        start_char: code_start + leading_ws,
+        end_char: code_start + leading_ws + name_len,
+    }]
+}
+
+fn dockerfile_value_declaration(
+    rest: &str,
+    code: &str,
+    code_start: usize,
+) -> Vec<LineScannerDeclaration> {
+    let rest = rest.trim_start();
+    let Some((name, name_len)) = shell_read_word(rest) else {
+        return Vec::new();
+    };
+    let leading_ws = code.len().saturating_sub(rest.len());
+    vec![LineScannerDeclaration {
+        name,
+        symbol_type: SymbolType::Property,
+        start_char: code_start + leading_ws,
+        end_char: code_start + leading_ws + name_len,
+    }]
+}
+
+fn dockerfile_from_flag_declaration(
+    rest: &str,
+    code: &str,
+    code_start: usize,
+) -> Vec<LineScannerDeclaration> {
+    let Some(flag_start) = rest.find("--from=") else {
+        return Vec::new();
+    };
+    let value_start = flag_start + "--from=".len();
+    let value = &rest[value_start..];
+    let Some((name, name_len)) = shell_read_word(value) else {
+        return Vec::new();
+    };
+    let leading_ws = code.len().saturating_sub(rest.len());
+    vec![LineScannerDeclaration {
+        name,
+        symbol_type: SymbolType::Import,
+        start_char: code_start + leading_ws + value_start,
+        end_char: code_start + leading_ws + value_start + name_len,
+    }]
+}
+
+fn dockerfile_read_key(text: &str) -> Option<(String, usize)> {
+    let mut end = 0usize;
+    for (index, ch) in text.char_indices() {
+        if ch.is_whitespace() || ch == '=' {
+            break;
+        }
+        end = index + ch.len_utf8();
+    }
+    (end > 0).then(|| (text[..end].to_string(), end))
+}
+
 fn push_line_scanner_symbol(
     symbols: &mut Vec<Symbol>,
     seen: &mut HashSet<(String, SymbolType, u32)>,
@@ -9849,6 +9995,7 @@ mod tests {
         "cpp/user_service.cpp",
         "c/user_service.c",
         "shell/deploy.sh",
+        "docker/Dockerfile",
     ];
 
     fn write_symbol_fixture(workspace_root: &Path, relative_path: &str) {
@@ -10426,6 +10573,35 @@ mod tests {
                     },
                 ],
             },
+            SymbolFixture {
+                path: "docker/Dockerfile",
+                expected_symbols: &[
+                    ExpectedSymbol {
+                        name: "node:22-alpine",
+                        symbol_type: SymbolType::Import,
+                    },
+                    ExpectedSymbol {
+                        name: "builder",
+                        symbol_type: SymbolType::Module,
+                    },
+                    ExpectedSymbol {
+                        name: "APP_VERSION",
+                        symbol_type: SymbolType::Constant,
+                    },
+                    ExpectedSymbol {
+                        name: "NODE_ENV",
+                        symbol_type: SymbolType::Constant,
+                    },
+                    ExpectedSymbol {
+                        name: "/app",
+                        symbol_type: SymbolType::Property,
+                    },
+                    ExpectedSymbol {
+                        name: "8080",
+                        symbol_type: SymbolType::Property,
+                    },
+                ],
+            },
         ];
 
         for fixture in fixtures {
@@ -10480,6 +10656,7 @@ mod tests {
             ),
             ("user_is_active", "c/user_service.c", "user_is_active"),
             ("cleanup-trap", "shell/deploy.sh", "cleanup-trap"),
+            ("APP_VERSION", "docker/Dockerfile", "APP_VERSION"),
         ] {
             let results = service.search_symbols(query, 10).unwrap();
             assert!(
@@ -10543,6 +10720,7 @@ mod tests {
             ("Ruby", 1),
             ("C/C++", 2),
             ("Shell", 1),
+            ("Dockerfile", 1),
         ] {
             assert!(
                 stats

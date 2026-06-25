@@ -35,6 +35,7 @@ pub enum Language {
     Ruby,
     Cpp,
     Shell,
+    Dockerfile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -352,11 +353,25 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extractor_version: 1,
         extracts: ExtractionCapabilities::scanner(true),
     },
+    LanguageCapability {
+        language: Language::Dockerfile,
+        display_name: "Dockerfile",
+        extensions: &["dockerfile"],
+        parser: ParserKind::Scanner,
+        support: SupportLevel::Partial,
+        extractor_version: 1,
+        extracts: ExtractionCapabilities::scanner(true),
+    },
 ];
 
 impl Language {
     /// Detect language from file path extension
     pub fn from_path(path: &str) -> Option<Self> {
+        let file_name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+        let file_name_lower = file_name.to_lowercase();
+        if file_name_lower == "dockerfile" || file_name_lower.starts_with("dockerfile.") {
+            return Some(Language::Dockerfile);
+        }
         let ext = path.rsplit('.').next()?;
         Self::from_extension(ext)
     }
@@ -377,8 +392,7 @@ impl Language {
     }
 
     pub fn capability_for_path(path: &str) -> Option<&'static LanguageCapability> {
-        let ext = path.rsplit('.').next()?;
-        Self::from_extension(ext).map(Self::capability)
+        Self::from_path(path).map(Self::capability)
     }
 
     pub fn all_capabilities() -> &'static [LanguageCapability] {
@@ -418,6 +432,10 @@ impl Language {
 
     pub fn is_cpp_scanner(self) -> bool {
         matches!(self, Language::Cpp)
+    }
+
+    pub fn is_dockerfile_scanner(self) -> bool {
+        matches!(self, Language::Dockerfile)
     }
 
     pub fn is_shell_scanner(self) -> bool {
@@ -636,6 +654,18 @@ mod tests {
         assert_eq!(
             Language::from_path("scripts/deploy.bash"),
             Some(Language::Shell)
+        );
+        assert_eq!(
+            Language::from_path("Dockerfile"),
+            Some(Language::Dockerfile)
+        );
+        assert_eq!(
+            Language::from_path("docker/Dockerfile"),
+            Some(Language::Dockerfile)
+        );
+        assert_eq!(
+            Language::from_path("Dockerfile.prod"),
+            Some(Language::Dockerfile)
         );
     }
 

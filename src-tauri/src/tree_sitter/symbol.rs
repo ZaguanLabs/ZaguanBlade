@@ -411,7 +411,8 @@ impl SymbolExtractor {
             | Language::Kotlin
             | Language::Ruby
             | Language::Cpp
-            | Language::Shell => None,
+            | Language::Shell
+            | Language::Dockerfile => None,
         }
     }
 
@@ -1002,7 +1003,8 @@ impl SymbolExtractor {
             | Language::Kotlin
             | Language::Ruby
             | Language::Cpp
-            | Language::Shell => {}
+            | Language::Shell
+            | Language::Dockerfile => {}
         }
         None
     }
@@ -1106,7 +1108,8 @@ fn extract_structural_relationships_from_node(
         | Language::Kotlin
         | Language::Ruby
         | Language::Cpp
-        | Language::Shell => {}
+        | Language::Shell
+        | Language::Dockerfile => {}
     }
 
     for i in 0..node.child_count() {
@@ -1532,7 +1535,8 @@ fn extract_relationship_target_name(
         | Language::Kotlin
         | Language::Ruby
         | Language::Cpp
-        | Language::Shell => None,
+        | Language::Shell
+        | Language::Dockerfile => None,
     }
 }
 
