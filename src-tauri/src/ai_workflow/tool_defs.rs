@@ -464,7 +464,8 @@ pub fn get_tool_definitions() -> Vec<Value> {
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "path": { "type": "string", "description": "Optional file or directory path scope, such as src/app or src/app/page.tsx" }
+                        "path": { "type": "string", "description": "Optional file or directory path scope, such as src/app or src/app/page.tsx" },
+                        "scope": { "type": "string", "description": "Alias for path; optional file or directory scope" }
                     },
                     "required": [],
                     "additionalProperties": false
@@ -666,6 +667,19 @@ mod tests {
         assert!(!names.contains(&"get_project_index_chunk"));
         assert!(names.contains(&"fast_context"));
         assert!(names.contains(&"load_skill"));
+    }
+
+    #[test]
+    fn symbol_schema_definition_includes_scope_alias() {
+        let defs = get_tool_definitions();
+        let symbol_schema = defs
+            .iter()
+            .find(|value| value.get("name").and_then(|v| v.as_str()) == Some("symbol_schema"))
+            .expect("symbol_schema tool definition");
+        let properties = &symbol_schema["function"]["parameters"]["properties"];
+
+        assert!(properties.get("path").is_some());
+        assert!(properties.get("scope").is_some());
     }
 
     #[test]

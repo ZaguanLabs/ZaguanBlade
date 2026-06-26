@@ -414,7 +414,7 @@ Response metadata includes `_meta.language_support`, `_meta.line_count` when the
 
 ### `symbol_related`
 
-Returns symbols related to a seed symbol.
+Returns symbols related to a seed symbol. Results can include structural graph relationships, same-module/module-import context, and bounded lexical-similarity fallbacks. Each related item includes `evidence`; lexical-similarity results are labeled as `structural: false` and `confidence: heuristic`, so they should be treated as navigation hints rather than graph truth.
 
 Parameters:
 
@@ -490,9 +490,13 @@ Relationship types include `call`, `import`, `export`, `extends`, `implements`, 
 
 Returns compact Symbols Index coverage and schema counts. Use this before trusting broad searches, investigating empty search results, or deciding whether a language/file type has enough indexed coverage.
 
-The response includes indexed file counts by extension, language, and support level; symbol counts by type; relationship integrity stats including unresolved targets; semantic anchor counts by kind; `_meta.index_health`; and `_meta.language_support`.
+The response includes indexed file counts by extension, language, and support level; symbol counts by type; relationship integrity stats including unresolved targets; semantic anchor counts by kind; `_meta.index_health`; and `_meta.language_support`. When scoped with `path`, responses include root-vs-scoped totals under `schema.scope` and `_meta.scope`.
 
-Parameters: none.
+Parameters:
+
+| Name | Type | Required |
+|------|------|----------|
+| `path` / `scope` | string | No |
 
 ### `edit_impact`
 

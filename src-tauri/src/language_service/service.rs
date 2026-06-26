@@ -2700,6 +2700,10 @@ impl LanguageService {
         symbol: &Symbol,
         limit: usize,
     ) -> Result<Vec<RelatedSymbol>, LanguageError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
         self.ensure_file_fresh(&symbol.file_path)?;
         let seed = self
             .symbol_store
@@ -12559,6 +12563,34 @@ export function loadPosts() {
             .any(|item| item.relationship == "sibling_export_consumer"
                 && item.symbol.file_path == "invoice.ts"
                 && item.symbol.name == "total"));
+    }
+
+    #[test]
+    fn related_symbols_respects_zero_limit() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("math.ts"),
+            r#"
+            export function add() {
+                return 1;
+            }
+        "#,
+        )
+        .unwrap();
+
+        service.index_file("math.ts").unwrap();
+        let add = service
+            .search_symbols_filtered("add", Some("math.ts"), None, 10)
+            .unwrap()
+            .into_iter()
+            .find(|result| result.symbol.name == "add")
+            .unwrap()
+            .symbol;
+
+        let related = service.get_related_symbols(&add, 0).unwrap();
+
+        assert!(related.is_empty());
     }
 
     #[test]

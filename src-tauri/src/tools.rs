@@ -962,6 +962,25 @@ mod tests {
     }
 
     #[test]
+    fn related_symbol_json_labels_graph_relationships_as_structural() {
+        let symbol = test_symbol("helper", "helper", SymbolType::Function, 1, None);
+        let related = crate::language_service::RelatedSymbol {
+            symbol,
+            relationship: "outgoing_call".to_string(),
+            reason: "caller has an outgoing call relationship to helper".to_string(),
+            score: 88,
+            distance: 1,
+        };
+
+        let payload = related_symbol_to_json(&related);
+
+        assert_eq!(payload["relationship"], "outgoing_call");
+        assert_eq!(payload["evidence"]["kind"], "graph_relationship");
+        assert_eq!(payload["evidence"]["structural"], true);
+        assert_eq!(payload["evidence"]["confidence"], "high");
+    }
+
+    #[test]
     fn symbol_json_serialization_escapes_control_characters() {
         let mut symbol = test_symbol(
             "control",
