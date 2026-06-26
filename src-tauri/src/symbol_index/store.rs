@@ -11,6 +11,20 @@ use std::sync::Mutex;
 
 use crate::tree_sitter::{Symbol, SymbolRelationship, SymbolRelationshipType, SymbolType};
 
+const GENERATED_INDEX_CLEAR_STATEMENTS: &[&str] = &[
+    "DELETE FROM symbol_relationships",
+    "DELETE FROM semantic_anchors",
+    "DELETE FROM symbols",
+    "DELETE FROM indexed_files",
+];
+
+const GENERATED_INDEX_TABLES: &[&str] = &[
+    "symbol_relationships",
+    "semantic_anchors",
+    "symbols",
+    "indexed_files",
+];
+
 /// SQLite-backed symbol store
 pub struct SymbolStore {
     conn: Mutex<Connection>,
@@ -1268,14 +1282,27 @@ impl SymbolStore {
         Ok(count)
     }
 
-    /// Delete all symbols
-    pub fn clear(&self) -> Result<(), SymbolStoreError> {
+    /// Delete generated index data only.
+    ///
+    /// This must not include user-authored metadata tables. If user-authored
+    /// data is ever stored in this database, keep it outside
+    /// `GENERATED_INDEX_CLEAR_STATEMENTS` or explicitly preserve and restore it
+    /// around destructive rebuilds.
+    pub fn clear_generated_index_data(&self) -> Result<(), SymbolStoreError> {
+        debug_assert_eq!(
+            GENERATED_INDEX_CLEAR_STATEMENTS.len(),
+            GENERATED_INDEX_TABLES.len()
+        );
         let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM symbol_relationships", [])?;
-        conn.execute("DELETE FROM semantic_anchors", [])?;
-        conn.execute("DELETE FROM symbols", [])?;
-        conn.execute("DELETE FROM indexed_files", [])?;
+        for statement in GENERATED_INDEX_CLEAR_STATEMENTS {
+            conn.execute(statement, [])?;
+        }
         Ok(())
+    }
+
+    /// Delete generated index data.
+    pub fn clear(&self) -> Result<(), SymbolStoreError> {
+        self.clear_generated_index_data()
     }
 
     /// Get total symbol count
@@ -2122,6 +2149,90 @@ mod tests {
 
         store.delete_file_symbols("test.ts").unwrap();
         assert_eq!(store.count().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_clear_generated_index_data_preserves_user_authored_tables() {
+        let store = SymbolStore::in_memory().unwrap();
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "CREATE TABLE user_project_notes (id TEXT PRIMARY KEY, body TEXT NOT NULL)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO user_project_notes (id, body) VALUES ('adr-1', 'keep me')",
+                [],
+            )
+            .unwrap();
+        }
+
+        let symbol = create_test_symbol("func1", "test.ts");
+        store.upsert_symbols(std::slice::from_ref(&symbol)).unwrap();
+        store
+            .replace_relationships_for_file(
+                "test.ts",
+                &[create_test_relationship(&symbol.id, "test.ts", "helper")],
+            )
+            .unwrap();
+        store
+            .replace_semantic_anchors_for_file(
+                "test.ts",
+                &[SemanticAnchor {
+                    id: "test.ts::anchor:route:1:0:abc".to_string(),
+                    file_path: "test.ts".to_string(),
+                    kind: "route".to_string(),
+                    value: "/settings".to_string(),
+                    line: 1,
+                    character: 0,
+                    preview: "/settings".to_string(),
+                    confidence: 0.9,
+                }],
+            )
+            .unwrap();
+        store.mark_file_indexed("test.ts", "hash", 1).unwrap();
+
+        store.clear_generated_index_data().unwrap();
+
+        assert_eq!(store.count().unwrap(), 0);
+        assert!(store.indexed_file_record("test.ts").unwrap().is_none());
+        assert!(store
+            .get_semantic_anchors_in_file("test.ts", 10)
+            .unwrap()
+            .is_empty());
+        assert!(store
+            .get_relationship_targets(&symbol.id, SymbolRelationshipType::Call, 10)
+            .unwrap()
+            .is_empty());
+
+        let preserved_body = {
+            let conn = store.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT body FROM user_project_notes WHERE id = 'adr-1'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(preserved_body, "keep me");
+    }
+
+    #[test]
+    fn test_generated_index_table_inventory_stays_intentional() {
+        assert_eq!(
+            GENERATED_INDEX_TABLES,
+            &[
+                "symbol_relationships",
+                "semantic_anchors",
+                "symbols",
+                "indexed_files"
+            ]
+        );
+        assert_eq!(
+            GENERATED_INDEX_CLEAR_STATEMENTS.len(),
+            GENERATED_INDEX_TABLES.len()
+        );
     }
 
     #[test]

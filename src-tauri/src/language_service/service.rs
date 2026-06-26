@@ -1372,7 +1372,7 @@ impl LanguageService {
             progress(&rebuild_health);
 
             self.file_cache.write().unwrap().clear();
-            self.symbol_store.clear()?;
+            self.symbol_store.clear_generated_index_data()?;
 
             return self.reconcile_index_with_progress_inner(progress, false);
         }
