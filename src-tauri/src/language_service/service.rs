@@ -2841,6 +2841,8 @@ impl LanguageService {
             }
         }
 
+        self.push_lexical_related_symbols(&seed, expanded_limit, &mut related, &mut seen)?;
+
         related.sort_by(|a, b| {
             b.score
                 .cmp(&a.score)
@@ -5235,6 +5237,76 @@ impl LanguageService {
                 distance,
             });
         }
+    }
+
+    fn push_lexical_related_symbols(
+        &self,
+        seed: &Symbol,
+        expanded_limit: usize,
+        related: &mut Vec<RelatedSymbol>,
+        seen: &mut HashSet<String>,
+    ) -> Result<(), LanguageError> {
+        let seed_tokens = related_identifier_tokens(seed);
+        if seed_tokens.is_empty() {
+            return Ok(());
+        }
+
+        let mut candidate_files = self.symbol_store.list_all_indexed_files()?;
+        candidate_files.retain(|record| is_nearby_related_file(&seed.file_path, &record.file_path));
+        candidate_files.sort_by(|a, b| {
+            nearby_file_rank(&seed.file_path, &a.file_path)
+                .cmp(&nearby_file_rank(&seed.file_path, &b.file_path))
+                .then_with(|| a.file_path.cmp(&b.file_path))
+        });
+        candidate_files.truncate(expanded_limit.clamp(16, 48));
+
+        let mut lexical_candidates = Vec::<(Symbol, f32)>::new();
+        for record in candidate_files {
+            for candidate in self.get_file_symbols(&record.file_path)? {
+                if candidate.id == seed.id || seen.contains(&candidate.id) {
+                    continue;
+                }
+
+                let score =
+                    lexical_related_score(&seed_tokens, &related_identifier_tokens(&candidate));
+                if score >= 0.5 {
+                    lexical_candidates.push((candidate, score));
+                }
+            }
+        }
+
+        lexical_candidates.sort_by(|(a, a_score), (b, b_score)| {
+            b_score
+                .partial_cmp(a_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    nearby_file_rank(&seed.file_path, &a.file_path)
+                        .cmp(&nearby_file_rank(&seed.file_path, &b.file_path))
+                })
+                .then_with(|| a.file_path.cmp(&b.file_path))
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        lexical_candidates.truncate(12);
+
+        for (candidate, lexical_score) in lexical_candidates {
+            let score = (50.0 + (lexical_score * 14.0)).round() as u32;
+            let reason = format!(
+                "{} shares identifier tokens with {} in a nearby indexed file.",
+                candidate.name, seed.name
+            );
+            Self::push_related_symbol(
+                seed,
+                candidate,
+                "lexical_similarity".to_string(),
+                reason,
+                score.min(64),
+                3,
+                related,
+                seen,
+            );
+        }
+
+        Ok(())
     }
 
     fn with_file_root_symbol(
@@ -10366,6 +10438,117 @@ fn direct_relationship_score(relationship_type: SymbolRelationshipType) -> u32 {
     }
 }
 
+fn related_identifier_tokens(symbol: &Symbol) -> HashSet<String> {
+    let mut tokens = identifier_tokens(&symbol.name);
+    if !symbol.qualified_name.is_empty() {
+        tokens.extend(identifier_tokens(&symbol.qualified_name));
+    }
+    tokens
+}
+
+fn identifier_tokens(text: &str) -> HashSet<String> {
+    let mut tokens = HashSet::new();
+    let mut current = String::new();
+    let mut previous_was_lower_or_digit = false;
+    let mut previous_was_upper = false;
+
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if !ch.is_ascii_alphanumeric() {
+            push_identifier_token(&mut tokens, &mut current);
+            previous_was_lower_or_digit = false;
+            previous_was_upper = false;
+            continue;
+        }
+
+        if ch.is_ascii_uppercase() && !current.is_empty() {
+            if previous_was_lower_or_digit
+                || (previous_was_upper
+                    && chars.peek().is_some_and(|next| next.is_ascii_lowercase()))
+            {
+                push_identifier_token(&mut tokens, &mut current);
+            }
+        }
+
+        current.push(ch.to_ascii_lowercase());
+        previous_was_lower_or_digit = ch.is_ascii_lowercase() || ch.is_ascii_digit();
+        previous_was_upper = ch.is_ascii_uppercase();
+    }
+
+    push_identifier_token(&mut tokens, &mut current);
+    tokens
+}
+
+fn push_identifier_token(tokens: &mut HashSet<String>, current: &mut String) {
+    if current.len() >= 2 {
+        tokens.insert(std::mem::take(current));
+    } else {
+        current.clear();
+    }
+}
+
+fn lexical_related_score(seed_tokens: &HashSet<String>, candidate_tokens: &HashSet<String>) -> f32 {
+    if seed_tokens.is_empty() || candidate_tokens.is_empty() {
+        return 0.0;
+    }
+
+    let shared_count = seed_tokens.intersection(candidate_tokens).count();
+    if shared_count == 0 {
+        return 0.0;
+    }
+
+    if seed_tokens.len() > 1 && shared_count < 2 {
+        return 0.0;
+    }
+
+    let union_count = seed_tokens.union(candidate_tokens).count();
+    if union_count == 0 {
+        return 0.0;
+    }
+
+    shared_count as f32 / union_count as f32
+}
+
+fn is_nearby_related_file(seed_path: &str, candidate_path: &str) -> bool {
+    if seed_path == candidate_path {
+        return true;
+    }
+
+    let seed = Path::new(seed_path);
+    let candidate = Path::new(candidate_path);
+    if seed.parent() == candidate.parent() {
+        return true;
+    }
+
+    seed.file_stem().is_some_and(|seed_stem| {
+        candidate
+            .file_stem()
+            .is_some_and(|candidate_stem| seed_stem == candidate_stem)
+    })
+}
+
+fn nearby_file_rank(seed_path: &str, candidate_path: &str) -> u8 {
+    if seed_path == candidate_path {
+        return 0;
+    }
+
+    let seed = Path::new(seed_path);
+    let candidate = Path::new(candidate_path);
+    if seed.file_stem().is_some_and(|seed_stem| {
+        candidate
+            .file_stem()
+            .is_some_and(|candidate_stem| seed_stem == candidate_stem)
+    }) {
+        return 1;
+    }
+
+    if seed.parent() == candidate.parent() {
+        return 2;
+    }
+
+    3
+}
+
 fn file_end_position(content: &str) -> (u32, u32) {
     if content.is_empty() {
         return (0, 0);
@@ -12376,6 +12559,44 @@ export function loadPosts() {
             .any(|item| item.relationship == "sibling_export_consumer"
                 && item.symbol.file_path == "invoice.ts"
                 && item.symbol.name == "total"));
+    }
+
+    #[test]
+    fn related_symbols_include_nearby_css_class_name_matches() {
+        let (service, temp_dir) = create_test_service();
+        fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+
+        fs::write(
+            temp_dir.path().join("src/button.tsx"),
+            r#"
+            export function buttonPrimaryController() {
+                return <button />;
+            }
+        "#,
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("src/button.css"),
+            ".buttonPrimary { color: red; }\n.cardSecondary { color: blue; }\n",
+        )
+        .unwrap();
+
+        service.index_directory("src").unwrap();
+        let button_primary = service
+            .search_symbols_filtered("buttonPrimaryController", Some("src/button.tsx"), None, 10)
+            .unwrap()
+            .into_iter()
+            .find(|result| result.symbol.name == "buttonPrimaryController")
+            .unwrap()
+            .symbol;
+
+        let related = service.get_related_symbols(&button_primary, 20).unwrap();
+
+        assert!(related
+            .iter()
+            .any(|item| item.relationship == "lexical_similarity"
+                && item.symbol.file_path == "src/button.css"
+                && item.symbol.name == ".buttonPrimary"));
     }
 
     #[test]
