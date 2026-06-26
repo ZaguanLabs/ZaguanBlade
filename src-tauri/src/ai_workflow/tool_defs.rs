@@ -130,7 +130,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "symbol_related",
             "function": {
                 "name": "symbol_related",
-                "description": "Return evidence-backed symbols related to a seed symbol, including direct graph edges, same-module exports, module importers, and consumers of sibling exports from the same module. Returns language_support metadata for the seed file.",
+                "description": "Return evidence-backed symbols related to a seed symbol, including direct graph edges, same-module exports, module importers, consumers of sibling exports, and bounded lexical-similarity fallbacks. Lexical matches are labeled as heuristic evidence, not structural graph truth. Returns language_support metadata for the seed file.",
                 "strict": false,
                 "parameters": {
                     "type": "object",

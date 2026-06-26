@@ -539,11 +539,12 @@ mod tests {
         compact_outline_nodes_for_parent, execute_tool, fast_context_tool, grep_search,
         impact_confidence, impact_risk_level, is_batch_read_only_tool,
         language_support_for_path_json, language_support_meta_json, paginate_tool_results,
-        parse_grep_timeout_ms, parse_relationship_types_arg, related_test_files_for_paths,
-        stage_semantic_patch_writes, symbol_inventory_entries, symbol_inventory_summary,
-        symbol_language_diagnostics, symbol_outline_diagnostics, symbol_reference_resolution_json,
-        symbol_search_connection_json, symbol_to_json, PatchHunk, SemanticPatchWrite, ToolResult,
-        GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS, GREP_TIMEOUT_MIN_MS,
+        parse_grep_timeout_ms, parse_relationship_types_arg, related_symbol_to_json,
+        related_test_files_for_paths, stage_semantic_patch_writes, symbol_inventory_entries,
+        symbol_inventory_summary, symbol_language_diagnostics, symbol_outline_diagnostics,
+        symbol_reference_resolution_json, symbol_search_connection_json, symbol_to_json, PatchHunk,
+        SemanticPatchWrite, ToolResult, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS,
+        GREP_TIMEOUT_MIN_MS,
     };
     use crate::semantic_patch::{InsertPosition, PatchOperation, PatchTarget, SemanticPatch};
     use crate::symbol_index::SymbolStore;
@@ -939,6 +940,25 @@ mod tests {
         assert_eq!(connection["resolution"]["strategy"], "resolved_symbol_id");
         assert_eq!(connection["resolution"]["confidence"], "high");
         assert_eq!(connection["resolution"]["resolved"], true);
+    }
+
+    #[test]
+    fn related_symbol_json_labels_lexical_similarity_as_heuristic() {
+        let symbol = test_symbol("style", ".buttonPrimary", SymbolType::CssSelector, 1, None);
+        let related = crate::language_service::RelatedSymbol {
+            symbol,
+            relationship: "lexical_similarity".to_string(),
+            reason: "shares identifier tokens".to_string(),
+            score: 58,
+            distance: 3,
+        };
+
+        let payload = related_symbol_to_json(&related);
+
+        assert_eq!(payload["relationship"], "lexical_similarity");
+        assert_eq!(payload["evidence"]["kind"], "identifier_token_overlap");
+        assert_eq!(payload["evidence"]["structural"], false);
+        assert_eq!(payload["evidence"]["confidence"], "heuristic");
     }
 
     #[test]
@@ -3370,9 +3390,26 @@ fn related_symbol_to_json(related: &crate::language_service::RelatedSymbol) -> s
     serde_json::json!({
         "symbol": symbol_to_json(&related.symbol),
         "relationship": related.relationship,
+        "evidence": related_symbol_evidence_json(&related.relationship),
         "reason": related.reason,
         "score": related.score,
         "distance": related.distance,
+    })
+}
+
+fn related_symbol_evidence_json(relationship: &str) -> serde_json::Value {
+    let (kind, structural, confidence) = if relationship == "lexical_similarity" {
+        ("identifier_token_overlap", false, "heuristic")
+    } else if relationship.starts_with("incoming_") || relationship.starts_with("outgoing_") {
+        ("graph_relationship", true, "high")
+    } else {
+        ("graph_context", true, "medium")
+    };
+
+    serde_json::json!({
+        "kind": kind,
+        "structural": structural,
+        "confidence": confidence,
     })
 }
 
