@@ -542,7 +542,7 @@ mod tests {
         parse_grep_timeout_ms, parse_relationship_types_arg, related_test_files_for_paths,
         stage_semantic_patch_writes, symbol_inventory_entries, symbol_inventory_summary,
         symbol_language_diagnostics, symbol_outline_diagnostics, symbol_reference_resolution_json,
-        symbol_search_connection_json, PatchHunk, SemanticPatchWrite, ToolResult,
+        symbol_search_connection_json, symbol_to_json, PatchHunk, SemanticPatchWrite, ToolResult,
         GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS, GREP_TIMEOUT_MIN_MS,
     };
     use crate::semantic_patch::{InsertPosition, PatchOperation, PatchTarget, SemanticPatch};
@@ -939,6 +939,33 @@ mod tests {
         assert_eq!(connection["resolution"]["strategy"], "resolved_symbol_id");
         assert_eq!(connection["resolution"]["confidence"], "high");
         assert_eq!(connection["resolution"]["resolved"], true);
+    }
+
+    #[test]
+    fn symbol_json_serialization_escapes_control_characters() {
+        let mut symbol = test_symbol(
+            "control",
+            "quote\"slash\\control",
+            SymbolType::Function,
+            1,
+            None,
+        );
+        let docstring = "line\n tab\t carriage\r control\u{0001}";
+        symbol.docstring = Some(docstring.to_string());
+
+        let payload = symbol_to_json(&symbol);
+        let serialized = serde_json::to_string(&payload).unwrap();
+
+        assert!(serialized.contains("\\\""));
+        assert!(serialized.contains("\\\\"));
+        assert!(serialized.contains("\\n"));
+        assert!(serialized.contains("\\t"));
+        assert!(serialized.contains("\\r"));
+        assert!(serialized.contains("\\u0001"));
+
+        let parsed: serde_json::Value = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(parsed["name"], symbol.name);
+        assert_eq!(parsed["docstring"], docstring);
     }
 
     #[test]
