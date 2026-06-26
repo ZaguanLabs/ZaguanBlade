@@ -3,7 +3,7 @@ import test from 'node:test';
 import { normalizeSplitBlocks } from '../hooks/useChatV2';
 import type { ChatMessage, CommandExecution, ToolCall } from '../types/chat';
 import type { StructuredAction } from '../types/events';
-import { computeStableChatRows, computeStableChatTimelineRows, deriveChatActiveWorkState, deriveChatProjection, deriveChatRows, deriveChatTimelineRows, deriveChatTimelineRowsFromProjection, deriveChatWorkEntries, deriveMessageRenderSegments, stabilizeChatProjection, type ChatActivity, type StableChatRowsState, type StableChatTimelineRowsState } from './chatTimeline';
+import { computeStableChatRows, computeStableChatTimelineRows, deriveChatActiveWorkState, deriveChatProjection, deriveChatRows, deriveChatTimelineRows, deriveChatTimelineRowsFromProjection, deriveChatWorkEntries, deriveMessageRenderSegments, estimateChatRowHeight, stabilizeChatProjection, type ChatActivity, type StableChatRowsState, type StableChatTimelineRowsState } from './chatTimeline';
 import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertToolCallBlockPreservingOrder, moveExistingContentAfterTools, upsertSplitTextBlocks } from './messageBlocks';
 
 function makeToolCall(overrides: Partial<ToolCall> & Pick<ToolCall, 'id'>): ToolCall {
@@ -76,6 +76,40 @@ test('deriveChatRows attaches pending actions to the assistant message owning th
     assert.equal(rows[1]?.pendingActions?.[0]?.id, 'call-1');
     assert.equal(rows[2]?.pendingActions, undefined);
     assert.equal(rows[2]?.isActive, true);
+});
+
+test('estimateChatRowHeight reserves expanded space only for active reasoning', () => {
+    const reasoning = Array.from(
+        { length: 18 },
+        (_, index) => `Reasoning step ${index + 1}: checking context before answering.`,
+    ).join('\n');
+    const activeMessage = makeAssistantMessage({
+        id: 'assistant-active-reasoning',
+        content: 'Final answer',
+        reasoning,
+        streaming: {
+            seq: 18,
+            startTime: 100,
+            lastSeqAt: 250,
+            activeKind: 'reasoning',
+        },
+    });
+    const completedMessage = makeAssistantMessage({
+        ...activeMessage,
+        id: 'assistant-completed-reasoning',
+        streaming: {
+            ...activeMessage.streaming!,
+            endTime: 300,
+        },
+    });
+
+    const activeRow = deriveChatRows([activeMessage], true, null)[0]!;
+    const completedRow = deriveChatRows([completedMessage], false, null)[0]!;
+
+    assert.ok(
+        estimateChatRowHeight(activeRow, { viewportWidthPx: 760 })
+            > estimateChatRowHeight(completedRow, { viewportWidthPx: 760 }) + 100,
+    );
 });
 
 test('deriveChatRows keeps active streamed assistant text even when a later tool row exists', () => {

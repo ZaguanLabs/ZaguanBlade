@@ -121,15 +121,31 @@ function estimateWrappedLineCount(text: string, charactersPerLine: number): numb
         .reduce((total, line) => total + Math.max(1, Math.ceil(line.length / normalizedCharsPerLine)), 0);
 }
 
+function getReasoningEstimateText(message: ChatMessageType): string {
+    if (message.reasoning?.trim()) {
+        return message.reasoning;
+    }
+
+    return (message.blocks || [])
+        .filter((block): block is Extract<MessageBlock, { type: 'reasoning' }> => block.type === 'reasoning')
+        .map((block) => block.content)
+        .filter((content) => content.trim().length > 0)
+        .join('\n');
+}
+
 function estimateMessageBodyHeight(message: ChatMessageType, viewportWidthPx?: number | null): number {
     const width = clampPositive(viewportWidthPx ?? 0, 820);
     const textCharsPerLine = Math.max(24, Math.floor((width - 132) / 8.2));
     const cardBase = 74;
     const contentText = message.content_after_tools || message.content_before_tools || message.content || '';
     const textLines = estimateWrappedLineCount(contentText, textCharsPerLine);
-    const reasoningLines = estimateWrappedLineCount(message.reasoning || '', textCharsPerLine - 4);
+    const reasoningText = getReasoningEstimateText(message);
+    const reasoningLines = estimateWrappedLineCount(reasoningText, textCharsPerLine - 4);
     const textHeight = textLines > 0 ? Math.max(28, textLines * 21) : 0;
-    const reasoningHeight = reasoningLines > 0 ? Math.min(180, 32 + reasoningLines * 14) : 0;
+    const reasoningIsActivelyStreaming = message.streaming?.activeKind === 'reasoning' && !message.streaming.endTime;
+    const reasoningHeight = reasoningLines > 0
+        ? (reasoningIsActivelyStreaming ? Math.min(180, 32 + reasoningLines * 14) : 38)
+        : 0;
     const imageCount = message.images?.length ?? 0;
     const imageRows = imageCount === 0 ? 0 : Math.ceil(imageCount / 2);
     const imageHeight = imageRows * 170;

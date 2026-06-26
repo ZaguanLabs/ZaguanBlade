@@ -65,11 +65,11 @@ function normalizeReasoningDisplayContent(content: string): string {
 
 const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent?: boolean }> = ({ content, isActive, hasContent }) => {
     const { t } = useTranslation();
-    const [isExpanded, setIsExpanded] = useState(true); // Start expanded
+    const isReasoningActive = isActive === true;
+    const [isExpanded, setIsExpanded] = useState(() => isReasoningActive);
     const [userToggled, setUserToggled] = useState(false); // Track if user manually toggled
     const contentRef = useRef<HTMLDivElement>(null);
-    const wasActiveRef = useRef(isActive);
-    const hadContentRef = useRef(hasContent);
+    const wasActiveRef = useRef(isReasoningActive);
     const reasoningScrollFrameRef = useRef<number | null>(null);
     const reasoningScrollTimeoutRef = useRef<number | null>(null);
     const lastReasoningScrollAtRef = useRef(0);
@@ -89,21 +89,20 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
 
     // Auto-expand while reasoning is active, auto-collapse when reasoning ends
     useEffect(() => {
-        if (isActive && !wasActiveRef.current && !userToggled) {
+        if (isReasoningActive && !wasActiveRef.current && !userToggled) {
             setIsExpanded(true);
         }
 
-        if (!isActive && wasActiveRef.current && isExpanded && !userToggled) {
+        if (!isReasoningActive && wasActiveRef.current && isExpanded && !userToggled) {
             setIsExpanded(false);
         }
 
-        wasActiveRef.current = isActive;
-        hadContentRef.current = hasContent;
-    }, [isActive, hasContent, isExpanded, userToggled]);
+        wasActiveRef.current = isReasoningActive;
+    }, [isReasoningActive, isExpanded, userToggled]);
 
     // Auto-scroll to bottom while streaming, capped to avoid repeated layout work.
     useEffect(() => {
-        if (!isExpanded || !isActive || !contentRef.current) {
+        if (!isExpanded || !isReasoningActive || !contentRef.current) {
             cancelReasoningScrollSync();
             return;
         }
@@ -136,7 +135,7 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
             reasoningScrollTimeoutRef.current = null;
             scheduleScrollFrame();
         }, delayMs);
-    }, [cancelReasoningScrollSync, displayContent, isExpanded, isActive]);
+    }, [cancelReasoningScrollSync, displayContent, isExpanded, isReasoningActive]);
 
     useEffect(() => cancelReasoningScrollSync, [cancelReasoningScrollSync]);
 
@@ -148,7 +147,7 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
         setUserToggled(true); // Mark that user has manually controlled this
     };
 
-    const isStreaming = isActive && !hasContent;
+    const isStreaming = isReasoningActive && !hasContent;
     const containerStyle = isStreaming
         ? {
             backgroundColor: 'color-mix(in srgb, var(--bg-surface) 88%, var(--bg-app))',
@@ -221,7 +220,7 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
                         <StreamingMarkdownRenderer
                             content={displayContent}
                             isAnimating={false}
-                            mode={isActive ? 'streaming' : 'static'}
+                            mode={isReasoningActive ? 'streaming' : 'static'}
                             profile="reasoning"
                         />
                     </div>
@@ -1066,7 +1065,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                 {hasReasoning && (
                                     <ReasoningBlock
                                         content={message.reasoning!}
-                                        isActive={isActive}
+                                        isActive={hasLiveTextStream && stream?.activeKind === 'reasoning'}
                                         hasContent={hasContent}
                                     />
                                 )}
