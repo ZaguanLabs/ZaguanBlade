@@ -434,10 +434,32 @@ fn calculate_symbol_relevance(symbol: &Symbol, query: &str) -> f32 {
         .as_deref()
         .map(|docstring| calculate_relevance(docstring, query) * 0.48)
         .unwrap_or(0.0);
-    name_score
+    let lexical_score = name_score
         .max(qualified_score)
         .max(signature_score)
-        .max(docstring_score)
+        .max(docstring_score);
+
+    (lexical_score * symbol_type_relevance_multiplier(symbol.symbol_type)).min(1.0)
+}
+
+fn symbol_type_relevance_multiplier(symbol_type: SymbolType) -> f32 {
+    match symbol_type {
+        SymbolType::Function | SymbolType::Method => 1.08,
+        SymbolType::Class
+        | SymbolType::Struct
+        | SymbolType::Interface
+        | SymbolType::Type
+        | SymbolType::Enum
+        | SymbolType::Trait => 1.06,
+        SymbolType::CssSelector
+        | SymbolType::CssCustomProperty
+        | SymbolType::CssKeyframes
+        | SymbolType::CssAtRule
+        | SymbolType::CssLayer
+        | SymbolType::CssFontFace => 1.04,
+        SymbolType::Import | SymbolType::Export | SymbolType::Module | SymbolType::Heading => 0.92,
+        _ => 1.0,
+    }
 }
 
 /// Calculate relevance score between query and symbol name
@@ -768,6 +790,21 @@ mod tests {
             execute_search(&store, &SearchQuery::text("xml parser").with_limit(10)).unwrap();
 
         assert_eq!(results[0].symbol.name, "XMLParser");
+        assert!(results[0].score > results[1].score);
+    }
+
+    #[test]
+    fn test_execute_search_applies_structural_type_boosts() {
+        let store = SymbolStore::in_memory().unwrap();
+        let symbols = vec![
+            create_test_symbol_in_file("runTask", SymbolType::Import, "src/imports.ts"),
+            create_test_symbol_in_file("runTask", SymbolType::Function, "src/tasks.ts"),
+        ];
+        store.upsert_symbols(&symbols).unwrap();
+
+        let results = execute_search(&store, &SearchQuery::text("runTask").with_limit(10)).unwrap();
+
+        assert_eq!(results[0].symbol.symbol_type, SymbolType::Function);
         assert!(results[0].score > results[1].score);
     }
 
