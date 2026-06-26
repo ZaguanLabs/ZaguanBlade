@@ -168,7 +168,7 @@ pub fn execute_search(
 
     // Search by text
     if let Some(ref text) = query.text {
-        let symbols = search_symbol_candidates(store, text, limit)?;
+        let symbols = search_symbol_candidates(store, text, search_candidate_limit(query, limit))?;
         let mut results: Vec<SearchResult> = symbols
             .into_iter()
             .map(|s| {
@@ -295,9 +295,8 @@ fn single_pattern_matches(value: &str, pattern: &str) -> bool {
 fn search_symbol_candidates(
     store: &SymbolStore,
     text: &str,
-    limit: usize,
+    candidate_limit: usize,
 ) -> Result<Vec<Symbol>, SymbolStoreError> {
-    let candidate_limit = limit.saturating_mul(4).max(limit).max(20);
     let mut symbols = Vec::new();
     let mut seen = HashSet::new();
 
@@ -319,6 +318,30 @@ fn search_symbol_candidates(
     }
 
     Ok(symbols)
+}
+
+fn search_candidate_limit(query: &SearchQuery, result_limit: usize) -> usize {
+    let base = result_limit.saturating_mul(4).max(result_limit).max(20);
+    if query_has_post_candidate_filters(query) {
+        result_limit
+            .saturating_mul(24)
+            .max(base)
+            .max(100)
+            .min(1_000)
+    } else {
+        base
+    }
+}
+
+fn query_has_post_candidate_filters(query: &SearchQuery) -> bool {
+    query.file_path.is_some()
+        || query.file_pattern.is_some()
+        || query.name_pattern.is_some()
+        || query.qualified_name_pattern.is_some()
+        || query
+            .symbol_types
+            .as_deref()
+            .is_some_and(|types| !types.is_empty())
 }
 
 fn apply_contextual_boosts(results: &mut [SearchResult], query: &SearchQuery) {
@@ -654,6 +677,38 @@ mod tests {
         assert!(comma_results
             .iter()
             .any(|result| result.symbol.file_path == "src/legacy.css"));
+    }
+
+    #[test]
+    fn test_execute_search_overfetches_when_filters_are_present() {
+        let store = SymbolStore::in_memory().unwrap();
+        let mut symbols = (0..40)
+            .map(|index| {
+                create_test_symbol_in_file(
+                    &format!("button{:02}", index),
+                    SymbolType::Function,
+                    "src/noisy.ts",
+                )
+            })
+            .collect::<Vec<_>>();
+        symbols.push(create_test_symbol_in_file(
+            "buttonTarget",
+            SymbolType::CssSelector,
+            "src/target.css",
+        ));
+        store.upsert_symbols(&symbols).unwrap();
+
+        let results = execute_search(
+            &store,
+            &SearchQuery::text("button")
+                .with_file_pattern("src/target.css")
+                .with_limit(1),
+        )
+        .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].symbol.name, "buttonTarget");
+        assert_eq!(results[0].symbol.file_path, "src/target.css");
     }
 
     #[test]
