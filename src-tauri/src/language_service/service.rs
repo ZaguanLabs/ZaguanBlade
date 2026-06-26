@@ -18,8 +18,8 @@ use crate::symbol_index::{
     UnresolvedRelationshipTarget,
 };
 use crate::tree_sitter::{
-    extract_symbol_relationships, extract_symbols, Language, Position, Range, Symbol,
-    SymbolRelationship, SymbolRelationshipType, SymbolType, TreeSitterParser,
+    extract_symbol_relationships, extract_symbols, stable_symbol_id, Language, Position, Range,
+    Symbol, SymbolRelationship, SymbolRelationshipType, SymbolType, TreeSitterParser,
 };
 use crate::worktree::{normalize_path, WorktreeStore};
 use serde::{Deserialize, Serialize};
@@ -3018,9 +3018,10 @@ impl LanguageService {
                 )
             })
             .collect::<HashSet<_>>();
+        let symbol_resolver = SymbolIdentityResolver::new(symbols);
 
         for usage in stylesheet_class_usages(content, &css_module_aliases) {
-            let Some(source_symbol) = source_symbol_for_usage_line(symbols, usage.line) else {
+            let Some(source_symbol) = symbol_resolver.source_for_usage_line(usage.line) else {
                 continue;
             };
             let key = (
@@ -3065,10 +3066,11 @@ impl LanguageService {
                 )
             })
             .collect::<HashSet<_>>();
+        let symbol_resolver = SymbolIdentityResolver::new(symbols);
 
         for usage in stylesheet_custom_property_usages(content) {
-            let Some(source_symbol) =
-                stylesheet_source_symbol_for_usage_line(symbols, usage.line, &usage.name)
+            let Some(source_symbol) = symbol_resolver
+                .stylesheet_source_for_custom_property_usage(usage.line, &usage.name)
             else {
                 continue;
             };
@@ -3667,18 +3669,11 @@ impl LanguageService {
         resolved: &mut Vec<Symbol>,
         seen: &mut HashSet<String>,
     ) {
-        for symbol in symbols {
-            if symbol.name != reference_name
-                || symbol.symbol_type == SymbolType::Import
-                || Self::is_synthetic_file_root_symbol(symbol)
-            {
-                continue;
-            }
-
-            if seen.insert(symbol.id.clone()) {
-                resolved.push(symbol.clone());
-            }
-        }
+        SymbolIdentityResolver::new(symbols).collect_matching_named_symbols(
+            reference_name,
+            resolved,
+            seen,
+        );
     }
 
     fn suppress_known_external_relationships(
@@ -5296,7 +5291,7 @@ impl LanguageService {
     }
 
     fn synthetic_file_root_id(file_path: &str) -> String {
-        format!("{}::__file__#{}", file_path, SymbolType::Module)
+        stable_symbol_id(file_path, "__file__", SymbolType::Module)
     }
 
     fn is_synthetic_file_root_symbol(symbol: &Symbol) -> bool {
@@ -6833,64 +6828,91 @@ fn is_css_identifier_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'
 }
 
-fn stylesheet_source_symbol_for_usage_line<'a>(
+struct SymbolIdentityResolver<'a> {
     symbols: &'a [Symbol],
-    line: u32,
-    target_name: &str,
-) -> Option<&'a Symbol> {
-    if let Some(symbol) = symbols.iter().find(|symbol| {
-        symbol.symbol_type == SymbolType::CssCustomProperty
-            && symbol.name != target_name
-            && symbol.range.start.line == line
-    }) {
-        return Some(symbol);
-    }
-
-    symbols
-        .iter()
-        .filter(|symbol| {
-            matches!(
-                symbol.symbol_type,
-                SymbolType::CssSelector
-                    | SymbolType::CssKeyframes
-                    | SymbolType::CssAtRule
-                    | SymbolType::CssLayer
-                    | SymbolType::CssFontFace
-            ) && symbol.range.start.line <= line
-        })
-        .max_by_key(|symbol| (symbol.range.start.line, symbol.range.start.character))
-        .or_else(|| {
-            symbols
-                .iter()
-                .find(|symbol| LanguageService::is_synthetic_file_root_symbol(symbol))
-        })
 }
 
-fn source_symbol_for_usage_line(symbols: &[Symbol], line: u32) -> Option<&Symbol> {
-    let mut candidates = symbols
-        .iter()
-        .filter(|symbol| {
-            symbol.symbol_type != SymbolType::Import
-                && !LanguageService::is_synthetic_file_root_symbol(symbol)
-                && symbol.range.start.line <= line
-                && symbol.range.end.line >= line
-        })
-        .collect::<Vec<_>>();
-    candidates.sort_by_key(|symbol| {
-        (
-            symbol
-                .range
-                .end
-                .line
-                .saturating_sub(symbol.range.start.line),
-            symbol.range.start.character,
-        )
-    });
-    candidates.into_iter().next().or_else(|| {
-        symbols
+impl<'a> SymbolIdentityResolver<'a> {
+    fn new(symbols: &'a [Symbol]) -> Self {
+        Self { symbols }
+    }
+
+    fn file_root(&self) -> Option<&'a Symbol> {
+        self.symbols
             .iter()
             .find(|symbol| LanguageService::is_synthetic_file_root_symbol(symbol))
-    })
+    }
+
+    fn source_for_usage_line(&self, line: u32) -> Option<&'a Symbol> {
+        self.symbols
+            .iter()
+            .filter(|symbol| {
+                symbol.symbol_type != SymbolType::Import
+                    && !LanguageService::is_synthetic_file_root_symbol(symbol)
+                    && symbol.range.start.line <= line
+                    && symbol.range.end.line >= line
+            })
+            .min_by_key(|symbol| {
+                (
+                    symbol
+                        .range
+                        .end
+                        .line
+                        .saturating_sub(symbol.range.start.line),
+                    symbol.range.start.character,
+                )
+            })
+            .or_else(|| self.file_root())
+    }
+
+    fn stylesheet_source_for_custom_property_usage(
+        &self,
+        line: u32,
+        target_name: &str,
+    ) -> Option<&'a Symbol> {
+        if let Some(symbol) = self.symbols.iter().find(|symbol| {
+            symbol.symbol_type == SymbolType::CssCustomProperty
+                && symbol.name != target_name
+                && symbol.range.start.line == line
+        }) {
+            return Some(symbol);
+        }
+
+        self.symbols
+            .iter()
+            .filter(|symbol| {
+                matches!(
+                    symbol.symbol_type,
+                    SymbolType::CssSelector
+                        | SymbolType::CssKeyframes
+                        | SymbolType::CssAtRule
+                        | SymbolType::CssLayer
+                        | SymbolType::CssFontFace
+                ) && symbol.range.start.line <= line
+            })
+            .max_by_key(|symbol| (symbol.range.start.line, symbol.range.start.character))
+            .or_else(|| self.file_root())
+    }
+
+    fn collect_matching_named_symbols(
+        &self,
+        reference_name: &str,
+        resolved: &mut Vec<Symbol>,
+        seen: &mut HashSet<String>,
+    ) {
+        for symbol in self.symbols {
+            if symbol.name != reference_name
+                || symbol.symbol_type == SymbolType::Import
+                || LanguageService::is_synthetic_file_root_symbol(symbol)
+            {
+                continue;
+            }
+
+            if seen.insert(symbol.id.clone()) {
+                resolved.push(symbol.clone());
+            }
+        }
+    }
 }
 
 fn compute_hash(content: &str) -> String {
@@ -12048,6 +12070,51 @@ export function Button() {
                 "expected Button to use {selector}"
             );
         }
+    }
+
+    #[test]
+    fn test_css_module_usage_source_prefers_narrowest_enclosing_symbol() {
+        let (service, temp_dir) = create_test_service();
+        fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+
+        fs::write(
+            temp_dir.path().join("src/Button.module.css"),
+            ".buttonPrimary { color: red; }\n",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("src/Button.tsx"),
+            r#"
+import styles from "./Button.module.css";
+
+export function outer() {
+    function inner() {
+        return styles.buttonPrimary;
+    }
+    return inner();
+}
+"#,
+        )
+        .unwrap();
+
+        service.index_directory("src").unwrap();
+
+        let css_symbol = service
+            .get_file_symbols("src/Button.module.css")
+            .unwrap()
+            .into_iter()
+            .find(|symbol| symbol.name == ".buttonPrimary")
+            .expect("expected indexed CSS selector");
+        let graph = service
+            .get_symbol_graph(&css_symbol, SymbolRelationshipType::Usage, 10)
+            .unwrap();
+
+        assert!(graph.incoming.iter().any(|reference| {
+            reference.source_symbol.file_path == "src/Button.tsx"
+                && reference.source_symbol.name == "inner"
+                && reference.relationship_type == SymbolRelationshipType::Usage
+                && reference.target_symbol_id.as_deref() == Some(css_symbol.id.as_str())
+        }));
     }
 
     #[test]

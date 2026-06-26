@@ -18,6 +18,7 @@ pub use parser::{
     TreeSitterGrammar, TreeSitterParser,
 };
 pub use query::QueryManager;
+pub(crate) use symbol::stable_symbol_id;
 pub use symbol::{
     extract_symbol_relationships, extract_symbols, Position, Range, Symbol, SymbolExtractor,
     SymbolRelationship, SymbolRelationshipType, SymbolType,

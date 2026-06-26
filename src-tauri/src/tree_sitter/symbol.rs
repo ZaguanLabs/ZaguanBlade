@@ -1622,7 +1622,11 @@ fn starts_before_or_at(left: Position, right: Position) -> bool {
     left.line < right.line || (left.line == right.line && left.character <= right.character)
 }
 
-fn stable_symbol_id(file_path: &str, qualified_name: &str, symbol_type: SymbolType) -> String {
+pub(crate) fn stable_symbol_id(
+    file_path: &str,
+    qualified_name: &str,
+    symbol_type: SymbolType,
+) -> String {
     format!("{}::{}#{}", file_path, qualified_name, symbol_type)
 }
 
