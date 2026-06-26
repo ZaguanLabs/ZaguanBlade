@@ -528,19 +528,30 @@ fn text_tokens(text: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut previous_was_lower_or_digit = false;
+    let mut previous_was_upper = false;
 
-    for ch in text.chars() {
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
         if !ch.is_ascii_alphanumeric() {
             push_token(&mut tokens, &mut current);
             previous_was_lower_or_digit = false;
+            previous_was_upper = false;
             continue;
         }
 
-        if ch.is_ascii_uppercase() && previous_was_lower_or_digit && !current.is_empty() {
-            push_token(&mut tokens, &mut current);
+        if ch.is_ascii_uppercase() && !current.is_empty() {
+            if previous_was_lower_or_digit
+                || (previous_was_upper
+                    && chars
+                        .peek()
+                        .is_some_and(|next| next.is_ascii_lowercase()))
+            {
+                push_token(&mut tokens, &mut current);
+            }
         }
         current.push(ch.to_ascii_lowercase());
         previous_was_lower_or_digit = ch.is_ascii_lowercase() || ch.is_ascii_digit();
+        previous_was_upper = ch.is_ascii_uppercase();
     }
 
     push_token(&mut tokens, &mut current);
@@ -611,6 +622,8 @@ mod tests {
         assert!(calculate_relevance("UserService", "user service") > 0.8);
         assert!(calculate_relevance("normalize_user_id", "normalize user id") > 0.8);
         assert!(calculate_relevance(".button-primary", "button primary") > 0.8);
+        assert!(calculate_relevance("XMLParser", "xml parser") > 0.8);
+        assert_eq!(text_tokens("XMLParser"), vec!["xml", "parser"]);
     }
 
     #[test]
@@ -739,6 +752,22 @@ mod tests {
             execute_search(&store, &SearchQuery::text("user service").with_limit(10)).unwrap();
 
         assert_eq!(results[0].symbol.name, "UserService");
+        assert!(results[0].score > results[1].score);
+    }
+
+    #[test]
+    fn test_execute_search_ranks_acronym_token_matches() {
+        let store = SymbolStore::in_memory().unwrap();
+        let symbols = vec![
+            create_test_symbol_in_file("XMLHttpRequest", SymbolType::Class, "src/http.ts"),
+            create_test_symbol_in_file("XMLParser", SymbolType::Class, "src/parser.ts"),
+        ];
+        store.upsert_symbols(&symbols).unwrap();
+
+        let results =
+            execute_search(&store, &SearchQuery::text("xml parser").with_limit(10)).unwrap();
+
+        assert_eq!(results[0].symbol.name, "XMLParser");
         assert!(results[0].score > results[1].score);
     }
 
