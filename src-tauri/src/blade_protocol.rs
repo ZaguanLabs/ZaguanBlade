@@ -167,6 +167,10 @@ pub enum EditorIntent {
     SetActiveFile {
         path: Option<String>,
     },
+    /// Replace the current open file list for editor context synchronization
+    SetOpenFiles {
+        paths: Vec<String>,
+    },
     SyncDocument {
         path: String,
         content: String,

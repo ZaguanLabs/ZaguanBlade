@@ -98,11 +98,14 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         });
         const unsubscribeStateSnapshot = subscribeBladeNestedEventType('Editor', 'StateSnapshot', (payload) => {
             const backendOwnsEditorState = isBackendAuthoritative();
+            const backendOpenFiles = payload.open_files ?? [];
             const nextActiveFile = backendOwnsEditorState
-                ? payload.active_file ?? null
+                ? payload.active_file ?? snapshotRef.current.activeFile
                 : snapshotRef.current.activeFile;
             const nextOpenFiles = backendOwnsEditorState
-                ? payload.open_files ?? snapshotRef.current.openFiles
+                ? (backendOpenFiles.length > 0 || snapshotRef.current.openFiles.length === 0
+                    ? backendOpenFiles
+                    : snapshotRef.current.openFiles)
                 : snapshotRef.current.openFiles;
             snapshotRef.current = {
                 activeFile: nextActiveFile,
@@ -151,10 +154,7 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         // Always update local state for immediate UI feedback
         setEditorState(prev => ({ ...prev, activeFile: file }));
 
-        // If backend authority is enabled, also notify backend
-        if (isBackendAuthoritative()) {
-            EditorFacade.setActiveFile(file).catch(console.error);
-        }
+        EditorFacade.setActiveFile(file).catch(console.error);
     }, []);
 
     const setCursorPosition = useCallback((line: number, column: number) => {
@@ -207,6 +207,7 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             openFiles: files,
         };
         setEditorState(prev => ({ ...prev, openFiles: files }));
+        EditorFacade.setOpenFiles(files).catch(console.error);
     }, []);
 
     const clearSelection = useCallback(() => {

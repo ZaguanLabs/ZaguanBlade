@@ -536,15 +536,15 @@ mod tests {
     use super::{
         apply_multi_patch_to_string, apply_patch_to_string, apply_patch_to_string_with_line_hint,
         apply_semantic_patch_with_service, apply_semantic_patch_writes_with_service,
-        compact_outline_nodes_for_parent, execute_tool, fast_context_tool, grep_search,
-        impact_confidence, impact_risk_level, is_batch_read_only_tool,
-        language_support_for_path_json, language_support_meta_json, paginate_tool_results,
-        parse_grep_timeout_ms, parse_relationship_types_arg, related_symbol_to_json,
-        related_test_files_for_paths, stage_semantic_patch_writes, symbol_inventory_entries,
-        symbol_inventory_summary, symbol_language_diagnostics, symbol_outline_diagnostics,
-        symbol_reference_resolution_json, symbol_search_connection_json, symbol_to_json, PatchHunk,
-        SemanticPatchWrite, ToolResult, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS,
-        GREP_TIMEOUT_MIN_MS,
+        compact_outline_nodes_for_parent, execute_tool, execute_tool_with_editor,
+        fast_context_tool, grep_search, impact_confidence, impact_risk_level,
+        is_batch_read_only_tool, language_support_for_path_json, language_support_meta_json,
+        paginate_tool_results, parse_grep_timeout_ms, parse_relationship_types_arg,
+        related_symbol_to_json, related_test_files_for_paths, stage_semantic_patch_writes,
+        symbol_inventory_entries, symbol_inventory_summary, symbol_language_diagnostics,
+        symbol_outline_diagnostics, symbol_reference_resolution_json,
+        symbol_search_connection_json, symbol_to_json, EditorState, PatchHunk, SemanticPatchWrite,
+        ToolResult, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS, GREP_TIMEOUT_MIN_MS,
     };
     use crate::semantic_patch::{InsertPosition, PatchOperation, PatchTarget, SemanticPatch};
     use crate::symbol_index::SymbolStore;
@@ -582,6 +582,40 @@ mod tests {
         assert_eq!(metadata["support_level"], "full");
         assert_eq!(metadata["parser"], "tree_sitter");
         assert_eq!(metadata["extracts"]["definitions"], true);
+    }
+
+    #[test]
+    fn get_editor_state_returns_all_open_files() {
+        let editor_state = EditorState {
+            active_file: Some("src/main.rs".to_string()),
+            open_files: vec![
+                "src/main.rs".to_string(),
+                "src/lib.rs".to_string(),
+                "src/app.rs".to_string(),
+            ],
+            active_tab_index: 0,
+            cursor_line: Some(12),
+            cursor_column: Some(4),
+            selection_start_line: None,
+            selection_end_line: None,
+        };
+
+        let result = execute_tool_with_editor::<tauri::Wry>(
+            std::path::Path::new("."),
+            "get_editor_state",
+            "{}",
+            Some(&editor_state),
+            None,
+        );
+        assert!(result.success);
+
+        let payload: serde_json::Value =
+            serde_json::from_str(&result.content).expect("valid editor state JSON");
+        assert_eq!(payload["active_file"], "src/main.rs");
+        assert_eq!(
+            payload["open_files"],
+            serde_json::json!(["src/main.rs", "src/lib.rs", "src/app.rs"])
+        );
     }
 
     #[test]

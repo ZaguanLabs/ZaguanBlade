@@ -79,6 +79,7 @@ export type EditorIntent =
     | { type: "OpenFile"; payload: { path: string } }
     | { type: "CloseFile"; payload: { path: string } }
     | { type: "SetActiveFile"; payload: { path: string | null } }
+    | { type: "SetOpenFiles"; payload: { paths: string[] } }
     | { type: "SyncDocument"; payload: { path: string; content: string; version: number } }
     | { type: "CloseDocument"; payload: { path: string } }
     | { type: "UpdateCursor"; payload: { line: number; column: number } }

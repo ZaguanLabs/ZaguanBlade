@@ -109,17 +109,23 @@ export const EditorFacade = {
     },
 
     /**
-     * Set the active file. In backend authority mode, this updates Rust state
-     * and emits ActiveFileChanged event.
+     * Set the active file. This always updates Rust state for AI context.
+     * Backend authority mode additionally emits ActiveFileChanged events.
      */
     async setActiveFile(path: string | null): Promise<void> {
-        if (!isBackendAuthoritative()) {
-            throw new PassthroughError();
-        }
-
         await BladeDispatcher.editor({
             type: 'SetActiveFile',
             payload: { path }
+        });
+    },
+
+    /**
+     * Publish the open file list to Rust for AI context.
+     */
+    async setOpenFiles(paths: string[]): Promise<void> {
+        await BladeDispatcher.editor({
+            type: 'SetOpenFiles',
+            payload: { paths }
         });
     },
 

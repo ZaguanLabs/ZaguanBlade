@@ -3,6 +3,8 @@ use crate::blade_event_scheduler;
 use crate::blade_protocol::{self, BladeError, BladeIntent, SystemEvent, Version};
 use crate::chat_orchestrator::handle_send_message;
 use crate::commands::{chat, files, tools};
+use crate::core_state::TabInfo;
+use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use tauri::{Manager, State};
 use tokio::fs;
@@ -21,6 +23,66 @@ fn emit_system_event(window: &tauri::Window, intent_id: uuid::Uuid, event: Syste
         Some(intent_id.to_string()),
         blade_protocol::BladeEvent::System(event),
     );
+}
+
+fn dedupe_non_empty_paths(paths: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut deduped = Vec::new();
+    let mut seen = HashSet::new();
+
+    for path in paths {
+        if path.trim().is_empty() {
+            continue;
+        }
+        if seen.insert(path.clone()) {
+            deduped.push(path);
+        }
+    }
+
+    deduped
+}
+
+fn open_file_paths_from_tabs(tabs: &[TabInfo]) -> Vec<String> {
+    dedupe_non_empty_paths(tabs.iter().filter_map(|tab| tab.path.clone()))
+}
+
+fn sync_open_files_from_tabs(state: &AppState) {
+    let open_files = {
+        let tabs = state.tabs.lock().unwrap();
+        open_file_paths_from_tabs(&tabs)
+    };
+    *state.open_files.lock().unwrap() = open_files;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::open_file_paths_from_tabs;
+    use crate::core_state::{TabInfo, TabType};
+
+    fn file_tab(id: &str, path: Option<&str>) -> TabInfo {
+        TabInfo {
+            id: id.to_string(),
+            title: id.to_string(),
+            tab_type: TabType::File,
+            path: path.map(str::to_string),
+            is_dirty: false,
+        }
+    }
+
+    #[test]
+    fn open_file_paths_from_tabs_keeps_all_unique_file_paths_in_tab_order() {
+        let tabs = vec![
+            file_tab("one", Some("src/main.rs")),
+            file_tab("two", Some("src/lib.rs")),
+            file_tab("duplicate", Some("src/main.rs")),
+            file_tab("empty", Some("")),
+            file_tab("scratch", None),
+        ];
+
+        assert_eq!(
+            open_file_paths_from_tabs(&tabs),
+            vec!["src/main.rs".to_string(), "src/lib.rs".to_string()]
+        );
+    }
 }
 
 #[tauri::command]
@@ -497,12 +559,12 @@ pub async fn dispatch(
                     Ok(())
                 }
                 blade_protocol::EditorIntent::SetActiveFile { path } => {
-                    if backend_authority {
-                        {
-                            let mut active = state.active_file.lock().unwrap();
-                            *active = path.clone();
-                        }
+                    {
+                        let mut active = state.active_file.lock().unwrap();
+                        *active = path.clone();
+                    }
 
+                    if backend_authority {
                         emit_blade_event(
                             &window,
                             Some(intent_id.to_string()),
@@ -511,6 +573,10 @@ pub async fn dispatch(
                             ),
                         );
                     }
+                    Ok(())
+                }
+                blade_protocol::EditorIntent::SetOpenFiles { paths } => {
+                    *state.open_files.lock().unwrap() = dedupe_non_empty_paths(paths);
                     Ok(())
                 }
                 blade_protocol::EditorIntent::SyncDocument {
@@ -663,6 +729,7 @@ pub async fn dispatch(
                             let mut active_file = state.active_file.lock().unwrap();
                             *active_file = Some(p.clone());
                         }
+                        sync_open_files_from_tabs(&state);
 
                         emit_blade_event(
                             &window,
@@ -684,6 +751,7 @@ pub async fn dispatch(
                             let mut tabs = state.tabs.lock().unwrap();
                             tabs.retain(|t| t.id != tab_id);
                         }
+                        sync_open_files_from_tabs(&state);
                         {
                             let mut active = state.active_tab_id.lock().unwrap();
                             if active.as_ref() == Some(&tab_id) {
@@ -750,6 +818,7 @@ pub async fn dispatch(
                             }
                             *tabs = reordered;
                         }
+                        sync_open_files_from_tabs(&state);
 
                         emit_blade_event(
                             &window,

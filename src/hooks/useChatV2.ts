@@ -792,11 +792,13 @@ export function useChatV2(options: UseChatV2Options = {}) {
     }, cachedSnapshot: ReturnType<typeof getEditorSnapshotRef.current>) => {
         const backendOwnsEditorState = isBackendAuthoritative();
         const activeFile = backendOwnsEditorState
-            ? freshSnapshot.active_file ?? null
+            ? freshSnapshot.active_file ?? cachedSnapshot.activeFile ?? null
             : cachedSnapshot.activeFile ?? null;
+        const freshOpenFiles = freshSnapshot.open_files || [];
+        const cachedOpenFiles = cachedSnapshot.openFiles || [];
         const openFilesSource = backendOwnsEditorState
-            ? freshSnapshot.open_files || []
-            : cachedSnapshot.openFiles || [];
+            ? (freshOpenFiles.length > 0 ? freshOpenFiles : cachedOpenFiles)
+            : cachedOpenFiles;
         const openFiles = Array.from(new Set(openFilesSource.filter(Boolean)));
 
         return {
