@@ -4,7 +4,7 @@
 //! by combining symbol data, file content, and related code.
 
 use std::collections::{HashSet, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -759,65 +759,8 @@ impl ContextAssembler {
     }
 
     fn resolve_import_target(&self, file_path: &str, import_target: &str) -> Option<String> {
-        if import_target.is_empty() {
-            return None;
-        }
-
-        let base_file = self.language_service.resolve_path(file_path);
-        let parent = base_file.parent()?;
-
-        if import_target.starts_with('.') {
-            let normalized = parent.join(import_target);
-            return self.find_existing_import_candidate(&normalized);
-        }
-
-        if import_target.contains("::") {
-            let crate_relative = import_target
-                .trim_start_matches("crate::")
-                .trim_start_matches("self::")
-                .trim_start_matches("super::")
-                .replace("::", "/");
-            return self.find_existing_import_candidate(
-                &self.language_service.resolve_path(&crate_relative),
-            );
-        }
-
-        if import_target.contains('.') {
-            let dotted = import_target.replace('.', "/");
-            return self
-                .find_existing_import_candidate(&self.language_service.resolve_path(&dotted));
-        }
-
-        None
-    }
-
-    fn find_existing_import_candidate(&self, base_path: &Path) -> Option<String> {
-        let mut candidates: Vec<PathBuf> = Vec::new();
-
-        if base_path.extension().is_some() {
-            candidates.push(base_path.to_path_buf());
-        } else {
-            for extension in ["ts", "tsx", "astro", "js", "jsx", "py", "rs"] {
-                candidates.push(base_path.with_extension(extension));
-            }
-
-            for index_name in [
-                "index.ts",
-                "index.tsx",
-                "index.js",
-                "index.jsx",
-                "mod.rs",
-                "__init__.py",
-            ] {
-                candidates.push(base_path.join(index_name));
-            }
-        }
-
-        candidates.into_iter().find_map(|candidate| {
-            candidate
-                .exists()
-                .then(|| self.path_to_workspace_relative(&candidate))
-        })
+        self.language_service
+            .resolve_import_target(file_path, import_target)
     }
 
     fn path_to_workspace_relative(&self, path: &Path) -> String {

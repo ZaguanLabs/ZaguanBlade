@@ -564,9 +564,7 @@ fn text_tokens(text: &str) -> Vec<String> {
         if ch.is_ascii_uppercase() && !current.is_empty() {
             if previous_was_lower_or_digit
                 || (previous_was_upper
-                    && chars
-                        .peek()
-                        .is_some_and(|next| next.is_ascii_lowercase()))
+                    && chars.peek().is_some_and(|next| next.is_ascii_lowercase()))
             {
                 push_token(&mut tokens, &mut current);
             }

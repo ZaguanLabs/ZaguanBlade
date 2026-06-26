@@ -3058,7 +3058,11 @@ impl LanguageService {
         }
     }
 
-    fn resolve_import_target(&self, file_path: &str, import_target: &str) -> Option<String> {
+    pub(crate) fn resolve_import_target(
+        &self,
+        file_path: &str,
+        import_target: &str,
+    ) -> Option<String> {
         if import_target.is_empty() {
             return None;
         }
@@ -3096,32 +3100,27 @@ impl LanguageService {
     fn find_existing_import_candidate(&self, base_path: &Path) -> Option<String> {
         let mut candidates: Vec<PathBuf> = Vec::new();
 
-        if base_path.extension().is_some() {
-            candidates.push(base_path.to_path_buf());
-        } else {
-            for extension in [
-                "ts", "tsx", "astro", "js", "jsx", "py", "rs", "go", "css", "scss", "sass", "less",
-            ] {
+        if base_path.is_file() {
+            return Some(self.path_to_workspace_relative(base_path));
+        }
+
+        if base_path.extension().is_none() {
+            for extension in Language::all_extensions() {
                 candidates.push(base_path.with_extension(extension));
             }
 
-            for index_name in [
-                "index.ts",
-                "index.tsx",
-                "index.astro",
-                "index.js",
-                "index.jsx",
-                "main.go",
-                "mod.rs",
-                "__init__.py",
-            ] {
+            for extension in Language::all_extensions() {
+                candidates.push(base_path.join(format!("index.{extension}")));
+            }
+
+            for index_name in ["main.go", "mod.rs", "__init__.py"] {
                 candidates.push(base_path.join(index_name));
             }
         }
 
         candidates.into_iter().find_map(|candidate| {
             candidate
-                .exists()
+                .is_file()
                 .then(|| self.path_to_workspace_relative(&candidate))
         })
     }
@@ -12238,6 +12237,25 @@ export function loadPosts() {
             .unwrap();
 
         assert_eq!(resolved, "src/lib/availability.ts");
+    }
+
+    #[test]
+    fn resolve_import_target_uses_language_capability_extensions() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+        fs::write(temp_dir.path().join("src/app.ts"), "").unwrap();
+        fs::write(temp_dir.path().join("src/theme.css"), ".button {}").unwrap();
+        fs::write(temp_dir.path().join("src/bootstrap.php"), "<?php").unwrap();
+
+        assert_eq!(
+            service.resolve_import_target("src/app.ts", "./theme"),
+            Some("src/theme.css".to_string())
+        );
+        assert_eq!(
+            service.resolve_import_target("src/app.ts", "./bootstrap"),
+            Some("src/bootstrap.php".to_string())
+        );
     }
 
     #[test]

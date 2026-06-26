@@ -424,6 +424,12 @@ impl Language {
         LANGUAGE_CAPABILITIES
     }
 
+    pub fn all_extensions() -> impl Iterator<Item = &'static str> {
+        LANGUAGE_CAPABILITIES
+            .iter()
+            .flat_map(|capability| capability.extensions.iter().copied())
+    }
+
     pub fn is_stylesheet_scanner(self) -> bool {
         matches!(
             self,
@@ -734,6 +740,11 @@ mod tests {
                 );
             }
         }
+
+        let all_extensions = Language::all_extensions().collect::<Vec<_>>();
+        assert!(all_extensions.contains(&"ts"));
+        assert!(all_extensions.contains(&"css"));
+        assert!(all_extensions.contains(&"php"));
     }
 
     #[test]
