@@ -459,11 +459,13 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "symbol_schema",
             "function": {
                 "name": "symbol_schema",
-                "description": "Return compact Symbols Index coverage and schema counts: indexed files by extension/language/support level, symbols by type, relationship integrity stats, unresolved relationship targets, and semantic anchor counts. Use before trusting broad or empty symbol searches.",
+                "description": "Return compact Symbols Index coverage and schema counts: indexed files by extension/language/support level, symbols by type, relationship integrity stats, unresolved relationship targets, and semantic anchor counts. Optional path scopes counts to one file or directory and includes root-vs-scoped totals. Use before trusting broad or empty symbol searches.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
-                    "properties": {},
+                    "properties": {
+                        "path": { "type": "string", "description": "Optional file or directory path scope, such as src/app or src/app/page.tsx" }
+                    },
                     "required": [],
                     "additionalProperties": false
                 }

@@ -1717,7 +1717,7 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
         "edit_impact" => edit_impact_tool(workspace_root, &args, app_handle),
         "symbol_graph" => symbol_graph_tool(workspace_root, &args, app_handle),
         "symbol_trace" => symbol_trace_tool(workspace_root, &args, app_handle),
-        "symbol_schema" => symbol_schema_tool(app_handle),
+        "symbol_schema" => symbol_schema_tool(&args, app_handle),
         "symbol_outline" => symbol_outline_tool(workspace_root, &args, app_handle),
         "read_file_range" => read_file_range(workspace_root, &args),
         "load_skill" => load_skill_tool(workspace_root, &args),
@@ -4587,24 +4587,42 @@ fn symbol_trace_tool<R: tauri::Runtime>(
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
 }
 
-fn symbol_schema_tool<R: tauri::Runtime>(app_handle: Option<&tauri::AppHandle<R>>) -> ToolResult {
+fn symbol_schema_tool<R: tauri::Runtime>(
+    args: &HashMap<String, serde_json::Value>,
+    app_handle: Option<&tauri::AppHandle<R>>,
+) -> ToolResult {
     let service = match language_service_from_app_handle(app_handle) {
         Ok(service) => service,
         Err(err) => return ToolResult::err(err),
     };
+    let scope_path = args
+        .get("path")
+        .or_else(|| args.get("scope"))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     let started = Instant::now();
-    let schema = match service.index_schema_snapshot() {
+    let schema = match service.index_schema_snapshot_for_path(scope_path) {
         Ok(schema) => schema,
         Err(err) => return ToolResult::err(err.to_string()),
     };
+    let scope_meta = schema.scope.as_ref().map(|scope| {
+        serde_json::json!({
+            "requested_path": scope.requested_path,
+            "normalized_path": scope.normalized_path,
+            "root_totals": scope.root_totals,
+            "scoped_totals": schema.totals,
+        })
+    });
     let payload = serde_json::json!({
         "schema": schema,
         "_meta": {
             "tool": "symbol_schema",
             "source": "language_service",
             "timing_ms": started.elapsed().as_millis(),
+            "scope": scope_meta,
             "index_health": service.index_health_snapshot(),
-            "language_support": language_support_meta_json(None),
+            "language_support": language_support_meta_json(scope_path),
         }
     });
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())

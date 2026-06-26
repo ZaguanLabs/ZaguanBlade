@@ -102,6 +102,19 @@ pub struct SemanticAnchorResult {
     pub score: f32,
 }
 
+fn query_scoped_count(
+    conn: &Connection,
+    unscoped_sql: &str,
+    scoped_sql: &str,
+    scoped: Option<(&str, &str)>,
+) -> Result<i64, SymbolStoreError> {
+    match scoped {
+        Some((scope, like)) => conn.query_row(scoped_sql, params![scope, like], |row| row.get(0)),
+        None => conn.query_row(unscoped_sql, [], |row| row.get(0)),
+    }
+    .map_err(SymbolStoreError::from)
+}
+
 impl SymbolStore {
     /// Create a new symbol store at the given path
     pub fn new(db_path: &Path) -> Result<Self, SymbolStoreError> {
@@ -1456,91 +1469,185 @@ impl SymbolStore {
     pub fn relationship_integrity_stats(
         &self,
     ) -> Result<RelationshipIntegrityStats, SymbolStoreError> {
+        self.relationship_integrity_stats_for_scope(None)
+    }
+
+    pub fn relationship_integrity_stats_for_scope(
+        &self,
+        scope_path: Option<&str>,
+    ) -> Result<RelationshipIntegrityStats, SymbolStoreError> {
         let conn = self.conn.lock().unwrap();
-        let total_relationships: i64 =
-            conn.query_row("SELECT COUNT(*) FROM symbol_relationships", [], |row| {
-                row.get(0)
-            })?;
-        let resolved_relationships: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM symbol_relationships WHERE target_symbol_id IS NOT NULL",
-            [],
-            |row| row.get(0),
+        let scope_like = scope_path.map(|path| format!("{path}/%"));
+        let scoped = scope_path.zip(scope_like.as_deref());
+
+        let total_relationships = query_scoped_count(
+            &conn,
+            "SELECT COUNT(*) FROM symbol_relationships",
+            r#"
+            SELECT COUNT(*)
+            FROM symbol_relationships
+            WHERE source_file_path = ?1 OR source_file_path LIKE ?2
+            "#,
+            scoped,
         )?;
-        let unresolved_symbol_relationships: i64 = conn.query_row(
+        let resolved_relationships = query_scoped_count(
+            &conn,
+            "SELECT COUNT(*) FROM symbol_relationships WHERE target_symbol_id IS NOT NULL",
+            r#"
+            SELECT COUNT(*)
+            FROM symbol_relationships
+            WHERE target_symbol_id IS NOT NULL
+              AND (source_file_path = ?1 OR source_file_path LIKE ?2)
+            "#,
+            scoped,
+        )?;
+        let unresolved_symbol_relationships = query_scoped_count(
+            &conn,
             r#"
             SELECT COUNT(*)
             FROM symbol_relationships
             WHERE target_symbol_id IS NULL AND relationship_type <> 'import'
             "#,
-            [],
-            |row| row.get(0),
+            r#"
+            SELECT COUNT(*)
+            FROM symbol_relationships
+            WHERE target_symbol_id IS NULL
+              AND relationship_type <> 'import'
+              AND (source_file_path = ?1 OR source_file_path LIKE ?2)
+            "#,
+            scoped,
         )?;
-        let missing_source_symbols: i64 = conn.query_row(
+        let missing_source_symbols = query_scoped_count(
+            &conn,
             r#"
             SELECT COUNT(*)
             FROM symbol_relationships r
             LEFT JOIN symbols s ON s.id = r.source_symbol_id
             WHERE s.id IS NULL
             "#,
-            [],
-            |row| row.get(0),
+            r#"
+            SELECT COUNT(*)
+            FROM symbol_relationships r
+            LEFT JOIN symbols s ON s.id = r.source_symbol_id
+            WHERE s.id IS NULL
+              AND (r.source_file_path = ?1 OR r.source_file_path LIKE ?2)
+            "#,
+            scoped,
         )?;
-        let missing_target_symbols: i64 = conn.query_row(
+        let missing_target_symbols = query_scoped_count(
+            &conn,
             r#"
             SELECT COUNT(*)
             FROM symbol_relationships r
             LEFT JOIN symbols s ON s.id = r.target_symbol_id
             WHERE r.target_symbol_id IS NOT NULL AND s.id IS NULL
             "#,
-            [],
-            |row| row.get(0),
+            r#"
+            SELECT COUNT(*)
+            FROM symbol_relationships r
+            LEFT JOIN symbols s ON s.id = r.target_symbol_id
+            WHERE r.target_symbol_id IS NOT NULL
+              AND s.id IS NULL
+              AND (r.source_file_path = ?1 OR r.source_file_path LIKE ?2)
+            "#,
+            scoped,
         )?;
         let by_type = {
-            let mut stmt = conn.prepare(
-                r#"
-                SELECT relationship_type,
-                       COUNT(*),
-                       SUM(CASE WHEN target_symbol_id IS NOT NULL THEN 1 ELSE 0 END),
-                       SUM(CASE WHEN target_symbol_id IS NULL AND relationship_type <> 'import' THEN 1 ELSE 0 END)
-                FROM symbol_relationships
-                GROUP BY relationship_type
-                ORDER BY COUNT(*) DESC, relationship_type ASC
-                "#,
-            )?;
-            let rows = stmt
-                .query_map([], |row| {
-                    Ok(RelationshipTypeStats {
-                        relationship_type: row.get(0)?,
-                        total_relationships: row.get::<_, i64>(1)? as usize,
-                        resolved_relationships: row.get::<_, i64>(2)? as usize,
-                        unresolved_symbol_relationships: row.get::<_, i64>(3)? as usize,
-                    })
-                })?
-                .collect::<Result<Vec<_>, _>>()?;
-            rows
+            match scoped {
+                Some((scope, like)) => {
+                    let mut stmt = conn.prepare(
+                        r#"
+                        SELECT relationship_type,
+                               COUNT(*),
+                               SUM(CASE WHEN target_symbol_id IS NOT NULL THEN 1 ELSE 0 END),
+                               SUM(CASE WHEN target_symbol_id IS NULL AND relationship_type <> 'import' THEN 1 ELSE 0 END)
+                        FROM symbol_relationships
+                        WHERE source_file_path = ?1 OR source_file_path LIKE ?2
+                        GROUP BY relationship_type
+                        ORDER BY COUNT(*) DESC, relationship_type ASC
+                        "#,
+                    )?;
+                    let rows = stmt.query_map(params![scope, like], |row| {
+                        Ok(RelationshipTypeStats {
+                            relationship_type: row.get(0)?,
+                            total_relationships: row.get::<_, i64>(1)? as usize,
+                            resolved_relationships: row.get::<_, i64>(2)? as usize,
+                            unresolved_symbol_relationships: row.get::<_, i64>(3)? as usize,
+                        })
+                    })?;
+                    rows.collect::<Result<Vec<_>, _>>()?
+                }
+                None => {
+                    let mut stmt = conn.prepare(
+                        r#"
+                        SELECT relationship_type,
+                               COUNT(*),
+                               SUM(CASE WHEN target_symbol_id IS NOT NULL THEN 1 ELSE 0 END),
+                               SUM(CASE WHEN target_symbol_id IS NULL AND relationship_type <> 'import' THEN 1 ELSE 0 END)
+                        FROM symbol_relationships
+                        GROUP BY relationship_type
+                        ORDER BY COUNT(*) DESC, relationship_type ASC
+                        "#,
+                    )?;
+                    let rows = stmt.query_map([], |row| {
+                        Ok(RelationshipTypeStats {
+                            relationship_type: row.get(0)?,
+                            total_relationships: row.get::<_, i64>(1)? as usize,
+                            resolved_relationships: row.get::<_, i64>(2)? as usize,
+                            unresolved_symbol_relationships: row.get::<_, i64>(3)? as usize,
+                        })
+                    })?;
+                    rows.collect::<Result<Vec<_>, _>>()?
+                }
+            }
         };
         let top_unresolved_targets = {
-            let mut stmt = conn.prepare(
-                r#"
-                SELECT relationship_type, target_name, COUNT(*), MIN(source_file_path)
-                FROM symbol_relationships
-                WHERE target_symbol_id IS NULL AND relationship_type <> 'import'
-                GROUP BY relationship_type, target_name
-                ORDER BY COUNT(*) DESC, relationship_type ASC, target_name ASC
-                LIMIT 12
-                "#,
-            )?;
-            let rows = stmt
-                .query_map([], |row| {
-                    Ok(UnresolvedRelationshipTarget {
-                        relationship_type: row.get(0)?,
-                        target_name: row.get(1)?,
-                        count: row.get::<_, i64>(2)? as usize,
-                        example_source_file: row.get(3)?,
-                    })
-                })?
-                .collect::<Result<Vec<_>, _>>()?;
-            rows
+            match scoped {
+                Some((scope, like)) => {
+                    let mut stmt = conn.prepare(
+                        r#"
+                        SELECT relationship_type, target_name, COUNT(*), MIN(source_file_path)
+                        FROM symbol_relationships
+                        WHERE target_symbol_id IS NULL
+                          AND relationship_type <> 'import'
+                          AND (source_file_path = ?1 OR source_file_path LIKE ?2)
+                        GROUP BY relationship_type, target_name
+                        ORDER BY COUNT(*) DESC, relationship_type ASC, target_name ASC
+                        LIMIT 12
+                        "#,
+                    )?;
+                    let rows = stmt.query_map(params![scope, like], |row| {
+                        Ok(UnresolvedRelationshipTarget {
+                            relationship_type: row.get(0)?,
+                            target_name: row.get(1)?,
+                            count: row.get::<_, i64>(2)? as usize,
+                            example_source_file: row.get(3)?,
+                        })
+                    })?;
+                    rows.collect::<Result<Vec<_>, _>>()?
+                }
+                None => {
+                    let mut stmt = conn.prepare(
+                        r#"
+                        SELECT relationship_type, target_name, COUNT(*), MIN(source_file_path)
+                        FROM symbol_relationships
+                        WHERE target_symbol_id IS NULL AND relationship_type <> 'import'
+                        GROUP BY relationship_type, target_name
+                        ORDER BY COUNT(*) DESC, relationship_type ASC, target_name ASC
+                        LIMIT 12
+                        "#,
+                    )?;
+                    let rows = stmt.query_map([], |row| {
+                        Ok(UnresolvedRelationshipTarget {
+                            relationship_type: row.get(0)?,
+                            target_name: row.get(1)?,
+                            count: row.get::<_, i64>(2)? as usize,
+                            example_source_file: row.get(3)?,
+                        })
+                    })?;
+                    rows.collect::<Result<Vec<_>, _>>()?
+                }
+            }
         };
 
         Ok(RelationshipIntegrityStats {
@@ -1555,39 +1662,97 @@ impl SymbolStore {
     }
 
     pub fn symbol_type_counts(&self) -> Result<Vec<(String, usize)>, SymbolStoreError> {
+        self.symbol_type_counts_for_scope(None)
+    }
+
+    pub fn symbol_type_counts_for_scope(
+        &self,
+        scope_path: Option<&str>,
+    ) -> Result<Vec<(String, usize)>, SymbolStoreError> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            r#"
-            SELECT symbol_type, COUNT(*)
-            FROM symbols
-            GROUP BY symbol_type
-            ORDER BY COUNT(*) DESC, symbol_type ASC
-            "#,
-        )?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
+        match scope_path {
+            Some(scope) => {
+                let like = format!("{scope}/%");
+                let mut stmt = conn.prepare(
+                    r#"
+                    SELECT symbol_type, COUNT(*)
+                    FROM symbols
+                    WHERE file_path = ?1 OR file_path LIKE ?2
+                    GROUP BY symbol_type
+                    ORDER BY COUNT(*) DESC, symbol_type ASC
+                    "#,
+                )?;
+                let rows = stmt
+                    .query_map(params![scope, like], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            }
+            None => {
+                let mut stmt = conn.prepare(
+                    r#"
+                    SELECT symbol_type, COUNT(*)
+                    FROM symbols
+                    GROUP BY symbol_type
+                    ORDER BY COUNT(*) DESC, symbol_type ASC
+                    "#,
+                )?;
+                let rows = stmt
+                    .query_map([], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            }
+        }
     }
 
     pub fn semantic_anchor_kind_counts(&self) -> Result<Vec<(String, usize)>, SymbolStoreError> {
+        self.semantic_anchor_kind_counts_for_scope(None)
+    }
+
+    pub fn semantic_anchor_kind_counts_for_scope(
+        &self,
+        scope_path: Option<&str>,
+    ) -> Result<Vec<(String, usize)>, SymbolStoreError> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            r#"
-            SELECT kind, COUNT(*)
-            FROM semantic_anchors
-            GROUP BY kind
-            ORDER BY COUNT(*) DESC, kind ASC
-            "#,
-        )?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
+        match scope_path {
+            Some(scope) => {
+                let like = format!("{scope}/%");
+                let mut stmt = conn.prepare(
+                    r#"
+                    SELECT kind, COUNT(*)
+                    FROM semantic_anchors
+                    WHERE file_path = ?1 OR file_path LIKE ?2
+                    GROUP BY kind
+                    ORDER BY COUNT(*) DESC, kind ASC
+                    "#,
+                )?;
+                let rows = stmt
+                    .query_map(params![scope, like], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            }
+            None => {
+                let mut stmt = conn.prepare(
+                    r#"
+                    SELECT kind, COUNT(*)
+                    FROM semantic_anchors
+                    GROUP BY kind
+                    ORDER BY COUNT(*) DESC, kind ASC
+                    "#,
+                )?;
+                let rows = stmt
+                    .query_map([], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            }
+        }
     }
 
     fn hydrate_symbol_references(

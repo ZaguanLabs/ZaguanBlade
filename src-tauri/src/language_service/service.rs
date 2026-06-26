@@ -145,8 +145,16 @@ pub struct IndexSchemaTotals {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IndexSchemaScope {
+    pub requested_path: String,
+    pub normalized_path: String,
+    pub root_totals: IndexSchemaTotals,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IndexSchemaSnapshot {
     pub totals: IndexSchemaTotals,
+    pub scope: Option<IndexSchemaScope>,
     pub files_by_extension: Vec<IndexSchemaCount>,
     pub files_by_language: Vec<IndexSchemaLanguageCount>,
     pub files_by_support_level: Vec<IndexSchemaCount>,
@@ -863,20 +871,38 @@ impl LanguageService {
     }
 
     pub fn index_schema_snapshot(&self) -> Result<IndexSchemaSnapshot, LanguageError> {
-        let indexed_files = self.symbol_store.list_all_indexed_files()?;
+        self.index_schema_snapshot_for_path(None)
+    }
+
+    pub fn index_schema_snapshot_for_path(
+        &self,
+        scope_path: Option<&str>,
+    ) -> Result<IndexSchemaSnapshot, LanguageError> {
+        let all_indexed_files = self.symbol_store.list_all_indexed_files()?;
+        let normalized_scope = scope_path.and_then(normalize_schema_scope_path);
+        let indexed_files = match normalized_scope.as_deref() {
+            Some(scope) => all_indexed_files
+                .iter()
+                .filter(|record| schema_path_matches_scope(&record.file_path, scope))
+                .cloned()
+                .collect::<Vec<_>>(),
+            None => all_indexed_files.clone(),
+        };
         let symbols_by_type = self
             .symbol_store
-            .symbol_type_counts()?
+            .symbol_type_counts_for_scope(normalized_scope.as_deref())?
             .into_iter()
             .map(|(name, count)| IndexSchemaCount { name, count })
             .collect::<Vec<_>>();
         let semantic_anchors_by_kind = self
             .symbol_store
-            .semantic_anchor_kind_counts()?
+            .semantic_anchor_kind_counts_for_scope(normalized_scope.as_deref())?
             .into_iter()
             .map(|(name, count)| IndexSchemaCount { name, count })
             .collect::<Vec<_>>();
-        let relationships = self.symbol_store.relationship_integrity_stats()?;
+        let relationships = self
+            .symbol_store
+            .relationship_integrity_stats_for_scope(normalized_scope.as_deref())?;
 
         let mut extension_counts = BTreeMap::<String, usize>::new();
         let mut language_counts = BTreeMap::<(String, String), usize>::new();
@@ -913,14 +939,25 @@ impl LanguageService {
             .iter()
             .map(|entry| entry.count)
             .sum();
+        let totals = IndexSchemaTotals {
+            indexed_files: indexed_files.len(),
+            symbols: symbol_total,
+            relationships: relationships.total_relationships,
+            semantic_anchors: semantic_anchor_total,
+        };
+
+        let scope = match (scope_path, normalized_scope.as_deref()) {
+            (Some(requested_path), Some(normalized_path)) => Some(IndexSchemaScope {
+                requested_path: requested_path.to_string(),
+                normalized_path: normalized_path.to_string(),
+                root_totals: index_schema_root_totals(all_indexed_files.len(), &self.symbol_store)?,
+            }),
+            _ => None,
+        };
 
         Ok(IndexSchemaSnapshot {
-            totals: IndexSchemaTotals {
-                indexed_files: indexed_files.len(),
-                symbols: symbol_total,
-                relationships: relationships.total_relationships,
-                semantic_anchors: semantic_anchor_total,
-            },
+            totals,
+            scope,
             files_by_extension: extension_counts
                 .into_iter()
                 .map(|(name, count)| IndexSchemaCount { name, count })
@@ -6892,6 +6929,69 @@ fn support_level_label(level: crate::tree_sitter::SupportLevel) -> &'static str 
     }
 }
 
+fn index_schema_root_totals(
+    indexed_files: usize,
+    symbol_store: &SymbolStore,
+) -> Result<IndexSchemaTotals, LanguageError> {
+    let symbols = symbol_store
+        .symbol_type_counts()?
+        .into_iter()
+        .map(|(_, count)| count)
+        .sum();
+    let relationships = symbol_store
+        .relationship_integrity_stats()?
+        .total_relationships;
+    let semantic_anchors = symbol_store
+        .semantic_anchor_kind_counts()?
+        .into_iter()
+        .map(|(_, count)| count)
+        .sum();
+
+    Ok(IndexSchemaTotals {
+        indexed_files,
+        symbols,
+        relationships,
+        semantic_anchors,
+    })
+}
+
+fn normalize_schema_scope_path(path: &str) -> Option<String> {
+    let mut normalized = path.trim().replace('\\', "/");
+    while let Some(stripped) = normalized.strip_prefix("./") {
+        normalized = stripped.to_string();
+    }
+    while let Some(stripped) = normalized.strip_prefix('/') {
+        normalized = stripped.to_string();
+    }
+
+    let mut collapsed = String::with_capacity(normalized.len());
+    let mut previous_was_slash = false;
+    for ch in normalized.chars() {
+        if ch == '/' {
+            if !previous_was_slash {
+                collapsed.push(ch);
+            }
+            previous_was_slash = true;
+        } else {
+            collapsed.push(ch);
+            previous_was_slash = false;
+        }
+    }
+
+    let normalized = collapsed.trim_end_matches('/').trim().to_string();
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn schema_path_matches_scope(file_path: &str, scope: &str) -> bool {
+    let Some(file_path) = normalize_schema_scope_path(file_path) else {
+        return false;
+    };
+    file_path == scope
+        || file_path
+            .strip_prefix(scope)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
 fn skip_counts_from_map(counts: &BTreeMap<String, usize>) -> Vec<IndexSkipCount> {
     counts
         .iter()
@@ -11190,6 +11290,68 @@ mod tests {
             .symbols_by_type
             .iter()
             .any(|entry| entry.name == "property" && entry.count >= 6));
+    }
+
+    #[test]
+    fn test_index_schema_snapshot_scopes_counts_to_path() {
+        let (service, temp_dir) = create_test_service();
+        write_all_scanner_language_fixtures(temp_dir.path());
+
+        service.index_directory("").unwrap();
+        let root_schema = service.index_schema_snapshot().unwrap();
+        let scoped_schema = service
+            .index_schema_snapshot_for_path(Some("./css//variants/"))
+            .unwrap();
+
+        assert_eq!(scoped_schema.totals.indexed_files, 3);
+        assert!(scoped_schema.totals.indexed_files < root_schema.totals.indexed_files);
+        assert!(scoped_schema.totals.symbols < root_schema.totals.symbols);
+        assert!(scoped_schema
+            .files_by_extension
+            .iter()
+            .any(|entry| entry.name == "scss" && entry.count == 1));
+        assert!(scoped_schema
+            .files_by_language
+            .iter()
+            .any(|entry| entry.language == "SCSS" && entry.count == 1));
+        assert!(scoped_schema
+            .files_by_language
+            .iter()
+            .all(|entry| entry.language != "PHP"));
+
+        let scope = scoped_schema.scope.as_ref().unwrap();
+        assert_eq!(scope.requested_path, "./css//variants/");
+        assert_eq!(scope.normalized_path, "css/variants");
+        assert_eq!(
+            scope.root_totals.indexed_files,
+            SCANNER_LANGUAGE_FIXTURE_PATHS.len()
+        );
+        assert_eq!(scope.root_totals.symbols, root_schema.totals.symbols);
+    }
+
+    #[test]
+    fn test_index_schema_snapshot_scopes_to_exact_file() {
+        let (service, temp_dir) = create_test_service();
+        write_all_scanner_language_fixtures(temp_dir.path());
+
+        service.index_directory("").unwrap();
+        let scoped_schema = service
+            .index_schema_snapshot_for_path(Some("/php/service.php"))
+            .unwrap();
+
+        assert_eq!(scoped_schema.totals.indexed_files, 1);
+        assert!(scoped_schema
+            .files_by_extension
+            .iter()
+            .any(|entry| entry.name == "php" && entry.count == 1));
+        assert!(scoped_schema
+            .files_by_language
+            .iter()
+            .any(|entry| entry.language == "PHP" && entry.count == 1));
+        assert_eq!(
+            scoped_schema.scope.as_ref().unwrap().normalized_path,
+            "php/service.php"
+        );
     }
 
     #[test]
