@@ -1,0 +1,89 @@
+{
+  "case": "python-basic",
+  "language": "Python",
+  "parse_status": "ok",
+  "symbol_count": 5,
+  "relationship_count": 3,
+  "symbols": [
+    {
+      "name": "os",
+      "kind": "import",
+      "qualified_name": "os",
+      "start_line": 0,
+      "start_col": 0,
+      "end_line": 0,
+      "end_col": 9,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "greet",
+      "kind": "function",
+      "qualified_name": "greet",
+      "start_line": 3,
+      "start_col": 0,
+      "end_line": 5,
+      "end_col": 23,
+      "parent_qualified_name": null,
+      "docstring": "Greeter module helper.",
+      "signature": "(name: str) -> str"
+    },
+    {
+      "name": "Calculator",
+      "kind": "class",
+      "qualified_name": "Calculator",
+      "start_line": 8,
+      "start_col": 0,
+      "end_line": 12,
+      "end_col": 20,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "add",
+      "kind": "method",
+      "qualified_name": "Calculator.add",
+      "start_line": 11,
+      "start_col": 4,
+      "end_line": 12,
+      "end_col": 20,
+      "parent_qualified_name": "Calculator",
+      "docstring": null,
+      "signature": "(self, a: int, b: int) -> int"
+    },
+    {
+      "name": "helper",
+      "kind": "function",
+      "qualified_name": "helper",
+      "start_line": 15,
+      "start_col": 0,
+      "end_line": 16,
+      "end_col": 23,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": "(name: str) -> str"
+    }
+  ],
+  "relationships": [
+    {
+      "relationship_type": "import",
+      "source_qualified_name": "os",
+      "target_name": "os",
+      "line": 0
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "greet",
+      "target_name": "helper",
+      "line": 5
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "helper",
+      "target_name": "strip",
+      "line": 16
+    }
+  ]
+}

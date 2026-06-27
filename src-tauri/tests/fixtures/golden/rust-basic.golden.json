@@ -1,0 +1,113 @@
+{
+  "case": "rust-basic",
+  "language": "Rust",
+  "parse_status": "ok",
+  "symbol_count": 7,
+  "relationship_count": 3,
+  "symbols": [
+    {
+      "name": "std::collections::HashMap",
+      "kind": "import",
+      "qualified_name": "std::collections::HashMap",
+      "start_line": 1,
+      "start_col": 0,
+      "end_line": 1,
+      "end_col": 30,
+      "parent_qualified_name": null,
+      "docstring": "! Module-level documentation for the geometry fixture.",
+      "signature": null
+    },
+    {
+      "name": "Point",
+      "kind": "struct",
+      "qualified_name": "Point",
+      "start_line": 4,
+      "start_col": 0,
+      "end_line": 7,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "A point in 2D space.",
+      "signature": null
+    },
+    {
+      "name": "Color",
+      "kind": "enum",
+      "qualified_name": "Color",
+      "start_line": 10,
+      "start_col": 0,
+      "end_line": 14,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "Color options for rendering.",
+      "signature": null
+    },
+    {
+      "name": "impl Point",
+      "kind": "impl",
+      "qualified_name": "impl Point",
+      "start_line": 16,
+      "start_col": 0,
+      "end_line": 26,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "new",
+      "kind": "function",
+      "qualified_name": "impl Point.new",
+      "start_line": 18,
+      "start_col": 4,
+      "end_line": 20,
+      "end_col": 5,
+      "parent_qualified_name": "impl Point",
+      "docstring": "Create a new point.",
+      "signature": "(x: i32, y: i32) Point"
+    },
+    {
+      "name": "sum",
+      "kind": "function",
+      "qualified_name": "impl Point.sum",
+      "start_line": 23,
+      "start_col": 4,
+      "end_line": 25,
+      "end_col": 5,
+      "parent_qualified_name": "impl Point",
+      "docstring": "Compute the sum of the coordinates.",
+      "signature": "(&self) i32"
+    },
+    {
+      "name": "run",
+      "kind": "function",
+      "qualified_name": "run",
+      "start_line": 29,
+      "start_col": 0,
+      "end_line": 34,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "Entry-point helper that builds a point and logs it.",
+      "signature": "(map: HashMap<String, i32>) i32"
+    }
+  ],
+  "relationships": [
+    {
+      "relationship_type": "import",
+      "source_qualified_name": "std::collections::HashMap",
+      "target_name": "std::collections::HashMap",
+      "line": 1
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "run",
+      "target_name": "new",
+      "line": 31
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "run",
+      "target_name": "sum",
+      "line": 33
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "case": "json-duplicate-key",
+  "language": "Json",
+  "parse_status": "unsupported_grammar",
+  "symbol_count": 0,
+  "relationship_count": 0,
+  "symbols": [],
+  "relationships": []
+}

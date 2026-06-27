@@ -1,0 +1,83 @@
+{
+  "case": "go-basic",
+  "language": "Go",
+  "parse_status": "ok",
+  "symbol_count": 5,
+  "relationship_count": 2,
+  "symbols": [
+    {
+      "name": "fmt",
+      "kind": "import",
+      "qualified_name": "fmt",
+      "start_line": 2,
+      "start_col": 7,
+      "end_line": 2,
+      "end_col": 12,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "Base",
+      "kind": "struct",
+      "qualified_name": "Base",
+      "start_line": 5,
+      "start_col": 5,
+      "end_line": 7,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "Server",
+      "kind": "struct",
+      "qualified_name": "Server",
+      "start_line": 10,
+      "start_col": 5,
+      "end_line": 13,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "NewServer",
+      "kind": "function",
+      "qualified_name": "NewServer",
+      "start_line": 16,
+      "start_col": 0,
+      "end_line": 18,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "NewServer builds a Server.",
+      "signature": "(name string) *Server"
+    },
+    {
+      "name": "Start",
+      "kind": "method",
+      "qualified_name": "Start",
+      "start_line": 21,
+      "start_col": 0,
+      "end_line": 24,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "Start runs the server.",
+      "signature": "() error"
+    }
+  ],
+  "relationships": [
+    {
+      "relationship_type": "import",
+      "source_qualified_name": "fmt",
+      "target_name": "fmt",
+      "line": 2
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "Start",
+      "target_name": "Println",
+      "line": 22
+    }
+  ]
+}
