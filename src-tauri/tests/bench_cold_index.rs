@@ -50,7 +50,9 @@ const SOURCE_EXTS: &[&str] = &[
 /// this `relationship_enrichment_ms`-dominated Rust corpus that inflation is
 /// only ~6–8% of wall, but it scales with the parse fraction — a parse-heavy
 /// pinned corpus may exceed 0.10 and need the plan's documented 0.25 fallback.
-const RECONCILE_BOUND: f64 = 0.10;
+/// We assert the 0.25 fallback (covers all corpora incl. parse-heavy ones) and
+/// keep `within_10pct` as a printed diagnostic so the tighter bound stays visible.
+const RECONCILE_BOUND: f64 = 0.25;
 
 /// Resolve the corpus directory and its label.
 fn resolve_corpus() -> (PathBuf, String) {
@@ -231,6 +233,8 @@ fn bench_cold_index() {
     // Print BEFORE asserting so --nocapture always shows the JSON + reconcile
     // diagnostics even if the reconciliation assertion fails.
     println!("{}", serde_json::to_string_pretty(&report).unwrap());
+    // Single-line sentinel for machine scraping across multi-repo baseline runs.
+    println!("BENCH_JSON {}", serde_json::to_string(&report).unwrap());
 
     // DoD reconciliation: do the per-stage timers account for wall?
     let stage_sum_ms =
