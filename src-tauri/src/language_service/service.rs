@@ -1342,6 +1342,12 @@ impl LanguageService {
                 progress(&health);
                 suppressed_external_relationships +=
                     self.commit_staged_file_indexes(&staged_files)?;
+                // M2.4 — run the global-unique back-fill exactly once, after the
+                // full reconcile has committed every file. Only now is COUNT(*)
+                // truly global; running it per-batch or on single-file paths would
+                // resolve against an incomplete symbol set (order-dependent).
+                self.symbol_store
+                    .backfill_unresolved_relationship_targets()?;
             }
         }
 
@@ -1776,13 +1782,7 @@ impl LanguageService {
             self.append_astro_component_export_relationship(file_path, symbols, relationships);
         }
         let translation_call_aliases = extract_translation_call_aliases(extraction_content);
-        self.resolve_relationship_targets(
-            file_path,
-            extraction_language,
-            symbols,
-            relationships,
-            &translation_call_aliases,
-        )?;
+        self.resolve_relationship_targets(symbols, relationships)?;
         Ok(Self::suppress_known_external_relationships(
             extraction_language,
             relationships,
@@ -1910,6 +1910,9 @@ impl LanguageService {
             &semantic_anchors,
             &relationships,
         )?;
+        // M2.4 — incremental single-file reindex resolves edges same-file/imported
+        // only; the global-unique back-fill is deferred to the next full reindex
+        // so its COUNT(*) stays truly global (not "unique among files seen so far").
         let db_write_ms = db_write_start.elapsed().as_millis() as u64;
 
         // Update cache
@@ -2175,6 +2178,10 @@ impl LanguageService {
         let relationship_db_write_start = std::time::Instant::now();
         self.symbol_store
             .replace_relationships_for_files(&final_relationship_records)?;
+        // M2.4 — the set-based global-unique back-fill is NOT run here: this
+        // helper commits one staged batch, and the global COUNT(*) must see every
+        // file. The full-index callers (`reconcile_index_with_progress_inner`,
+        // `index_directory`) run it exactly once after all files are committed.
         db_write_ms += relationship_db_write_start.elapsed().as_millis() as u64;
 
         let cache_start = std::time::Instant::now();
@@ -2309,6 +2316,10 @@ impl LanguageService {
             stats.relationship_enrichment_ms += commit_metrics.relationship_enrichment_ms;
             stats.db_write_ms += commit_metrics.db_write_ms;
             stats.cache_update_ms += commit_metrics.cache_update_ms;
+            // M2.4 — run the global-unique back-fill exactly once, after the full
+            // directory index has committed every file (true global COUNT(*)).
+            self.symbol_store
+                .backfill_unresolved_relationship_targets()?;
         }
 
         stats.duration_ms = start.elapsed().as_millis() as u64;
@@ -3549,11 +3560,8 @@ impl LanguageService {
 
     fn resolve_relationship_targets(
         &self,
-        file_path: &str,
-        language: Language,
         file_symbols: &[Symbol],
         relationships: &mut [SymbolRelationship],
-        translation_call_aliases: &HashSet<String>,
     ) -> Result<(), LanguageError> {
         let imported_files = relationships
             .iter()
@@ -3561,7 +3569,6 @@ impl LanguageService {
             .map(|relationship| relationship.target_name.clone())
             .collect::<Vec<_>>();
         let mut imported_symbol_cache = HashMap::new();
-        let mut contextual_cache = HashMap::new();
 
         for relationship in relationships.iter_mut() {
             if relationship.relationship_type == SymbolRelationshipType::Import {
@@ -3574,31 +3581,27 @@ impl LanguageService {
 
             relationship.target_symbol_id = self.resolve_relationship_symbol_id(
                 &relationship.target_name,
-                relationship.relationship_type,
-                language,
-                file_path,
                 file_symbols,
                 &imported_files,
                 &mut imported_symbol_cache,
-                &mut contextual_cache,
-                translation_call_aliases,
             )?;
         }
 
         Ok(())
     }
 
+    /// Cheap, precise per-reference resolution: same-file first, then symbols of
+    /// explicitly-imported files. Anything not uniquely pinned here is left
+    /// NULL and resolved later by the set-based global-unique back-fill (M2.4,
+    /// `SymbolStore::backfill_unresolved_relationship_targets`) once the whole
+    /// batch's symbols exist. The old per-reference `search_symbols_contextual`
+    /// fallback — the cold-index bottleneck (81–97% of wall time) — is gone.
     fn resolve_relationship_symbol_id(
         &self,
         reference_name: &str,
-        relationship_type: SymbolRelationshipType,
-        language: Language,
-        file_path: &str,
         file_symbols: &[Symbol],
         imported_files: &[String],
         imported_symbol_cache: &mut HashMap<String, Vec<Symbol>>,
-        contextual_cache: &mut HashMap<String, Option<String>>,
-        translation_call_aliases: &HashSet<String>,
     ) -> Result<Option<String>, LanguageError> {
         let mut same_file = Vec::new();
         let mut seen = HashSet::new();
@@ -3632,40 +3635,8 @@ impl LanguageService {
         if imported_matches.len() == 1 {
             return Ok(Some(imported_matches[0].id.clone()));
         }
-        if imported_matches.len() > 1 {
-            return Ok(None);
-        }
 
-        if relationship_type == SymbolRelationshipType::Call
-            && (Self::is_runtime_external_call_name(language, reference_name)
-                || translation_call_aliases.contains(reference_name))
-        {
-            return Ok(None);
-        }
-
-        if let Some(cached) = contextual_cache.get(reference_name) {
-            return Ok(cached.clone());
-        }
-
-        let preferred_files = imported_files.to_vec();
-        let contextual =
-            self.search_symbols_contextual(reference_name, 8, Some(file_path), &preferred_files)?;
-        let exact = contextual
-            .into_iter()
-            .filter(|result| {
-                result.symbol.name == reference_name
-                    && result.symbol.symbol_type != SymbolType::Import
-            })
-            .map(|result| result.symbol)
-            .collect::<Vec<_>>();
-
-        let resolved = if exact.len() == 1 {
-            Some(exact[0].id.clone())
-        } else {
-            None
-        };
-        contextual_cache.insert(reference_name.to_string(), resolved.clone());
-        Ok(resolved)
+        Ok(None)
     }
 
     fn collect_matching_symbols(
@@ -3703,6 +3674,12 @@ impl LanguageService {
         relationship: &SymbolRelationship,
         translation_call_aliases: &HashSet<String>,
     ) -> bool {
+        // A known external/library/builtin call name is always suppressed when it
+        // is still unresolved after same-file/imported resolution — regardless of
+        // whether its bare name happens to be a globally-unique project symbol.
+        // Distinguishing a project `parse()` from `JSON.parse()` needs receiver/
+        // type context and is deferred to M5.1; a bare-name back-fill cannot do it
+        // safely, so we never let such a call survive to be mis-wired.
         relationship.relationship_type == SymbolRelationshipType::Call
             && relationship.target_symbol_id.is_none()
             && (Self::is_known_external_call_name(language, &relationship.target_name)
@@ -3908,108 +3885,6 @@ impl LanguageService {
         }
     }
 
-    fn is_runtime_external_call_name(language: Language, target_name: &str) -> bool {
-        let name = target_name.rsplit("::").next().unwrap_or(target_name);
-        match language {
-            Language::TypeScript
-            | Language::Tsx
-            | Language::Astro
-            | Language::JavaScript
-            | Language::Jsx => matches!(
-                name,
-                "Array"
-                    | "Boolean"
-                    | "Date"
-                    | "Error"
-                    | "JSON"
-                    | "Map"
-                    | "Math"
-                    | "Number"
-                    | "Object"
-                    | "Promise"
-                    | "RegExp"
-                    | "Set"
-                    | "String"
-                    | "catch"
-                    | "finally"
-                    | "parse"
-                    | "stringify"
-                    | "then"
-            ),
-            Language::Rust => matches!(
-                name,
-                "Err"
-                    | "None"
-                    | "Ok"
-                    | "Some"
-                    | "and_then"
-                    | "as_ref"
-                    | "clone"
-                    | "collect"
-                    | "expect"
-                    | "filter"
-                    | "format"
-                    | "iter"
-                    | "map"
-                    | "or_else"
-                    | "to_string"
-                    | "unwrap"
-                    | "unwrap_or"
-                    | "unwrap_or_default"
-            ),
-            Language::Go => matches!(
-                name,
-                "append"
-                    | "cap"
-                    | "close"
-                    | "copy"
-                    | "delete"
-                    | "len"
-                    | "make"
-                    | "new"
-                    | "panic"
-                    | "recover"
-            ),
-            Language::Python => matches!(
-                name,
-                "dict"
-                    | "enumerate"
-                    | "filter"
-                    | "format"
-                    | "int"
-                    | "len"
-                    | "list"
-                    | "map"
-                    | "open"
-                    | "print"
-                    | "range"
-                    | "set"
-                    | "str"
-            ),
-            Language::Markdown
-            | Language::Css
-            | Language::Scss
-            | Language::Sass
-            | Language::Less
-            | Language::Html
-            | Language::Vue
-            | Language::Svelte
-            | Language::Json
-            | Language::Yaml
-            | Language::Toml
-            | Language::Php
-            | Language::Java
-            | Language::CSharp
-            | Language::Kotlin
-            | Language::Ruby
-            | Language::Cpp
-            | Language::Shell
-            | Language::Dockerfile
-            | Language::Sql
-            | Language::BuildScript => false,
-        }
-    }
-
     fn index_file_content(
         &self,
         file_path: &str,
@@ -4060,6 +3935,9 @@ impl LanguageService {
         self.symbol_store.upsert_symbols(&symbols)?;
         self.symbol_store
             .replace_relationships_for_file(file_path, &relationships)?;
+        // M2.4 — incremental single-file path: no global-unique back-fill here;
+        // edges resolve same-file/imported and are globally back-filled on the
+        // next full reindex (keeps the back-fill's COUNT(*) truly global).
         self.symbol_store
             .mark_file_indexed_with_metadata_and_extractor_version(
                 file_path,
@@ -13429,7 +13307,7 @@ metadata:
             LanguageService::suppress_known_external_relationships(
                 Language::TypeScript,
                 &mut relationships,
-                &aliases
+                &aliases,
             ),
             1
         );
@@ -13746,7 +13624,14 @@ metadata:
     }
 
     #[test]
-    fn common_library_method_names_still_resolve_to_project_symbols() {
+    fn external_named_call_is_suppressed_not_backfilled_to_unique_project_symbol() {
+        // library-named call resolution deferred to M5.1 (receiver typing);
+        // bare-name back-fill cannot distinguish project `parse()` from
+        // `JSON.parse()`. `findUnique` is a known external/library method name, so
+        // the unresolved `findUnique()` call in main.ts (which does NOT import
+        // project-api.ts) is suppressed at enrichment time rather than persisted
+        // as a NULL edge and mis-wired by the global-unique back-fill to the
+        // project symbol that merely shares its bare name.
         let (service, temp_dir) = create_test_service();
 
         fs::write(
@@ -13770,10 +13655,13 @@ metadata:
             .unwrap();
         let references = service.find_references_to_symbol(&target, 10).unwrap();
 
-        assert!(references.iter().any(|reference| {
-            reference.source_symbol.file_path == "main.ts"
-                && reference.target_symbol_id.as_deref() == Some(target.id.as_str())
-        }));
+        assert!(
+            !references.iter().any(|reference| {
+                reference.source_symbol.file_path == "main.ts"
+                    && reference.target_symbol_id.as_deref() == Some(target.id.as_str())
+            }),
+            "known external-named call must be suppressed, not back-filled to a same-named project symbol"
+        );
     }
 
     #[test]

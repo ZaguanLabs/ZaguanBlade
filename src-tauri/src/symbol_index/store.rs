@@ -25,6 +25,40 @@ const GENERATED_INDEX_TABLES: &[&str] = &[
     "indexed_files",
 ];
 
+/// M2.4 set-based back-fill. One `UPDATE`: for every relationship whose
+/// `target_symbol_id` is still NULL, write the id of the matching symbol ONLY
+/// when `target_name` matches EXACTLY ONE candidate symbol globally. The
+/// `COUNT(*) = 1` guard and the value sub-`SELECT` share an identical candidate
+/// filter (`name = target_name`, excluding `import` placeholders and the
+/// synthetic `__file__` root), so an ambiguous name can never be written and a
+/// unique name resolves deterministically. `import` relationships are skipped.
+/// `confidence = 0.5`: a name-only heuristic (no scope/type analysis) — the
+/// uniqueness guard is what makes it safe, not the score.
+const BACKFILL_GLOBAL_UNIQUE_SQL: &str = r#"
+UPDATE symbol_relationships
+SET target_symbol_id = (
+        SELECT s.id
+        FROM symbols s
+        WHERE s.name = symbol_relationships.target_name
+          AND s.name != ''
+          AND s.symbol_type != 'import'
+          AND s.qualified_name != '__file__'
+    ),
+    resolution_strategy = 'global_unique',
+    confidence = 0.5
+WHERE target_symbol_id IS NULL
+  AND relationship_type != 'import'
+  AND symbol_relationships.target_name != ''
+  AND (
+        SELECT COUNT(*)
+        FROM symbols s2
+        WHERE s2.name = symbol_relationships.target_name
+          AND s2.name != ''
+          AND s2.symbol_type != 'import'
+          AND s2.qualified_name != '__file__'
+      ) = 1
+"#;
+
 /// SQLite-backed symbol store
 pub struct SymbolStore {
     conn: Mutex<Connection>,
@@ -921,6 +955,32 @@ impl SymbolStore {
 
         tx.commit()?;
         Ok(())
+    }
+
+    /// M2.4 — set-based relationship back-fill.
+    ///
+    /// Resolves `symbol_relationships.target_symbol_id` for rows that are still
+    /// NULL by matching `target_name` against the GLOBAL symbol set in a single
+    /// `UPDATE`, replacing the old per-reference `search_symbols_contextual`
+    /// round-trips (the cold-index bottleneck: 81–97% of wall time).
+    ///
+    /// CORRECTNESS GUARD: a target is written ONLY when the name matches
+    /// EXACTLY ONE candidate symbol globally (`COUNT(*) = 1`). An ambiguous name
+    /// (`> 1` match) is left NULL — a wrong `target_symbol_id` silently corrupts
+    /// the knowledge graph (symbol_trace / edit_impact). Already-resolved
+    /// (non-NULL) rows are never overwritten, and `import` edges are left to the
+    /// dedicated import canonicalization. Candidate symbols exclude `import`
+    /// placeholders and the synthetic `__file__` root, mirroring the in-memory
+    /// resolver's filter. The `COUNT(*) = 1` predicate is byte-for-byte the same
+    /// candidate filter as the value `SELECT`, so the guard cannot disagree with
+    /// the write.
+    ///
+    /// Idempotent: re-running only ever turns NULL into a unique match. Returns
+    /// the number of rows newly resolved.
+    pub fn backfill_unresolved_relationship_targets(&self) -> Result<usize, SymbolStoreError> {
+        let conn = self.conn.lock().unwrap();
+        let resolved = conn.execute(BACKFILL_GLOBAL_UNIQUE_SQL, [])?;
+        Ok(resolved)
     }
 
     pub fn get_relationship_targets(
@@ -2020,6 +2080,14 @@ impl SymbolStore {
         &self,
         rows: Vec<(Symbol, String, String, Option<String>, u32)>,
     ) -> Result<Vec<SymbolReference>, SymbolStoreError> {
+        // M2.4 — hydrate target symbols with ONE batched lookup keyed on the
+        // distinct target ids, instead of N+1 `get_symbol` round-trips (one per
+        // edge). The map below is the JOIN, resolved in a single query.
+        let target_symbols = self.get_symbols_by_ids(
+            rows.iter()
+                .filter_map(|(_, _, _, target_symbol_id, _)| target_symbol_id.as_deref()),
+        )?;
+
         let mut references = Vec::with_capacity(rows.len());
 
         for (source_symbol, relationship_type, target_name, target_symbol_id, line) in rows {
@@ -2031,10 +2099,9 @@ impl SymbolStore {
                         error,
                     ))
                 })?;
-            let target_symbol = match target_symbol_id.as_deref() {
-                Some(id) => self.get_symbol(id)?,
-                None => None,
-            };
+            let target_symbol = target_symbol_id
+                .as_deref()
+                .and_then(|id| target_symbols.get(id).cloned());
 
             references.push(SymbolReference {
                 source_symbol,
@@ -2047,6 +2114,52 @@ impl SymbolStore {
         }
 
         Ok(references)
+    }
+
+    /// Fetch the given symbol ids in a single query, returning an `id -> Symbol`
+    /// map. Ids are de-duplicated and chunked under SQLite's bound-parameter
+    /// ceiling so one logical lookup replaces N `get_symbol` calls.
+    fn get_symbols_by_ids<'a, I>(
+        &self,
+        ids: I,
+    ) -> Result<HashMap<String, Symbol>, SymbolStoreError>
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
+        let unique_ids: Vec<String> = ids
+            .into_iter()
+            .collect::<BTreeSet<&str>>()
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        if unique_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let conn = self.conn.lock().unwrap();
+        let mut symbols = HashMap::with_capacity(unique_ids.len());
+        // Stay well under SQLite's default 999 bound-parameter limit per query.
+        for chunk in unique_ids.chunks(900) {
+            let placeholders = std::iter::repeat("?")
+                .take(chunk.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let mut stmt = conn.prepare(&format!(
+                r#"
+                SELECT id, name, qualified_name, symbol_type, file_path, start_line, start_char,
+                       end_line, end_char, byte_offset, byte_length, parent_id, docstring, signature, content_hash
+                FROM symbols WHERE id IN ({placeholders})
+                "#,
+            ))?;
+            let chunk_symbols = stmt
+                .query_map(params_from_iter(chunk.iter()), row_to_symbol)?
+                .collect::<Result<Vec<_>, _>>()?;
+            for symbol in chunk_symbols {
+                symbols.insert(symbol.id.clone(), symbol);
+            }
+        }
+
+        Ok(symbols)
     }
 }
 
@@ -2358,6 +2471,111 @@ mod tests {
     fn test_create_store() {
         let store = SymbolStore::in_memory().unwrap();
         assert_eq!(store.count().unwrap(), 0);
+    }
+
+    /// M2.4 correctness gate: the set-based back-fill resolves a relationship
+    /// ONLY when its `target_name` matches exactly one symbol globally. A name
+    /// shared by symbols in different files is ambiguous and must stay NULL — a
+    /// wrong `target_symbol_id` silently corrupts the knowledge graph.
+    #[test]
+    fn backfill_resolves_unique_targets_but_never_ambiguous_names() {
+        let store = SymbolStore::in_memory().unwrap();
+
+        // "Shared" exists in TWO different files (ambiguous); "OnlyOne" exists
+        // in exactly one file (unambiguous).
+        store
+            .upsert_symbols(&[
+                create_test_symbol("Shared", "a.ts"),
+                create_test_symbol("Shared", "b.ts"),
+                create_test_symbol("OnlyOne", "c.ts"),
+                create_test_symbol("caller", "caller.ts"),
+            ])
+            .unwrap();
+
+        let caller_id = "caller.ts::caller#function";
+        store
+            .replace_relationships_for_file(
+                "caller.ts",
+                &[
+                    create_test_relationship(caller_id, "caller.ts", "Shared"),
+                    create_test_relationship(caller_id, "caller.ts", "OnlyOne"),
+                ],
+            )
+            .unwrap();
+
+        // Both edges start NULL; exactly one (the unique "OnlyOne") resolves.
+        let resolved = store.backfill_unresolved_relationship_targets().unwrap();
+        assert_eq!(resolved, 1);
+
+        let conn = store.conn.lock().unwrap();
+
+        // Ambiguous name → still NULL, untagged (no wrong back-fill).
+        let (shared_target, shared_strategy): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT target_symbol_id, resolution_strategy
+                 FROM symbol_relationships WHERE target_name = 'Shared'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(
+            shared_target.is_none(),
+            "ambiguous name must NOT be back-filled, got {shared_target:?}"
+        );
+        assert!(shared_strategy.is_none());
+
+        // Unique name → resolved to the single matching symbol and tagged.
+        let (unique_target, unique_strategy, unique_confidence): (
+            Option<String>,
+            Option<String>,
+            Option<f64>,
+        ) = conn
+            .query_row(
+                "SELECT target_symbol_id, resolution_strategy, confidence
+                 FROM symbol_relationships WHERE target_name = 'OnlyOne'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(unique_target.as_deref(), Some("c.ts::OnlyOne#function"));
+        assert_eq!(unique_strategy.as_deref(), Some("global_unique"));
+        assert_eq!(unique_confidence, Some(0.5));
+    }
+
+    /// The back-fill never overwrites an already-resolved (non-NULL) target and
+    /// is idempotent on a second run.
+    #[test]
+    fn backfill_preserves_existing_targets_and_is_idempotent() {
+        let store = SymbolStore::in_memory().unwrap();
+        store
+            .upsert_symbols(&[
+                create_test_symbol("OnlyOne", "c.ts"),
+                create_test_symbol("decoy", "d.ts"),
+                create_test_symbol("caller", "caller.ts"),
+            ])
+            .unwrap();
+
+        let caller_id = "caller.ts::caller#function";
+        // Pre-resolved to a deliberately "wrong" id: the back-fill must leave it.
+        let mut pinned = create_test_relationship(caller_id, "caller.ts", "OnlyOne");
+        pinned.target_symbol_id = Some("d.ts::decoy#function".to_string());
+        store
+            .replace_relationships_for_file("caller.ts", &[pinned])
+            .unwrap();
+
+        assert_eq!(store.backfill_unresolved_relationship_targets().unwrap(), 0);
+        // Second run is also a no-op.
+        assert_eq!(store.backfill_unresolved_relationship_targets().unwrap(), 0);
+
+        let conn = store.conn.lock().unwrap();
+        let target: Option<String> = conn
+            .query_row(
+                "SELECT target_symbol_id FROM symbol_relationships WHERE target_name = 'OnlyOne'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(target.as_deref(), Some("d.ts::decoy#function"));
     }
 
     fn coverage_symbol(
