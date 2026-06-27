@@ -398,6 +398,11 @@ impl SymbolStore {
             "#,
         )?;
 
+        // Apply ordered, versioned migrations AFTER the base schema is ensured.
+        // This framework owns NEW schema going forward (M2.3); the legacy
+        // `ensure_column` probes above continue to own the CURRENT columns.
+        run_migrations(&conn)?;
+
         Ok(())
     }
 
@@ -2177,6 +2182,81 @@ fn ensure_column(
     Ok(())
 }
 
+/// Latest schema version this binary knows how to produce.
+///
+/// Equal to `MIGRATIONS.len()`. A freshly-migrated database ends with
+/// `PRAGMA user_version` set to this value.
+// Currently only asserted by the migration tests; the next column-adding
+// milestone (M2.4) will read it from production code.
+#[cfg_attr(not(test), allow(dead_code))]
+const LATEST_SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
+
+/// Ordered, **append-only** schema migrations keyed on `PRAGMA user_version`.
+///
+/// `MIGRATIONS[n]` migrates the database from `user_version = n` to
+/// `user_version = n + 1` (so `MIGRATIONS[0]` takes v0 → v1). NEVER edit,
+/// reorder, or remove a shipped step — only append new ones. This framework
+/// owns NEW schema going forward; the legacy `ensure_column` probes in
+/// `create_schema` keep owning the CURRENT columns (converting them is riskier
+/// than letting the two coexist), so the two intentionally overlap with no
+/// conflict.
+///
+/// N7 — no column without an in-phase consumer: v1 adds ONLY the three
+/// `symbol_relationships` columns that M2.4 (set-based relationship back-fill)
+/// will consume to tag each back-filled edge with how it was resolved + a
+/// confidence, so wrong/ambiguous back-fills stay auditable.
+///
+/// DEFERRED per N7 (do NOT add here): the other columns from the plan's M2.3
+/// list — `language`, `is_lexical`, `return_type`, `visibility`, `modifiers` on
+/// `symbols`, and the `routes` table — are deferred to their consuming
+/// milestones (M0.2 re-base / M4.x). They land as new appended migration steps
+/// when (and only when) their consumer ships.
+const MIGRATIONS: &[fn(&Connection) -> Result<(), SymbolStoreError>] =
+    &[migration_v1_relationship_resolution_columns];
+
+/// Apply every pending migration step, advancing `PRAGMA user_version`.
+///
+/// Reads the current `user_version`, then runs each not-yet-applied step from
+/// `MIGRATIONS` inside its own transaction, bumping `user_version` in the same
+/// transaction so the version can never run ahead of the schema. Idempotent:
+/// once `user_version == LATEST_SCHEMA_VERSION` this is a no-op, so running it
+/// repeatedly (e.g. on every `SymbolStore::new`) is safe.
+fn run_migrations(conn: &Connection) -> Result<(), SymbolStoreError> {
+    let mut version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+
+    while (version as usize) < MIGRATIONS.len() {
+        let step = MIGRATIONS[version as usize];
+        // `unchecked_transaction` works on `&Connection`; on any early return
+        // (the `?` below) the guard drops and rolls the step back, so a failed
+        // migration never leaves `user_version` ahead of the real schema.
+        let tx = conn.unchecked_transaction()?;
+        step(&tx)?;
+        let next = version + 1;
+        // `user_version` is an integer we fully control and cannot be bound as a
+        // parameter, so format it directly; it is transactional with the DDL above.
+        tx.execute_batch(&format!("PRAGMA user_version = {next}"))?;
+        tx.commit()?;
+        version = next;
+    }
+
+    Ok(())
+}
+
+/// Migration v1: add the relationship-resolution audit columns M2.4 consumes.
+///
+/// `ensure_column` pragma-checks `table_info` before issuing `ALTER TABLE … ADD
+/// COLUMN`, which makes each add idempotent: re-running this migration, or
+/// running it on a DB where a prior ad-hoc `ensure_column` already added one of
+/// these columns, is a safe no-op (no "duplicate column name" error).
+fn migration_v1_relationship_resolution_columns(
+    conn: &Connection,
+) -> Result<(), SymbolStoreError> {
+    ensure_column(conn, "symbol_relationships", "resolution_strategy", "TEXT")?;
+    ensure_column(conn, "symbol_relationships", "confidence", "REAL")?;
+    ensure_column(conn, "symbol_relationships", "metadata_json", "TEXT")?;
+    Ok(())
+}
+
 fn symbol_search_terms(query: &str) -> Vec<String> {
     query
         .split(|ch: char| !ch.is_alphanumeric() && ch != '_')
@@ -2613,6 +2693,134 @@ mod tests {
             GENERATED_INDEX_CLEAR_STATEMENTS.len(),
             GENERATED_INDEX_TABLES.len()
         );
+    }
+
+    /// Column names of `table`, in declaration order, via `PRAGMA table_info`.
+    fn table_columns(conn: &Connection, table: &str) -> Vec<String> {
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .unwrap();
+        stmt.query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    const NEW_RELATIONSHIP_COLUMNS: [&str; 3] =
+        ["resolution_strategy", "confidence", "metadata_json"];
+
+    #[test]
+    fn migration_forward_from_empty_reaches_latest_with_writable_columns() {
+        // A fresh in-memory store runs `create_schema` -> `run_migrations`.
+        let store = SymbolStore::in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, LATEST_SCHEMA_VERSION);
+
+        let columns = table_columns(&conn, "symbol_relationships");
+        for new_column in NEW_RELATIONSHIP_COLUMNS {
+            assert!(
+                columns.iter().any(|column| column == new_column),
+                "expected migrated column `{new_column}`"
+            );
+        }
+
+        // The new columns are writable + queryable.
+        conn.execute(
+            "INSERT INTO symbol_relationships
+             (source_symbol_id, source_file_path, target_name, target_symbol_id,
+              relationship_type, line, resolution_strategy, confidence, metadata_json)
+             VALUES ('s1', 'f.rs', 'helper', 's2', 'call', 7,
+                     'unique_global_name', 0.95, '{\"source\":\"backfill\"}')",
+            [],
+        )
+        .unwrap();
+
+        let (strategy, confidence, metadata): (String, f64, String) = conn
+            .query_row(
+                "SELECT resolution_strategy, confidence, metadata_json
+                 FROM symbol_relationships WHERE source_symbol_id = 's1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(strategy, "unique_global_name");
+        assert_eq!(confidence, 0.95);
+        assert_eq!(metadata, "{\"source\":\"backfill\"}");
+    }
+
+    #[test]
+    fn migration_forward_from_current_pre_migration_db() {
+        // Simulate a DB created BEFORE M2.3: the base `symbol_relationships`
+        // table, `user_version = 0`, none of the new columns present.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE symbol_relationships (
+                source_symbol_id TEXT NOT NULL,
+                source_file_path TEXT NOT NULL,
+                target_name TEXT NOT NULL,
+                target_symbol_id TEXT,
+                relationship_type TEXT NOT NULL,
+                line INTEGER NOT NULL,
+                PRIMARY KEY (source_symbol_id, target_name, relationship_type, line)
+            );",
+        )
+        .unwrap();
+
+        let start_version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(start_version, 0);
+        let before = table_columns(&conn, "symbol_relationships");
+        for new_column in NEW_RELATIONSHIP_COLUMNS {
+            assert!(!before.iter().any(|column| column == new_column));
+        }
+
+        run_migrations(&conn).unwrap();
+
+        let migrated_version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(migrated_version, LATEST_SCHEMA_VERSION);
+        let after = table_columns(&conn, "symbol_relationships");
+        for new_column in NEW_RELATIONSHIP_COLUMNS {
+            assert!(
+                after.iter().any(|column| column == new_column),
+                "expected migrated column `{new_column}`"
+            );
+        }
+
+        // Running again is a no-op: version stays put and no columns are added.
+        run_migrations(&conn).unwrap();
+        let rerun_version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rerun_version, LATEST_SCHEMA_VERSION);
+        assert_eq!(after.len(), table_columns(&conn, "symbol_relationships").len());
+    }
+
+    #[test]
+    fn migration_idempotency_no_duplicate_columns() {
+        // `create_schema` already migrated once; run it twice more.
+        let store = SymbolStore::in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+
+        run_migrations(&conn).unwrap();
+        run_migrations(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, LATEST_SCHEMA_VERSION);
+
+        let columns = table_columns(&conn, "symbol_relationships");
+        for new_column in NEW_RELATIONSHIP_COLUMNS {
+            let occurrences = columns.iter().filter(|column| *column == new_column).count();
+            assert_eq!(occurrences, 1, "column `{new_column}` was duplicated");
+        }
     }
 
     #[test]
