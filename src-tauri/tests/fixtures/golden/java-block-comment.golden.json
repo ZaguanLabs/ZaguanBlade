@@ -1,9 +1,46 @@
 {
   "case": "java-block-comment",
   "language": "Java",
-  "parse_status": "unsupported_grammar",
-  "symbol_count": 0,
+  "parse_status": "scanner",
+  "symbol_count": 3,
   "relationship_count": 0,
-  "symbols": [],
+  "symbols": [
+    {
+      "name": "com.example",
+      "kind": "namespace",
+      "qualified_name": "com.example",
+      "start_line": 0,
+      "start_col": 8,
+      "end_line": 0,
+      "end_col": 19,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": "package com.example;"
+    },
+    {
+      "name": "Bar",
+      "kind": "class",
+      "qualified_name": "Bar",
+      "start_line": 6,
+      "start_col": 13,
+      "end_line": 6,
+      "end_col": 16,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": "public class Bar {"
+    },
+    {
+      "name": "doWork",
+      "kind": "method",
+      "qualified_name": "doWork",
+      "start_line": 7,
+      "start_col": 16,
+      "end_line": 7,
+      "end_col": 22,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": "public void doWork() {"
+    }
+  ],
   "relationships": []
 }

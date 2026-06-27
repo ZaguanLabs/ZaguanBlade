@@ -22,11 +22,13 @@
 //!
 //! NOTE: The "scanner offender" fixtures (java/php/scss/sql/dockerfile/json/
 //! yaml) are NOT backed by a tree-sitter grammar, so `TreeSitterParser::parse`
-//! returns `UnsupportedLanguage` and the public extraction API yields zero
-//! symbols. Their goldens therefore record `parse_status: "unsupported_grammar"`
-//! with empty output. The known scanner false-positives those fixtures encode
-//! live in a *separate*, non-public line-scanner path and are not reachable via
-//! the allowed public API; this harness documents the gap for later milestones.
+//! returns `UnsupportedLanguage`. For these, the harness instead drives the
+//! non-tree-sitter line/regex SCANNER path via the
+//! `zblade_lib::language_service::extract_scanner_symbols` entry point (exposed
+//! by M1.4) and records `parse_status: "scanner"`. This makes the scanner
+//! false-positives those fixtures encode *live* in the golden so M1.4's
+//! comment/string/heredoc-aware preprocessing is gated by them. Scanner symbols
+//! never carry relationships, so the relationship list is always empty here.
 
 use std::collections::HashMap;
 use std::fs;
@@ -34,6 +36,7 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
+use zblade_lib::language_service::extract_scanner_symbols;
 use zblade_lib::tree_sitter::{
     extract_symbol_relationships, extract_symbols, Language, TreeSitterParser,
 };
@@ -100,8 +103,12 @@ fn snapshot_for_case(case: &str, fixture_file: &str) -> String {
                         extract_symbol_relationships(&tree, &source, lang, fixture_file, &symbols);
                     ("ok".to_string(), symbols, relationships)
                 }
-                // Scanner-only languages have no tree-sitter grammar registered.
-                Err(_) => ("unsupported_grammar".to_string(), Vec::new(), Vec::new()),
+                // Scanner-only languages have no tree-sitter grammar; drive the
+                // line/regex scanner path directly. Scanners emit no relationships.
+                Err(_) => {
+                    let symbols = extract_scanner_symbols(fixture_file, &source, lang);
+                    ("scanner".to_string(), symbols, Vec::new())
+                }
             }
         }
     };

@@ -1,9 +1,22 @@
 {
   "case": "scss-brace-in-string",
   "language": "Scss",
-  "parse_status": "unsupported_grammar",
-  "symbol_count": 0,
+  "parse_status": "scanner",
+  "symbol_count": 1,
   "relationship_count": 0,
-  "symbols": [],
+  "symbols": [
+    {
+      "name": ".alert",
+      "kind": "css_selector",
+      "qualified_name": ".alert",
+      "start_line": 0,
+      "start_col": 0,
+      "end_line": 0,
+      "end_col": 6,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    }
+  ],
   "relationships": []
 }

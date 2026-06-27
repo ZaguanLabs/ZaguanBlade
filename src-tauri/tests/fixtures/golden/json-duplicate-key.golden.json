@@ -1,9 +1,34 @@
 {
   "case": "json-duplicate-key",
   "language": "Json",
-  "parse_status": "unsupported_grammar",
-  "symbol_count": 0,
+  "parse_status": "scanner",
+  "symbol_count": 2,
   "relationship_count": 0,
-  "symbols": [],
+  "symbols": [
+    {
+      "name": "name",
+      "kind": "property",
+      "qualified_name": "name",
+      "start_line": 1,
+      "start_col": 3,
+      "end_line": 1,
+      "end_col": 7,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "port",
+      "kind": "property",
+      "qualified_name": "port",
+      "start_line": 2,
+      "start_col": 3,
+      "end_line": 2,
+      "end_col": 7,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    }
+  ],
   "relationships": []
 }

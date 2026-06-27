@@ -1,7 +1,7 @@
 {
   "case": "yaml-duplicate-key",
   "language": "Yaml",
-  "parse_status": "unsupported_grammar",
+  "parse_status": "scanner",
   "symbol_count": 0,
   "relationship_count": 0,
   "symbols": [],

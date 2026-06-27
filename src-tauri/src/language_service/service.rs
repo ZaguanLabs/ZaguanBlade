@@ -7197,7 +7197,17 @@ fn extract_css_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
     let mut font_face_depth = 0i32;
     let sass_indented = file_path.to_ascii_lowercase().ends_with(".sass");
 
-    for (line_index, segment) in content.split_inclusive('\n').enumerate() {
+    // Comment/string-blanked structural view (byte-aligned with `content`): used
+    // only for brace counting and selector boundary detection, so a `{`/`}`
+    // hiding inside a `content: "}"` value or a `/* */` block is not miscounted.
+    // Symbol names are still read from the original line.
+    let blanked = blank_noncode_spans(content, &CSS_LEX);
+
+    for (line_index, (segment, blanked_segment)) in content
+        .split_inclusive('\n')
+        .zip(blanked.split_inclusive('\n'))
+        .enumerate()
+    {
         let line_start = byte_offset;
         byte_offset += segment.len();
 
@@ -7205,6 +7215,10 @@ fn extract_css_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
         let line = line_without_lf
             .strip_suffix('\r')
             .unwrap_or(line_without_lf);
+        let blanked_without_lf = blanked_segment.strip_suffix('\n').unwrap_or(blanked_segment);
+        let line_code = blanked_without_lf
+            .strip_suffix('\r')
+            .unwrap_or(blanked_without_lf);
         let line_number = line_index as u32;
 
         for (name, start_char, end_char) in css_custom_properties_in_line(line) {
@@ -7285,19 +7299,19 @@ fn extract_css_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
             }
         }
         if starts_font_face {
-            font_face_depth = css_next_brace_depth(0, line);
+            font_face_depth = css_next_brace_depth(0, line_code);
         } else if font_face_depth > 0 {
-            font_face_depth = css_next_brace_depth(font_face_depth, line);
+            font_face_depth = css_next_brace_depth(font_face_depth, line_code);
         }
 
-        let trimmed = line.trim();
+        let trimmed = line_code.trim();
         if trimmed.is_empty() || trimmed.starts_with("/*") || trimmed.starts_with('*') {
-            brace_depth = css_next_brace_depth(brace_depth, line);
+            brace_depth = css_next_brace_depth(brace_depth, line_code);
             continue;
         }
 
         if sass_indented && (trimmed.starts_with('.') || trimmed.starts_with('#')) {
-            let indent_chars = line.len().saturating_sub(line.trim_start().len());
+            let indent_chars = line_code.len().saturating_sub(line_code.trim_start().len());
             for (name, start_char, end_char) in css_selectors_in_text(trimmed) {
                 push_css_symbol(
                     &mut symbols,
@@ -7344,7 +7358,7 @@ fn extract_css_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
             }
         }
 
-        brace_depth = css_next_brace_depth(brace_depth, line);
+        brace_depth = css_next_brace_depth(brace_depth, line_code);
     }
 
     symbols
@@ -8294,8 +8308,458 @@ fn push_config_symbol(
     });
 }
 
+// ============================================================================
+// M1.4 — shared comment/string/heredoc-aware preprocessing for line scanners.
+//
+// ZBlade's line-oriented scanner languages carry no cross-line lexical state, so
+// a `class`/`def`/`function` keyword sitting inside a `/* … */` block, a string
+// literal, or a heredoc was extracted as a real symbol, and a trailing
+// `// class Foo` comment minted a bogus symbol. `blank_noncode_spans` replaces
+// the bytes of commented / quoted / heredoc spans with spaces — preserving
+// newlines and the exact byte length, so every downstream line/column/byte
+// calculation is unchanged — BEFORE the per-line declaration scanners run.
+//
+// ONE implementation, parameterized per language by `LexSpec`. Strings are
+// always *tracked* (so a comment marker inside a string is never mistaken for a
+// comment), but only *blanked* when `blank_strings` is set: several scanners
+// read an identifier out of a string literal (Ruby `require "x"`, shell
+// `source "x"`, C/C++ `#include "x"`), and blanking those would erase real
+// symbols.
+// ============================================================================
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HeredocStyle {
+    None,
+    /// PHP `<<<LABEL` / `<<<'LABEL'` heredoc & nowdoc (`<<<` is an unambiguous
+    /// opener, unlike the shell/Ruby `<<` which collides with operators).
+    Php,
+}
+
+#[derive(Clone, Copy)]
+struct StringDelim {
+    open: u8,
+    close: u8,
+}
+
+/// Per-language lexical surface used by `blank_noncode_spans`.
+struct LexSpec {
+    /// Line-comment markers (e.g. `//`, `#`, `--`). First match wins.
+    line_comments: &'static [&'static str],
+    /// Block-comment open/close (e.g. `("/*", "*/")`); spans lines.
+    block_comment: Option<(&'static str, &'static str)>,
+    /// String delimiters to track. A backslash escapes the next byte.
+    strings: &'static [StringDelim],
+    /// Blank string interiors too — only for languages that never read an
+    /// identifier out of a string literal.
+    blank_strings: bool,
+    heredoc: HeredocStyle,
+    /// PHP 8 attributes start with `#[`; never treat that `#` as a line comment.
+    attr_hash_guard: bool,
+}
+
+const STR_DQ_SQ: &[StringDelim] = &[
+    StringDelim {
+        open: b'"',
+        close: b'"',
+    },
+    StringDelim {
+        open: b'\'',
+        close: b'\'',
+    },
+];
+const STR_SQ_ONLY: &[StringDelim] = &[StringDelim {
+    open: b'\'',
+    close: b'\'',
+}];
+const STR_DQ_ONLY: &[StringDelim] = &[StringDelim {
+    open: b'"',
+    close: b'"',
+}];
+
+const PHP_LEX: LexSpec = LexSpec {
+    line_comments: &["//", "#"],
+    block_comment: Some(("/*", "*/")),
+    strings: STR_DQ_SQ,
+    blank_strings: true,
+    heredoc: HeredocStyle::Php,
+    attr_hash_guard: true,
+};
+const JAVA_LEX: LexSpec = LexSpec {
+    line_comments: &["//"],
+    block_comment: Some(("/*", "*/")),
+    strings: STR_DQ_SQ,
+    blank_strings: true,
+    heredoc: HeredocStyle::None,
+    attr_hash_guard: false,
+};
+const CSHARP_LEX: LexSpec = LexSpec {
+    line_comments: &["//"],
+    block_comment: Some(("/*", "*/")),
+    strings: STR_DQ_SQ,
+    blank_strings: true,
+    heredoc: HeredocStyle::None,
+    attr_hash_guard: false,
+};
+const KOTLIN_LEX: LexSpec = LexSpec {
+    line_comments: &["//"],
+    block_comment: Some(("/*", "*/")),
+    strings: STR_DQ_SQ,
+    blank_strings: true,
+    heredoc: HeredocStyle::None,
+    attr_hash_guard: false,
+};
+// Ruby reads `require "x"` out of a string → track but do not blank strings.
+const RUBY_LEX: LexSpec = LexSpec {
+    line_comments: &["#"],
+    block_comment: None,
+    strings: STR_DQ_SQ,
+    blank_strings: false,
+    heredoc: HeredocStyle::None,
+    attr_hash_guard: false,
+};
+// C/C++ reads `#include "x"` out of a string → track but do not blank strings.
+// `#` is a preprocessor sigil here, not a comment marker.
+const CPP_LEX: LexSpec = LexSpec {
+    line_comments: &["//"],
+    block_comment: Some(("/*", "*/")),
+    strings: STR_DQ_SQ,
+    blank_strings: false,
+    heredoc: HeredocStyle::None,
+    attr_hash_guard: false,
+};
+// Shell reads `source "x"` out of a string → track but do not blank strings.
+const SHELL_LEX: LexSpec = LexSpec {
+    line_comments: &["#"],
+    block_comment: None,
+    strings: STR_DQ_SQ,
+    blank_strings: false,
+    heredoc: HeredocStyle::None,
+    attr_hash_guard: false,
+};
+const DOCKERFILE_LEX: LexSpec = LexSpec {
+    line_comments: &["#"],
+    block_comment: None,
+    strings: STR_DQ_SQ,
+    blank_strings: false,
+    heredoc: HeredocStyle::None,
+    attr_hash_guard: false,
+};
+// SQL: `'` is a string, `"` is a (quoted) identifier — track only `'`.
+const SQL_LEX: LexSpec = LexSpec {
+    line_comments: &["--"],
+    block_comment: Some(("/*", "*/")),
+    strings: STR_SQ_ONLY,
+    blank_strings: false,
+    heredoc: HeredocStyle::None,
+    attr_hash_guard: false,
+};
+const BUILD_SCRIPT_LEX: LexSpec = LexSpec {
+    line_comments: &["#"],
+    block_comment: None,
+    strings: STR_DQ_ONLY,
+    blank_strings: false,
+    heredoc: HeredocStyle::None,
+    attr_hash_guard: false,
+};
+// CSS/SCSS/Sass/Less: blank `/* */` blocks and strings so a `{`/`}` hiding in a
+// `content: "}"` value (or a comment) is not mis-counted as a real brace. Line
+// comments are intentionally omitted: a bare `//` is not a CSS comment and would
+// wrongly swallow `url(http://…)`. Used only for the structural brace/selector
+// view; symbol names are still read from the original line.
+const CSS_LEX: LexSpec = LexSpec {
+    line_comments: &[],
+    block_comment: Some(("/*", "*/")),
+    strings: STR_DQ_SQ,
+    blank_strings: true,
+    heredoc: HeredocStyle::None,
+    attr_hash_guard: false,
+};
+
+/// Blank comment / string / heredoc spans of `content`, preserving byte length
+/// and newlines so existing line/offset math is unchanged.
+fn blank_noncode_spans(content: &str, spec: &LexSpec) -> String {
+    let src = content.as_bytes();
+    let mut out = src.to_vec();
+    let mut in_block = false;
+    let mut heredoc_label: Option<Vec<u8>> = None;
+    let mut pos = 0usize;
+
+    for segment in content.split_inclusive('\n') {
+        let line_start = pos;
+        let line_end = pos + segment.len();
+        pos = line_end;
+        scrub_line(
+            src,
+            &mut out,
+            line_start,
+            line_end,
+            spec,
+            &mut in_block,
+            &mut heredoc_label,
+        );
+    }
+
+    String::from_utf8(out).unwrap_or_else(|_| content.to_string())
+}
+
+#[inline]
+fn blank_span_byte(out: &mut [u8], src: &[u8], i: usize) {
+    if src[i] != b'\n' && src[i] != b'\r' {
+        out[i] = b' ';
+    }
+}
+
+#[inline]
+fn bytes_match_at(src: &[u8], i: usize, needle: &str) -> bool {
+    let n = needle.as_bytes();
+    src.len() >= i + n.len() && &src[i..i + n.len()] == n
+}
+
+fn line_comment_len_at(src: &[u8], i: usize, spec: &LexSpec) -> Option<usize> {
+    for marker in spec.line_comments {
+        if bytes_match_at(src, i, marker) {
+            if spec.attr_hash_guard && *marker == "#" && src.get(i + 1) == Some(&b'[') {
+                continue; // PHP 8 attribute `#[…]`, not a comment.
+            }
+            return Some(marker.len());
+        }
+    }
+    None
+}
+
+fn string_open_at(src: &[u8], i: usize, spec: &LexSpec) -> Option<u8> {
+    let b = src[i];
+    spec.strings
+        .iter()
+        .find(|delim| delim.open == b)
+        .map(|delim| delim.close)
+}
+
+/// Detect a PHP heredoc/nowdoc opener `<<<LABEL` / `<<<'LABEL'` at `i`. Returns
+/// the label and the number of bytes consumed by the opener token.
+fn php_heredoc_open_at(src: &[u8], i: usize, end: usize) -> Option<(Vec<u8>, usize)> {
+    if !bytes_match_at(src, i, "<<<") {
+        return None;
+    }
+    let mut j = i + 3;
+    while j < end && (src[j] == b' ' || src[j] == b'\t') {
+        j += 1;
+    }
+    let quote = if j < end && (src[j] == b'\'' || src[j] == b'"') {
+        let q = src[j];
+        j += 1;
+        Some(q)
+    } else {
+        None
+    };
+    let label_start = j;
+    while j < end && (src[j] == b'_' || src[j].is_ascii_alphanumeric()) {
+        j += 1;
+    }
+    if j == label_start || src[label_start].is_ascii_digit() {
+        return None; // labels are non-empty and cannot start with a digit
+    }
+    let label = src[label_start..j].to_vec();
+    if let Some(q) = quote {
+        if src.get(j) != Some(&q) {
+            return None; // unterminated quoted label
+        }
+        j += 1;
+    }
+    Some((label, j - i))
+}
+
+/// Is this line a heredoc closing marker for `label`? (PHP 7.3+ allows the
+/// closing label to be indented and immediately followed by a non-identifier.)
+fn line_is_heredoc_terminator(line: &[u8], label: &[u8]) -> bool {
+    let mut endp = line.len();
+    while endp > 0 && (line[endp - 1] == b'\n' || line[endp - 1] == b'\r') {
+        endp -= 1;
+    }
+    let line = &line[..endp];
+    let mut s = 0usize;
+    while s < line.len() && (line[s] == b' ' || line[s] == b'\t') {
+        s += 1;
+    }
+    let rest = &line[s..];
+    if !rest.starts_with(label) {
+        return false;
+    }
+    match rest.get(label.len()) {
+        None => true,
+        Some(c) => !(c.is_ascii_alphanumeric() || *c == b'_'),
+    }
+}
+
+/// Scrub one line `src[start..end]` (the trailing `\n`, if any, is inside the
+/// range), updating the cross-line `in_block` / `heredoc_label` state.
+fn scrub_line(
+    src: &[u8],
+    out: &mut [u8],
+    start: usize,
+    end: usize,
+    spec: &LexSpec,
+    in_block: &mut bool,
+    heredoc_label: &mut Option<Vec<u8>>,
+) {
+    // Inside an open heredoc: blank body lines until the terminator line.
+    if let Some(label) = heredoc_label.as_ref() {
+        if line_is_heredoc_terminator(&src[start..end], label) {
+            *heredoc_label = None;
+        } else {
+            for i in start..end {
+                blank_span_byte(out, src, i);
+            }
+        }
+        return;
+    }
+
+    let mut pending_heredoc: Option<Vec<u8>> = None;
+    let mut cur_string: Option<u8> = None; // line-local; reset every line
+    let mut i = start;
+
+    while i < end {
+        let b = src[i];
+        if b == b'\n' {
+            break;
+        }
+
+        if *in_block {
+            if let Some((_, close)) = spec.block_comment {
+                if bytes_match_at(src, i, close) {
+                    for k in i..i + close.len() {
+                        blank_span_byte(out, src, k);
+                    }
+                    i += close.len();
+                    *in_block = false;
+                    continue;
+                }
+            }
+            blank_span_byte(out, src, i);
+            i += 1;
+            continue;
+        }
+
+        if let Some(close) = cur_string {
+            if b == b'\\' {
+                if spec.blank_strings {
+                    blank_span_byte(out, src, i);
+                    if i + 1 < end {
+                        blank_span_byte(out, src, i + 1);
+                    }
+                }
+                i += if i + 1 < end { 2 } else { 1 };
+                continue;
+            }
+            if spec.blank_strings {
+                blank_span_byte(out, src, i);
+            }
+            if b == close {
+                cur_string = None;
+            }
+            i += 1;
+            continue;
+        }
+
+        // Normal state.
+        if let Some((open, _)) = spec.block_comment {
+            if bytes_match_at(src, i, open) {
+                for k in i..i + open.len() {
+                    blank_span_byte(out, src, k);
+                }
+                i += open.len();
+                *in_block = true;
+                continue;
+            }
+        }
+
+        if line_comment_len_at(src, i, spec).is_some() {
+            while i < end && src[i] != b'\n' {
+                blank_span_byte(out, src, i);
+                i += 1;
+            }
+            continue;
+        }
+
+        if let Some(close) = string_open_at(src, i, spec) {
+            if spec.blank_strings {
+                blank_span_byte(out, src, i);
+            }
+            cur_string = Some(close);
+            i += 1;
+            continue;
+        }
+
+        if spec.heredoc == HeredocStyle::Php {
+            if let Some((label, consumed)) = php_heredoc_open_at(src, i, end) {
+                pending_heredoc = Some(label);
+                i += consumed;
+                continue;
+            }
+        }
+
+        i += 1;
+    }
+
+    if let Some(label) = pending_heredoc {
+        *heredoc_label = Some(label);
+    }
+}
+
+/// Run the non-tree-sitter line/regex SCANNER extractor for a scanner-backed
+/// language and return the symbols it would index. The golden harness uses this
+/// to exercise the scanner path directly, which the public tree-sitter
+/// `extract_symbols` cannot reach. Returns an empty vec for tree-sitter
+/// languages and for Vue/Svelte (whose component extraction needs a
+/// `LanguageService`).
+pub fn extract_scanner_symbols(file_path: &str, content: &str, language: Language) -> Vec<Symbol> {
+    if matches!(language, Language::Markdown) {
+        return extract_markdown_header_symbols(file_path, content);
+    }
+    if language.is_stylesheet_scanner() {
+        return extract_css_symbols(file_path, content);
+    }
+    if language.is_markup_scanner() && !matches!(language, Language::Vue | Language::Svelte) {
+        return extract_markup_symbols(file_path, content);
+    }
+    if language.is_config_scanner() {
+        return extract_config_symbols(file_path, content, language);
+    }
+    if language.is_php_scanner() {
+        return extract_php_symbols(file_path, content);
+    }
+    if language.is_java_scanner() {
+        return extract_java_symbols(file_path, content);
+    }
+    if language.is_csharp_scanner() {
+        return extract_csharp_symbols(file_path, content);
+    }
+    if language.is_kotlin_scanner() {
+        return extract_kotlin_symbols(file_path, content);
+    }
+    if language.is_ruby_scanner() {
+        return extract_ruby_symbols(file_path, content);
+    }
+    if language.is_cpp_scanner() {
+        return extract_cpp_symbols(file_path, content);
+    }
+    if language.is_shell_scanner() {
+        return extract_shell_symbols(file_path, content);
+    }
+    if language.is_dockerfile_scanner() {
+        return extract_dockerfile_symbols(file_path, content);
+    }
+    if language.is_sql_scanner() {
+        return extract_sql_symbols(file_path, content);
+    }
+    if language.is_build_script_scanner() {
+        return extract_build_script_symbols(file_path, content);
+    }
+    Vec::new()
+}
+
 fn extract_php_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
-    extract_line_scanner_symbols(file_path, content, php_declarations_in_line)
+    extract_line_scanner_symbols(file_path, content, &PHP_LEX, php_declarations_in_line)
 }
 
 #[derive(Debug, Clone)]
@@ -8309,13 +8773,18 @@ struct LineScannerDeclaration {
 fn extract_line_scanner_symbols(
     file_path: &str,
     content: &str,
+    spec: &LexSpec,
     declarations_in_line: fn(&str) -> Vec<LineScannerDeclaration>,
 ) -> Vec<Symbol> {
+    // Blank commented/quoted/heredoc spans first (byte-length and newlines
+    // preserved), so a keyword hiding in a comment/string/heredoc is not
+    // mis-extracted. Offsets computed below are identical to the original file.
+    let blanked = blank_noncode_spans(content, spec);
     let mut symbols = Vec::new();
     let mut seen = HashSet::new();
     let mut byte_offset = 0usize;
 
-    for (line_index, segment) in content.split_inclusive('\n').enumerate() {
+    for (line_index, segment) in blanked.split_inclusive('\n').enumerate() {
         let line_start = byte_offset;
         byte_offset += segment.len();
 
@@ -8521,7 +8990,7 @@ fn is_php_identifier_char(ch: char) -> bool {
 }
 
 fn extract_java_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
-    extract_line_scanner_symbols(file_path, content, java_declarations_in_line)
+    extract_line_scanner_symbols(file_path, content, &JAVA_LEX, java_declarations_in_line)
 }
 
 fn java_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
@@ -8747,7 +9216,7 @@ fn is_java_identifier_char(ch: char) -> bool {
 }
 
 fn extract_csharp_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
-    extract_line_scanner_symbols(file_path, content, csharp_declarations_in_line)
+    extract_line_scanner_symbols(file_path, content, &CSHARP_LEX, csharp_declarations_in_line)
 }
 
 fn csharp_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
@@ -8892,7 +9361,7 @@ fn csharp_method_declaration(code: &str, code_start: usize) -> Option<LineScanne
 }
 
 fn extract_kotlin_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
-    extract_line_scanner_symbols(file_path, content, kotlin_declarations_in_line)
+    extract_line_scanner_symbols(file_path, content, &KOTLIN_LEX, kotlin_declarations_in_line)
 }
 
 fn kotlin_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
@@ -9070,7 +9539,7 @@ fn kotlin_function_declaration(code: &str, code_start: usize) -> Option<LineScan
 }
 
 fn extract_ruby_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
-    extract_line_scanner_symbols(file_path, content, ruby_declarations_in_line)
+    extract_line_scanner_symbols(file_path, content, &RUBY_LEX, ruby_declarations_in_line)
 }
 
 fn ruby_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
@@ -9208,7 +9677,7 @@ fn ruby_read_method_name(text: &str) -> Option<(String, usize)> {
 }
 
 fn extract_cpp_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
-    extract_line_scanner_symbols(file_path, content, cpp_declarations_in_line)
+    extract_line_scanner_symbols(file_path, content, &CPP_LEX, cpp_declarations_in_line)
 }
 
 fn cpp_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
@@ -9458,7 +9927,7 @@ fn cpp_is_control_or_builtin(name: &str) -> bool {
 }
 
 fn extract_shell_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
-    extract_line_scanner_symbols(file_path, content, shell_declarations_in_line)
+    extract_line_scanner_symbols(file_path, content, &SHELL_LEX, shell_declarations_in_line)
 }
 
 fn shell_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
@@ -9585,7 +10054,12 @@ fn shell_read_identifier_before(text: &str) -> Option<(String, usize)> {
 }
 
 fn extract_dockerfile_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
-    extract_line_scanner_symbols(file_path, content, dockerfile_declarations_in_line)
+    extract_line_scanner_symbols(
+        file_path,
+        content,
+        &DOCKERFILE_LEX,
+        dockerfile_declarations_in_line,
+    )
 }
 
 fn dockerfile_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
@@ -9720,7 +10194,7 @@ fn dockerfile_read_key(text: &str) -> Option<(String, usize)> {
 }
 
 fn extract_sql_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
-    extract_line_scanner_symbols(file_path, content, sql_declarations_in_line)
+    extract_line_scanner_symbols(file_path, content, &SQL_LEX, sql_declarations_in_line)
 }
 
 fn sql_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
@@ -9877,7 +10351,12 @@ fn sql_read_identifier_at(text: &str, cursor: usize) -> Option<(String, usize, u
 }
 
 fn extract_build_script_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
-    extract_line_scanner_symbols(file_path, content, build_script_declarations_in_line)
+    extract_line_scanner_symbols(
+        file_path,
+        content,
+        &BUILD_SCRIPT_LEX,
+        build_script_declarations_in_line,
+    )
 }
 
 fn build_script_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
@@ -15260,5 +15739,104 @@ func helper() {}
             .expect_err("json files should not be symbol-indexed yet");
 
         assert!(matches!(error, LanguageError::NotSupported(_)));
+    }
+
+    // ---- M1.4 — comment/string/heredoc-aware preprocessing ----
+
+    fn assert_length_and_newlines_preserved(input: &str, output: &str) {
+        assert_eq!(input.len(), output.len(), "byte length must be preserved");
+        let in_nl: Vec<usize> = input.match_indices('\n').map(|(i, _)| i).collect();
+        let out_nl: Vec<usize> = output.match_indices('\n').map(|(i, _)| i).collect();
+        assert_eq!(in_nl, out_nl, "newline byte positions must be preserved");
+    }
+
+    #[test]
+    fn blank_noncode_spans_blanks_multiline_block_comment() {
+        let src = "package p;\n/*\nclass Foo {\n*/\nclass Bar {}\n";
+        let out = blank_noncode_spans(src, &JAVA_LEX);
+        assert_length_and_newlines_preserved(src, out.as_str());
+        assert!(!out.contains("Foo"), "block-comment body must be blanked: {out:?}");
+        assert!(out.contains("class Bar {}"), "real code must survive: {out:?}");
+    }
+
+    #[test]
+    fn blank_noncode_spans_strips_trailing_line_comment() {
+        // PHP previously minted a bogus `Baz` class from the trailing comment.
+        let src = "return 1; // class Baz\n";
+        let out = blank_noncode_spans(src, &PHP_LEX);
+        assert_length_and_newlines_preserved(src, out.as_str());
+        assert!(out.starts_with("return 1;"));
+        assert!(!out.contains("class Baz"), "trailing comment must be blanked: {out:?}");
+    }
+
+    #[test]
+    fn blank_noncode_spans_protects_comment_marker_inside_string() {
+        // The `//` lives inside a string, so it must NOT start a comment.
+        let src = "var url = \"http://x // y\"; // real comment\n";
+        let out = blank_noncode_spans(src, &JAVA_LEX);
+        assert_length_and_newlines_preserved(src, out.as_str());
+        assert!(out.contains("var url ="), "code before the string survives: {out:?}");
+        assert!(!out.contains("real comment"), "trailing comment is blanked: {out:?}");
+    }
+
+    #[test]
+    fn blank_noncode_spans_keeps_string_for_string_reading_langs() {
+        // Ruby reads the import out of the string literal — it must NOT be blanked.
+        let src = "require \"json\" # load\n";
+        let out = blank_noncode_spans(src, &RUBY_LEX);
+        assert_length_and_newlines_preserved(src, out.as_str());
+        assert!(out.contains("\"json\""), "ruby string content must survive: {out:?}");
+        assert!(!out.contains("load"), "trailing `#` comment is still blanked: {out:?}");
+    }
+
+    #[test]
+    fn blank_noncode_spans_blanks_php_heredoc_body() {
+        let src = "$x = <<<EOT\nclass Hidden {}\nEOT;\nclass Real {}\n";
+        let out = blank_noncode_spans(src, &PHP_LEX);
+        assert_length_and_newlines_preserved(src, out.as_str());
+        assert!(!out.contains("Hidden"), "heredoc body must be blanked: {out:?}");
+        assert!(out.contains("class Real {}"), "code after EOT survives: {out:?}");
+    }
+
+    #[test]
+    fn blank_noncode_spans_keeps_php_attribute() {
+        // `#[...]` is a PHP 8 attribute, not a `#` line comment.
+        let src = "#[Route] class Controller {}\n";
+        let out = blank_noncode_spans(src, &PHP_LEX);
+        assert_length_and_newlines_preserved(src, out.as_str());
+        assert_eq!(out, src, "attribute line must be untouched: {out:?}");
+    }
+
+    #[test]
+    fn java_scanner_ignores_class_inside_block_comment() {
+        let symbols = extract_java_symbols(
+            "Demo.java",
+            "package com.example;\n/*\nclass Foo {\n    void hidden() {}\n*/\npublic class Bar {}\n",
+        );
+        let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"Bar"), "real class kept: {names:?}");
+        assert!(!names.contains(&"Foo"), "commented class dropped: {names:?}");
+        assert!(!names.contains(&"hidden"), "commented method dropped: {names:?}");
+    }
+
+    #[test]
+    fn php_scanner_ignores_trailing_comment_class() {
+        let symbols = extract_php_symbols(
+            "Service.php",
+            "<?php\nclass Bar\n{\n    public function handle()\n    {\n        return 1; // class Baz\n    }\n}\n",
+        );
+        let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"Bar"), "real class kept: {names:?}");
+        assert!(names.contains(&"handle"), "real method kept: {names:?}");
+        assert!(!names.contains(&"Baz"), "trailing-comment class dropped: {names:?}");
+    }
+
+    #[test]
+    fn ruby_scanner_keeps_require_from_string() {
+        // Regression guard: string blanking must stay disabled for Ruby.
+        let symbols = extract_ruby_symbols("svc.rb", "require \"json\"\nclass Svc\nend\n");
+        let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"json"), "require target survives: {names:?}");
+        assert!(names.contains(&"Svc"), "class survives: {names:?}");
     }
 }

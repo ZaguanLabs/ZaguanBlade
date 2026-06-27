@@ -1,9 +1,34 @@
 {
   "case": "php-trailing-comment",
   "language": "Php",
-  "parse_status": "unsupported_grammar",
-  "symbol_count": 0,
+  "parse_status": "scanner",
+  "symbol_count": 2,
   "relationship_count": 0,
-  "symbols": [],
+  "symbols": [
+    {
+      "name": "Bar",
+      "kind": "class",
+      "qualified_name": "Bar",
+      "start_line": 2,
+      "start_col": 6,
+      "end_line": 2,
+      "end_col": 9,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": "class Bar"
+    },
+    {
+      "name": "handle",
+      "kind": "method",
+      "qualified_name": "handle",
+      "start_line": 4,
+      "start_col": 20,
+      "end_line": 4,
+      "end_col": 26,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": "public function handle()"
+    }
+  ],
   "relationships": []
 }
