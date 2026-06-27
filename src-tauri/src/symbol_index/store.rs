@@ -5,11 +5,11 @@
 
 use rusqlite::{params, params_from_iter, types::Value, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::sync::Mutex;
 
-use crate::tree_sitter::{Symbol, SymbolRelationship, SymbolRelationshipType, SymbolType};
+use crate::tree_sitter::{Language, Symbol, SymbolRelationship, SymbolRelationshipType, SymbolType};
 
 const GENERATED_INDEX_CLEAR_STATEMENTS: &[&str] = &[
     "DELETE FROM symbol_relationships",
@@ -96,6 +96,117 @@ pub struct UnresolvedRelationshipTarget {
     pub target_name: String,
     pub count: usize,
     pub example_source_file: String,
+}
+
+/// Per-language × per-kind coverage matrix with explicit `0` rows back-filled.
+///
+/// Read-only diagnostic answering "are we indexing the right data per file
+/// type." Serialize-friendly so it can later feed the schema tool.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CoverageHistogram {
+    pub per_language: Vec<LanguageCoverage>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LanguageCoverage {
+    pub language: String,
+    /// Count per `SymbolType` variant; absent variants are present as `0`.
+    pub symbol_counts: Vec<(String, u64)>,
+    /// Count per `SymbolRelationshipType` variant; absent variants are `0`.
+    pub relationship_counts: Vec<(String, u64)>,
+    /// Fraction (0.0..=1.0) of Function+Method symbols with a non-empty signature.
+    pub function_method_signature_pct: f64,
+}
+
+/// Every `SymbolType` variant, so the histogram can back-fill an explicit `0`
+/// row for each kind that never appeared in a given language.
+const ALL_SYMBOL_TYPES: &[SymbolType] = &[
+    SymbolType::Function,
+    SymbolType::Method,
+    SymbolType::Class,
+    SymbolType::Struct,
+    SymbolType::Interface,
+    SymbolType::Type,
+    SymbolType::Enum,
+    SymbolType::EnumMember,
+    SymbolType::Constant,
+    SymbolType::Variable,
+    SymbolType::Property,
+    SymbolType::Module,
+    SymbolType::Namespace,
+    SymbolType::Import,
+    SymbolType::Export,
+    SymbolType::Trait,
+    SymbolType::Impl,
+    SymbolType::Heading,
+    SymbolType::CssSelector,
+    SymbolType::CssCustomProperty,
+    SymbolType::CssKeyframes,
+    SymbolType::CssAtRule,
+    SymbolType::CssLayer,
+    SymbolType::CssFontFace,
+];
+
+/// Every `SymbolRelationshipType` variant, for the same zero back-fill.
+const ALL_RELATIONSHIP_TYPES: &[SymbolRelationshipType] = &[
+    SymbolRelationshipType::Call,
+    SymbolRelationshipType::Import,
+    SymbolRelationshipType::Export,
+    SymbolRelationshipType::Extends,
+    SymbolRelationshipType::Implements,
+    SymbolRelationshipType::Contains,
+    SymbolRelationshipType::Usage,
+];
+
+// NOTE: language derived from file path until M2.3 adds a real `language` column; re-base then.
+fn coverage_language_label(file_path: &str) -> String {
+    Language::from_path(file_path)
+        .map(|language| language.display_name().to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+// Drift guard: adding a variant to either enum without extending the arrays
+// above is a compile error, keeping the zero back-fill exhaustive.
+#[allow(dead_code)]
+fn coverage_variant_drift_guard(
+    symbol_type: SymbolType,
+    relationship_type: SymbolRelationshipType,
+) {
+    match symbol_type {
+        SymbolType::Function
+        | SymbolType::Method
+        | SymbolType::Class
+        | SymbolType::Struct
+        | SymbolType::Interface
+        | SymbolType::Type
+        | SymbolType::Enum
+        | SymbolType::EnumMember
+        | SymbolType::Constant
+        | SymbolType::Variable
+        | SymbolType::Property
+        | SymbolType::Module
+        | SymbolType::Namespace
+        | SymbolType::Import
+        | SymbolType::Export
+        | SymbolType::Trait
+        | SymbolType::Impl
+        | SymbolType::Heading
+        | SymbolType::CssSelector
+        | SymbolType::CssCustomProperty
+        | SymbolType::CssKeyframes
+        | SymbolType::CssAtRule
+        | SymbolType::CssLayer
+        | SymbolType::CssFontFace => {}
+    }
+    match relationship_type {
+        SymbolRelationshipType::Call
+        | SymbolRelationshipType::Import
+        | SymbolRelationshipType::Export
+        | SymbolRelationshipType::Extends
+        | SymbolRelationshipType::Implements
+        | SymbolRelationshipType::Contains
+        | SymbolRelationshipType::Usage => {}
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1688,6 +1799,124 @@ impl SymbolStore {
         })
     }
 
+    /// Per-language × per-kind matrix of symbol and relationship counts, with an
+    /// explicit `0` row back-filled for every `SymbolType` / `SymbolRelationshipType`
+    /// that did not appear for a language, plus the per-language "% of
+    /// Function/Method symbols carrying a non-null signature".
+    ///
+    /// Read-only diagnostic; does not change any extraction behavior.
+    //
+    // NOTE: language derived from file path until M2.3 adds a real `language` column; re-base then.
+    pub fn coverage_histogram(&self) -> Result<CoverageHistogram, SymbolStoreError> {
+        let conn = self.conn.lock().unwrap();
+
+        // language -> (symbol_type string -> count)
+        let mut symbol_counts: BTreeMap<String, HashMap<String, u64>> = BTreeMap::new();
+        // language -> (function+method total, function+method with non-empty signature)
+        let mut signature_totals: BTreeMap<String, (u64, u64)> = BTreeMap::new();
+        // language -> (relationship_type string -> count)
+        let mut relationship_counts: BTreeMap<String, HashMap<String, u64>> = BTreeMap::new();
+
+        let function_key = SymbolType::Function.to_string();
+        let method_key = SymbolType::Method.to_string();
+
+        {
+            let mut stmt = conn.prepare("SELECT file_path, symbol_type, signature FROM symbols")?;
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                let file_path: String = row.get(0)?;
+                let symbol_type: String = row.get(1)?;
+                let signature: Option<String> = row.get(2)?;
+                let language = coverage_language_label(&file_path);
+
+                *symbol_counts
+                    .entry(language.clone())
+                    .or_default()
+                    .entry(symbol_type.clone())
+                    .or_insert(0) += 1;
+
+                if symbol_type == function_key || symbol_type == method_key {
+                    let entry = signature_totals.entry(language).or_insert((0, 0));
+                    entry.0 += 1;
+                    if signature.is_some_and(|sig| !sig.trim().is_empty()) {
+                        entry.1 += 1;
+                    }
+                }
+            }
+        }
+
+        {
+            let mut stmt =
+                conn.prepare("SELECT source_file_path, relationship_type FROM symbol_relationships")?;
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                let file_path: String = row.get(0)?;
+                let relationship_type: String = row.get(1)?;
+                let language = coverage_language_label(&file_path);
+
+                *relationship_counts
+                    .entry(language)
+                    .or_default()
+                    .entry(relationship_type)
+                    .or_insert(0) += 1;
+            }
+        }
+
+        // Union of every language that produced a symbol or a relationship.
+        let mut languages: BTreeSet<String> = BTreeSet::new();
+        languages.extend(symbol_counts.keys().cloned());
+        languages.extend(relationship_counts.keys().cloned());
+
+        let per_language = languages
+            .into_iter()
+            .map(|language| {
+                let observed_symbols = symbol_counts.get(&language);
+                // Back-fill an explicit 0 for every SymbolType variant that is absent.
+                let symbol_counts = ALL_SYMBOL_TYPES
+                    .iter()
+                    .map(|kind| {
+                        let key = kind.to_string();
+                        let count = observed_symbols
+                            .and_then(|counts| counts.get(&key))
+                            .copied()
+                            .unwrap_or(0);
+                        (key, count)
+                    })
+                    .collect();
+
+                let observed_relationships = relationship_counts.get(&language);
+                // Back-fill an explicit 0 for every relationship variant that is absent.
+                let relationship_counts = ALL_RELATIONSHIP_TYPES
+                    .iter()
+                    .map(|relationship_type| {
+                        let key = relationship_type.to_string();
+                        let count = observed_relationships
+                            .and_then(|counts| counts.get(&key))
+                            .copied()
+                            .unwrap_or(0);
+                        (key, count)
+                    })
+                    .collect();
+
+                let function_method_signature_pct = match signature_totals.get(&language) {
+                    Some((total, with_signature)) if *total > 0 => {
+                        *with_signature as f64 / *total as f64
+                    }
+                    _ => 0.0,
+                };
+
+                LanguageCoverage {
+                    language,
+                    symbol_counts,
+                    relationship_counts,
+                    function_method_signature_pct,
+                }
+            })
+            .collect();
+
+        Ok(CoverageHistogram { per_language })
+    }
+
     pub fn symbol_type_counts(&self) -> Result<Vec<(String, usize)>, SymbolStoreError> {
         self.symbol_type_counts_for_scope(None)
     }
@@ -2049,6 +2278,157 @@ mod tests {
     fn test_create_store() {
         let store = SymbolStore::in_memory().unwrap();
         assert_eq!(store.count().unwrap(), 0);
+    }
+
+    fn coverage_symbol(
+        id: &str,
+        name: &str,
+        file_path: &str,
+        symbol_type: SymbolType,
+        signature: Option<&str>,
+    ) -> Symbol {
+        Symbol {
+            id: id.to_string(),
+            name: name.to_string(),
+            qualified_name: name.to_string(),
+            symbol_type,
+            file_path: file_path.to_string(),
+            range: Range {
+                start: Position {
+                    line: 1,
+                    character: 0,
+                },
+                end: Position {
+                    line: 2,
+                    character: 0,
+                },
+            },
+            byte_offset: 0,
+            byte_length: 0,
+            parent_id: None,
+            docstring: None,
+            signature: signature.map(|s| s.to_string()),
+            content_hash: "hash".to_string(),
+        }
+    }
+
+    fn coverage_count(counts: &[(String, u64)], key: &str) -> u64 {
+        counts
+            .iter()
+            .find(|(label, _)| label == key)
+            .map(|(_, count)| *count)
+            // `.expect` proves the zero rows are *present* (back-filled), not just defaulted.
+            .unwrap_or_else(|| panic!("expected a back-filled row for `{key}`"))
+    }
+
+    #[test]
+    fn test_coverage_histogram_backfills_zeros() {
+        let store = SymbolStore::in_memory().unwrap();
+
+        // Rust: 3 functions (2 with signatures), 1 method (with signature), 1 struct.
+        // function+method total = 4, with non-empty signature = 3 -> pct = 0.75.
+        let rust_file = "src/lib.rs";
+        store
+            .upsert_symbols(&[
+                coverage_symbol(
+                    "r1",
+                    "func_a",
+                    rust_file,
+                    SymbolType::Function,
+                    Some("(x: i32) -> i32"),
+                ),
+                coverage_symbol(
+                    "r2",
+                    "func_b",
+                    rust_file,
+                    SymbolType::Function,
+                    Some("() -> ()"),
+                ),
+                coverage_symbol("r3", "func_c", rust_file, SymbolType::Function, None),
+                coverage_symbol(
+                    "r4",
+                    "method_a",
+                    rust_file,
+                    SymbolType::Method,
+                    Some("(&self)"),
+                ),
+                coverage_symbol("r5", "StructX", rust_file, SymbolType::Struct, None),
+            ])
+            .unwrap();
+
+        // One Rust relationship of a single kind (implements); all others must be 0.
+        store
+            .replace_relationships_for_file(
+                rust_file,
+                &[SymbolRelationship {
+                    source_symbol_id: "r5".to_string(),
+                    source_file_path: rust_file.to_string(),
+                    target_name: "Renderable".to_string(),
+                    target_symbol_id: None,
+                    relationship_type: SymbolRelationshipType::Implements,
+                    line: 1,
+                }],
+            )
+            .unwrap();
+
+        // TypeScript: a single Class, no functions/methods (pct must be 0.0).
+        let ts_file = "src/app.ts";
+        store
+            .upsert_symbols(&[coverage_symbol(
+                "t1",
+                "AppService",
+                ts_file,
+                SymbolType::Class,
+                None,
+            )])
+            .unwrap();
+
+        let histogram = store.coverage_histogram().unwrap();
+        assert_eq!(histogram.per_language.len(), 2);
+
+        let rust = histogram
+            .per_language
+            .iter()
+            .find(|coverage| coverage.language == "Rust")
+            .expect("Rust language row present");
+        let typescript = histogram
+            .per_language
+            .iter()
+            .find(|coverage| coverage.language == "TypeScript")
+            .expect("TypeScript language row present");
+
+        // Present kinds counted correctly.
+        assert_eq!(coverage_count(&rust.symbol_counts, "function"), 3);
+        assert_eq!(coverage_count(&rust.symbol_counts, "method"), 1);
+        assert_eq!(coverage_count(&rust.symbol_counts, "struct"), 1);
+
+        // Absent kinds appear as explicit 0 rows (the load-bearing back-fill).
+        assert_eq!(coverage_count(&rust.symbol_counts, "class"), 0);
+        assert_eq!(coverage_count(&rust.symbol_counts, "trait"), 0);
+        assert_eq!(coverage_count(&rust.symbol_counts, "enum"), 0);
+        assert_eq!(coverage_count(&rust.symbol_counts, "css_selector"), 0);
+        // Every SymbolType variant is represented exactly once.
+        assert_eq!(rust.symbol_counts.len(), ALL_SYMBOL_TYPES.len());
+
+        // Relationship back-fill: implements observed, everything else 0.
+        assert_eq!(coverage_count(&rust.relationship_counts, "implements"), 1);
+        assert_eq!(coverage_count(&rust.relationship_counts, "call"), 0);
+        assert_eq!(coverage_count(&rust.relationship_counts, "import"), 0);
+        assert_eq!(
+            rust.relationship_counts.len(),
+            ALL_RELATIONSHIP_TYPES.len()
+        );
+
+        // Signature percentage: 3 of 4 Function/Method symbols carry a signature.
+        assert!((rust.function_method_signature_pct - 0.75).abs() < 1e-9);
+
+        // Second language shows zeros for the first language's kinds, and vice versa.
+        assert_eq!(coverage_count(&typescript.symbol_counts, "class"), 1);
+        assert_eq!(coverage_count(&typescript.symbol_counts, "struct"), 0);
+        assert_eq!(coverage_count(&typescript.symbol_counts, "function"), 0);
+        assert_eq!(typescript.symbol_counts.len(), ALL_SYMBOL_TYPES.len());
+        // No Function/Method symbols -> pct defaults to 0.0 (no divide-by-zero).
+        assert_eq!(typescript.function_method_signature_pct, 0.0);
     }
 
     #[test]
