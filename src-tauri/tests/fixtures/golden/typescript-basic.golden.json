@@ -99,7 +99,7 @@
       "end_col": 1,
       "parent_qualified_name": null,
       "docstring": null,
-      "signature": null
+      "signature": "(token: string) : boolean"
     },
     {
       "name": "helper",

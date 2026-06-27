@@ -298,6 +298,9 @@ pub struct SymbolExtractor {
 struct ParentSymbolContext {
     id: String,
     qualified_name: String,
+    /// Separator used when composing a child's qualified name from this parent.
+    /// `.` for most nesting; `::` for Rust `impl`/method paths (`Type::method`).
+    separator: &'static str,
 }
 
 impl SymbolExtractor {
@@ -344,7 +347,9 @@ impl SymbolExtractor {
                 .map(compute_content_hash)
                 .unwrap_or_default();
             symbol.qualified_name = match parent_context.as_ref() {
-                Some(parent) => format!("{}.{}", parent.qualified_name, symbol.name),
+                Some(parent) => {
+                    format!("{}{}{}", parent.qualified_name, parent.separator, symbol.name)
+                }
                 None => symbol.name.clone(),
             };
             symbol.id =
@@ -354,6 +359,18 @@ impl SymbolExtractor {
             let symbol_qualified_name = symbol.qualified_name.clone();
             symbols.push(symbol);
 
+            // Compose the context handed to this node's children. For a Rust
+            // `impl` block the members inside bind to the *implemented type*
+            // (`Point::new`), not to the synthetic `impl Point` node.
+            let child_context = self.child_parent_context(
+                &node,
+                source,
+                language,
+                &symbol_id,
+                &symbol_qualified_name,
+                symbols,
+            );
+
             // Process children with this symbol as parent
             for i in 0..node.child_count() {
                 if let Some(child) = node.child(i as u32) {
@@ -361,10 +378,7 @@ impl SymbolExtractor {
                         child,
                         source,
                         language,
-                        Some(ParentSymbolContext {
-                            id: symbol_id.clone(),
-                            qualified_name: symbol_qualified_name.clone(),
-                        }),
+                        Some(child_context.clone()),
                         symbols,
                     );
                 }
@@ -382,6 +396,49 @@ impl SymbolExtractor {
                     );
                 }
             }
+        }
+    }
+
+    /// Build the parent context handed to a symbol node's children.
+    ///
+    /// The default simply nests under the current symbol with a `.` separator.
+    /// Rust `impl` blocks are special-cased: their members bind to the
+    /// implemented type symbol with a `::` separator so methods read as
+    /// `Type::method` and parent to the struct/enum/trait being implemented.
+    fn child_parent_context(
+        &self,
+        node: &Node,
+        source: &str,
+        language: Language,
+        self_id: &str,
+        self_qualified_name: &str,
+        symbols: &[Symbol],
+    ) -> ParentSymbolContext {
+        if language == Language::Rust && node.kind() == "impl_item" {
+            if let Some(type_name) = node
+                .child_by_field_name("type")
+                .and_then(|type_node| type_node.utf8_text(source.as_bytes()).ok())
+                .and_then(normalize_reference_name)
+            {
+                let id = symbols
+                    .iter()
+                    .find(|symbol| {
+                        symbol.name == type_name && is_rust_type_symbol(symbol.symbol_type)
+                    })
+                    .map(|symbol| symbol.id.clone())
+                    .unwrap_or_else(|| self_id.to_string());
+                return ParentSymbolContext {
+                    id,
+                    qualified_name: type_name,
+                    separator: "::",
+                };
+            }
+        }
+
+        ParentSymbolContext {
+            id: self_id.to_string(),
+            qualified_name: self_qualified_name.to_string(),
+            separator: ".",
         }
     }
 
@@ -506,6 +563,11 @@ impl SymbolExtractor {
                 ))
             }
             "variable_declarator" => {
+                // Skip function-body locals; only module/class-scope declarators
+                // are meaningful symbols (cuts index/token noise).
+                if !self.is_emittable_js_ts_declarator(node) {
+                    return None;
+                }
                 let name_node = node.child_by_field_name("name")?;
                 let name = self.extract_js_ts_binding_name(&name_node, source)?;
                 let value = node.child_by_field_name("value");
@@ -648,9 +710,28 @@ impl SymbolExtractor {
             }
             "function_item" => {
                 let name = self.get_child_text(node, "name", source)?;
+                // A `function_item` directly inside an `impl` block is a method.
+                let symbol_type = if is_rust_impl_method(node) {
+                    SymbolType::Method
+                } else {
+                    SymbolType::Function
+                };
+                Some(Symbol::new(name, symbol_type, self.file_path.clone(), range))
+            }
+            "field_declaration" => {
+                let name = self.get_child_text(node, "name", source)?;
                 Some(Symbol::new(
                     name,
-                    SymbolType::Function,
+                    SymbolType::Property,
+                    self.file_path.clone(),
+                    range,
+                ))
+            }
+            "enum_variant" => {
+                let name = self.get_child_text(node, "name", source)?;
+                Some(Symbol::new(
+                    name,
+                    SymbolType::EnumMember,
                     self.file_path.clone(),
                     range,
                 ))
@@ -860,6 +941,41 @@ impl SymbolExtractor {
         }
     }
 
+    /// Return the node carrying the `parameters` field for a signature. For a
+    /// `variable_declarator` bound to an arrow/function value, that is the value
+    /// node; otherwise it is the node itself (when it has parameters).
+    fn js_ts_signature_node<'tree>(&self, node: &Node<'tree>) -> Option<Node<'tree>> {
+        if node.child_by_field_name("parameters").is_some() {
+            return Some(*node);
+        }
+        if node.kind() == "variable_declarator" {
+            let value = node.child_by_field_name("value")?;
+            if matches!(
+                value.kind(),
+                "arrow_function" | "function" | "function_expression" | "generator_function"
+            ) {
+                return Some(value);
+            }
+        }
+        None
+    }
+
+    /// Only emit a `variable_declarator` symbol when its enclosing scope is
+    /// module/class level. Declarators inside a function body are locals (noise).
+    fn is_emittable_js_ts_declarator(&self, node: &Node) -> bool {
+        let mut current = node.parent();
+        while let Some(ancestor) = current {
+            match ancestor.kind() {
+                // A statement block means we are inside a function/arrow/loop body.
+                "statement_block" | "function_body" => return false,
+                "program" | "module" => return true,
+                _ => {}
+            }
+            current = ancestor.parent();
+        }
+        true
+    }
+
     fn has_js_ts_function_descendant(&self, node: &Node, source: &str) -> bool {
         for i in 0..node.named_child_count() {
             if let Some(child) = node.named_child(i as u32) {
@@ -914,23 +1030,104 @@ impl SymbolExtractor {
         }
     }
 
-    fn extract_docstring(&self, node: &Node, source: &str, _language: Language) -> Option<String> {
-        // Look for comment node immediately before this node
-        if let Some(prev) = node.prev_sibling() {
-            let kind = prev.kind();
-            if kind == "comment" || kind == "block_comment" || kind == "line_comment" {
-                return prev.utf8_text(source.as_bytes()).ok().map(|s| {
-                    // Clean up comment markers
-                    let s = s.trim();
-                    let s = s.strip_prefix("///").unwrap_or(s);
-                    let s = s.strip_prefix("//").unwrap_or(s);
-                    let s = s.strip_prefix("/*").unwrap_or(s);
-                    let s = s.strip_suffix("*/").unwrap_or(s);
-                    let s = s.strip_prefix("#").unwrap_or(s);
-                    let s = s.strip_prefix("\"\"\"").unwrap_or(s);
-                    let s = s.strip_suffix("\"\"\"").unwrap_or(s);
-                    s.trim().to_string()
-                });
+    fn extract_docstring(&self, node: &Node, source: &str, language: Language) -> Option<String> {
+        match language {
+            Language::Rust => self.extract_rust_docstring(node, source),
+            Language::Python => self
+                .extract_python_docstring(node, source)
+                .or_else(|| self.extract_prev_comment_docstring(node, source)),
+            Language::Go => self.extract_go_docstring(node, source),
+            _ => self.extract_prev_comment_docstring(node, source),
+        }
+    }
+
+    /// Capture the single comment node immediately preceding `node` (the
+    /// original, language-agnostic behavior).
+    fn extract_prev_comment_docstring(&self, node: &Node, source: &str) -> Option<String> {
+        let prev = node.prev_sibling()?;
+        let kind = prev.kind();
+        if kind != "comment" && kind != "block_comment" && kind != "line_comment" {
+            return None;
+        }
+        prev.utf8_text(source.as_bytes()).ok().map(|s| {
+            // Clean up comment markers
+            let s = s.trim();
+            let s = s.strip_prefix("///").unwrap_or(s);
+            let s = s.strip_prefix("//").unwrap_or(s);
+            let s = s.strip_prefix("/*").unwrap_or(s);
+            let s = s.strip_suffix("*/").unwrap_or(s);
+            let s = s.strip_prefix('#').unwrap_or(s);
+            let s = s.strip_prefix("\"\"\"").unwrap_or(s);
+            let s = s.strip_suffix("\"\"\"").unwrap_or(s);
+            s.trim().to_string()
+        })
+    }
+
+    /// Join consecutive `///` / `//!` doc-comment lines directly above `node`
+    /// into one docstring. Falls back to a single preceding comment otherwise.
+    fn extract_rust_docstring(&self, node: &Node, source: &str) -> Option<String> {
+        let mut lines: Vec<String> = Vec::new();
+        let mut expected_row = node.start_position().row;
+        let mut cursor = node.prev_sibling();
+
+        while let Some(prev) = cursor {
+            if prev.kind() != "line_comment" {
+                break;
+            }
+            let Ok(text) = prev.utf8_text(source.as_bytes()) else {
+                break;
+            };
+            let trimmed = text.trim();
+            if !(trimmed.starts_with("///") || trimmed.starts_with("//!")) {
+                break;
+            }
+            // Only attach contiguous doc-comment lines (no blank-line gap).
+            if prev.end_position().row + 1 != expected_row {
+                break;
+            }
+            lines.push(clean_rust_doc_line(trimmed));
+            expected_row = prev.start_position().row;
+            cursor = prev.prev_sibling();
+        }
+
+        if lines.is_empty() {
+            return self.extract_prev_comment_docstring(node, source);
+        }
+        lines.reverse();
+        Some(lines.join("\n"))
+    }
+
+    /// Capture a Python docstring: the first `expression_statement → string`
+    /// child of a function/class body.
+    fn extract_python_docstring(&self, node: &Node, source: &str) -> Option<String> {
+        if node.kind() != "function_definition" && node.kind() != "class_definition" {
+            return None;
+        }
+        let body = node.child_by_field_name("body")?;
+        let first = body.named_child(0)?;
+        if first.kind() != "expression_statement" {
+            return None;
+        }
+        let string_node = first.named_child(0)?;
+        if string_node.kind() != "string" {
+            return None;
+        }
+        let text = string_node.utf8_text(source.as_bytes()).ok()?;
+        Some(decode_python_string(text))
+    }
+
+    /// Go doc comments precede the declaration; for type/const/var specs the
+    /// comment sits before the wrapping `*_declaration`, not the spec itself.
+    fn extract_go_docstring(&self, node: &Node, source: &str) -> Option<String> {
+        if let Some(doc) = self.extract_prev_comment_docstring(node, source) {
+            return Some(doc);
+        }
+        if matches!(node.kind(), "type_spec" | "const_spec" | "var_spec") {
+            if let Some(parent) = node.parent() {
+                // Only borrow the wrapper's comment for the first spec in a group.
+                if parent.named_child(0).map(|c| c.id()) == Some(node.id()) {
+                    return self.extract_prev_comment_docstring(&parent, source);
+                }
             }
         }
         None
@@ -943,16 +1140,20 @@ impl SymbolExtractor {
             | Language::Astro
             | Language::JavaScript
             | Language::Jsx => {
-                // For functions, extract parameters
-                if let Some(params) = node.child_by_field_name("parameters") {
-                    let params_text = params.utf8_text(source.as_bytes()).ok()?;
-                    // Try to get return type
-                    let return_type = node
-                        .child_by_field_name("return_type")
-                        .and_then(|n| n.utf8_text(source.as_bytes()).ok())
-                        .map(|s| format!(" {}", s))
-                        .unwrap_or_default();
-                    return Some(format!("{}{}", params_text, return_type));
+                // For functions, extract parameters. For `const f = (...) => ...`
+                // the parameters live on the arrow/function value, not on the
+                // `variable_declarator` itself.
+                if let Some(sig_node) = self.js_ts_signature_node(node) {
+                    if let Some(params) = sig_node.child_by_field_name("parameters") {
+                        let params_text = params.utf8_text(source.as_bytes()).ok()?;
+                        // Try to get return type
+                        let return_type = sig_node
+                            .child_by_field_name("return_type")
+                            .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+                            .map(|s| format!(" {}", s))
+                            .unwrap_or_default();
+                        return Some(format!("{}{}", params_text, return_type));
+                    }
                 }
             }
             Language::Python => {
@@ -1094,8 +1295,15 @@ fn extract_structural_relationships_from_node(
             relationships,
             seen,
         ),
-        Language::Go
-        | Language::Markdown
+        Language::Go => extract_go_structural_relationships(
+            node,
+            source,
+            file_path,
+            symbols,
+            relationships,
+            seen,
+        ),
+        Language::Markdown
         | Language::Css
         | Language::Scss
         | Language::Sass
@@ -1288,6 +1496,137 @@ fn extract_rust_structural_relationships(
     );
 }
 
+fn extract_go_structural_relationships(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    symbols: &[Symbol],
+    relationships: &mut Vec<SymbolRelationship>,
+    seen: &mut HashSet<(String, String, SymbolRelationshipType, u32)>,
+) {
+    match node.kind() {
+        // Receiver→method binding: the method's parent is its receiver type.
+        "method_declaration" => {
+            let Some(receiver) = node.child_by_field_name("receiver") else {
+                return;
+            };
+            let Some(receiver_type) = go_receiver_type_name(&receiver, source) else {
+                return;
+            };
+            let Some(method_name) = node
+                .child_by_field_name("name")
+                .and_then(|name| name.utf8_text(source.as_bytes()).ok())
+            else {
+                return;
+            };
+            let Some(type_symbol) = find_symbol_by_name(symbols, &receiver_type) else {
+                return;
+            };
+            push_relationship(
+                relationships,
+                seen,
+                type_symbol,
+                file_path,
+                method_name.to_string(),
+                SymbolRelationshipType::Contains,
+                node.start_position().row as u32,
+            );
+        }
+        // Struct embedding: `type Server struct { Base }` → Server extends Base.
+        "type_spec" => {
+            let Some(type_node) = node.child_by_field_name("type") else {
+                return;
+            };
+            if type_node.kind() != "struct_type" {
+                return;
+            }
+            let Some(type_name) = node
+                .child_by_field_name("name")
+                .and_then(|name| name.utf8_text(source.as_bytes()).ok())
+            else {
+                return;
+            };
+            let Some(type_symbol) = find_symbol_by_name(symbols, type_name) else {
+                return;
+            };
+            let line = node.start_position().row as u32;
+            for embedded in go_embedded_type_names(&type_node, source) {
+                push_relationship(
+                    relationships,
+                    seen,
+                    type_symbol,
+                    file_path,
+                    embedded,
+                    SymbolRelationshipType::Extends,
+                    line,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Resolve the base type name of a Go method receiver (`(s *Server)` → `Server`).
+fn go_receiver_type_name(receiver: &Node, source: &str) -> Option<String> {
+    let mut type_node = None;
+    for i in 0..receiver.named_child_count() {
+        if let Some(param) = receiver.named_child(i as u32) {
+            if let Some(ty) = param.child_by_field_name("type") {
+                type_node = Some(ty);
+                break;
+            }
+        }
+    }
+    let mut ty = type_node?;
+    while ty.kind() == "pointer_type" {
+        ty = last_named_child(&ty)?;
+    }
+    ty.utf8_text(source.as_bytes())
+        .ok()
+        .and_then(normalize_reference_name)
+}
+
+/// Collect the names of anonymously-embedded fields in a Go struct type.
+fn go_embedded_type_names(struct_type: &Node, source: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let Some(field_list) = (0..struct_type.named_child_count())
+        .filter_map(|i| struct_type.named_child(i as u32))
+        .find(|child| child.kind() == "field_declaration_list")
+    else {
+        return names;
+    };
+
+    for i in 0..field_list.named_child_count() {
+        let Some(field) = field_list.named_child(i as u32) else {
+            continue;
+        };
+        if field.kind() != "field_declaration" {
+            continue;
+        }
+        // Named fields have a `name` field; embedded fields carry only a type.
+        if field.child_by_field_name("name").is_some() {
+            continue;
+        }
+        let Some(mut ty) = field.child_by_field_name("type") else {
+            continue;
+        };
+        while ty.kind() == "pointer_type" {
+            let Some(inner) = last_named_child(&ty) else {
+                break;
+            };
+            ty = inner;
+        }
+        if let Some(name) = ty
+            .utf8_text(source.as_bytes())
+            .ok()
+            .and_then(normalize_reference_name)
+        {
+            names.push(name);
+        }
+    }
+    names
+}
+
 fn push_relationship(
     relationships: &mut Vec<SymbolRelationship>,
     seen: &mut HashSet<(String, String, SymbolRelationshipType, u32)>,
@@ -1440,6 +1779,45 @@ fn find_symbol_by_name<'a>(symbols: &'a [Symbol], name: &str) -> Option<&'a Symb
         .find(|symbol| symbol.name == name && symbol.symbol_type != SymbolType::Import)
 }
 
+/// Symbol kinds a Rust `impl` block can be implemented for.
+fn is_rust_type_symbol(symbol_type: SymbolType) -> bool {
+    matches!(
+        symbol_type,
+        SymbolType::Struct | SymbolType::Enum | SymbolType::Trait | SymbolType::Type
+    )
+}
+
+/// True when a Rust `function_item` is declared directly inside an `impl` block
+/// (`impl_item → declaration_list → function_item`).
+fn is_rust_impl_method(node: &Node) -> bool {
+    node.parent()
+        .filter(|parent| parent.kind() == "declaration_list")
+        .and_then(|parent| parent.parent())
+        .map(|grandparent| grandparent.kind() == "impl_item")
+        .unwrap_or(false)
+}
+
+/// Strip the leading `///` / `//` marker from a single Rust doc-comment line.
+fn clean_rust_doc_line(text: &str) -> String {
+    let s = text.trim();
+    let s = s.strip_prefix("///").unwrap_or(s);
+    let s = s.strip_prefix("//").unwrap_or(s);
+    s.trim().to_string()
+}
+
+/// Decode a Python string literal (the docstring text) by stripping any string
+/// prefix and the surrounding quote markers.
+fn decode_python_string(text: &str) -> String {
+    let s = text.trim();
+    let s = s.trim_start_matches(|c: char| matches!(c, 'r' | 'R' | 'b' | 'B' | 'f' | 'F' | 'u' | 'U'));
+    for quote in ["\"\"\"", "'''", "\"", "'"] {
+        if let Some(inner) = s.strip_prefix(quote).and_then(|rest| rest.strip_suffix(quote)) {
+            return inner.trim().to_string();
+        }
+    }
+    s.trim().to_string()
+}
+
 fn extract_relationships_from_node(
     node: Node,
     source: &str,
@@ -1510,13 +1888,19 @@ fn extract_relationship_target_name(
             let callee = node.child_by_field_name("function")?;
             extract_callable_name(&callee, source)
         }
-        Language::Rust => {
-            if node.kind() != "call_expression" {
-                return None;
+        Language::Rust => match node.kind() {
+            "call_expression" => {
+                let callee = node.child_by_field_name("function")?;
+                extract_callable_name(&callee, source)
             }
-            let callee = node.child_by_field_name("function")?;
-            extract_callable_name(&callee, source)
-        }
+            // `println!(...)`, `anyhow!(...)`, `tracing::info!(...)` etc. emit a
+            // Call edge from the macro path child.
+            "macro_invocation" => {
+                let macro_node = node.child_by_field_name("macro")?;
+                extract_callable_name(&macro_node, source)
+            }
+            _ => None,
+        },
         Language::Go => {
             if node.kind() != "call_expression" {
                 return None;

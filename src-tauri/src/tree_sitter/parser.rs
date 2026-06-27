@@ -125,7 +125,7 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["ts"],
         parser: ParserKind::TreeSitter(TreeSitterGrammar::TypeScript),
         support: SupportLevel::Full,
-        extractor_version: 1,
+        extractor_version: 2,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
@@ -134,7 +134,7 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["tsx"],
         parser: ParserKind::TreeSitter(TreeSitterGrammar::Tsx),
         support: SupportLevel::Full,
-        extractor_version: 1,
+        extractor_version: 2,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
@@ -145,7 +145,7 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
             target: Language::Tsx,
         },
         support: SupportLevel::Partial,
-        extractor_version: 1,
+        extractor_version: 2,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
@@ -154,7 +154,7 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["js", "mjs", "cjs"],
         parser: ParserKind::TreeSitter(TreeSitterGrammar::JavaScript),
         support: SupportLevel::Full,
-        extractor_version: 1,
+        extractor_version: 2,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
@@ -163,7 +163,7 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["jsx"],
         parser: ParserKind::TreeSitter(TreeSitterGrammar::JavaScript),
         support: SupportLevel::Full,
-        extractor_version: 1,
+        extractor_version: 2,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
@@ -172,7 +172,7 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["py"],
         parser: ParserKind::TreeSitter(TreeSitterGrammar::Python),
         support: SupportLevel::Full,
-        extractor_version: 1,
+        extractor_version: 2,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
@@ -181,7 +181,7 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["rs"],
         parser: ParserKind::TreeSitter(TreeSitterGrammar::Rust),
         support: SupportLevel::Full,
-        extractor_version: 1,
+        extractor_version: 2,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
@@ -190,7 +190,7 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["go"],
         parser: ParserKind::TreeSitter(TreeSitterGrammar::Go),
         support: SupportLevel::Full,
-        extractor_version: 1,
+        extractor_version: 2,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {

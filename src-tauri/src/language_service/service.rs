@@ -13052,7 +13052,7 @@ metadata:
             .indexed_file_record("versioned.ts")
             .unwrap()
             .unwrap();
-        assert_eq!(initial_record.extractor_version, Some(1));
+        assert_eq!(initial_record.extractor_version, Some(2));
 
         service
             .symbol_store
@@ -13082,7 +13082,7 @@ metadata:
             .indexed_file_record("versioned.ts")
             .unwrap()
             .unwrap();
-        assert_eq!(refreshed_record.extractor_version, Some(1));
+        assert_eq!(refreshed_record.extractor_version, Some(2));
     }
 
     #[test]

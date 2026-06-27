@@ -3,7 +3,7 @@
   "language": "Go",
   "parse_status": "ok",
   "symbol_count": 5,
-  "relationship_count": 2,
+  "relationship_count": 4,
   "symbols": [
     {
       "name": "fmt",
@@ -26,7 +26,7 @@
       "end_line": 7,
       "end_col": 1,
       "parent_qualified_name": null,
-      "docstring": null,
+      "docstring": "Base holds shared state.",
       "signature": null
     },
     {
@@ -38,7 +38,7 @@
       "end_line": 13,
       "end_col": 1,
       "parent_qualified_name": null,
-      "docstring": null,
+      "docstring": "Server embeds Base and adds a name.",
       "signature": null
     },
     {
@@ -72,6 +72,18 @@
       "source_qualified_name": "fmt",
       "target_name": "fmt",
       "line": 2
+    },
+    {
+      "relationship_type": "extends",
+      "source_qualified_name": "Server",
+      "target_name": "Base",
+      "line": 10
+    },
+    {
+      "relationship_type": "contains",
+      "source_qualified_name": "Server",
+      "target_name": "Start",
+      "line": 21
     },
     {
       "relationship_type": "call",

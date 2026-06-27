@@ -26,7 +26,7 @@
       "end_line": 5,
       "end_col": 23,
       "parent_qualified_name": null,
-      "docstring": "Greeter module helper.",
+      "docstring": "Return a greeting for the given name.",
       "signature": "(name: str) -> str"
     },
     {
@@ -38,7 +38,7 @@
       "end_line": 12,
       "end_col": 20,
       "parent_qualified_name": null,
-      "docstring": null,
+      "docstring": "A simple calculator.",
       "signature": null
     },
     {

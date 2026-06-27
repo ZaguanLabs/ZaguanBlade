@@ -2,8 +2,8 @@
   "case": "rust-basic",
   "language": "Rust",
   "parse_status": "ok",
-  "symbol_count": 7,
-  "relationship_count": 3,
+  "symbol_count": 12,
+  "relationship_count": 4,
   "symbols": [
     {
       "name": "std::collections::HashMap",
@@ -30,6 +30,30 @@
       "signature": null
     },
     {
+      "name": "x",
+      "kind": "property",
+      "qualified_name": "Point.x",
+      "start_line": 5,
+      "start_col": 4,
+      "end_line": 5,
+      "end_col": 14,
+      "parent_qualified_name": "Point",
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "y",
+      "kind": "property",
+      "qualified_name": "Point.y",
+      "start_line": 6,
+      "start_col": 4,
+      "end_line": 6,
+      "end_col": 14,
+      "parent_qualified_name": "Point",
+      "docstring": null,
+      "signature": null
+    },
+    {
       "name": "Color",
       "kind": "enum",
       "qualified_name": "Color",
@@ -39,6 +63,42 @@
       "end_col": 1,
       "parent_qualified_name": null,
       "docstring": "Color options for rendering.",
+      "signature": null
+    },
+    {
+      "name": "Red",
+      "kind": "enum_member",
+      "qualified_name": "Color.Red",
+      "start_line": 11,
+      "start_col": 4,
+      "end_line": 11,
+      "end_col": 7,
+      "parent_qualified_name": "Color",
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "Green",
+      "kind": "enum_member",
+      "qualified_name": "Color.Green",
+      "start_line": 12,
+      "start_col": 4,
+      "end_line": 12,
+      "end_col": 9,
+      "parent_qualified_name": "Color",
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "Blue",
+      "kind": "enum_member",
+      "qualified_name": "Color.Blue",
+      "start_line": 13,
+      "start_col": 4,
+      "end_line": 13,
+      "end_col": 8,
+      "parent_qualified_name": "Color",
+      "docstring": null,
       "signature": null
     },
     {
@@ -55,25 +115,25 @@
     },
     {
       "name": "new",
-      "kind": "function",
-      "qualified_name": "impl Point.new",
+      "kind": "method",
+      "qualified_name": "Point::new",
       "start_line": 18,
       "start_col": 4,
       "end_line": 20,
       "end_col": 5,
-      "parent_qualified_name": "impl Point",
+      "parent_qualified_name": "Point",
       "docstring": "Create a new point.",
       "signature": "(x: i32, y: i32) Point"
     },
     {
       "name": "sum",
-      "kind": "function",
-      "qualified_name": "impl Point.sum",
+      "kind": "method",
+      "qualified_name": "Point::sum",
       "start_line": 23,
       "start_col": 4,
       "end_line": 25,
       "end_col": 5,
-      "parent_qualified_name": "impl Point",
+      "parent_qualified_name": "Point",
       "docstring": "Compute the sum of the coordinates.",
       "signature": "(&self) i32"
     },
@@ -102,6 +162,12 @@
       "source_qualified_name": "run",
       "target_name": "new",
       "line": 31
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "run",
+      "target_name": "println",
+      "line": 32
     },
     {
       "relationship_type": "call",
