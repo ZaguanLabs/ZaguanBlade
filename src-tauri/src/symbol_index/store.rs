@@ -180,6 +180,7 @@ const ALL_SYMBOL_TYPES: &[SymbolType] = &[
     SymbolType::CssLayer,
     SymbolType::CssFontFace,
     SymbolType::Resource,
+    SymbolType::Route,
 ];
 
 /// Every `SymbolRelationshipType` variant, for the same zero back-fill.
@@ -193,6 +194,7 @@ const ALL_RELATIONSHIP_TYPES: &[SymbolRelationshipType] = &[
     SymbolRelationshipType::Usage,
     SymbolRelationshipType::UsesType,
     SymbolRelationshipType::ReadsEnv,
+    SymbolRelationshipType::Handles,
 ];
 
 // NOTE: language derived from file path until M2.3 adds a real `language` column; re-base then.
@@ -234,7 +236,8 @@ fn coverage_variant_drift_guard(
         | SymbolType::CssAtRule
         | SymbolType::CssLayer
         | SymbolType::CssFontFace
-        | SymbolType::Resource => {}
+        | SymbolType::Resource
+        | SymbolType::Route => {}
     }
     match relationship_type {
         SymbolRelationshipType::Call
@@ -245,7 +248,8 @@ fn coverage_variant_drift_guard(
         | SymbolRelationshipType::Contains
         | SymbolRelationshipType::Usage
         | SymbolRelationshipType::UsesType
-        | SymbolRelationshipType::ReadsEnv => {}
+        | SymbolRelationshipType::ReadsEnv
+        | SymbolRelationshipType::Handles => {}
     }
 }
 

@@ -301,3 +301,26 @@ fn golden_yaml_toplevel_sequence() {
 fn golden_yaml_mixed_multidoc() {
     check_case("yaml-mixed-multidoc", "yaml-mixed-multidoc.yaml");
 }
+
+// ---- M4.4 — Route nodes + canonicalization + HANDLES ----
+
+// Flask: `@app.route("/users/<int:id>", methods=["GET","POST"])` → two Route
+// nodes (`GET`/`POST /users/{}`) each with a `handles` edge to `get_user`.
+#[test]
+fn golden_flask_route() {
+    check_case("flask-route", "flask-route.py");
+}
+
+// Express: `router.post("/api/orders/:id", handler)` → one Route node
+// (`POST /api/orders/{}`) + a `handles` edge to the named `handler` function.
+#[test]
+fn golden_express_route() {
+    check_case("express-route", "express-route.js");
+}
+
+// NestJS: `@Controller("users")` + `@Get(":id")` → Route node `GET /users/{}` +
+// a `handles` edge to the `findOne` controller method.
+#[test]
+fn golden_nest_controller() {
+    check_case("nest-controller", "nest-controller.ts");
+}

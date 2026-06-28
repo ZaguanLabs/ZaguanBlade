@@ -42,6 +42,12 @@ pub enum SymbolType {
     /// A declarative infrastructure resource (e.g. a Kubernetes manifest doc
     /// with both `apiVersion` and `kind`), named `"<kind>/<metadata.name>"`.
     Resource,
+    /// An HTTP route registration (M4.4), named with the canonical
+    /// `"<METHOD> <canonical-path>"` (e.g. `"POST /api/orders/{}"`). The path is
+    /// canonicalized so the same route unifies across frameworks (every param
+    /// syntax collapses to `{}`). A `Handles` edge links the Route to its handler
+    /// function/method symbol.
+    Route,
 }
 
 impl std::fmt::Display for SymbolType {
@@ -72,6 +78,7 @@ impl std::fmt::Display for SymbolType {
             SymbolType::CssLayer => "css_layer",
             SymbolType::CssFontFace => "css_font_face",
             SymbolType::Resource => "resource",
+            SymbolType::Route => "route",
         };
         write!(f, "{}", s)
     }
@@ -138,6 +145,7 @@ impl std::str::FromStr for SymbolType {
             "css_layer" => Ok(SymbolType::CssLayer),
             "css_font_face" => Ok(SymbolType::CssFontFace),
             "resource" => Ok(SymbolType::Resource),
+            "route" => Ok(SymbolType::Route),
             _ => Err(format!("Unknown symbol type: {}", s)),
         }
     }
@@ -261,6 +269,14 @@ pub enum SymbolRelationshipType {
     /// `target_symbol_id` stays NULL) (M4.2). Stored as the TEXT value
     /// `"reads_env"`.
     ReadsEnv,
+    /// An HTTP Route node HANDLES a handler function/method (M4.4). The SOURCE is
+    /// the synthetic `Route` symbol (`"<METHOD> <canonical-path>"`); the TARGET is
+    /// the handler function/method symbol that the route maps to (`target_name` is
+    /// the handler's name and `target_symbol_id` carries its resolved id). Stored
+    /// as the TEXT value `"handles"`. Routes with no identifiable handler (e.g. an
+    /// inline anonymous Express callback) emit the Route node WITHOUT this edge
+    /// (the low-confidence anchor fallback).
+    Handles,
 }
 
 impl std::fmt::Display for SymbolRelationshipType {
@@ -275,6 +291,7 @@ impl std::fmt::Display for SymbolRelationshipType {
             SymbolRelationshipType::Usage => "usage",
             SymbolRelationshipType::UsesType => "uses_type",
             SymbolRelationshipType::ReadsEnv => "reads_env",
+            SymbolRelationshipType::Handles => "handles",
         };
         write!(f, "{}", s)
     }
@@ -294,6 +311,7 @@ impl std::str::FromStr for SymbolRelationshipType {
             "usage" | "uses" => Ok(SymbolRelationshipType::Usage),
             "uses_type" => Ok(SymbolRelationshipType::UsesType),
             "reads_env" => Ok(SymbolRelationshipType::ReadsEnv),
+            "handles" => Ok(SymbolRelationshipType::Handles),
             _ => Err(format!("Unknown relationship type: {}", s)),
         }
     }
@@ -1647,7 +1665,49 @@ pub fn extract_symbols(
     file_path: &str,
 ) -> Vec<Symbol> {
     let extractor = SymbolExtractor::new(file_path.to_string());
-    extractor.extract(tree, source, language)
+    let mut symbols = extractor.extract(tree, source, language);
+    // M4.4: append a `Route` symbol per detected HTTP route registration (Python
+    // decorators, NestJS `@Controller`/`@Get`, Express `app`/`router.METHOD`).
+    // Each is named with its canonical `"<METHOD> <path>"`; the matching `Handles`
+    // edge to the handler is emitted later by `extract_symbol_relationships`.
+    append_route_symbols(tree, source, language, file_path, &mut symbols);
+    symbols
+}
+
+/// Detect HTTP route registrations and append one `Route` symbol per route
+/// (M4.4). The route's canonical name (`"<METHOD> <canon-path>"`) is its own
+/// `qualified_name`, and its id is derived with `stable_symbol_id` so the
+/// relationship pass can recover it for the `Handles` edge. Duplicate
+/// `<METHOD> <path>` routes in one file collapse to a single node.
+fn append_route_symbols(
+    tree: &Tree,
+    source: &str,
+    language: Language,
+    file_path: &str,
+    symbols: &mut Vec<Symbol>,
+) {
+    let routes = collect_routes(&tree.root_node(), source, language);
+    let mut seen: HashSet<String> = HashSet::new();
+    for route in routes {
+        let qn = route.symbol_name();
+        if !seen.insert(qn.clone()) {
+            continue;
+        }
+        let mut symbol = Symbol::new(
+            qn.clone(),
+            SymbolType::Route,
+            file_path.to_string(),
+            route.reg_range,
+        );
+        symbol.qualified_name = qn.clone();
+        symbol.byte_offset = route.reg_byte_offset;
+        symbol.byte_length = route.reg_byte_length;
+        // The Route node is synthetic (no own source span text to hash); hash its
+        // canonical identity so the value is stable and span-independent.
+        symbol.content_hash = compute_content_hash(&qn);
+        symbol.id = stable_symbol_id(file_path, &qn, SymbolType::Route);
+        symbols.push(symbol);
+    }
 }
 
 pub fn extract_symbol_relationships(
@@ -1682,7 +1742,644 @@ pub fn extract_symbol_relationships(
     // Import edges are derived from the symbol list, not the tree.
     extract_import_relationships(file_path, symbols, &mut rel.relationships, &mut rel.seen);
 
+    // M4.4: `Handles` edges (Route → handler). Re-runs route detection (cheap,
+    // pure) and links each route's synthetic `Route` symbol id to the handler
+    // function/method symbol resolved from `symbols`. Routes whose handler cannot
+    // be identified emit no edge (the Route node alone is the anchor fallback).
+    emit_route_handles(
+        tree,
+        source,
+        language,
+        file_path,
+        symbols,
+        &mut rel.relationships,
+        &mut rel.seen,
+    );
+
     rel.relationships
+}
+
+/// Emit one `Handles` edge per detected route whose handler resolves to a
+/// function/method symbol in `all_symbols` (M4.4). DIRECTION: source = the
+/// synthetic `Route` symbol, target = the handler (so "what handles `POST
+/// /api/orders`" is the Route node's outgoing `Handles` edge). The handler is
+/// matched either by its definition position (Python-decorated function, NestJS
+/// method) or by name (an Express identifier callback). A route with no resolvable
+/// handler contributes no edge.
+fn emit_route_handles(
+    tree: &Tree,
+    source: &str,
+    language: Language,
+    file_path: &str,
+    all_symbols: &[Symbol],
+    relationships: &mut Vec<SymbolRelationship>,
+    seen: &mut HashSet<(String, String, SymbolRelationshipType, u32)>,
+) {
+    let routes = collect_routes(&tree.root_node(), source, language);
+    for route in routes {
+        let qn = route.symbol_name();
+        let route_id = stable_symbol_id(file_path, &qn, SymbolType::Route);
+        let Some(handler) = resolve_route_handler(&route.handler, all_symbols) else {
+            continue;
+        };
+        let key = (
+            route_id.clone(),
+            handler.name.clone(),
+            SymbolRelationshipType::Handles,
+            route.reg_line,
+        );
+        if seen.insert(key) {
+            relationships.push(SymbolRelationship {
+                source_symbol_id: route_id,
+                source_file_path: file_path.to_string(),
+                target_name: handler.name.clone(),
+                target_symbol_id: Some(handler.id.clone()),
+                relationship_type: SymbolRelationshipType::Handles,
+                line: route.reg_line,
+            });
+        }
+    }
+}
+
+/// Resolve a route's `HandlerRef` to the concrete handler symbol, restricted to
+/// function/method symbols. Position matching is exact (a symbol's range start is
+/// its defining node's start), so it cannot collide with the Route node itself.
+fn resolve_route_handler<'a>(
+    handler: &HandlerRef,
+    all_symbols: &'a [Symbol],
+) -> Option<&'a Symbol> {
+    let is_callable = |symbol: &Symbol| {
+        matches!(symbol.symbol_type, SymbolType::Function | SymbolType::Method)
+    };
+    match handler {
+        HandlerRef::ByPosition(pos) => all_symbols
+            .iter()
+            .find(|symbol| symbol.range.start == *pos && is_callable(symbol)),
+        HandlerRef::ByName(name) => all_symbols
+            .iter()
+            .find(|symbol| symbol.name == *name && is_callable(symbol)),
+        HandlerRef::None => None,
+    }
+}
+
+// ---- M4.4 route detection + canonicalization -------------------------------
+
+/// One detected HTTP route registration: its method + canonical path, the span of
+/// the registration site (decorator / call / method-decorator) for the synthetic
+/// `Route` symbol, and how to find its handler symbol.
+struct DetectedRoute {
+    method: String,
+    canon_path: String,
+    reg_range: Range,
+    reg_byte_offset: usize,
+    reg_byte_length: usize,
+    reg_line: u32,
+    handler: HandlerRef,
+}
+
+impl DetectedRoute {
+    /// The canonical Route symbol name / qualified_name: `"<METHOD> <canon-path>"`.
+    fn symbol_name(&self) -> String {
+        format!("{} {}", self.method, self.canon_path)
+    }
+}
+
+/// How to locate a route's handler symbol in the file's symbol set.
+enum HandlerRef {
+    /// The handler is the function/method whose definition node STARTS here
+    /// (Python-decorated function, NestJS controller method).
+    ByPosition(Position),
+    /// The handler is a named function/method referenced by an Express callback
+    /// identifier (`router.post("/x", handler)`).
+    ByName(String),
+    /// No identifiable handler (inline anonymous callback / unresolved) — the
+    /// Route node is emitted alone (low-confidence anchor fallback).
+    None,
+}
+
+/// Canonicalize a raw route path so the SAME route unifies across frameworks:
+/// every parameter syntax collapses to a single `{}` token. Recognized param
+/// forms — Express `:name`, FastAPI/OpenAPI `{name}`, Flask `<id>` / `<int:id>` /
+/// `<path:p>`, and template `${…}` — all become `{}`; literal segments are
+/// preserved. A trailing slash is stripped (except the root `/`).
+///
+/// `/users/:id`, `/users/{id}`, and `/users/<int:id>` all canonicalize to
+/// `/users/{}`.
+fn route_canon_path(raw: &str) -> String {
+    let s = raw.trim();
+    if s.is_empty() {
+        return "/".to_string();
+    }
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    // `true` at the very start and immediately after a `/` — the only position an
+    // Express `:name` param may begin (so a stray `:` elsewhere is left literal).
+    let mut at_segment_start = true;
+    while i < bytes.len() {
+        let c = bytes[i];
+        match c {
+            // Template `${…}` — collapse, skipping the brace-balanced interior.
+            b'$' if i + 1 < bytes.len() && bytes[i + 1] == b'{' => {
+                out.push_str("{}");
+                i += 2;
+                let mut depth = 1u32;
+                while i < bytes.len() && depth > 0 {
+                    match bytes[i] {
+                        b'{' => depth += 1,
+                        b'}' => depth -= 1,
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                at_segment_start = false;
+            }
+            // FastAPI / OpenAPI `{name}` — collapse, skipping to the matching `}`.
+            b'{' => {
+                out.push_str("{}");
+                i += 1;
+                let mut depth = 1u32;
+                while i < bytes.len() && depth > 0 {
+                    match bytes[i] {
+                        b'{' => depth += 1,
+                        b'}' => depth -= 1,
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                at_segment_start = false;
+            }
+            // Flask `<id>` / `<int:id>` / `<path:p>` — collapse to the matching `>`.
+            b'<' => {
+                out.push_str("{}");
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'>' {
+                    i += 1;
+                }
+                if i < bytes.len() {
+                    i += 1; // consume `>`
+                }
+                at_segment_start = false;
+            }
+            // Express `:name` — only at a segment start; consume to the next `/`.
+            b':' if at_segment_start => {
+                out.push_str("{}");
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'/' {
+                    i += 1;
+                }
+                at_segment_start = false;
+            }
+            _ => {
+                out.push(c as char);
+                at_segment_start = c == b'/';
+                i += 1;
+            }
+        }
+    }
+    // Strip a trailing slash (except the bare root `/`).
+    if out.len() > 1 && out.ends_with('/') {
+        out.pop();
+    }
+    if out.is_empty() {
+        out.push('/');
+    }
+    out
+}
+
+/// Detect every HTTP route registration in the file (M4.4). Framework coverage:
+/// Python decorators (`@app.route`/`@app.get`/`@router.post`), NestJS
+/// `@Controller` + `@Get`/`@Post`/… method decorators, and Express/JS
+/// `app`/`router.METHOD(...)` calls. Paths passed as bare identifiers are resolved
+/// through the M4.2 module-level constant map.
+fn collect_routes(root: &Node, source: &str, language: Language) -> Vec<DetectedRoute> {
+    let mut const_map: HashMap<String, String> = HashMap::new();
+    collect_module_constants(root, language, source, &mut const_map);
+    let mut out = Vec::new();
+    walk_routes(root, source, language, &const_map, &mut out);
+    out
+}
+
+/// Recursive dispatch for `collect_routes`: visit each node and run the
+/// per-framework route extractors that apply to `language`.
+fn walk_routes(
+    node: &Node,
+    source: &str,
+    language: Language,
+    const_map: &HashMap<String, String>,
+    out: &mut Vec<DetectedRoute>,
+) {
+    match language {
+        Language::Python => {
+            if node.kind() == "decorated_definition" {
+                python_routes_from_decorated(node, source, const_map, out);
+            }
+        }
+        Language::TypeScript
+        | Language::Tsx
+        | Language::Astro
+        | Language::JavaScript
+        | Language::Jsx => {
+            if matches!(node.kind(), "class_declaration" | "class") {
+                nest_routes_from_class(node, source, const_map, out);
+            }
+            if node.kind() == "call_expression" {
+                express_route_from_call(node, source, const_map, out);
+            }
+        }
+        _ => {}
+    }
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        walk_routes(&child, source, language, const_map, out);
+    }
+}
+
+/// Map a verb word to its canonical upper-case HTTP method, or `None` when the
+/// word is not a recognized verb. Case-insensitive (so Python `get` / NestJS
+/// `Get` / Express `GET` all resolve).
+fn http_method_word(name: &str) -> Option<&'static str> {
+    match name.to_ascii_lowercase().as_str() {
+        "get" => Some("GET"),
+        "post" => Some("POST"),
+        "put" => Some("PUT"),
+        "delete" => Some("DELETE"),
+        "patch" => Some("PATCH"),
+        "head" => Some("HEAD"),
+        "options" => Some("OPTIONS"),
+        _ => None,
+    }
+}
+
+/// Python route decorators (`decorated_definition`): a function decorated with
+/// `@app.route(...)`/`@app.get(...)`/`@router.post(...)` (FastAPI/Flask). The
+/// decorated FUNCTION is the handler; the METHOD comes from the verb in the
+/// decorator name (`get` → `GET`) or, for `route`, the `methods=[…]` keyword
+/// (defaulting to `GET`). Only a function (not a decorated class) yields routes,
+/// and only a decorator whose call resolves to a verb/`route` does — so ordinary
+/// decorators (`@login_required`) are ignored.
+fn python_routes_from_decorated(
+    node: &Node,
+    source: &str,
+    const_map: &HashMap<String, String>,
+    out: &mut Vec<DetectedRoute>,
+) {
+    let Some(definition) = node.child_by_field_name("definition") else {
+        return;
+    };
+    if definition.kind() != "function_definition" {
+        return;
+    }
+    let start = definition.start_position();
+    let handler_pos = Position::new(start.row as u32, start.column as u32);
+
+    let mut cursor = node.walk();
+    for decorator in node.named_children(&mut cursor) {
+        if decorator.kind() != "decorator" {
+            continue;
+        }
+        let Some(call) = first_child_of_kind(&decorator, "call") else {
+            continue;
+        };
+        let Some(func) = call.child_by_field_name("function") else {
+            continue;
+        };
+        let method_token = match func.kind() {
+            "attribute" => func
+                .child_by_field_name("attribute")
+                .and_then(|n| node_text(&n, source)),
+            "identifier" => node_text(&func, source),
+            _ => None,
+        };
+        let Some(method_token) = method_token else {
+            continue;
+        };
+        let Some(args) = call.child_by_field_name("arguments") else {
+            continue;
+        };
+        // The METHODS this decorator registers.
+        let methods: Vec<String> = if let Some(verb) = http_method_word(method_token) {
+            vec![verb.to_string()]
+        } else if method_token == "route" {
+            parse_methods_kwarg(&args, source).unwrap_or_else(|| vec!["GET".to_string()])
+        } else {
+            continue;
+        };
+        let Some(path) = first_positional_arg(&args)
+            .and_then(|arg| literal_or_const(&arg, source, const_map))
+        else {
+            continue;
+        };
+        let canon = route_canon_path(&path);
+        for method in methods {
+            out.push(DetectedRoute {
+                method,
+                canon_path: canon.clone(),
+                reg_range: Range::from_node(&decorator),
+                reg_byte_offset: decorator.start_byte(),
+                reg_byte_length: decorator.end_byte().saturating_sub(decorator.start_byte()),
+                reg_line: decorator.start_position().row as u32,
+                handler: HandlerRef::ByPosition(handler_pos),
+            });
+        }
+    }
+}
+
+/// The `methods=[…]` keyword argument of a Flask `@app.route(...)` call as
+/// upper-cased method names, or `None` when no such keyword (caller defaults to
+/// `GET`).
+fn parse_methods_kwarg(args: &Node, source: &str) -> Option<Vec<String>> {
+    let mut cursor = args.walk();
+    for child in args.named_children(&mut cursor) {
+        if child.kind() != "keyword_argument" {
+            continue;
+        }
+        let Some(name) = child.child_by_field_name("name") else {
+            continue;
+        };
+        if node_text(&name, source) != Some("methods") {
+            continue;
+        }
+        let Some(value) = child.child_by_field_name("value") else {
+            continue;
+        };
+        if value.kind() != "list" {
+            continue;
+        }
+        let mut methods = Vec::new();
+        let mut vc = value.walk();
+        for item in value.named_children(&mut vc) {
+            if let Some(v) = string_literal_value(&item, source) {
+                methods.push(v.to_ascii_uppercase());
+            }
+        }
+        if !methods.is_empty() {
+            return Some(methods);
+        }
+    }
+    None
+}
+
+/// The first POSITIONAL argument node of an argument list (skips Python
+/// `keyword_argument`s).
+fn first_positional_arg<'t>(args: &Node<'t>) -> Option<Node<'t>> {
+    let mut cursor = args.walk();
+    let found = args
+        .named_children(&mut cursor)
+        .find(|c| c.kind() != "keyword_argument");
+    found
+}
+
+/// NestJS controller routes: a class carrying `@Controller("base")` whose methods
+/// carry `@Get`/`@Post`/`@Put`/`@Delete`/`@Patch`/`@Head`/`@Options`/`@All`. The
+/// route is `<METHOD> <base + sub>`; the decorated METHOD is the handler.
+/// `@Controller` is REQUIRED (a plain class with a stray `@Get` is not promoted).
+fn nest_routes_from_class(
+    class_node: &Node,
+    source: &str,
+    const_map: &HashMap<String, String>,
+    out: &mut Vec<DetectedRoute>,
+) {
+    let decorators = collect_class_decorators(class_node);
+    let mut base_path: Option<String> = None;
+    for decorator in &decorators {
+        let Some(call) = first_child_of_kind(decorator, "call_expression") else {
+            continue;
+        };
+        let Some(func) = call.child_by_field_name("function") else {
+            continue;
+        };
+        if func.kind() != "identifier" || node_text(&func, source) != Some("Controller") {
+            continue;
+        }
+        let base = call
+            .child_by_field_name("arguments")
+            .and_then(|args| first_positional_arg(&args))
+            .and_then(|arg| literal_or_const(&arg, source, const_map))
+            .unwrap_or_default();
+        base_path = Some(base);
+        break;
+    }
+    // Require @Controller — conservative gate against false routes.
+    let Some(base) = base_path else {
+        return;
+    };
+
+    let Some(body) = class_node.child_by_field_name("body") else {
+        return;
+    };
+    let mut pending: Vec<Node> = Vec::new();
+    let mut cursor = body.walk();
+    for child in body.named_children(&mut cursor) {
+        match child.kind() {
+            "decorator" => pending.push(child),
+            "method_definition" => {
+                nest_routes_for_method(&child, &pending, &base, source, const_map, out);
+                pending.clear();
+            }
+            _ => pending.clear(),
+        }
+    }
+}
+
+/// Emit a route for each HTTP-method decorator preceding a NestJS controller
+/// method. The handler is the method itself (matched later by definition start).
+fn nest_routes_for_method(
+    method_node: &Node,
+    decorators: &[Node],
+    base: &str,
+    source: &str,
+    const_map: &HashMap<String, String>,
+    out: &mut Vec<DetectedRoute>,
+) {
+    let start = method_node.start_position();
+    let handler_pos = Position::new(start.row as u32, start.column as u32);
+    for decorator in decorators {
+        let Some(call) = first_child_of_kind(decorator, "call_expression") else {
+            continue;
+        };
+        let Some(func) = call.child_by_field_name("function") else {
+            continue;
+        };
+        if func.kind() != "identifier" {
+            continue;
+        }
+        let Some(name) = node_text(&func, source) else {
+            continue;
+        };
+        // Nest decorators are PascalCase; match exactly so a lowercase call cannot.
+        let method = match name {
+            "Get" | "Post" | "Put" | "Delete" | "Patch" | "Head" | "Options" => {
+                http_method_word(name).unwrap_or("GET")
+            }
+            "All" => "ALL",
+            _ => continue,
+        };
+        let sub = call
+            .child_by_field_name("arguments")
+            .and_then(|args| first_positional_arg(&args))
+            .and_then(|arg| literal_or_const(&arg, source, const_map))
+            .unwrap_or_default();
+        let canon = route_canon_path(&join_route_paths(base, &sub));
+        out.push(DetectedRoute {
+            method: method.to_string(),
+            canon_path: canon,
+            reg_range: Range::from_node(decorator),
+            reg_byte_offset: decorator.start_byte(),
+            reg_byte_length: decorator.end_byte().saturating_sub(decorator.start_byte()),
+            reg_line: decorator.start_position().row as u32,
+            handler: HandlerRef::ByPosition(handler_pos),
+        });
+    }
+}
+
+/// Gather the `decorator` nodes attached to a class: the class node's own leading
+/// decorators (non-exported `@Controller class …`) plus, when the class is the
+/// declaration of an `export_statement`, that statement's decorators
+/// (`@Controller export class …`).
+fn collect_class_decorators<'t>(class_node: &Node<'t>) -> Vec<Node<'t>> {
+    let mut out = Vec::new();
+    let mut cursor = class_node.walk();
+    for child in class_node.children(&mut cursor) {
+        if child.kind() == "decorator" {
+            out.push(child);
+        }
+    }
+    if let Some(parent) = class_node.parent() {
+        if parent.kind() == "export_statement" {
+            let mut pc = parent.walk();
+            for child in parent.children(&mut pc) {
+                if child.kind() == "decorator" {
+                    out.push(child);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Join a NestJS controller base path and a method sub-path into a single raw
+/// path, dropping empty segments (`"users"` + `":id"` → `/users/:id`; `""` + `""`
+/// → `/`). Canonicalization happens afterwards.
+fn join_route_paths(base: &str, sub: &str) -> String {
+    let mut segs: Vec<&str> = Vec::new();
+    for part in [base, sub] {
+        for seg in part.split('/') {
+            if !seg.is_empty() {
+                segs.push(seg);
+            }
+        }
+    }
+    if segs.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{}", segs.join("/"))
+    }
+}
+
+/// Express/JS route call: `app.get("/x", handler)` / `router.post("/x", h)` (also
+/// `put`/`delete`/`patch`/`head`/`options`/`all`/`use`). To avoid false routes
+/// from generic `.get()` calls (`map.get(k)`, `obj.get()`), the receiver MUST be
+/// an app/router-like identifier AND the first argument MUST be a string path
+/// (starting with `/`). The handler is the LAST argument when it is a bare
+/// identifier; an inline anonymous callback yields a Route with no handler.
+fn express_route_from_call(
+    call: &Node,
+    source: &str,
+    const_map: &HashMap<String, String>,
+    out: &mut Vec<DetectedRoute>,
+) {
+    let Some(func) = call.child_by_field_name("function") else {
+        return;
+    };
+    if func.kind() != "member_expression" {
+        return;
+    }
+    let Some(object) = func.child_by_field_name("object") else {
+        return;
+    };
+    if object.kind() != "identifier" {
+        return;
+    }
+    let Some(receiver) = node_text(&object, source) else {
+        return;
+    };
+    if !is_app_router_like(receiver) {
+        return;
+    }
+    let Some(property) = func.child_by_field_name("property") else {
+        return;
+    };
+    let Some(prop) = node_text(&property, source) else {
+        return;
+    };
+    let Some(method) = express_method_word(prop) else {
+        return;
+    };
+    let Some(args) = call.child_by_field_name("arguments") else {
+        return;
+    };
+    let arg_nodes: Vec<Node> = {
+        let mut cursor = args.walk();
+        args.named_children(&mut cursor).collect()
+    };
+    let Some(path_node) = arg_nodes.first() else {
+        return;
+    };
+    let Some(path) = literal_or_const(path_node, source, const_map) else {
+        return;
+    };
+    // A real route path starts with `/`; this is the decisive gate that rejects
+    // `map.get(key)` / `obj.get()` and other generic accessor calls.
+    if !path.starts_with('/') {
+        return;
+    }
+    let canon = route_canon_path(&path);
+
+    // Handler = the LAST argument when it names a function; inline callbacks and
+    // path-only calls leave the route handler-less (anchor fallback).
+    let handler = match arg_nodes.last() {
+        Some(last) if arg_nodes.len() >= 2 && last.kind() == "identifier" => {
+            HandlerRef::ByName(node_text(last, source).unwrap_or_default().to_string())
+        }
+        _ => HandlerRef::None,
+    };
+
+    out.push(DetectedRoute {
+        method: method.to_string(),
+        canon_path: canon,
+        reg_range: Range::from_node(call),
+        reg_byte_offset: call.start_byte(),
+        reg_byte_length: call.end_byte().saturating_sub(call.start_byte()),
+        reg_line: call.start_position().row as u32,
+        handler,
+    });
+}
+
+/// Express method words (HTTP verbs plus `all` / `use`) → canonical method label.
+fn express_method_word(prop: &str) -> Option<String> {
+    if let Some(verb) = http_method_word(prop) {
+        return Some(verb.to_string());
+    }
+    match prop.to_ascii_lowercase().as_str() {
+        "all" => Some("ALL".to_string()),
+        "use" => Some("USE".to_string()),
+        _ => None,
+    }
+}
+
+/// True when an identifier names an Express app/router-like object. Conservative
+/// allow-list (`app`/`router`/`api`/`server`/`route`/`routes` and the common
+/// `*Router`/`*App`/`*Routes` suffixes) so generic receivers (`map`, `cache`,
+/// `obj`) never register routes.
+fn is_app_router_like(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "app" | "router" | "api" | "server" | "route" | "routes"
+    ) || lower.ends_with("router")
+        || lower.ends_with("app")
+        || lower.ends_with("routes")
 }
 
 fn extract_typescript_structural_relationships(
@@ -4087,5 +4784,169 @@ func helper() {}
             relationship.target_name == "helper"
                 && relationship.relationship_type == SymbolRelationshipType::Call
         }));
+    }
+
+    // ---- M4.4 route detection -------------------------------------------
+
+    /// The sorted `Route` symbol qualified-names extracted from `code`.
+    fn route_nodes(code: &str, language: Language, path: &str) -> Vec<String> {
+        let mut parser = TreeSitterParser::new().unwrap();
+        let tree = parser.parse(code, language).unwrap();
+        let symbols = extract_symbols(&tree, code, language, path);
+        let mut names: Vec<String> = symbols
+            .iter()
+            .filter(|s| s.symbol_type == SymbolType::Route)
+            .map(|s| s.qualified_name.clone())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// The sorted `(route_qualified_name, handler_name)` `Handles` edges from
+    /// `code`, with the Route source id resolved back to its qualified name.
+    fn handles_edges(code: &str, language: Language, path: &str) -> Vec<(String, String)> {
+        let mut parser = TreeSitterParser::new().unwrap();
+        let tree = parser.parse(code, language).unwrap();
+        let symbols = extract_symbols(&tree, code, language, path);
+        let relationships = extract_symbol_relationships(&tree, code, language, path, &symbols);
+        let id_to_qn: HashMap<&str, &str> = symbols
+            .iter()
+            .map(|s| (s.id.as_str(), s.qualified_name.as_str()))
+            .collect();
+        let mut edges: Vec<(String, String)> = relationships
+            .iter()
+            .filter(|r| r.relationship_type == SymbolRelationshipType::Handles)
+            .map(|r| {
+                let route = id_to_qn
+                    .get(r.source_symbol_id.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| r.source_symbol_id.clone());
+                (route, r.target_name.clone())
+            })
+            .collect();
+        edges.sort();
+        edges
+    }
+
+    #[test]
+    fn test_route_canon_path_unifies_param_syntax() {
+        // Express `:id`, FastAPI/OpenAPI `{id}`, and Flask `<int:id>` all unify.
+        assert_eq!(route_canon_path("/users/:id"), "/users/{}");
+        assert_eq!(route_canon_path("/users/{id}"), "/users/{}");
+        assert_eq!(route_canon_path("/users/<int:id>"), "/users/{}");
+        assert_eq!(route_canon_path("/users/<path:p>"), "/users/{}");
+        assert_eq!(route_canon_path("/users/${id}"), "/users/{}");
+        // Multiple params + literal-segment preservation.
+        assert_eq!(route_canon_path("/a/:x/b/{y}"), "/a/{}/b/{}");
+        assert_eq!(route_canon_path("/api/orders/:id"), "/api/orders/{}");
+        // Trailing slash stripped, except the bare root.
+        assert_eq!(route_canon_path("/users/"), "/users");
+        assert_eq!(route_canon_path("/"), "/");
+        assert_eq!(route_canon_path(""), "/");
+        // A stray non-segment-start `:` is left literal (not a param).
+        assert_eq!(route_canon_path("/a:b"), "/a:b");
+    }
+
+    #[test]
+    fn test_route_flask_emits_route_and_handles() {
+        // `@app.route(..., methods=["GET","POST"])` yields one Route per method,
+        // both handled by the decorated function.
+        let code = "import flask\napp = flask.Flask(__name__)\n\n@app.route(\"/users/<int:id>\", methods=[\"GET\", \"POST\"])\ndef get_user(id):\n    return id\n";
+        assert_eq!(
+            route_nodes(code, Language::Python, "app.py"),
+            vec!["GET /users/{}".to_string(), "POST /users/{}".to_string()]
+        );
+        assert_eq!(
+            handles_edges(code, Language::Python, "app.py"),
+            vec![
+                ("GET /users/{}".to_string(), "get_user".to_string()),
+                ("POST /users/{}".to_string(), "get_user".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_route_fastapi_verb_decorator_emits_route() {
+        // FastAPI/Flask `@router.post("/items")` — method from the decorator verb.
+        let code = "@router.post(\"/items\")\ndef create_item():\n    pass\n";
+        assert_eq!(
+            route_nodes(code, Language::Python, "api.py"),
+            vec!["POST /items".to_string()]
+        );
+        assert_eq!(
+            handles_edges(code, Language::Python, "api.py"),
+            vec![("POST /items".to_string(), "create_item".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_route_nest_emits_route_and_handles() {
+        // `@Controller("users")` base + `@Get(":id")` method → `GET /users/{}`.
+        let code = "@Controller(\"users\")\nexport class UsersController {\n    @Get(\":id\")\n    findOne(id: string) {\n        return id;\n    }\n\n    @Post()\n    create() {}\n}\n";
+        assert_eq!(
+            route_nodes(code, Language::TypeScript, "users.controller.ts"),
+            vec!["GET /users/{}".to_string(), "POST /users".to_string()]
+        );
+        assert_eq!(
+            handles_edges(code, Language::TypeScript, "users.controller.ts"),
+            vec![
+                ("GET /users/{}".to_string(), "findOne".to_string()),
+                ("POST /users".to_string(), "create".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_route_express_emits_route_and_handles() {
+        // `router.post("/api/orders/:id", createOrder)` → Route + Handles to the
+        // named handler.
+        let code = "const router = express.Router();\nfunction createOrder(req, res) { res.end(); }\nrouter.post(\"/api/orders/:id\", createOrder);\n";
+        assert_eq!(
+            route_nodes(code, Language::JavaScript, "routes.js"),
+            vec!["POST /api/orders/{}".to_string()]
+        );
+        assert_eq!(
+            handles_edges(code, Language::JavaScript, "routes.js"),
+            vec![("POST /api/orders/{}".to_string(), "createOrder".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_route_express_inline_handler_is_anchor_only() {
+        // An inline anonymous callback has no named symbol → Route node, no edge.
+        let code = "app.get(\"/health\", (req, res) => res.send(\"ok\"));\n";
+        assert_eq!(
+            route_nodes(code, Language::JavaScript, "app.js"),
+            vec!["GET /health".to_string()]
+        );
+        assert!(
+            handles_edges(code, Language::JavaScript, "app.js").is_empty(),
+            "inline handler must not produce a handles edge"
+        );
+    }
+
+    #[test]
+    fn test_route_generic_map_get_emits_no_route() {
+        // Generic `.get()` calls on non-app/router receivers must NOT become
+        // routes — false routes are worse than missed ones.
+        let code = "const m = new Map();\nfunction f(key) {\n    const a = m.get(key);\n    const b = obj.get();\n    const c = cache.get(\"/looks/like/path\");\n    return a;\n}\n";
+        assert!(
+            route_nodes(code, Language::JavaScript, "m.js").is_empty(),
+            "no routes expected from generic .get()"
+        );
+        assert!(
+            handles_edges(code, Language::JavaScript, "m.js").is_empty(),
+            "no handles expected from generic .get()"
+        );
+    }
+
+    #[test]
+    fn test_route_nest_requires_controller() {
+        // A plain class with a stray `@Get` but NO `@Controller` is not promoted.
+        let code = "export class NotAController {\n    @Get(\":id\")\n    findOne(id: string) {\n        return id;\n    }\n}\n";
+        assert!(
+            route_nodes(code, Language::TypeScript, "x.ts").is_empty(),
+            "no @Controller → no routes"
+        );
     }
 }

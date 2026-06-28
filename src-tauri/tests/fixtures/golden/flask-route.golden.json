@@ -1,0 +1,77 @@
+{
+  "case": "flask-route",
+  "language": "Python",
+  "parse_status": "ok",
+  "symbol_count": 4,
+  "relationship_count": 3,
+  "symbols": [
+    {
+      "name": "flask",
+      "kind": "import",
+      "qualified_name": "flask",
+      "start_line": 0,
+      "start_col": 0,
+      "end_line": 0,
+      "end_col": 23,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "GET /users/{}",
+      "kind": "route",
+      "qualified_name": "GET /users/{}",
+      "start_line": 5,
+      "start_col": 0,
+      "end_line": 5,
+      "end_col": 54,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "POST /users/{}",
+      "kind": "route",
+      "qualified_name": "POST /users/{}",
+      "start_line": 5,
+      "start_col": 0,
+      "end_line": 5,
+      "end_col": 54,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "get_user",
+      "kind": "function",
+      "qualified_name": "get_user",
+      "start_line": 6,
+      "start_col": 0,
+      "end_line": 7,
+      "end_col": 21,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": "(id)"
+    }
+  ],
+  "relationships": [
+    {
+      "relationship_type": "import",
+      "source_qualified_name": "flask",
+      "target_name": "flask",
+      "line": 0
+    },
+    {
+      "relationship_type": "handles",
+      "source_qualified_name": "GET /users/{}",
+      "target_name": "get_user",
+      "line": 5
+    },
+    {
+      "relationship_type": "handles",
+      "source_qualified_name": "POST /users/{}",
+      "target_name": "get_user",
+      "line": 5
+    }
+  ]
+}

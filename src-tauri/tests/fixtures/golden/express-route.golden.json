@@ -1,0 +1,83 @@
+{
+  "case": "express-route",
+  "language": "JavaScript",
+  "parse_status": "ok",
+  "symbol_count": 4,
+  "relationship_count": 4,
+  "symbols": [
+    {
+      "name": "express",
+      "kind": "constant",
+      "qualified_name": "express",
+      "start_line": 0,
+      "start_col": 6,
+      "end_line": 0,
+      "end_col": 34,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "router",
+      "kind": "constant",
+      "qualified_name": "router",
+      "start_line": 1,
+      "start_col": 6,
+      "end_line": 1,
+      "end_col": 31,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "handler",
+      "kind": "function",
+      "qualified_name": "handler",
+      "start_line": 3,
+      "start_col": 0,
+      "end_line": 5,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": "(req, res)"
+    },
+    {
+      "name": "POST /api/orders/{}",
+      "kind": "route",
+      "qualified_name": "POST /api/orders/{}",
+      "start_line": 7,
+      "start_col": 0,
+      "end_line": 7,
+      "end_col": 39,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    }
+  ],
+  "relationships": [
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "express",
+      "target_name": "require",
+      "line": 0
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "router",
+      "target_name": "Router",
+      "line": 1
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "handler",
+      "target_name": "json",
+      "line": 4
+    },
+    {
+      "relationship_type": "handles",
+      "source_qualified_name": "POST /api/orders/{}",
+      "target_name": "handler",
+      "line": 7
+    }
+  ]
+}
