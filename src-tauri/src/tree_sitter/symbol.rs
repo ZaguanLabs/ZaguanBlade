@@ -4,6 +4,7 @@
 //! tree-sitter AST trees for indexing and context assembly.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tree_sitter::{Node, Tree};
@@ -294,13 +295,65 @@ pub struct SymbolExtractor {
     file_path: String,
 }
 
-#[derive(Clone)]
-struct ParentSymbolContext {
-    id: String,
-    qualified_name: String,
-    /// Separator used when composing a child's qualified name from this parent.
+/// One frame of the unified-walk scope stack: the enclosing symbol's identity.
+///
+/// A single frame carries BOTH concerns the old code threaded separately:
+/// - what `find_enclosing_symbol` needed — this symbol's own `id` + `range`
+///   (used to attribute relationships to their innermost enclosing symbol);
+/// - what the old `parent_context` threading needed — the context handed to
+///   this symbol's children (`child_id` / `child_qn` / `child_sep`), so a child's
+///   `parent_id` and `qualified_name` reproduce exactly what was composed before.
+///
+/// `Arc<str>` lets a frame's id/qn be cloned out cheaply for relationship
+/// sources and child composition, replacing the per-child `String` clones the
+/// recursive `parent_context.clone()` used to pay.
+struct Scope {
+    /// This symbol's own id (relationship source / parent linkage of children).
+    id: Arc<str>,
+    /// This symbol's own range (enclosing-symbol containment + tie-break key).
+    range: Range,
+    /// Parent-id handed to this scope's children.
+    child_id: Arc<str>,
+    /// Qualified-name prefix handed to this scope's children.
+    child_qn: Arc<str>,
+    /// Separator joining `child_qn` to a child's name.
     /// `.` for most nesting; `::` for Rust `impl`/method paths (`Type::method`).
-    separator: &'static str,
+    child_sep: &'static str,
+}
+
+/// The child-naming context a symbol hands down to its descendants. The default
+/// nests under the symbol itself with a `.`; a Rust `impl` block remaps it to the
+/// implemented type with `::` (so methods read `Type::method`).
+struct ChildCtx {
+    id: Arc<str>,
+    qn: Arc<str>,
+    sep: &'static str,
+}
+
+/// Mutable state threaded through the single unified DFS.
+struct WalkState {
+    /// Stack of enclosing symbol scopes (outermost at index 0, innermost on top).
+    /// Pushed on entering a symbol-creating node, popped on leaving it.
+    scope: Vec<Scope>,
+    /// Symbols produced so far, in pre-order. This IS the output of the symbol
+    /// walk; it is also consulted live for the Rust-`impl` child-context lookup,
+    /// which must see only symbols-so-far (matching the original pass).
+    symbols: Vec<Symbol>,
+}
+
+/// Relationship-walk sink, threaded alongside `WalkState` when the unified DFS
+/// runs in relationship mode.
+struct RelState<'a> {
+    relationships: Vec<SymbolRelationship>,
+    /// De-dup key shared across the call, import, and structural concerns
+    /// (matching the original single shared `seen` set).
+    seen: HashSet<(String, String, SymbolRelationshipType, u32)>,
+    /// The full, already-computed symbol set for the file. Needed for the
+    /// forward-reference structural lookups (Rust `impl` / Go receiver +
+    /// embedding via `find_symbol_by_name`), which may target a type declared
+    /// later in the file. Call/structural-TS/Python attribution instead uses the
+    /// live scope stack in `WalkState` (the innermost enclosing symbol).
+    all_symbols: &'a [Symbol],
 }
 
 impl SymbolExtractor {
@@ -308,135 +361,287 @@ impl SymbolExtractor {
         Self { file_path }
     }
 
-    /// Extract all symbols from a tree
+    /// Extract all symbols from a tree via the single unified DFS (symbol mode).
     pub fn extract(&self, tree: &Tree, source: &str, language: Language) -> Vec<Symbol> {
-        let mut symbols = Vec::new();
-        self.extract_from_node(tree.root_node(), source, language, None, &mut symbols);
-        symbols
+        let mut state = WalkState {
+            scope: Vec::new(),
+            symbols: Vec::new(),
+        };
+        self.walk_symbols(tree.root_node(), source, language, &mut state);
+        state.symbols
     }
 
-    fn extract_from_node(
-        &self,
-        node: Node,
-        source: &str,
-        language: Language,
-        parent_context: Option<ParentSymbolContext>,
-        symbols: &mut Vec<Symbol>,
-    ) {
-        // Extract symbol from this node if applicable
-        if let Some(mut symbol) = self.node_to_symbol(&node, source, language) {
-            if let Some(parent) = parent_context.as_ref() {
-                symbol.parent_id = Some(parent.id.clone());
-            }
+    /// One pre-order DFS that produces symbols, threading the scope stack.
+    /// (The relationship concerns are layered onto this same shape in
+    /// `extract_symbol_relationships`'s walk; this one carries only symbols.)
+    fn walk_symbols(&self, node: Node, source: &str, language: Language, state: &mut WalkState) {
+        let pushed = self.enter_symbol_scope(&node, source, language, state);
 
-            // Try to extract docstring
-            if let Some(doc) = self.extract_docstring(&node, source, language) {
-                symbol.docstring = Some(doc);
-            }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.walk_symbols(child, source, language, state);
+        }
 
-            // Try to extract signature
-            if let Some(sig) = self.extract_signature(&node, source, language) {
-                symbol.signature = Some(sig);
-            }
-
-            symbol.byte_offset = node.start_byte();
-            symbol.byte_length = node.end_byte().saturating_sub(node.start_byte());
-            symbol.content_hash = node
-                .utf8_text(source.as_bytes())
-                .ok()
-                .map(compute_content_hash)
-                .unwrap_or_default();
-            symbol.qualified_name = match parent_context.as_ref() {
-                Some(parent) => {
-                    format!("{}{}{}", parent.qualified_name, parent.separator, symbol.name)
-                }
-                None => symbol.name.clone(),
-            };
-            symbol.id =
-                stable_symbol_id(&self.file_path, &symbol.qualified_name, symbol.symbol_type);
-
-            let symbol_id = symbol.id.clone();
-            let symbol_qualified_name = symbol.qualified_name.clone();
-            symbols.push(symbol);
-
-            // Compose the context handed to this node's children. For a Rust
-            // `impl` block the members inside bind to the *implemented type*
-            // (`Point::new`), not to the synthetic `impl Point` node.
-            let child_context = self.child_parent_context(
-                &node,
-                source,
-                language,
-                &symbol_id,
-                &symbol_qualified_name,
-                symbols,
-            );
-
-            // Process children with this symbol as parent
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                self.extract_from_node(
-                    child,
-                    source,
-                    language,
-                    Some(child_context.clone()),
-                    symbols,
-                );
-            }
-        } else {
-            // No symbol at this node, process children with same parent
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                self.extract_from_node(
-                    child,
-                    source,
-                    language,
-                    parent_context.clone(),
-                    symbols,
-                );
-            }
+        if pushed {
+            state.scope.pop();
         }
     }
 
-    /// Build the parent context handed to a symbol node's children.
+    /// If `node` creates a symbol, finalize it (qualified_name / parent_id from
+    /// the scope-stack top, plus docstring / signature / spans / hash), append it
+    /// to `state.symbols`, and push its `Scope`. Returns whether a scope was
+    /// pushed (so the caller knows to pop on the way out).
+    ///
+    /// This reproduces the old `parent_context` threading exactly: a child's
+    /// `parent_id`/`qualified_name` are composed from the innermost scope's
+    /// child-context, and the Rust-`impl` remap to the implemented type is
+    /// preserved (members read `Type::method`, parented to the type symbol).
+    fn enter_symbol_scope(
+        &self,
+        node: &Node,
+        source: &str,
+        language: Language,
+        state: &mut WalkState,
+    ) -> bool {
+        let Some(mut symbol) = self.node_to_symbol(node, source, language) else {
+            return false;
+        };
+
+        // Compose qualified_name + parent_id from the enclosing scope's
+        // child-context (the top of the stack), or treat as a root symbol.
+        let (parent_id, qualified_name) = match state.scope.last() {
+            Some(parent) => (
+                Some(parent.child_id.to_string()),
+                format!("{}{}{}", parent.child_qn, parent.child_sep, symbol.name),
+            ),
+            None => (None, symbol.name.clone()),
+        };
+        symbol.parent_id = parent_id;
+
+        // Try to extract docstring
+        if let Some(doc) = self.extract_docstring(node, source, language) {
+            symbol.docstring = Some(doc);
+        }
+
+        // Try to extract signature
+        if let Some(sig) = self.extract_signature(node, source, language) {
+            symbol.signature = Some(sig);
+        }
+
+        symbol.byte_offset = node.start_byte();
+        symbol.byte_length = node.end_byte().saturating_sub(node.start_byte());
+        symbol.content_hash = node
+            .utf8_text(source.as_bytes())
+            .ok()
+            .map(compute_content_hash)
+            .unwrap_or_default();
+        symbol.qualified_name = qualified_name.clone();
+        symbol.id = stable_symbol_id(&self.file_path, &qualified_name, symbol.symbol_type);
+
+        let id: Arc<str> = Arc::from(symbol.id.as_str());
+        let range = symbol.range;
+        state.symbols.push(symbol);
+
+        // Compose the context handed to this node's children. For a Rust `impl`
+        // block the members inside bind to the *implemented type* (`Point::new`),
+        // not to the synthetic `impl Point` node.
+        let child = self.child_ctx(node, source, language, &id, &qualified_name, &state.symbols);
+        state.scope.push(Scope {
+            id,
+            range,
+            child_id: child.id,
+            child_qn: child.qn,
+            child_sep: child.sep,
+        });
+        true
+    }
+
+    /// Build the child-naming context a symbol node hands to its children.
     ///
     /// The default simply nests under the current symbol with a `.` separator.
     /// Rust `impl` blocks are special-cased: their members bind to the
     /// implemented type symbol with a `::` separator so methods read as
     /// `Type::method` and parent to the struct/enum/trait being implemented.
-    fn child_parent_context(
+    /// The implemented-type lookup scans `symbols` (symbols-so-far) exactly as
+    /// before, so a type declared *after* its `impl` still falls back to self.
+    fn child_ctx(
         &self,
         node: &Node,
         source: &str,
         language: Language,
-        self_id: &str,
+        self_id: &Arc<str>,
         self_qualified_name: &str,
         symbols: &[Symbol],
-    ) -> ParentSymbolContext {
+    ) -> ChildCtx {
         if language == Language::Rust && node.kind() == "impl_item" {
             if let Some(type_name) = node
                 .child_by_field_name("type")
                 .and_then(|type_node| type_node.utf8_text(source.as_bytes()).ok())
                 .and_then(normalize_reference_name)
             {
-                let id = symbols
+                let id: Arc<str> = symbols
                     .iter()
                     .find(|symbol| {
                         symbol.name == type_name && is_rust_type_symbol(symbol.symbol_type)
                     })
-                    .map(|symbol| symbol.id.clone())
-                    .unwrap_or_else(|| self_id.to_string());
-                return ParentSymbolContext {
+                    .map(|symbol| Arc::from(symbol.id.as_str()))
+                    .unwrap_or_else(|| self_id.clone());
+                return ChildCtx {
                     id,
-                    qualified_name: type_name,
-                    separator: "::",
+                    qn: Arc::from(type_name.as_str()),
+                    sep: "::",
                 };
             }
         }
 
-        ParentSymbolContext {
-            id: self_id.to_string(),
-            qualified_name: self_qualified_name.to_string(),
-            separator: ".",
+        ChildCtx {
+            id: self_id.clone(),
+            qn: Arc::from(self_qualified_name),
+            sep: ".",
+        }
+    }
+
+    /// One pre-order DFS that produces relationships. It rebuilds the SAME scope
+    /// stack as the symbol walk (via `enter_symbol_scope`, so the re-derived
+    /// symbol ids are byte-identical), then runs the relationship concerns per
+    /// node off that stack. The re-derived `state.symbols` is scratch here; the
+    /// returned edges live in `rel`.
+    fn walk_relationships(
+        &self,
+        node: Node,
+        source: &str,
+        language: Language,
+        state: &mut WalkState,
+        rel: &mut RelState,
+    ) {
+        let pushed = self.enter_symbol_scope(&node, source, language, state);
+
+        // Call / macro-call concern: attribute to the innermost enclosing symbol.
+        self.process_call_relationship(&node, source, language, state, rel);
+        // Structural concern: extends / implements / contains. Runs AFTER the
+        // scope push so a class node resolves to its own symbol (reproducing the
+        // old `find_enclosing_symbol(class_range)` self-match).
+        self.process_structural_relationship(node, source, language, state, rel);
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.walk_relationships(child, source, language, state, rel);
+        }
+
+        if pushed {
+            state.scope.pop();
+        }
+    }
+
+    /// Dispatch the structural-relationship concern for this node. TS/Python
+    /// attribute to the innermost enclosing symbol via the live scope stack
+    /// (the class itself once its scope is pushed); Rust `impl` / Go use the full
+    /// `all_symbols` set via `find_symbol_by_name` (the implemented/receiver type
+    /// may be declared later in the file — a true forward reference).
+    fn process_structural_relationship(
+        &self,
+        node: Node,
+        source: &str,
+        language: Language,
+        state: &WalkState,
+        rel: &mut RelState,
+    ) {
+        match language {
+            Language::TypeScript
+            | Language::Tsx
+            | Language::Astro
+            | Language::JavaScript
+            | Language::Jsx => extract_typescript_structural_relationships(
+                node,
+                source,
+                &self.file_path,
+                &state.scope,
+                &mut rel.relationships,
+                &mut rel.seen,
+            ),
+            Language::Python => extract_python_structural_relationships(
+                node,
+                source,
+                &self.file_path,
+                &state.scope,
+                &mut rel.relationships,
+                &mut rel.seen,
+            ),
+            Language::Rust => extract_rust_structural_relationships(
+                node,
+                source,
+                &self.file_path,
+                rel.all_symbols,
+                &mut rel.relationships,
+                &mut rel.seen,
+            ),
+            Language::Go => extract_go_structural_relationships(
+                node,
+                source,
+                &self.file_path,
+                rel.all_symbols,
+                &mut rel.relationships,
+                &mut rel.seen,
+            ),
+            Language::Markdown
+            | Language::Css
+            | Language::Scss
+            | Language::Sass
+            | Language::Less
+            | Language::Html
+            | Language::Vue
+            | Language::Svelte
+            | Language::Json
+            | Language::Yaml
+            | Language::Toml
+            | Language::Php
+            | Language::Java
+            | Language::CSharp
+            | Language::Kotlin
+            | Language::Ruby
+            | Language::Cpp
+            | Language::Shell
+            | Language::Dockerfile
+            | Language::Sql
+            | Language::BuildScript => {}
+        }
+    }
+
+    /// Emit a `Call` edge for a call/macro-invocation node, sourced from the
+    /// innermost enclosing symbol on the scope stack. Reproduces the old
+    /// `extract_relationships_from_node` + `find_enclosing_symbol` pairing.
+    fn process_call_relationship(
+        &self,
+        node: &Node,
+        source: &str,
+        language: Language,
+        state: &WalkState,
+        rel: &mut RelState,
+    ) {
+        let Some(target_name) = extract_relationship_target_name(node, source, language) else {
+            return;
+        };
+        let range = Range::from_node(node);
+        let Some(source_id) = resolve_enclosing_scope(&state.scope, &range).map(|s| s.id.to_string())
+        else {
+            return;
+        };
+        let line = node.start_position().row as u32;
+        let key = (
+            source_id.clone(),
+            target_name.clone(),
+            SymbolRelationshipType::Call,
+            line,
+        );
+        if rel.seen.insert(key) {
+            rel.relationships.push(SymbolRelationship {
+                source_symbol_id: source_id,
+                source_file_path: self.file_path.clone(),
+                target_name,
+                target_symbol_id: None,
+                relationship_type: SymbolRelationshipType::Call,
+                line,
+            });
         }
     }
 
@@ -1230,118 +1435,32 @@ pub fn extract_symbol_relationships(
     file_path: &str,
     symbols: &[Symbol],
 ) -> Vec<SymbolRelationship> {
-    let mut relationships = Vec::new();
-    let mut seen = HashSet::new();
-    extract_relationships_from_node(
-        tree.root_node(),
-        source,
-        language,
-        file_path,
-        symbols,
-        &mut relationships,
-        &mut seen,
-    );
-    extract_import_relationships(file_path, symbols, &mut relationships, &mut seen);
-    extract_structural_relationships_from_node(
-        tree.root_node(),
-        source,
-        language,
-        file_path,
-        symbols,
-        &mut relationships,
-        &mut seen,
-    );
-    relationships
-}
+    let extractor = SymbolExtractor::new(file_path.to_string());
+    let mut state = WalkState {
+        scope: Vec::new(),
+        symbols: Vec::new(),
+    };
+    let mut rel = RelState {
+        relationships: Vec::new(),
+        seen: HashSet::new(),
+        all_symbols: symbols,
+    };
 
-fn extract_structural_relationships_from_node(
-    node: Node,
-    source: &str,
-    language: Language,
-    file_path: &str,
-    symbols: &[Symbol],
-    relationships: &mut Vec<SymbolRelationship>,
-    seen: &mut HashSet<(String, String, SymbolRelationshipType, u32)>,
-) {
-    match language {
-        Language::TypeScript
-        | Language::Tsx
-        | Language::Astro
-        | Language::JavaScript
-        | Language::Jsx => extract_typescript_structural_relationships(
-            node,
-            source,
-            file_path,
-            symbols,
-            relationships,
-            seen,
-        ),
-        Language::Python => extract_python_structural_relationships(
-            node,
-            source,
-            file_path,
-            symbols,
-            relationships,
-            seen,
-        ),
-        Language::Rust => extract_rust_structural_relationships(
-            node,
-            source,
-            file_path,
-            symbols,
-            relationships,
-            seen,
-        ),
-        Language::Go => extract_go_structural_relationships(
-            node,
-            source,
-            file_path,
-            symbols,
-            relationships,
-            seen,
-        ),
-        Language::Markdown
-        | Language::Css
-        | Language::Scss
-        | Language::Sass
-        | Language::Less
-        | Language::Html
-        | Language::Vue
-        | Language::Svelte
-        | Language::Json
-        | Language::Yaml
-        | Language::Toml
-        | Language::Php
-        | Language::Java
-        | Language::CSharp
-        | Language::Kotlin
-        | Language::Ruby
-        | Language::Cpp
-        | Language::Shell
-        | Language::Dockerfile
-        | Language::Sql
-        | Language::BuildScript => {}
-    }
+    // Unified relationship walk: call/macro + structural edges off one DFS,
+    // attributed to the enclosing symbol via the scope stack.
+    extractor.walk_relationships(tree.root_node(), source, language, &mut state, &mut rel);
 
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        extract_structural_relationships_from_node(
-            child,
-            source,
-            language,
-            file_path,
-            symbols,
-            relationships,
-            seen,
-        );
-    }
+    // Import edges are derived from the symbol list, not the tree.
+    extract_import_relationships(file_path, symbols, &mut rel.relationships, &mut rel.seen);
+
+    rel.relationships
 }
 
 fn extract_typescript_structural_relationships(
     node: Node,
     source: &str,
     file_path: &str,
-    symbols: &[Symbol],
+    scope: &[Scope],
     relationships: &mut Vec<SymbolRelationship>,
     seen: &mut HashSet<(String, String, SymbolRelationshipType, u32)>,
 ) {
@@ -1350,7 +1469,9 @@ fn extract_typescript_structural_relationships(
         return;
     }
 
-    let Some(source_symbol) = find_enclosing_symbol(symbols, &Range::from_node(&node)) else {
+    let Some(source_id) =
+        resolve_enclosing_scope(scope, &Range::from_node(&node)).map(|frame| frame.id.to_string())
+    else {
         return;
     };
     let Ok(text) = node.utf8_text(source.as_bytes()) else {
@@ -1366,7 +1487,7 @@ fn extract_typescript_structural_relationships(
                 push_relationship(
                     relationships,
                     seen,
-                    source_symbol,
+                    &source_id,
                     file_path,
                     target_name,
                     SymbolRelationshipType::Extends,
@@ -1380,7 +1501,7 @@ fn extract_typescript_structural_relationships(
                 push_relationship(
                     relationships,
                     seen,
-                    source_symbol,
+                    &source_id,
                     file_path,
                     target_name,
                     SymbolRelationshipType::Implements,
@@ -1396,7 +1517,7 @@ fn extract_typescript_structural_relationships(
                 push_relationship(
                     relationships,
                     seen,
-                    source_symbol,
+                    &source_id,
                     file_path,
                     target_name,
                     SymbolRelationshipType::Extends,
@@ -1411,7 +1532,7 @@ fn extract_python_structural_relationships(
     node: Node,
     source: &str,
     file_path: &str,
-    symbols: &[Symbol],
+    scope: &[Scope],
     relationships: &mut Vec<SymbolRelationship>,
     seen: &mut HashSet<(String, String, SymbolRelationshipType, u32)>,
 ) {
@@ -1419,7 +1540,9 @@ fn extract_python_structural_relationships(
         return;
     }
 
-    let Some(source_symbol) = find_enclosing_symbol(symbols, &Range::from_node(&node)) else {
+    let Some(source_id) =
+        resolve_enclosing_scope(scope, &Range::from_node(&node)).map(|frame| frame.id.to_string())
+    else {
         return;
     };
     let Ok(text) = node.utf8_text(source.as_bytes()) else {
@@ -1439,7 +1562,7 @@ fn extract_python_structural_relationships(
         push_relationship(
             relationships,
             seen,
-            source_symbol,
+            &source_id,
             file_path,
             target_name,
             SymbolRelationshipType::Extends,
@@ -1484,7 +1607,7 @@ fn extract_rust_structural_relationships(
     push_relationship(
         relationships,
         seen,
-        source_symbol,
+        &source_symbol.id,
         file_path,
         trait_name,
         SymbolRelationshipType::Implements,
@@ -1521,7 +1644,7 @@ fn extract_go_structural_relationships(
             push_relationship(
                 relationships,
                 seen,
-                type_symbol,
+                &type_symbol.id,
                 file_path,
                 method_name.to_string(),
                 SymbolRelationshipType::Contains,
@@ -1550,7 +1673,7 @@ fn extract_go_structural_relationships(
                 push_relationship(
                     relationships,
                     seen,
-                    type_symbol,
+                    &type_symbol.id,
                     file_path,
                     embedded,
                     SymbolRelationshipType::Extends,
@@ -1623,7 +1746,7 @@ fn go_embedded_type_names(struct_type: &Node, source: &str) -> Vec<String> {
 fn push_relationship(
     relationships: &mut Vec<SymbolRelationship>,
     seen: &mut HashSet<(String, String, SymbolRelationshipType, u32)>,
-    source_symbol: &Symbol,
+    source_id: &str,
     file_path: &str,
     target_name: String,
     relationship_type: SymbolRelationshipType,
@@ -1634,7 +1757,7 @@ fn push_relationship(
     }
 
     let key = (
-        source_symbol.id.clone(),
+        source_id.to_string(),
         target_name.clone(),
         relationship_type,
         line,
@@ -1642,7 +1765,7 @@ fn push_relationship(
 
     if seen.insert(key) {
         relationships.push(SymbolRelationship {
-            source_symbol_id: source_symbol.id.clone(),
+            source_symbol_id: source_id.to_string(),
             source_file_path: file_path.to_string(),
             target_name,
             target_symbol_id: None,
@@ -1811,51 +1934,6 @@ fn decode_python_string(text: &str) -> String {
     s.trim().to_string()
 }
 
-fn extract_relationships_from_node(
-    node: Node,
-    source: &str,
-    language: Language,
-    file_path: &str,
-    symbols: &[Symbol],
-    relationships: &mut Vec<SymbolRelationship>,
-    seen: &mut HashSet<(String, String, SymbolRelationshipType, u32)>,
-) {
-    if let Some(target_name) = extract_relationship_target_name(&node, source, language) {
-        if let Some(source_symbol) = find_enclosing_symbol(symbols, &Range::from_node(&node)) {
-            let key = (
-                source_symbol.id.clone(),
-                target_name.clone(),
-                SymbolRelationshipType::Call,
-                node.start_position().row as u32,
-            );
-
-            if seen.insert(key) {
-                relationships.push(SymbolRelationship {
-                    source_symbol_id: source_symbol.id.clone(),
-                    source_file_path: file_path.to_string(),
-                    target_name,
-                    target_symbol_id: None,
-                    relationship_type: SymbolRelationshipType::Call,
-                    line: node.start_position().row as u32,
-                });
-            }
-        }
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        extract_relationships_from_node(
-            child,
-            source,
-            language,
-            file_path,
-            symbols,
-            relationships,
-            seen,
-        );
-    }
-}
-
 fn extract_relationship_target_name(
     node: &Node,
     source: &str,
@@ -1970,28 +2048,32 @@ fn last_named_child<'tree>(node: &Node<'tree>) -> Option<Node<'tree>> {
     }
 }
 
-fn find_enclosing_symbol<'a>(symbols: &'a [Symbol], range: &Range) -> Option<&'a Symbol> {
-    symbols
+/// Scope-stack analogue of `find_enclosing_symbol`: the smallest-range scope
+/// containing `range`, ties broken by earliest-pushed (outermost). Because the
+/// stack holds exactly the symbol-creating ancestors in pre-order — the same set
+/// `find_enclosing_symbol` would match (range containment ⇔ ancestry in a tree),
+/// in the same relative order it scans `symbols` — this reproduces its result
+/// (including the equal-range tie-break) at O(depth) instead of O(symbols).
+fn resolve_enclosing_scope<'a>(scope: &'a [Scope], range: &Range) -> Option<&'a Scope> {
+    scope
         .iter()
-        .filter(|symbol| symbol_contains_range(symbol, range))
-        .min_by_key(|symbol| {
-            let line_span = symbol
+        .filter(|frame| {
+            starts_before_or_at(frame.range.start, range.start)
+                && starts_before_or_at(range.end, frame.range.end)
+        })
+        .min_by_key(|frame| {
+            let line_span = frame
                 .range
                 .end
                 .line
-                .saturating_sub(symbol.range.start.line);
-            let char_span = symbol
+                .saturating_sub(frame.range.start.line);
+            let char_span = frame
                 .range
                 .end
                 .character
-                .saturating_sub(symbol.range.start.character);
+                .saturating_sub(frame.range.start.character);
             (line_span, char_span)
         })
-}
-
-fn symbol_contains_range(symbol: &Symbol, range: &Range) -> bool {
-    starts_before_or_at(symbol.range.start, range.start)
-        && starts_before_or_at(range.end, symbol.range.end)
 }
 
 fn starts_before_or_at(left: Position, right: Position) -> bool {
