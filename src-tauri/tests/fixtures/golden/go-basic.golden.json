@@ -2,8 +2,8 @@
   "case": "go-basic",
   "language": "Go",
   "parse_status": "ok",
-  "symbol_count": 5,
-  "relationship_count": 4,
+  "symbol_count": 6,
+  "relationship_count": 6,
   "symbols": [
     {
       "name": "fmt",
@@ -64,6 +64,18 @@
       "parent_qualified_name": null,
       "docstring": "Start runs the server.",
       "signature": "() error"
+    },
+    {
+      "name": "Pick",
+      "kind": "function",
+      "qualified_name": "Pick",
+      "start_line": 28,
+      "start_col": 0,
+      "end_line": 30,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "edge, while the real `Server` parameter/return type must.",
+      "signature": "(items []T, srv *Server) *Server"
     }
   ],
   "relationships": [
@@ -80,6 +92,12 @@
       "line": 10
     },
     {
+      "relationship_type": "uses_type",
+      "source_qualified_name": "NewServer",
+      "target_name": "Server",
+      "line": 16
+    },
+    {
       "relationship_type": "contains",
       "source_qualified_name": "Server",
       "target_name": "Start",
@@ -90,6 +108,12 @@
       "source_qualified_name": "Start",
       "target_name": "Println",
       "line": 22
+    },
+    {
+      "relationship_type": "uses_type",
+      "source_qualified_name": "Pick",
+      "target_name": "Server",
+      "line": 28
     }
   ]
 }

@@ -23,3 +23,9 @@ func (s *Server) Start() error {
 	fmt.Println(s.Name)
 	return nil
 }
+
+// Pick is generic: its own type parameter `T` must NOT become a `uses_type`
+// edge, while the real `Server` parameter/return type must.
+func Pick[T any](items []T, srv *Server) *Server {
+	return srv
+}

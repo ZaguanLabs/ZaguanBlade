@@ -190,6 +190,7 @@ const ALL_RELATIONSHIP_TYPES: &[SymbolRelationshipType] = &[
     SymbolRelationshipType::Implements,
     SymbolRelationshipType::Contains,
     SymbolRelationshipType::Usage,
+    SymbolRelationshipType::UsesType,
 ];
 
 // NOTE: language derived from file path until M2.3 adds a real `language` column; re-base then.
@@ -239,7 +240,8 @@ fn coverage_variant_drift_guard(
         | SymbolRelationshipType::Extends
         | SymbolRelationshipType::Implements
         | SymbolRelationshipType::Contains
-        | SymbolRelationshipType::Usage => {}
+        | SymbolRelationshipType::Usage
+        | SymbolRelationshipType::UsesType => {}
     }
 }
 

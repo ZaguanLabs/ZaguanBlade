@@ -246,6 +246,10 @@ pub enum SymbolRelationshipType {
     Implements,
     Contains,
     Usage,
+    /// A function/method references a TYPE in its signature (parameter or return
+    /// type). Source is the enclosing function/method symbol; `target_name` is the
+    /// base type name (M4.1). Stored as the TEXT value `"uses_type"`.
+    UsesType,
 }
 
 impl std::fmt::Display for SymbolRelationshipType {
@@ -258,6 +262,7 @@ impl std::fmt::Display for SymbolRelationshipType {
             SymbolRelationshipType::Implements => "implements",
             SymbolRelationshipType::Contains => "contains",
             SymbolRelationshipType::Usage => "usage",
+            SymbolRelationshipType::UsesType => "uses_type",
         };
         write!(f, "{}", s)
     }
@@ -275,6 +280,7 @@ impl std::str::FromStr for SymbolRelationshipType {
             "implements" => Ok(SymbolRelationshipType::Implements),
             "contains" => Ok(SymbolRelationshipType::Contains),
             "usage" | "uses" => Ok(SymbolRelationshipType::Usage),
+            "uses_type" => Ok(SymbolRelationshipType::UsesType),
             _ => Err(format!("Unknown relationship type: {}", s)),
         }
     }
@@ -522,6 +528,13 @@ impl SymbolExtractor {
         // scope push so a class node resolves to its own symbol (reproducing the
         // old `find_enclosing_symbol(class_range)` self-match).
         self.process_structural_relationship(node, source, language, state, rel);
+        // `uses_type` concern (M4.1): when this node just created a
+        // function/method symbol, emit an edge to each TYPE named in its
+        // signature (parameter + return types). Gated on `pushed` so we only fire
+        // for the symbol-creating node, and on symbol_type inside the handler.
+        if pushed {
+            self.process_uses_type_relationship(&node, source, language, state, rel);
+        }
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
@@ -642,6 +655,115 @@ impl SymbolExtractor {
                 relationship_type: SymbolRelationshipType::Call,
                 line,
             });
+        }
+    }
+
+    /// Emit `UsesType` edges (M4.1) for a node that just created a
+    /// function/method symbol. The source is that symbol; the targets are the
+    /// non-builtin base type names referenced in the signature's parameter types
+    /// and return type. Body casts/generics are deferred (§13) — signatures only.
+    ///
+    /// The edge `line` is the function symbol's definition line, so the shared
+    /// `seen` set collapses a type used in both a parameter and the return into a
+    /// single edge (dedup on `(source, type)`).
+    fn process_uses_type_relationship(
+        &self,
+        node: &Node,
+        source: &str,
+        language: Language,
+        state: &WalkState,
+        rel: &mut RelState,
+    ) {
+        // The symbol just appended by `enter_symbol_scope` for THIS node.
+        let (source_id, line) = match state.symbols.last() {
+            Some(sym)
+                if matches!(
+                    sym.symbol_type,
+                    SymbolType::Function | SymbolType::Method
+                ) =>
+            {
+                (sym.id.clone(), sym.range.start.line)
+            }
+            _ => return,
+        };
+
+        let Some(sig_node) = self.uses_type_signature_node(node, language) else {
+            return;
+        };
+
+        // The type parameters THIS function declares (`fn f<T, K>` / `func F[T any]`
+        // / `def f[T]`) are NOT referenced types — they are introduced by the
+        // signature itself. Gather their names so they can be filtered out of the
+        // emitted targets below (M4.1 noise fix). Scoped to THIS signature.
+        let mut declared_params: HashSet<String> = HashSet::new();
+        collect_declared_type_params(&sig_node, language, source, &mut declared_params);
+
+        // Collect raw type-name leaves from each parameter's `type` field. Going
+        // type-field-by-field (rather than scanning the whole parameter list)
+        // avoids picking up parameter *names* — which in Python share the
+        // `identifier` node-kind with type names.
+        let mut raw: Vec<String> = Vec::new();
+        if let Some(params) = sig_node.child_by_field_name("parameters") {
+            let mut cursor = params.walk();
+            for param in params.named_children(&mut cursor) {
+                if let Some(type_node) = param.child_by_field_name("type") {
+                    collect_type_names(&type_node, language, source, &mut raw);
+                }
+            }
+        }
+
+        // Return type: Go names it `result`; the others `return_type`.
+        let return_field = if language == Language::Go {
+            "result"
+        } else {
+            "return_type"
+        };
+        if let Some(return_node) = sig_node.child_by_field_name(return_field) {
+            collect_type_names(&return_node, language, source, &mut raw);
+        }
+
+        for name in raw {
+            let Some(clean) = clean_type_name(&name) else {
+                continue;
+            };
+            // Drop the function's OWN generic type parameters (`<T, K, V>`): they
+            // are declarations, not references.
+            if declared_params.contains(&clean) {
+                continue;
+            }
+            if is_builtin_type(language, &clean) {
+                continue;
+            }
+            // `push_relationship` dedups on (source, target, UsesType, line); since
+            // line is constant per function, this is dedup on (source, type).
+            push_relationship(
+                &mut rel.relationships,
+                &mut rel.seen,
+                &source_id,
+                &self.file_path,
+                clean,
+                SymbolRelationshipType::UsesType,
+                line,
+            );
+        }
+    }
+
+    /// The node whose `parameters` / return-type fields carry the signature for a
+    /// just-created function/method symbol. For most languages that is the symbol
+    /// node itself; for a TS/JS `const f = (...) => ...` the params live on the
+    /// arrow/function *value*, so reuse `js_ts_signature_node`.
+    fn uses_type_signature_node<'tree>(
+        &self,
+        node: &Node<'tree>,
+        language: Language,
+    ) -> Option<Node<'tree>> {
+        match language {
+            Language::TypeScript
+            | Language::Tsx
+            | Language::Astro
+            | Language::JavaScript
+            | Language::Jsx => self.js_ts_signature_node(node),
+            _ => Some(*node),
         }
     }
 
@@ -2285,6 +2407,340 @@ fn last_named_child<'tree>(node: &Node<'tree>) -> Option<Node<'tree>> {
     }
 }
 
+/// The first named child of `node` whose kind is `kind`, if any.
+fn first_child_of_kind<'tree>(node: &Node<'tree>, kind: &str) -> Option<Node<'tree>> {
+    let mut cursor = node.walk();
+    let found = node.named_children(&mut cursor).find(|c| c.kind() == kind);
+    found
+}
+
+/// Insert the NAME of one declared type parameter into `out`. The name is the
+/// node itself when it is already a `type_identifier`, otherwise the first
+/// `type_identifier` DIRECT child (e.g. Rust/TS `type_parameter` → its leading
+/// `type_identifier`; any trailing bound like `: Clone` / `extends X` is nested
+/// deeper and is intentionally not treated as the name).
+fn insert_type_param_name(node: &Node, source: &str, out: &mut HashSet<String>) {
+    if node.kind() == "type_identifier" {
+        if let Ok(text) = node.utf8_text(source.as_bytes()) {
+            out.insert(text.to_string());
+        }
+        return;
+    }
+    if let Some(name) = first_child_of_kind(node, "type_identifier") {
+        if let Ok(text) = name.utf8_text(source.as_bytes()) {
+            out.insert(text.to_string());
+        }
+    }
+}
+
+/// Insert every direct `identifier` child of `node` into `out` (Go/Python name
+/// position uses `identifier`, not `type_identifier`).
+fn insert_identifier_names(node: &Node, source: &str, out: &mut HashSet<String>) {
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if child.kind() == "identifier" {
+            if let Ok(text) = child.utf8_text(source.as_bytes()) {
+                out.insert(text.to_string());
+            }
+        }
+    }
+}
+
+/// Collect the set of type-parameter names that THIS function/method DECLARES,
+/// from the structural declaration site on its signature node (M4.1 noise fix).
+///
+/// A function's own generic parameters (`fn f<T, K, V>` / `function f<T, U>` /
+/// `func F[T any, K comparable]` / PEP-695 `def f[T, K]`) are NOT referenced
+/// types — they are introduced by the signature itself — so the caller filters
+/// them out of the emitted `uses_type` targets. Per-language declaration sites:
+/// - Rust / TS family: a `type_parameters` child; each entry's name is its
+///   leading `type_identifier` (bounds are nested and ignored).
+/// - Go: a `type_parameter_list` child; each `type_parameter_declaration` names
+///   one-or-more params via `identifier` leaves (the constraint is a sibling).
+/// - Python: a PEP-695 `type_parameter` child; each `type` wraps an `identifier`.
+///
+/// Old-style Python `TypeVar`s assigned elsewhere are invisible from the
+/// signature and are a known minor limitation (not handled here).
+fn collect_declared_type_params(
+    sig_node: &Node,
+    language: Language,
+    source: &str,
+    out: &mut HashSet<String>,
+) {
+    match language {
+        Language::Rust
+        | Language::TypeScript
+        | Language::Tsx
+        | Language::Astro
+        | Language::JavaScript
+        | Language::Jsx => {
+            if let Some(tp) = first_child_of_kind(sig_node, "type_parameters") {
+                let mut cursor = tp.walk();
+                for child in tp.named_children(&mut cursor) {
+                    insert_type_param_name(&child, source, out);
+                }
+            }
+        }
+        Language::Go => {
+            if let Some(tpl) = first_child_of_kind(sig_node, "type_parameter_list") {
+                let mut cursor = tpl.walk();
+                for decl in tpl.named_children(&mut cursor) {
+                    insert_identifier_names(&decl, source, out);
+                }
+            }
+        }
+        Language::Python => {
+            // The list node kind is `type_parameter` (singular) holding `type`
+            // entries that each wrap the name `identifier`.
+            if let Some(tp) = first_child_of_kind(sig_node, "type_parameter") {
+                let mut cursor = tp.walk();
+                for child in tp.named_children(&mut cursor) {
+                    if child.kind() == "identifier" {
+                        if let Ok(text) = child.utf8_text(source.as_bytes()) {
+                            out.insert(text.to_string());
+                        }
+                    } else {
+                        insert_identifier_names(&child, source, out);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Collect the type-name leaves referenced inside a type subtree (M4.1).
+///
+/// Recurses through generics, references, slices, pointers, maps, etc., so a
+/// container like `Result<Widget>` / `map[string]Widget` / `List[Widget]` yields
+/// its INNER named types (the container itself is dropped later by
+/// `is_builtin_type`). This is "recurse into generic args" done structurally via
+/// tree-sitter, which also avoids lifetime / keyword / module-prefix noise that a
+/// purely textual parse would hit.
+///
+/// Per-language leaf kinds:
+/// - Rust / TS family / Go: type names are `type_identifier` leaves. Rust/TS
+///   primitives are distinct node kinds (`primitive_type` / `predefined_type`)
+///   and never appear here; Go predeclared types ARE `type_identifier` and are
+///   dropped by name in `is_builtin_type`.
+/// - Python: type positions are expressions, so type names are `identifier`
+///   leaves (filtered by name). An `attribute` (e.g. `typing.Optional`) is
+///   reduced to its rightmost segment so the module prefix is not emitted.
+fn collect_type_names(node: &Node, language: Language, source: &str, out: &mut Vec<String>) {
+    match language {
+        Language::Python => match node.kind() {
+            "identifier" => {
+                if let Ok(text) = node.utf8_text(source.as_bytes()) {
+                    out.push(text.to_string());
+                }
+            }
+            // `a.b.C` → keep only `C` (drop the module/object path).
+            "attribute" => {
+                if let Some(attr) = node.child_by_field_name("attribute") {
+                    collect_type_names(&attr, language, source, out);
+                }
+            }
+            _ => {
+                let mut cursor = node.walk();
+                for child in node.named_children(&mut cursor) {
+                    collect_type_names(&child, language, source, out);
+                }
+            }
+        },
+        _ => {
+            if node.kind() == "type_identifier" {
+                if let Ok(text) = node.utf8_text(source.as_bytes()) {
+                    out.push(text.to_string());
+                }
+                return;
+            }
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                collect_type_names(&child, language, source, out);
+            }
+        }
+    }
+}
+
+/// Normalize one collected type leaf into a bare base type name (M4.1).
+///
+/// Strips wrapper sigils/keywords (`&`, `*`, `mut`, `dyn`, `impl`, `const`),
+/// unwraps any residual generic (`Foo<Bar>` → `Foo`), drops slice/array/option
+/// punctuation (`[]`, `?`), and takes the last path segment (`a::B`/`a.B` → `B`).
+/// `collect_type_names` already yields atomic leaves, so this is mostly a
+/// validating normalizer; it returns `None` for anything that is not a plain
+/// identifier (e.g. a stray lifetime or punctuation token).
+fn clean_type_name(raw: &str) -> Option<String> {
+    let mut value = raw.trim();
+
+    // Peel leading reference/pointer sigils and type keywords, repeatedly.
+    loop {
+        let before = value;
+        value = value.trim_start_matches(['&', '*']).trim_start();
+        for keyword in ["mut ", "dyn ", "impl ", "const "] {
+            if let Some(rest) = value.strip_prefix(keyword) {
+                value = rest.trim_start();
+            }
+        }
+        if value == before {
+            break;
+        }
+    }
+
+    // Drop any generic argument list, slice/array brackets, and option marker.
+    let value = value.split('<').next().unwrap_or(value);
+    let value = value.trim_matches(|c| matches!(c, '[' | ']' | '?' | '(' | ')')).trim();
+
+    // Keep the final path segment of a qualified name.
+    let value = value.rsplit("::").next().unwrap_or(value);
+    let value = value.rsplit('.').next().unwrap_or(value).trim();
+
+    // Accept only a plain identifier (defensive against lifetimes / tokens).
+    let mut chars = value.chars();
+    let first_ok = chars
+        .next()
+        .map(|c| c.is_alphabetic() || c == '_')
+        .unwrap_or(false);
+    if !first_ok || !value.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return None;
+    }
+    Some(value.to_string())
+}
+
+/// True when `name` is a language primitive / ubiquitous std container whose
+/// `uses_type` edge would be pure noise (M4.1). Container generics (e.g. Rust
+/// `Vec`/`Result`, TS `Promise`/`Array`, Python `Optional`/`List`) are dropped
+/// *here* while their inner type was already kept by `collect_type_names`. JS/JSX
+/// have no type annotations and unsupported languages emit nothing, so they treat
+/// every name as builtin (skip).
+fn is_builtin_type(language: Language, name: &str) -> bool {
+    match language {
+        Language::Rust => RUST_BUILTIN_TYPES.contains(&name),
+        Language::TypeScript | Language::Tsx | Language::Astro => TS_BUILTIN_TYPES.contains(&name),
+        Language::Python => PYTHON_BUILTIN_TYPES.contains(&name),
+        Language::Go => GO_BUILTIN_TYPES.contains(&name),
+        _ => true,
+    }
+}
+
+/// Rust primitives + `String`/`Self` + the ubiquitous std smart-pointer /
+/// collection generics + the closure traits. The container names are dropped (low
+/// signal); their inner type was already collected, so `Result<Widget>` still
+/// yields `Widget` and `&dyn Fn(In) -> Out` still yields `In`/`Out` while the
+/// `Fn`/`FnMut`/`FnOnce` trait itself is noise.
+static RUST_BUILTIN_TYPES: &[&str] = &[
+    "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize", "f32",
+    "f64", "bool", "char", "str", "String", "Self", "Vec", "Option", "Result", "Box", "Rc", "Arc",
+    "Weak", "Cell", "RefCell", "Mutex", "RwLock", "Cow", "Pin", "HashMap", "HashSet", "BTreeMap",
+    "BTreeSet", "VecDeque", "BinaryHeap", "LinkedList", "Fn", "FnMut", "FnOnce",
+];
+
+/// TypeScript primitive/utility types + global container generics (their inner
+/// type was already collected).
+static TS_BUILTIN_TYPES: &[&str] = &[
+    "string",
+    "number",
+    "boolean",
+    "void",
+    "any",
+    "unknown",
+    "never",
+    "null",
+    "undefined",
+    "object",
+    "symbol",
+    "bigint",
+    "this",
+    "Promise",
+    "Array",
+    "ReadonlyArray",
+    "Map",
+    "ReadonlyMap",
+    "Set",
+    "ReadonlySet",
+    "WeakMap",
+    "WeakSet",
+    "Record",
+    "Partial",
+    "Required",
+    "Readonly",
+    "Pick",
+    "Omit",
+    "Exclude",
+    "Extract",
+    "NonNullable",
+];
+
+/// Python builtins + `typing` container generics (inner type already collected).
+static PYTHON_BUILTIN_TYPES: &[&str] = &[
+    "int",
+    "str",
+    "bool",
+    "float",
+    "complex",
+    "bytes",
+    "bytearray",
+    "memoryview",
+    "None",
+    "NoneType",
+    "object",
+    "type",
+    "list",
+    "dict",
+    "set",
+    "frozenset",
+    "tuple",
+    "range",
+    "Any",
+    "List",
+    "Dict",
+    "Set",
+    "FrozenSet",
+    "Tuple",
+    "Optional",
+    "Union",
+    "Sequence",
+    "Mapping",
+    "MutableMapping",
+    "Iterable",
+    "Iterator",
+    "Callable",
+    "Awaitable",
+    "Coroutine",
+    "Type",
+    "ClassVar",
+    "Final",
+    "Annotated",
+    "Literal",
+];
+
+/// Go predeclared types. Go has no container *type names* (`map`/`[]`/`chan` are
+/// distinct node kinds), so only the predeclared identifiers need dropping.
+static GO_BUILTIN_TYPES: &[&str] = &[
+    "bool",
+    "string",
+    "int",
+    "int8",
+    "int16",
+    "int32",
+    "int64",
+    "uint",
+    "uint8",
+    "uint16",
+    "uint32",
+    "uint64",
+    "uintptr",
+    "byte",
+    "rune",
+    "float32",
+    "float64",
+    "complex64",
+    "complex128",
+    "error",
+    "any",
+    "comparable",
+];
+
 /// Scope-stack analogue of `find_enclosing_symbol`: the smallest-range scope
 /// containing `range`, ties broken by earliest-pushed (outermost). Because the
 /// stack holds exactly the symbol-creating ancestors in pre-order — the same set
@@ -2663,6 +3119,163 @@ func (s *Server) Handle() error {
         assert!(symbols
             .iter()
             .any(|s| s.name == "Handle" && s.symbol_type == SymbolType::Method));
+    }
+
+    /// Collect the `uses_type` target names attributed to a given source
+    /// qualified-name from a freshly-extracted file.
+    fn uses_type_targets(
+        code: &str,
+        language: Language,
+        path: &str,
+        source_qn: &str,
+    ) -> Vec<String> {
+        let mut parser = TreeSitterParser::new().unwrap();
+        let tree = parser.parse(code, language).unwrap();
+        let symbols = extract_symbols(&tree, code, language, path);
+        let relationships = extract_symbol_relationships(&tree, code, language, path, &symbols);
+        let id_for = |qn: &str| -> Option<String> {
+            symbols
+                .iter()
+                .find(|s| s.qualified_name == qn)
+                .map(|s| s.id.clone())
+        };
+        let source_id = id_for(source_qn).expect("source symbol not found");
+        let mut targets: Vec<String> = relationships
+            .iter()
+            .filter(|r| {
+                r.relationship_type == SymbolRelationshipType::UsesType
+                    && r.source_symbol_id == source_id
+            })
+            .map(|r| r.target_name.clone())
+            .collect();
+        targets.sort();
+        targets
+    }
+
+    #[test]
+    fn test_uses_type_rust_signature_edges() {
+        // `Config` (param) and `Widget` (inner of `Result<Widget>`) are emitted;
+        // the `bool` primitive and the `Result` container are NOT.
+        let code = r#"
+struct Config;
+struct Widget;
+fn f(c: Config, flag: bool) -> Result<Widget> {
+    todo!()
+}
+"#;
+        let targets = uses_type_targets(code, Language::Rust, "lib.rs", "f");
+        assert!(targets.contains(&"Config".to_string()), "got {targets:?}");
+        assert!(targets.contains(&"Widget".to_string()), "got {targets:?}");
+        assert!(!targets.contains(&"bool".to_string()), "got {targets:?}");
+        assert!(!targets.contains(&"Result".to_string()), "got {targets:?}");
+    }
+
+    #[test]
+    fn test_uses_type_rust_nested_generics_and_refs() {
+        // `&mut Vec<Box<dyn Trait>>` keeps the inner `Trait`; `HashMap<String,i32>`
+        // is all-builtin so it yields nothing.
+        let code = r#"
+trait Trait {}
+struct Item;
+fn g(items: &mut Vec<Box<dyn Trait>>, m: std::collections::HashMap<String, i32>) -> Option<Item> {
+    todo!()
+}
+"#;
+        let targets = uses_type_targets(code, Language::Rust, "lib.rs", "g");
+        assert_eq!(targets, vec!["Item".to_string(), "Trait".to_string()]);
+    }
+
+    #[test]
+    fn test_uses_type_rust_excludes_generic_params_and_fn_traits() {
+        // A function's OWN declared generic params (`<T, K, V>`) are declarations,
+        // not references, so they must NOT be emitted. A real param type (`Config`)
+        // IS emitted. The closure trait `Fn` is low-signal noise and is dropped,
+        // while the closure's argument/return types (`In`/`Out`) are still kept.
+        let code = r#"
+struct Config;
+struct In;
+struct Out;
+fn generic<T, K, V>(a: T, m: K, cfg: Config, f: &dyn Fn(In) -> Out) -> V {
+    todo!()
+}
+"#;
+        let targets = uses_type_targets(code, Language::Rust, "lib.rs", "generic");
+        assert!(targets.contains(&"Config".to_string()), "got {targets:?}");
+        assert!(targets.contains(&"In".to_string()), "got {targets:?}");
+        assert!(targets.contains(&"Out".to_string()), "got {targets:?}");
+        assert!(!targets.contains(&"T".to_string()), "got {targets:?}");
+        assert!(!targets.contains(&"K".to_string()), "got {targets:?}");
+        assert!(!targets.contains(&"V".to_string()), "got {targets:?}");
+        assert!(!targets.contains(&"Fn".to_string()), "got {targets:?}");
+    }
+
+    #[test]
+    fn test_uses_type_excludes_generic_params_ts_go_python() {
+        // TypeScript `<T, U>` declared params excluded; real `Config` kept.
+        let ts = "function gen<T, U>(a: T, b: Config): U { return b as any; }";
+        let ts_targets = uses_type_targets(ts, Language::TypeScript, "m.ts", "gen");
+        assert_eq!(ts_targets, vec!["Config".to_string()], "ts: {ts_targets:?}");
+
+        // Go `[T any, K comparable]` declared params excluded; real `Config` kept.
+        let go = "package main\nfunc Gen[T any, K comparable](a T, c Config) K { var z K; return z }";
+        let go_targets = uses_type_targets(go, Language::Go, "m.go", "Gen");
+        assert_eq!(go_targets, vec!["Config".to_string()], "go: {go_targets:?}");
+
+        // Python PEP-695 `def gen[T, K]` declared params excluded; real `Config` kept.
+        let py = "def gen[T, K](a: T, c: Config) -> K:\n    return a";
+        let py_targets = uses_type_targets(py, Language::Python, "m.py", "gen");
+        assert_eq!(py_targets, vec!["Config".to_string()], "py: {py_targets:?}");
+    }
+
+    #[test]
+    fn test_uses_type_typescript_signature_edges() {
+        // Arrow-const function: params/return live on the arrow value. `Config`
+        // and `Widget` (inner of `Promise<Widget>`) emitted; `boolean` not.
+        let code = r#"
+const build = (c: Config, flag: boolean): Promise<Widget> => {
+    return load(c);
+};
+"#;
+        let targets = uses_type_targets(code, Language::TypeScript, "m.ts", "build");
+        assert!(targets.contains(&"Config".to_string()), "got {targets:?}");
+        assert!(targets.contains(&"Widget".to_string()), "got {targets:?}");
+        assert!(!targets.contains(&"boolean".to_string()), "got {targets:?}");
+        assert!(!targets.contains(&"Promise".to_string()), "got {targets:?}");
+    }
+
+    #[test]
+    fn test_uses_type_python_signature_edges() {
+        // `int`/`str` builtins dropped; `Config` param and `Widget` (inner of
+        // `typing.Optional[Widget]`) kept; the `typing` module prefix is not a
+        // target.
+        let code = r#"
+def f(c: Config, n: int, w: typing.Optional[Widget]) -> str:
+    return str(n)
+"#;
+        let targets = uses_type_targets(code, Language::Python, "m.py", "f");
+        assert!(targets.contains(&"Config".to_string()), "got {targets:?}");
+        assert!(targets.contains(&"Widget".to_string()), "got {targets:?}");
+        assert!(!targets.contains(&"int".to_string()), "got {targets:?}");
+        assert!(!targets.contains(&"str".to_string()), "got {targets:?}");
+        assert!(!targets.contains(&"typing".to_string()), "got {targets:?}");
+        assert!(!targets.contains(&"Optional".to_string()), "got {targets:?}");
+    }
+
+    #[test]
+    fn test_uses_type_go_signature_edges() {
+        // `string`/`error` predeclared dropped; `Widget` (map value) and `Server`
+        // (pointer return) kept.
+        let code = r#"
+package main
+func F(name string, m map[string]Widget) (*Server, error) {
+    return nil, nil
+}
+"#;
+        let targets = uses_type_targets(code, Language::Go, "m.go", "F");
+        assert!(targets.contains(&"Widget".to_string()), "got {targets:?}");
+        assert!(targets.contains(&"Server".to_string()), "got {targets:?}");
+        assert!(!targets.contains(&"string".to_string()), "got {targets:?}");
+        assert!(!targets.contains(&"error".to_string()), "got {targets:?}");
     }
 
     #[test]

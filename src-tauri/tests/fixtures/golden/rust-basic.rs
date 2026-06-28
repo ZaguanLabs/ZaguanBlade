@@ -33,3 +33,12 @@ pub fn run(map: HashMap<String, i32>) -> i32 {
     println!("sum = {}", p.sum());
     p.sum()
 }
+
+/// Generic helper: its own type parameter `T` must NOT become a `uses_type`
+/// edge, while the real `Point` parameter type must. `Vec`/`Option` are builtin
+/// containers (dropped) and the closure trait `Fn` is low-signal noise (dropped),
+/// but the closure's argument/return types are kept.
+pub fn pick<T>(items: Vec<T>, anchor: Point, choose: &dyn Fn(Color) -> T) -> Option<T> {
+    let _ = (items, anchor, choose);
+    None
+}

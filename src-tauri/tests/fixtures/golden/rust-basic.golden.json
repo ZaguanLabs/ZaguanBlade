@@ -2,8 +2,8 @@
   "case": "rust-basic",
   "language": "Rust",
   "parse_status": "ok",
-  "symbol_count": 12,
-  "relationship_count": 4,
+  "symbol_count": 13,
+  "relationship_count": 7,
   "symbols": [
     {
       "name": "std::collections::HashMap",
@@ -148,6 +148,18 @@
       "parent_qualified_name": null,
       "docstring": "Entry-point helper that builds a point and logs it.",
       "signature": "(map: HashMap<String, i32>) i32"
+    },
+    {
+      "name": "pick",
+      "kind": "function",
+      "qualified_name": "pick",
+      "start_line": 40,
+      "start_col": 0,
+      "end_line": 43,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "but the closure's argument/return types are kept.",
+      "signature": "(items: Vec<T>, anchor: Point, choose: &dyn Fn(Color) -> T) Option<T>"
     }
   ],
   "relationships": [
@@ -156,6 +168,12 @@
       "source_qualified_name": "std::collections::HashMap",
       "target_name": "std::collections::HashMap",
       "line": 1
+    },
+    {
+      "relationship_type": "uses_type",
+      "source_qualified_name": "Point::new",
+      "target_name": "Point",
+      "line": 18
     },
     {
       "relationship_type": "call",
@@ -174,6 +192,18 @@
       "source_qualified_name": "run",
       "target_name": "sum",
       "line": 33
+    },
+    {
+      "relationship_type": "uses_type",
+      "source_qualified_name": "pick",
+      "target_name": "Color",
+      "line": 40
+    },
+    {
+      "relationship_type": "uses_type",
+      "source_qualified_name": "pick",
+      "target_name": "Point",
+      "line": 40
     }
   ]
 }
