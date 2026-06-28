@@ -119,7 +119,8 @@
       "relationship_type": "call",
       "source_qualified_name": "helper",
       "target_name": "strip",
-      "line": 16
+      "line": 16,
+      "recv_type": "str"
     },
     {
       "relationship_type": "reads_env",

@@ -251,7 +251,8 @@
       "relationship_type": "call",
       "source_qualified_name": "run",
       "target_name": "sum",
-      "line": 33
+      "line": 33,
+      "recv_type": "Point"
     },
     {
       "relationship_type": "uses_type",

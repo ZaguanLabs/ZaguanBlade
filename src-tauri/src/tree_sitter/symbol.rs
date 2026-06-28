@@ -110,6 +110,7 @@ fn extract_import_relationships(
                 target_symbol_id: None,
                 relationship_type: SymbolRelationshipType::Import,
                 line: symbol.range.start.line,
+                ..Default::default()
             });
         }
     }
@@ -325,6 +326,102 @@ pub struct SymbolRelationship {
     pub target_symbol_id: Option<String>,
     pub relationship_type: SymbolRelationshipType,
     pub line: u32,
+    /// M5.1 receiver-type dispatch. For a method/attribute Call edge whose
+    /// receiver evaluated to a known `TypeRep::Named`, this carries that base
+    /// type NAME (e.g. `self.run()` inside class `A` → `Some("A")`; `x.run()`
+    /// where `x = B()` → `Some("B")`). Bare calls and `TypeRep::Unknown`
+    /// receivers leave it `None` so downstream resolution is unchanged. Persisted
+    /// to the `metadata_json` column as `{"recv_type":"<name>"}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recv_type: Option<String>,
+    /// M5.1 audit tag. Set to `Some("receiver_type")` ONLY when the per-file
+    /// resolver disambiguated an otherwise-ambiguous candidate set by `recv_type`.
+    /// `None` everywhere else (matching today's per-file resolutions, which carry
+    /// no strategy until the global-unique back-fill tags them in the store).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution_strategy: Option<String>,
+    /// M5.1 confidence for a `receiver_type` resolution (above `global_unique`'s
+    /// `0.5`). `None` unless `resolution_strategy` is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
+}
+
+impl Default for SymbolRelationship {
+    fn default() -> Self {
+        SymbolRelationship {
+            source_symbol_id: String::new(),
+            source_file_path: String::new(),
+            target_name: String::new(),
+            target_symbol_id: None,
+            relationship_type: SymbolRelationshipType::Call,
+            line: 0,
+            recv_type: None,
+            resolution_strategy: None,
+            confidence: None,
+        }
+    }
+}
+
+/// M5.1 minimal type representation for receiver-type dispatch. Deliberately
+/// tiny: the dispatch path only ever reads a base `Named` qualified-name, and an
+/// `Unknown` receiver falls straight through to today's resolver (strict
+/// superset). `Ref`/`Generic`/trait-solving are deferred (§13 parking lot).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TypeRep {
+    /// A concrete named type (class/struct/interface/…) — its base NAME as
+    /// written (`Foo`), used to match a method candidate's parent-class name.
+    Named(String),
+    /// The receiver's type could not be evaluated cheaply → no narrowing.
+    Unknown,
+}
+
+/// M5.1 one scope's local-variable typing, with the conservatism the adversarial
+/// review demands. A name maps to a `TypeRep`; `poisoned` names are stuck on
+/// `Unknown` for the rest of the scope (a conflicting re-assignment makes the type
+/// ambiguous and no later write may revive a concrete type).
+///
+/// Guiding principle: when a variable's type is not CONFIDENTLY known it MUST be
+/// `Unknown` (which falls through to today's safe resolver) — never a guess. Every
+/// mutator below errs toward `Unknown`.
+#[derive(Default)]
+struct VarFrame {
+    types: HashMap<String, TypeRep>,
+    /// Names made permanently `Unknown` by a conflicting re-assignment (FIX 2).
+    poisoned: HashSet<String>,
+}
+
+impl VarFrame {
+    /// Record a binding of `name` to `rep`, overwriting any prior type (FIX 1: a
+    /// rebind must never leave the stale type). Two guards keep it conservative:
+    /// - a poisoned name is immutable (`Unknown` wins forever);
+    /// - re-binding an existing CONCRETE type to a DIFFERENT concrete type is a
+    ///   flow-insensitive conflict (we have no CFG) → poison to `Unknown` (FIX 2).
+    fn bind(&mut self, name: &str, rep: TypeRep) {
+        if self.poisoned.contains(name) {
+            return;
+        }
+        if let (Some(TypeRep::Named(old)), TypeRep::Named(new)) = (self.types.get(name), &rep) {
+            if old != new {
+                self.poison(name);
+                return;
+            }
+        }
+        self.types.insert(name.to_string(), rep);
+    }
+
+    /// Force `name` to a sticky `Unknown` for the rest of the scope (FIX 2).
+    fn poison(&mut self, name: &str) {
+        self.types.insert(name.to_string(), TypeRep::Unknown);
+        self.poisoned.insert(name.to_string());
+    }
+
+    /// Insert an `Unknown` shadow marker so `lookup_var_type` STOPS here instead of
+    /// leaking an outer same-named type (FIX 1/FIX 3: untyped params, loop/with/
+    /// except/comprehension/lambda targets). Goes through `bind`, so it also clears
+    /// a stale concrete type rather than leaving it.
+    fn shadow(&mut self, name: &str) {
+        self.bind(name, TypeRep::Unknown);
+    }
 }
 
 /// Symbol extractor for extracting symbols from AST trees
@@ -356,6 +453,10 @@ struct Scope {
     /// Separator joining `child_qn` to a child's name.
     /// `.` for most nesting; `::` for Rust `impl`/method paths (`Type::method`).
     child_sep: &'static str,
+    /// M5.1: whether this scope is a class-like TYPE (class/struct/interface/
+    /// trait/enum/impl). Used to resolve `self`/`this` to the nearest enclosing
+    /// type's `child_qn` (the qualified name handed to its members).
+    is_type: bool,
 }
 
 /// The child-naming context a symbol hands down to its descendants. The default
@@ -376,6 +477,19 @@ struct WalkState {
     /// walk; it is also consulted live for the Rust-`impl` child-context lookup,
     /// which must see only symbols-so-far (matching the original pass).
     symbols: Vec<Symbol>,
+    /// M5.1 per-scope local-variable type frames, pushed/popped in lockstep with
+    /// `scope` during the RELATIONSHIP walk only (the symbol walk never touches
+    /// it). Typed params and constructor-bound locals (`x = Foo()` / `new Foo()` /
+    /// `Foo::new()` / `Foo{}`) are inserted into the top frame; a receiver
+    /// identifier is resolved by scanning top→bottom. See `VarFrame` for the
+    /// conservative (Unknown-on-doubt) write semantics.
+    var_types: Vec<VarFrame>,
+    /// M5.1 class-gating set (FIX 4): the simple names of every class-like symbol
+    /// in this file. A Python `x = Foo()` is constructor-typed as `Foo` ONLY when
+    /// `Foo` is in this set (a real class, not a factory function); Rust
+    /// `let x = Foo::new()` likewise only when `Foo` is a known struct/enum. Built
+    /// once up-front from the full symbol list; empty during the symbol walk.
+    class_names: HashSet<String>,
 }
 
 /// Relationship-walk sink, threaded alongside `WalkState` when the unified DFS
@@ -409,6 +523,8 @@ impl SymbolExtractor {
         let mut state = WalkState {
             scope: Vec::new(),
             symbols: Vec::new(),
+            var_types: Vec::new(),
+            class_names: HashSet::new(),
         };
         self.walk_symbols(tree.root_node(), source, language, &mut state);
         state.symbols
@@ -483,6 +599,7 @@ impl SymbolExtractor {
 
         let id: Arc<str> = Arc::from(symbol.id.as_str());
         let range = symbol.range;
+        let is_type = is_class_like_symbol(symbol.symbol_type);
         state.symbols.push(symbol);
 
         // Compose the context handed to this node's children. For a Rust `impl`
@@ -495,6 +612,7 @@ impl SymbolExtractor {
             child_id: child.id,
             child_qn: child.qn,
             child_sep: child.sep,
+            is_type,
         });
         true
     }
@@ -558,6 +676,17 @@ impl SymbolExtractor {
         rel: &mut RelState,
     ) {
         let pushed = self.enter_symbol_scope(&node, source, language, state);
+        if pushed {
+            // M5.1: keep a per-scope local-variable type frame in lockstep with
+            // the scope stack (relationship walk only). Typed params for THIS
+            // node (if it is a function) land in the frame just pushed.
+            state.var_types.push(VarFrame::default());
+        }
+        // M5.1: record typed params / constructor-bound locals into the current
+        // (innermost) frame BEFORE any receiver in this subtree is evaluated.
+        // Pre-order + source order means `x = B()` is recorded before a later
+        // `x.run()` reads it.
+        self.process_var_typing(&node, source, language, state);
 
         // Call / macro-call concern: attribute to the innermost enclosing symbol.
         self.process_call_relationship(&node, source, language, state, rel);
@@ -585,6 +714,7 @@ impl SymbolExtractor {
 
         if pushed {
             state.scope.pop();
+            state.var_types.pop();
         }
     }
 
@@ -689,6 +819,10 @@ impl SymbolExtractor {
             line,
         );
         if rel.seen.insert(key) {
+            // M5.1: evaluate the receiver's type (self/this → enclosing class;
+            // constructor-bound / typed local → its type). `None` for bare calls
+            // and unknown receivers → downstream resolution unchanged.
+            let recv_type = self.eval_call_receiver_type(node, source, language, state);
             rel.relationships.push(SymbolRelationship {
                 source_symbol_id: source_id,
                 source_file_path: self.file_path.clone(),
@@ -696,7 +830,60 @@ impl SymbolExtractor {
                 target_symbol_id: None,
                 relationship_type: SymbolRelationshipType::Call,
                 line,
+                recv_type,
+                ..Default::default()
             });
+        }
+    }
+
+    /// M5.1: evaluate the TYPE of a call's receiver, if the call is a method/
+    /// attribute access whose receiver is `self`/`this`, or a local variable whose
+    /// type is known. Returns the base type NAME (`TypeRep::Named`), or `None`
+    /// (`TypeRep::Unknown` / bare call) → the resolver falls through unchanged.
+    fn eval_call_receiver_type(
+        &self,
+        node: &Node,
+        source: &str,
+        language: Language,
+        state: &WalkState,
+    ) -> Option<String> {
+        let receiver = call_receiver_node(node, language)?;
+        match eval_receiver_type_rep(&receiver, source, language, state) {
+            TypeRep::Named(name) => Some(name),
+            TypeRep::Unknown => None,
+        }
+    }
+
+    /// M5.1: record typed parameters and constructor-bound locals for `node` into
+    /// the current (innermost) variable-type frame. Dispatched per language; a
+    /// no-op when there is no enclosing frame (module-level) or the node is not a
+    /// binding/function. See the per-language `*_record_var_types` helpers.
+    fn process_var_typing(
+        &self,
+        node: &Node,
+        source: &str,
+        language: Language,
+        state: &mut WalkState,
+    ) {
+        // Disjoint field borrows: the frame is mutated, the class-gating set is
+        // only read (FIX 4).
+        let WalkState {
+            var_types,
+            class_names,
+            ..
+        } = state;
+        let Some(frame) = var_types.last_mut() else {
+            return;
+        };
+        match language {
+            Language::Python => python_record_var_types(node, source, frame, class_names),
+            Language::TypeScript
+            | Language::Tsx
+            | Language::Astro
+            | Language::JavaScript
+            | Language::Jsx => ts_record_var_types(node, language, source, frame, class_names),
+            Language::Rust => rust_record_var_types(node, source, frame, class_names),
+            _ => {}
         }
     }
 
@@ -1718,9 +1905,19 @@ pub fn extract_symbol_relationships(
     symbols: &[Symbol],
 ) -> Vec<SymbolRelationship> {
     let extractor = SymbolExtractor::new(file_path.to_string());
+    // M5.1 (FIX 4): the simple names of every class-like symbol in this file, so
+    // `x = Foo()` is only constructor-typed when `Foo` is a real class/struct —
+    // never a factory function. Built once before the relationship walk.
+    let class_names: HashSet<String> = symbols
+        .iter()
+        .filter(|s| is_class_like_symbol(s.symbol_type))
+        .map(|s| s.name.clone())
+        .collect();
     let mut state = WalkState {
         scope: Vec::new(),
         symbols: Vec::new(),
+        var_types: Vec::new(),
+        class_names,
     };
     // Precompute the per-file module-level constant map (M4.2): `NAME = "literal"`
     // bindings used to resolve bare-identifier env-var KEYs. Built up-front (not
@@ -1796,6 +1993,7 @@ fn emit_route_handles(
                 target_symbol_id: Some(handler.id.clone()),
                 relationship_type: SymbolRelationshipType::Handles,
                 line: route.reg_line,
+                ..Default::default()
             });
         }
     }
@@ -2697,6 +2895,7 @@ fn push_relationship(
             target_symbol_id: None,
             relationship_type,
             line,
+            ..Default::default()
         });
     }
 }
@@ -2827,6 +3026,487 @@ fn is_rust_type_symbol(symbol_type: SymbolType) -> bool {
         symbol_type,
         SymbolType::Struct | SymbolType::Enum | SymbolType::Trait | SymbolType::Type
     )
+}
+
+// ---- M5.1 receiver-type dispatch (extraction side) --------------------------
+
+/// True for class-like symbol kinds whose scope `self`/`this` resolves to, and
+/// whose qualified name a method candidate's parent must match (M5.1).
+fn is_class_like_symbol(symbol_type: SymbolType) -> bool {
+    matches!(
+        symbol_type,
+        SymbolType::Class
+            | SymbolType::Struct
+            | SymbolType::Interface
+            | SymbolType::Trait
+            | SymbolType::Enum
+            | SymbolType::Impl
+    )
+}
+
+/// The receiver (object) node of a method/attribute call, if any. `obj.m(...)`
+/// yields the `obj` node; a bare `m(...)` / macro invocation yields `None`.
+fn call_receiver_node<'tree>(call_node: &Node<'tree>, _language: Language) -> Option<Node<'tree>> {
+    let callee = call_node.child_by_field_name("function")?;
+    match callee.kind() {
+        // Python `obj.method(...)`
+        "attribute" => callee.child_by_field_name("object"),
+        // TS/JS `obj.method(...)`
+        "member_expression" | "member_access_expression" => callee.child_by_field_name("object"),
+        // Rust `value.method(...)`
+        "field_expression" => callee.child_by_field_name("value"),
+        _ => None,
+    }
+}
+
+/// Evaluate a receiver node to a `TypeRep`: `self`/`this` → the nearest enclosing
+/// class qualified name; a bare identifier → its recorded local-variable type;
+/// anything else → `Unknown` (the resolver then behaves exactly as today).
+fn eval_receiver_type_rep(
+    receiver: &Node,
+    source: &str,
+    language: Language,
+    state: &WalkState,
+) -> TypeRep {
+    let text = match receiver.kind() {
+        "identifier" | "self" | "this" | "shorthand_property_identifier" => {
+            receiver.utf8_text(source.as_bytes()).ok()
+        }
+        _ => None,
+    };
+    let Some(text) = text else {
+        return TypeRep::Unknown;
+    };
+    if text == "self" || text == "this" {
+        // Minor fix: a `this` whose nearest enclosing function is a nested NON-arrow
+        // `function` is rebound at runtime — it is NOT the class instance. Type it
+        // `Unknown` rather than guessing the class.
+        if text == "this"
+            && is_ts_family(language)
+            && this_rebound_by_plain_function(receiver)
+        {
+            return TypeRep::Unknown;
+        }
+        return nearest_type_qn(&state.scope)
+            .map(TypeRep::Named)
+            .unwrap_or(TypeRep::Unknown);
+    }
+    lookup_var_type(&state.var_types, text)
+}
+
+/// Whether `language` is a TS/JS-family grammar (shared `new`/`this`/param shapes).
+fn is_ts_family(language: Language) -> bool {
+    matches!(
+        language,
+        Language::TypeScript
+            | Language::Tsx
+            | Language::Astro
+            | Language::JavaScript
+            | Language::Jsx
+    )
+}
+
+/// Minor fix (TS/JS): true when a nested NON-arrow `function` sits between `this`
+/// and its enclosing class. Such a `function` rebinds `this` at call time, so the
+/// receiver is not the class instance. Arrow functions are transparent to `this`
+/// (they capture the lexical `this`), so we walk through them; a `method_definition`
+/// or the class boundary means `this` IS the class.
+fn this_rebound_by_plain_function(receiver: &Node) -> bool {
+    let mut cur = receiver.parent();
+    while let Some(n) = cur {
+        match n.kind() {
+            // Transparent to `this` — keep looking outward.
+            "arrow_function" => {}
+            // A plain function rebinds `this`.
+            "function_declaration"
+            | "function_expression"
+            | "generator_function_declaration"
+            | "generator_function"
+            | "function" => return true,
+            // The method/accessor/constructor whose `this` IS the class instance.
+            "method_definition" => return false,
+            // Reached the class / file with no intervening plain function.
+            "class_declaration" | "class" | "class_body" | "program" | "module" => {
+                return false;
+            }
+            _ => {}
+        }
+        cur = n.parent();
+    }
+    false
+}
+
+/// Qualified name of the nearest enclosing class-like scope (`self`/`this`).
+fn nearest_type_qn(scope: &[Scope]) -> Option<String> {
+    scope
+        .iter()
+        .rev()
+        .find(|s| s.is_type)
+        .map(|s| s.child_qn.to_string())
+}
+
+/// Resolve a variable name through the scope-stacked type frames (inner→outer).
+/// Stops at the FIRST frame that mentions the name — including an `Unknown` shadow
+/// marker (FIX 3) — so an inner binding hides an outer same-named type.
+fn lookup_var_type(var_types: &[VarFrame], name: &str) -> TypeRep {
+    for frame in var_types.iter().rev() {
+        if let Some(t) = frame.types.get(name) {
+            return t.clone();
+        }
+    }
+    TypeRep::Unknown
+}
+
+/// Base type NAME of a type-annotation node (`: Foo` / `Foo` / `pkg.Foo`), via the
+/// shared `collect_type_names` + `clean_type_name` normalizers. The first clean
+/// identifier leaf wins (`Optional[Foo]` keeps `Foo` only when unwrapped — here we
+/// take the outermost concrete name).
+fn type_node_base_name(type_node: &Node, language: Language, source: &str) -> Option<String> {
+    let mut raw = Vec::new();
+    collect_type_names(type_node, language, source, &mut raw);
+    raw.into_iter().find_map(|r| clean_type_name(&r))
+}
+
+/// Base type NAME bound by a constructor-style initializer, per language:
+/// Python `Foo(...)` / `pkg.Foo(...)`; TS/JS `new Foo(...)`; Rust `Foo::new(...)`
+/// or `Foo { .. }`. `None` if the initializer is not a recognized constructor.
+///
+/// FIX 4 (class-gating): `Foo(...)` is syntactically identical to a FACTORY call
+/// (`def Foo(): return Bar()`), and a Rust `Foo::method(...)` assoc fn may return a
+/// type other than `Foo`. So the CALL forms are trusted ONLY when `Foo` is a known
+/// class/struct name (`class_names`). The unambiguous forms — TS `new Foo()` and a
+/// Rust `Foo { .. }` struct literal — need no gating.
+fn constructor_type_name(
+    value_node: &Node,
+    language: Language,
+    source: &str,
+    class_names: &HashSet<String>,
+) -> Option<String> {
+    match language {
+        Language::Python => {
+            if value_node.kind() != "call" {
+                return None;
+            }
+            let func = value_node.child_by_field_name("function")?;
+            let name = node_clean_type_name(&func, source)?;
+            // Only a KNOWN class — a factory function `Widget()` is NOT a ctor.
+            class_names.contains(&name).then_some(name)
+        }
+        Language::TypeScript
+        | Language::Tsx
+        | Language::Astro
+        | Language::JavaScript
+        | Language::Jsx => {
+            if value_node.kind() != "new_expression" {
+                return None;
+            }
+            // `new Foo()` is unambiguously a construction — no gating needed.
+            let ctor = value_node.child_by_field_name("constructor")?;
+            node_clean_type_name(&ctor, source)
+        }
+        Language::Rust => match value_node.kind() {
+            "call_expression" => {
+                let func = value_node.child_by_field_name("function")?;
+                // `Foo::new(...)` → the path before the final `::`. Assoc fns may
+                // return another type (`Foo::from`, `Regex::new` → `Result`), so
+                // trust the path only when `Foo` is a known struct/enum.
+                if func.kind() == "scoped_identifier" {
+                    let path = func.child_by_field_name("path")?;
+                    let name = node_clean_type_name(&path, source)?;
+                    return class_names.contains(&name).then_some(name);
+                }
+                None
+            }
+            // `Foo { .. }` literal is unambiguously a construction — no gating.
+            "struct_expression" => {
+                let name = value_node.child_by_field_name("name")?;
+                node_clean_type_name(&name, source)
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The cleaned base type name of a node's source text (`pkg.Foo`/`a::B` → `Foo`/`B`).
+fn node_clean_type_name(node: &Node, source: &str) -> Option<String> {
+    node.utf8_text(source.as_bytes())
+        .ok()
+        .and_then(clean_type_name)
+}
+
+/// Record params + constructor-bound locals (and Unknown-clearing rebinds) for a
+/// Python `node` into the current frame. See FIX 1–4 in the module notes.
+fn python_record_var_types(
+    node: &Node,
+    source: &str,
+    frame: &mut VarFrame,
+    class_names: &HashSet<String>,
+) {
+    match node.kind() {
+        // A function (or lambda) introduces its parameters into the inner frame.
+        "function_definition" | "lambda" => record_params(node, Language::Python, source, frame),
+        "assignment" => {
+            let Some(left) = node.child_by_field_name("left") else {
+                return;
+            };
+            // Tuple/list unpack target (`a, b = ...`) → each name is rebound to an
+            // Unknown we cannot type (FIX 1); never leave a stale type.
+            if left.kind() != "identifier" {
+                bind_pattern_unknown(&left, source, frame);
+                return;
+            }
+            let Ok(var_name) = left.utf8_text(source.as_bytes()) else {
+                return;
+            };
+            // Annotated `x: Foo = ...` / `x: Foo`.
+            if let Some(type_node) = node.child_by_field_name("type") {
+                if let Some(t) = type_node_base_name(&type_node, Language::Python, source) {
+                    frame.bind(var_name, TypeRep::Named(t));
+                    return;
+                }
+            }
+            // Constructor `x = Foo(...)` (gated to a known class, FIX 4), else an
+            // unrecognized RHS → Unknown, which still OVERWRITES any stale type
+            // (FIX 1) and is what `bind` does.
+            let rep = node
+                .child_by_field_name("right")
+                .and_then(|right| {
+                    constructor_type_name(&right, Language::Python, source, class_names)
+                })
+                .map(TypeRep::Named)
+                .unwrap_or(TypeRep::Unknown);
+            frame.bind(var_name, rep);
+        }
+        // Loop / comprehension targets rebind their names to a value we cannot type
+        // (FIX 1): `for x in ...` / `[.. for x in ..]`.
+        "for_statement" | "for_in_clause" => {
+            if let Some(target) = node.child_by_field_name("left") {
+                bind_pattern_unknown(&target, source, frame);
+            }
+        }
+        // `with ... as y` and `except E as y` (both `as_pattern`) bind `y` to an
+        // untypable value (FIX 1).
+        "as_pattern" => {
+            if let Some(alias) = node.child_by_field_name("alias") {
+                bind_pattern_unknown(&alias, source, frame);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Record params + constructor-bound locals (and Unknown-clearing rebinds) for a
+/// TS/JS `node`. `new Foo()` is unambiguous so its branch ignores `class_names`.
+fn ts_record_var_types(
+    node: &Node,
+    language: Language,
+    source: &str,
+    frame: &mut VarFrame,
+    class_names: &HashSet<String>,
+) {
+    match node.kind() {
+        "function_declaration"
+        | "generator_function_declaration"
+        | "function_expression"
+        | "arrow_function"
+        | "method_definition" => record_params(node, language, source, frame),
+        "variable_declarator" => {
+            let Some(name) = node.child_by_field_name("name") else {
+                return;
+            };
+            if name.kind() != "identifier" {
+                return;
+            }
+            let Ok(var_name) = name.utf8_text(source.as_bytes()) else {
+                return;
+            };
+            // Typed `const x: Foo = ...`.
+            if let Some(type_node) = node.child_by_field_name("type") {
+                if let Some(t) = type_node_base_name(&type_node, language, source) {
+                    frame.bind(var_name, TypeRep::Named(t));
+                    return;
+                }
+            }
+            // `const x = new Foo()`, else unrecognized RHS → Unknown (FIX 1).
+            let rep = node
+                .child_by_field_name("value")
+                .and_then(|value| constructor_type_name(&value, language, source, class_names))
+                .map(TypeRep::Named)
+                .unwrap_or(TypeRep::Unknown);
+            frame.bind(var_name, rep);
+        }
+        // Re-assignment without `let`/`const`: `x = new Foo()` retypes, anything
+        // else clears the stale type (FIX 1).
+        "assignment_expression" => {
+            let Some(left) = node.child_by_field_name("left") else {
+                return;
+            };
+            if left.kind() != "identifier" {
+                return;
+            }
+            let Ok(var_name) = left.utf8_text(source.as_bytes()) else {
+                return;
+            };
+            let rep = node
+                .child_by_field_name("right")
+                .and_then(|right| constructor_type_name(&right, language, source, class_names))
+                .map(TypeRep::Named)
+                .unwrap_or(TypeRep::Unknown);
+            frame.bind(var_name, rep);
+        }
+        _ => {}
+    }
+}
+
+/// Record params + constructor-bound locals (and Unknown-clearing rebinds) for a
+/// Rust `node`. `Foo::new()` is gated to a known struct/enum (FIX 4).
+fn rust_record_var_types(
+    node: &Node,
+    source: &str,
+    frame: &mut VarFrame,
+    class_names: &HashSet<String>,
+) {
+    match node.kind() {
+        "function_item" => record_params(node, Language::Rust, source, frame),
+        "let_declaration" => {
+            let Some(pattern) = node.child_by_field_name("pattern") else {
+                return;
+            };
+            if pattern.kind() != "identifier" {
+                return;
+            }
+            let Ok(var_name) = pattern.utf8_text(source.as_bytes()) else {
+                return;
+            };
+            // Typed `let x: Foo = ...`.
+            if let Some(type_node) = node.child_by_field_name("type") {
+                if let Some(t) = type_node_base_name(&type_node, Language::Rust, source) {
+                    frame.bind(var_name, TypeRep::Named(t));
+                    return;
+                }
+            }
+            // `let x = Foo::new()` / `let x = Foo { .. }`, else unrecognized RHS →
+            // Unknown (FIX 1).
+            let rep = node
+                .child_by_field_name("value")
+                .and_then(|value| constructor_type_name(&value, Language::Rust, source, class_names))
+                .map(TypeRep::Named)
+                .unwrap_or(TypeRep::Unknown);
+            frame.bind(var_name, rep);
+        }
+        // `x = Foo::new()` re-assignment retypes; anything else clears stale (FIX 1).
+        "assignment_expression" => {
+            let Some(left) = node.child_by_field_name("left") else {
+                return;
+            };
+            if left.kind() != "identifier" {
+                return;
+            }
+            let Ok(var_name) = left.utf8_text(source.as_bytes()) else {
+                return;
+            };
+            let rep = node
+                .child_by_field_name("right")
+                .and_then(|right| constructor_type_name(&right, Language::Rust, source, class_names))
+                .map(TypeRep::Named)
+                .unwrap_or(TypeRep::Unknown);
+            frame.bind(var_name, rep);
+        }
+        _ => {}
+    }
+}
+
+/// Insert an `Unknown` shadow (FIX 1/FIX 3) for every plain identifier introduced
+/// by a binding pattern, descending only through pattern/tuple/list containers —
+/// NOT through `attribute`/`subscript` targets (`self.x`, `d[k]`), which rebind a
+/// FIELD, not a local name.
+fn bind_pattern_unknown(node: &Node, source: &str, frame: &mut VarFrame) {
+    match node.kind() {
+        "identifier" => {
+            if let Ok(name) = node.utf8_text(source.as_bytes()) {
+                frame.shadow(name);
+            }
+        }
+        "pattern_list" | "tuple_pattern" | "list_pattern" | "tuple" | "list"
+        | "as_pattern_target" | "parenthesized_expression" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                bind_pattern_unknown(&child, source, frame);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Record an entry in the inner frame for EACH parameter of a function/lambda node
+/// (FIX 3): a TYPED param → its base type (`Named`); an UNTYPED param → an `Unknown`
+/// SHADOW so a lookup stops at this frame and an outer same-named type cannot leak
+/// in. `self`/`this` is handled separately (`nearest_type_qn`); recording it here
+/// as `Unknown` is harmless because that path runs before `lookup_var_type`.
+fn record_params(func_node: &Node, language: Language, source: &str, frame: &mut VarFrame) {
+    let Some(params) = func_node.child_by_field_name("parameters") else {
+        return;
+    };
+    let mut cursor = params.walk();
+    for param in params.named_children(&mut cursor) {
+        let (name_node, type_node) = param_name_and_type(&param, language);
+        let Some(name_node) = name_node else {
+            continue;
+        };
+        if name_node.kind() != "identifier" {
+            continue;
+        }
+        let Ok(var_name) = name_node.utf8_text(source.as_bytes()) else {
+            continue;
+        };
+        let rep = type_node
+            .and_then(|tn| type_node_base_name(&tn, language, source))
+            .map(TypeRep::Named)
+            .unwrap_or(TypeRep::Unknown);
+        frame.bind(var_name, rep);
+    }
+}
+
+/// The `(name_node, type_node)` of one parameter node, per language. A `None` type
+/// means an untyped param (recorded as an `Unknown` shadow by `record_params`).
+fn param_name_and_type<'t>(
+    param: &Node<'t>,
+    language: Language,
+) -> (Option<Node<'t>>, Option<Node<'t>>) {
+    match language {
+        Language::Python => match param.kind() {
+            // Bare untyped param: the param node IS the identifier.
+            "identifier" => (Some(*param), None),
+            "typed_parameter" => (param.named_child(0), param.child_by_field_name("type")),
+            "default_parameter" => (param.child_by_field_name("name"), None),
+            "typed_default_parameter" => (
+                param.child_by_field_name("name"),
+                param.child_by_field_name("type"),
+            ),
+            "list_splat_pattern" | "dictionary_splat_pattern" => (param.named_child(0), None),
+            _ => (None, None),
+        },
+        Language::TypeScript
+        | Language::Tsx
+        | Language::Astro
+        | Language::JavaScript
+        | Language::Jsx => match param.kind() {
+            "required_parameter" | "optional_parameter" => (
+                param.child_by_field_name("pattern"),
+                param.child_by_field_name("type"),
+            ),
+            _ => (None, None),
+        },
+        Language::Rust => match param.kind() {
+            "parameter" => (
+                param.child_by_field_name("pattern"),
+                param.child_by_field_name("type"),
+            ),
+            _ => (None, None),
+        },
+        _ => (None, None),
+    }
 }
 
 /// True when a Rust `function_item` is declared directly inside an `impl` block

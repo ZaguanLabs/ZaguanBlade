@@ -1,0 +1,91 @@
+{
+  "case": "python-receiver-type",
+  "language": "Python",
+  "parse_status": "ok",
+  "symbol_count": 5,
+  "relationship_count": 3,
+  "symbols": [
+    {
+      "name": "A",
+      "kind": "class",
+      "qualified_name": "A",
+      "start_line": 0,
+      "start_col": 0,
+      "end_line": 7,
+      "end_col": 15,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "run",
+      "kind": "method",
+      "qualified_name": "A.run",
+      "start_line": 1,
+      "start_col": 4,
+      "end_line": 2,
+      "end_col": 16,
+      "parent_qualified_name": "A",
+      "docstring": null,
+      "signature": "(self)"
+    },
+    {
+      "name": "go",
+      "kind": "method",
+      "qualified_name": "A.go",
+      "start_line": 4,
+      "start_col": 4,
+      "end_line": 7,
+      "end_col": 15,
+      "parent_qualified_name": "A",
+      "docstring": null,
+      "signature": "(self)"
+    },
+    {
+      "name": "B",
+      "kind": "class",
+      "qualified_name": "B",
+      "start_line": 10,
+      "start_col": 0,
+      "end_line": 12,
+      "end_col": 16,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "run",
+      "kind": "method",
+      "qualified_name": "B.run",
+      "start_line": 11,
+      "start_col": 4,
+      "end_line": 12,
+      "end_col": 16,
+      "parent_qualified_name": "B",
+      "docstring": null,
+      "signature": "(self)"
+    }
+  ],
+  "relationships": [
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "A.go",
+      "target_name": "run",
+      "line": 5,
+      "recv_type": "A"
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "A.go",
+      "target_name": "B",
+      "line": 6
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "A.go",
+      "target_name": "run",
+      "line": 7,
+      "recv_type": "B"
+    }
+  ]
+}

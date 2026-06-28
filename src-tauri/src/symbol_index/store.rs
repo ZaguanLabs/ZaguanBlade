@@ -59,6 +59,16 @@ WHERE target_symbol_id IS NULL
       ) = 1
 "#;
 
+/// M5.1: serialize a relationship's receiver type into the `metadata_json`
+/// column (M2.3) as `{"recv_type":"<name>"}`. `None` (bare / unknown receiver) →
+/// SQL NULL, so non-receiver edges are byte-for-byte what today stores.
+fn relationship_metadata_json(relationship: &SymbolRelationship) -> Option<String> {
+    relationship
+        .recv_type
+        .as_ref()
+        .map(|recv| serde_json::json!({ "recv_type": recv }).to_string())
+}
+
 /// SQLite-backed symbol store
 pub struct SymbolStore {
     conn: Mutex<Connection>,
@@ -645,8 +655,8 @@ impl SymbolStore {
             tx.execute(
                 r#"
                 INSERT OR REPLACE INTO symbol_relationships
-                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line, resolution_strategy, confidence, metadata_json)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                 "#,
                 params![
                     &relationship.source_symbol_id,
@@ -655,6 +665,9 @@ impl SymbolStore {
                     relationship.target_symbol_id.as_deref(),
                     relationship.relationship_type.to_string(),
                     relationship.line,
+                    relationship.resolution_strategy.as_deref(),
+                    relationship.confidence,
+                    relationship_metadata_json(relationship),
                 ],
             )?;
         }
@@ -749,8 +762,8 @@ impl SymbolStore {
             tx.execute(
                 r#"
                 INSERT OR REPLACE INTO symbol_relationships
-                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line, resolution_strategy, confidence, metadata_json)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                 "#,
                 params![
                     &relationship.source_symbol_id,
@@ -759,6 +772,9 @@ impl SymbolStore {
                     relationship.target_symbol_id.as_deref(),
                     relationship.relationship_type.to_string(),
                     relationship.line,
+                    relationship.resolution_strategy.as_deref(),
+                    relationship.confidence,
+                    relationship_metadata_json(relationship),
                 ],
             )?;
         }
@@ -875,8 +891,8 @@ impl SymbolStore {
             let mut insert_relationship = tx.prepare(
                 r#"
                 INSERT OR REPLACE INTO symbol_relationships
-                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line, resolution_strategy, confidence, metadata_json)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                 "#,
             )?;
 
@@ -889,6 +905,9 @@ impl SymbolStore {
                         relationship.target_symbol_id.as_deref(),
                         relationship.relationship_type.to_string(),
                         relationship.line,
+                        relationship.resolution_strategy.as_deref(),
+                        relationship.confidence,
+                        relationship_metadata_json(relationship),
                     ])?;
                 }
             }
@@ -944,8 +963,8 @@ impl SymbolStore {
             let mut insert_relationship = tx.prepare(
                 r#"
                 INSERT OR REPLACE INTO symbol_relationships
-                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line, resolution_strategy, confidence, metadata_json)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                 "#,
             )?;
 
@@ -958,6 +977,9 @@ impl SymbolStore {
                         relationship.target_symbol_id.as_deref(),
                         relationship.relationship_type.to_string(),
                         relationship.line,
+                        relationship.resolution_strategy.as_deref(),
+                        relationship.confidence,
+                        relationship_metadata_json(relationship),
                     ])?;
                 }
             }
@@ -2474,6 +2496,7 @@ mod tests {
             target_symbol_id: None,
             relationship_type: SymbolRelationshipType::Call,
             line: 3,
+            ..Default::default()
         }
     }
 
@@ -2675,6 +2698,7 @@ mod tests {
                     target_symbol_id: None,
                     relationship_type: SymbolRelationshipType::Implements,
                     line: 1,
+                    ..Default::default()
                 }],
             )
             .unwrap();
@@ -3124,6 +3148,7 @@ mod tests {
                     target_symbol_id: Some(helper.id.clone()),
                     relationship_type: SymbolRelationshipType::Call,
                     line: 3,
+                    ..Default::default()
                 }],
             )
             .unwrap();
@@ -3178,6 +3203,7 @@ mod tests {
                         target_symbol_id: Some("missing-target".to_string()),
                         relationship_type: SymbolRelationshipType::Call,
                         line: 3,
+                        ..Default::default()
                     },
                     SymbolRelationship {
                         source_symbol_id: "missing-source".to_string(),
@@ -3186,6 +3212,7 @@ mod tests {
                         target_symbol_id: None,
                         relationship_type: SymbolRelationshipType::Call,
                         line: 4,
+                        ..Default::default()
                     },
                 ],
             )
@@ -3248,6 +3275,7 @@ mod tests {
                         target_symbol_id: None,
                         relationship_type: SymbolRelationshipType::Import,
                         line: 1,
+                        ..Default::default()
                     },
                     SymbolRelationship {
                         source_symbol_id: format!("{}::import2#import", symbol.file_path),
@@ -3256,6 +3284,7 @@ mod tests {
                         target_symbol_id: None,
                         relationship_type: SymbolRelationshipType::Import,
                         line: 2,
+                        ..Default::default()
                     },
                 ],
             )

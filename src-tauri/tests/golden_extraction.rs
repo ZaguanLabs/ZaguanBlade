@@ -57,13 +57,18 @@ struct SymbolView {
     signature: Option<String>,
 }
 
-/// Stable projection of a `SymbolRelationship` for snapshotting.
+/// Stable projection of a `SymbolRelationship` for snapshotting. `recv_type`
+/// (M5.1) is the receiver type captured for a method/attribute Call edge; it is
+/// `skip_serializing_if` None so existing goldens (no receiver typing) stay
+/// byte-identical and only receiver-typed calls surface it.
 #[derive(Serialize)]
 struct RelationshipView {
     relationship_type: String,
     source_qualified_name: String,
     target_name: String,
     line: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recv_type: Option<String>,
 }
 
 /// Full deterministic snapshot for one fixture case.
@@ -158,6 +163,7 @@ fn snapshot_for_case(case: &str, fixture_file: &str) -> String {
             source_qualified_name: resolve(&r.source_symbol_id),
             target_name: r.target_name.clone(),
             line: r.line,
+            recv_type: r.recv_type.clone(),
         })
         .collect();
 
@@ -237,6 +243,16 @@ fn golden_python_basic() {
 #[test]
 fn golden_go_basic() {
     check_case("go-basic", "go-basic.go");
+}
+
+// ---- M5.1 receiver-type dispatch case ----
+// Two classes `A` and `B` each define `run`. Inside `A.go`, `self.run()` captures
+// recv_type `A` and the constructor-bound `x = B(); x.run()` captures recv_type
+// `B` — the inputs that let the resolver disambiguate the otherwise-ambiguous
+// `run` call to the CORRECT class method (proven end-to-end in the lib tests).
+#[test]
+fn golden_python_receiver_type() {
+    check_case("python-receiver-type", "python-receiver-type.py");
 }
 
 // ---- Scanner-offender cases (capture current behavior; see module note) ----

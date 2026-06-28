@@ -3058,6 +3058,7 @@ impl LanguageService {
                     target_symbol_id: None,
                     relationship_type: SymbolRelationshipType::Usage,
                     line: usage.line,
+                    ..Default::default()
                 });
             }
         }
@@ -3112,6 +3113,7 @@ impl LanguageService {
                     target_symbol_id: None,
                     relationship_type: SymbolRelationshipType::Usage,
                     line: usage.line,
+                    ..Default::default()
                 });
             }
         }
@@ -3576,6 +3578,11 @@ impl LanguageService {
             .collect::<Vec<_>>();
         let mut imported_symbol_cache = HashMap::new();
 
+        // M5.1: build the same-file inheritance index ONCE for this file from its
+        // own Extends/Implements edges. Used only to widen a receiver type to its
+        // supertypes during disambiguation; never to invent a target.
+        let receiver_index = ReceiverTypeIndex::from_file(file_symbols, relationships);
+
         for relationship in relationships.iter_mut() {
             if relationship.relationship_type == SymbolRelationshipType::Import {
                 continue;
@@ -3585,12 +3592,26 @@ impl LanguageService {
                 continue;
             }
 
-            relationship.target_symbol_id = self.resolve_relationship_symbol_id(
+            // M5.1: carry the receiver type (if any) into the resolver so the two
+            // ambiguity branches can narrow — Unknown/None changes nothing.
+            let recv_type = relationship.recv_type.clone();
+            if let Some(resolved) = self.resolve_relationship_symbol_id(
                 &relationship.target_name,
+                recv_type.as_deref(),
                 file_symbols,
                 &imported_files,
                 &mut imported_symbol_cache,
-            )?;
+                &receiver_index,
+            )? {
+                relationship.target_symbol_id = Some(resolved.id);
+                // Only a receiver-type disambiguation carries an audit tag; plain
+                // same-file / imported-unique resolutions stay untagged exactly as
+                // before (the global-unique back-fill tags its own rows later).
+                if let Some(strategy) = resolved.strategy {
+                    relationship.resolution_strategy = Some(strategy.to_string());
+                    relationship.confidence = resolved.confidence;
+                }
+            }
         }
 
         Ok(())
@@ -3602,21 +3623,38 @@ impl LanguageService {
     /// `SymbolStore::backfill_unresolved_relationship_targets`) once the whole
     /// batch's symbols exist. The old per-reference `search_symbols_contextual`
     /// fallback — the cold-index bottleneck (81–97% of wall time) — is gone.
+    ///
+    /// M5.1 (strict superset): when a candidate set is AMBIGUOUS (`same_file > 1`
+    /// or `imported > 1`) AND the edge carries a known `recv_type`, narrow the
+    /// EXISTING candidate set to those whose parent class (or a supertype) equals
+    /// the receiver type. If exactly one survives, resolve to it and tag
+    /// `receiver_type`. Otherwise (no `recv_type`, 0 or >1 survivors) fall through
+    /// to today's behavior. The returned id is ALWAYS drawn from the existing
+    /// candidate set — never invented — and the already-resolved (`== 1`) branches
+    /// are untouched.
     fn resolve_relationship_symbol_id(
         &self,
         reference_name: &str,
+        recv_type: Option<&str>,
         file_symbols: &[Symbol],
         imported_files: &[String],
         imported_symbol_cache: &mut HashMap<String, Vec<Symbol>>,
-    ) -> Result<Option<String>, LanguageError> {
+        receiver_index: &ReceiverTypeIndex,
+    ) -> Result<Option<ResolvedTarget>, LanguageError> {
         let mut same_file = Vec::new();
         let mut seen = HashSet::new();
         self.collect_matching_symbols(file_symbols, reference_name, &mut same_file, &mut seen);
 
         if same_file.len() == 1 {
-            return Ok(Some(same_file[0].id.clone()));
+            return Ok(Some(ResolvedTarget::plain(same_file[0].id.clone())));
         }
         if same_file.len() > 1 {
+            // M5.1 ambiguity branch #1: narrow by receiver type before bailing.
+            if let Some(recv) = recv_type {
+                if let Some(id) = disambiguate_by_receiver(&same_file, recv, receiver_index) {
+                    return Ok(Some(ResolvedTarget::receiver(id)));
+                }
+            }
             return Ok(None);
         }
 
@@ -3639,7 +3677,16 @@ impl LanguageService {
         }
 
         if imported_matches.len() == 1 {
-            return Ok(Some(imported_matches[0].id.clone()));
+            return Ok(Some(ResolvedTarget::plain(imported_matches[0].id.clone())));
+        }
+        if imported_matches.len() > 1 {
+            // M5.1 ambiguity branch #2: narrow by receiver type before bailing.
+            if let Some(recv) = recv_type {
+                if let Some(id) = disambiguate_by_receiver(&imported_matches, recv, receiver_index)
+                {
+                    return Ok(Some(ResolvedTarget::receiver(id)));
+                }
+            }
         }
 
         Ok(None)
@@ -3658,6 +3705,8 @@ impl LanguageService {
             seen,
         );
     }
+
+    // ---- M5.1 receiver-type disambiguation (resolution side) ----------------
 
     fn suppress_known_external_relationships(
         language: Language,
@@ -4616,6 +4665,7 @@ impl LanguageService {
                 target_symbol_id: Some(symbol.id.clone()),
                 relationship_type: SymbolRelationshipType::Export,
                 line: symbol.range.start.line,
+                ..Default::default()
             });
         }
     }
@@ -4659,6 +4709,7 @@ impl LanguageService {
                 target_symbol_id: Some(symbol.id.clone()),
                 relationship_type: SymbolRelationshipType::Export,
                 line: symbol.range.start.line,
+                ..Default::default()
             });
         }
 
@@ -4713,6 +4764,7 @@ impl LanguageService {
                     target_symbol_id: Some(target_symbol.id.clone()),
                     relationship_type: SymbolRelationshipType::Export,
                     line,
+                    ..Default::default()
                 });
             }
 
@@ -4740,6 +4792,7 @@ impl LanguageService {
                     target_symbol_id: Some(target_symbol.id.clone()),
                     relationship_type: SymbolRelationshipType::Export,
                     line,
+                    ..Default::default()
                 });
             }
 
@@ -4773,6 +4826,7 @@ impl LanguageService {
                         target_symbol_id: Some(target_symbol.id.clone()),
                         relationship_type: SymbolRelationshipType::Export,
                         line,
+                        ..Default::default()
                     });
                 }
             }
@@ -4802,6 +4856,7 @@ impl LanguageService {
                     target_symbol_id: Some(target_symbol.id.clone()),
                     relationship_type: SymbolRelationshipType::Export,
                     line,
+                    ..Default::default()
                 });
             }
 
@@ -4829,6 +4884,7 @@ impl LanguageService {
                     target_symbol_id: Some(target_symbol.id.clone()),
                     relationship_type: SymbolRelationshipType::Export,
                     line,
+                    ..Default::default()
                 });
             }
 
@@ -4855,6 +4911,7 @@ impl LanguageService {
                     target_symbol_id: Some(target_symbol.id.clone()),
                     relationship_type: SymbolRelationshipType::Export,
                     line,
+                    ..Default::default()
                 });
             }
 
@@ -4888,6 +4945,7 @@ impl LanguageService {
                     target_symbol_id: Some(target_symbol.id.clone()),
                     relationship_type: SymbolRelationshipType::Export,
                     line,
+                    ..Default::default()
                 });
             }
 
@@ -4918,6 +4976,7 @@ impl LanguageService {
                         target_symbol_id: Some(target_symbol.id.clone()),
                         relationship_type: SymbolRelationshipType::Export,
                         line,
+                        ..Default::default()
                     });
                 }
             }
@@ -4951,6 +5010,7 @@ impl LanguageService {
                     target_symbol_id: Some(target_symbol.id.clone()),
                     relationship_type: SymbolRelationshipType::Export,
                     line,
+                    ..Default::default()
                 });
             }
 
@@ -5000,6 +5060,7 @@ impl LanguageService {
                     target_symbol_id: Some(target_symbol.id.clone()),
                     relationship_type: SymbolRelationshipType::Export,
                     line,
+                    ..Default::default()
                 });
             }
 
@@ -5034,6 +5095,7 @@ impl LanguageService {
                         target_symbol_id: Some(target_symbol.id.clone()),
                         relationship_type: SymbolRelationshipType::Export,
                         line,
+                        ..Default::default()
                     });
                 }
             }
@@ -5065,6 +5127,7 @@ impl LanguageService {
             target_symbol_id: Some(component_symbol.id.clone()),
             relationship_type: SymbolRelationshipType::Export,
             line: component_symbol.range.start.line,
+            ..Default::default()
         });
     }
 
@@ -6791,6 +6854,146 @@ fn is_css_identifier_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'
 }
 
+/// M5.1 outcome of resolving one relationship target. `strategy`/`confidence`
+/// are `Some` ONLY for a receiver-type disambiguation (the auditable new path);
+/// plain same-file / imported-unique resolutions carry `None` so the stored row
+/// is byte-for-byte what today produces.
+struct ResolvedTarget {
+    id: String,
+    strategy: Option<&'static str>,
+    confidence: Option<f32>,
+}
+
+impl ResolvedTarget {
+    fn plain(id: String) -> Self {
+        Self {
+            id,
+            strategy: None,
+            confidence: None,
+        }
+    }
+
+    fn receiver(id: String) -> Self {
+        Self {
+            id,
+            // Confidence above `global_unique`'s 0.5: a scope/type-derived match
+            // is stronger than a name-only global-uniqueness guess.
+            strategy: Some("receiver_type"),
+            confidence: Some(0.8),
+        }
+    }
+}
+
+/// M5.1 same-file inheritance index: `subtype simple-name → direct supertype
+/// simple-names`, built once per file from its own `Extends`/`Implements` edges.
+/// Used ONLY to widen a receiver type to the set of class names whose method a
+/// receiver of that type could be calling (a method may be defined on a
+/// supertype). Cross-file supertype chains beyond this file's edges are not
+/// followed (bounded slice); an unknown chain simply yields the singleton set, so
+/// disambiguation falls through — never a regression.
+struct ReceiverTypeIndex {
+    supertypes: HashMap<String, Vec<String>>,
+}
+
+impl ReceiverTypeIndex {
+    fn from_file(file_symbols: &[Symbol], relationships: &[SymbolRelationship]) -> Self {
+        let id_to_name: HashMap<&str, &str> = file_symbols
+            .iter()
+            .map(|symbol| (symbol.id.as_str(), symbol.name.as_str()))
+            .collect();
+        let mut supertypes: HashMap<String, Vec<String>> = HashMap::new();
+        for relationship in relationships {
+            if !matches!(
+                relationship.relationship_type,
+                SymbolRelationshipType::Extends | SymbolRelationshipType::Implements
+            ) {
+                continue;
+            }
+            let Some(sub_name) = id_to_name.get(relationship.source_symbol_id.as_str()) else {
+                continue;
+            };
+            let sub = simple_type_name(sub_name);
+            let sup = simple_type_name(&relationship.target_name);
+            if sub == sup {
+                continue;
+            }
+            supertypes.entry(sub).or_default().push(sup);
+        }
+        Self { supertypes }
+    }
+
+    /// The receiver type plus all transitive supertypes (simple names), with a
+    /// hard iteration cap and a visited-set cycle guard.
+    fn supertype_closure(&self, recv_type: &str) -> HashSet<String> {
+        let start = simple_type_name(recv_type);
+        let mut result = HashSet::new();
+        result.insert(start.clone());
+        let mut stack = vec![start];
+        let mut steps = 0usize;
+        while let Some(current) = stack.pop() {
+            steps += 1;
+            if steps > 256 {
+                break;
+            }
+            if let Some(supers) = self.supertypes.get(&current) {
+                for supertype in supers {
+                    if result.insert(supertype.clone()) {
+                        stack.push(supertype.clone());
+                    }
+                }
+            }
+        }
+        result
+    }
+}
+
+/// M5.1 (strict superset): narrow an EXISTING ambiguous candidate set to those
+/// whose parent class (or a supertype of the receiver) equals `recv_type`. Returns
+/// `Some(id)` ONLY when EXACTLY ONE candidate survives — and that id is always one
+/// of the input candidates. 0 or >1 survivors → `None` (today's behavior).
+fn disambiguate_by_receiver(
+    candidates: &[Symbol],
+    recv_type: &str,
+    index: &ReceiverTypeIndex,
+) -> Option<String> {
+    let allowed = index.supertype_closure(recv_type);
+    let mut matched = candidates.iter().filter(|candidate| {
+        candidate_parent_class_name(candidate)
+            .map(|parent| allowed.contains(&parent))
+            .unwrap_or(false)
+    });
+    let first = matched.next()?;
+    if matched.next().is_some() {
+        // More than one candidate matched the receiver type → still ambiguous.
+        return None;
+    }
+    Some(first.id.clone())
+}
+
+/// The simple (last-segment) name of the class a method candidate belongs to,
+/// derived from its qualified name by dropping the final `.`/`::` member segment.
+/// `A.run`/`A::run`/`mod.A.run` → `A`; a non-member name (`run`) → `None` (a free
+/// function has no receiver class, so it never matches a typed receiver).
+fn candidate_parent_class_name(symbol: &Symbol) -> Option<String> {
+    let normalized = symbol.qualified_name.replace("::", ".");
+    let segments: Vec<&str> = normalized.split('.').filter(|s| !s.is_empty()).collect();
+    if segments.len() < 2 {
+        return None;
+    }
+    Some(segments[segments.len() - 2].to_string())
+}
+
+/// The simple (last-segment) name of a possibly-qualified type name.
+/// `mod::Foo`/`pkg.Foo`/`Foo` → `Foo`.
+fn simple_type_name(name: &str) -> String {
+    let normalized = name.replace("::", ".");
+    normalized
+        .rsplit('.')
+        .find(|s| !s.is_empty())
+        .unwrap_or(name)
+        .to_string()
+}
+
 struct SymbolIdentityResolver<'a> {
     symbols: &'a [Symbol],
 }
@@ -7756,6 +7959,7 @@ fn derive_config_import_relationships(
             target_symbol_id: None,
             relationship_type: SymbolRelationshipType::Import,
             line: symbol.range.start.line,
+            ..Default::default()
         });
     }
     relationships
@@ -11340,6 +11544,492 @@ mod tests {
         (service, temp_dir)
     }
 
+    /// M5.1 receiver-type dispatch (the "type_slice"). Each test indexes a single
+    /// file whose `run` method name is AMBIGUOUS (defined on two classes), so the
+    /// resolver MUST use the receiver type to pick the right target — otherwise it
+    /// bails to NULL exactly as before. Named `receiver_type_slice_*` inside module
+    /// `resolution_slice` so `cargo test --lib {resolution_slice,receiver_type,
+    /// type_slice}` all select them.
+    mod resolution_slice {
+        use super::*;
+
+        /// Find a freshly-extracted symbol by its exact qualified name.
+        fn sym<'a>(symbols: &'a [Symbol], qn: &str) -> &'a Symbol {
+            symbols
+                .iter()
+                .find(|s| s.qualified_name == qn)
+                .unwrap_or_else(|| panic!("no symbol with qualified_name {qn:?}"))
+        }
+
+        /// The set of RESOLVED target ids of call edges named `target_name` leaving
+        /// `source` (a method/function symbol).
+        fn resolved_call_targets(
+            service: &LanguageService,
+            source: &Symbol,
+            target_name: &str,
+        ) -> std::collections::HashSet<String> {
+            let graph = service
+                .get_symbol_graph(source, SymbolRelationshipType::Call, 50)
+                .unwrap();
+            graph
+                .outgoing
+                .iter()
+                .filter(|edge| {
+                    edge.relationship_type == SymbolRelationshipType::Call
+                        && edge.target_name == target_name
+                })
+                .filter_map(|edge| edge.target_symbol_id.clone())
+                .collect()
+        }
+
+        fn index_source(file: &str, source: &str) -> (LanguageService, TempDir, Vec<Symbol>) {
+            let (service, temp_dir) = create_test_service();
+            fs::write(temp_dir.path().join(file), source).unwrap();
+            let symbols = service.index_file(file).unwrap();
+            (service, temp_dir, symbols)
+        }
+
+        // A Python file where `run` is defined on BOTH `A` and `B`; `A.go` calls
+        // `self.run()` (→ A), `b = B(); b.run()` (→ B), `unique_helper()` (unique),
+        // and `loose(y)` calls `y.run()` on an UNTYPED param (unknown receiver).
+        const AMBIG_PY: &str = "\
+class A:
+    def run(self):
+        return 1
+
+    def go(self):
+        self.run()
+        b = B()
+        b.run()
+        unique_helper()
+
+
+class B:
+    def run(self):
+        return 2
+
+
+def unique_helper():
+    return 0
+
+
+def loose(y):
+    y.run()
+";
+
+        #[test]
+        fn receiver_type_slice_resolves_self_to_enclosing_class_method() {
+            let (service, _tmp, symbols) = index_source("recv.py", AMBIG_PY);
+            let go = sym(&symbols, "A.go");
+            let a_run = sym(&symbols, "A.run");
+            let b_run = sym(&symbols, "B.run");
+
+            let resolved = resolved_call_targets(&service, go, "run");
+            assert!(
+                resolved.contains(&a_run.id),
+                "self.run() must resolve to A.run via the enclosing class; got {resolved:?}"
+            );
+            // And NOT to B.run — `self` is an `A`.
+            assert!(
+                !(resolved.len() == 1 && resolved.contains(&b_run.id)),
+                "self.run() must not resolve to B.run"
+            );
+        }
+
+        #[test]
+        fn receiver_type_slice_resolves_this_in_typescript() {
+            const TS: &str = "\
+class A {
+  run(): number {
+    return 1;
+  }
+  go(): number {
+    return this.run();
+  }
+}
+class B {
+  run(): number {
+    return 2;
+  }
+}
+";
+            let (service, _tmp, symbols) = index_source("recv.ts", TS);
+            let go = sym(&symbols, "A.go");
+            let a_run = sym(&symbols, "A.run");
+
+            let resolved = resolved_call_targets(&service, go, "run");
+            assert!(
+                resolved.contains(&a_run.id),
+                "this.run() must resolve to A.run; got {resolved:?}"
+            );
+        }
+
+        #[test]
+        fn receiver_type_slice_resolves_constructor_typed_local() {
+            let (service, _tmp, symbols) = index_source("recv.py", AMBIG_PY);
+            let go = sym(&symbols, "A.go");
+            let b_run = sym(&symbols, "B.run");
+
+            let resolved = resolved_call_targets(&service, go, "run");
+            assert!(
+                resolved.contains(&b_run.id),
+                "b.run() where `b = B()` must resolve to B.run; got {resolved:?}"
+            );
+        }
+
+        #[test]
+        fn receiver_type_slice_disambiguates_same_method_name_across_classes() {
+            let (service, _tmp, symbols) = index_source("recv.py", AMBIG_PY);
+            let go = sym(&symbols, "A.go");
+            let a_run = sym(&symbols, "A.run");
+            let b_run = sym(&symbols, "B.run");
+
+            let resolved = resolved_call_targets(&service, go, "run");
+            // EXACTLY the two correct, distinct targets — self→A.run, b→B.run.
+            let expected: std::collections::HashSet<String> =
+                [a_run.id.clone(), b_run.id.clone()].into_iter().collect();
+            assert_eq!(
+                resolved, expected,
+                "the two `run` calls must resolve to A.run and B.run respectively"
+            );
+        }
+
+        #[test]
+        fn receiver_type_slice_unknown_receiver_stays_unresolved() {
+            let (service, _tmp, symbols) = index_source("recv.py", AMBIG_PY);
+            let loose = sym(&symbols, "loose");
+            let a_run = sym(&symbols, "A.run");
+            let b_run = sym(&symbols, "B.run");
+
+            // `y` is untyped → recv_type Unknown → the ambiguous `run` falls through
+            // to today's behavior: it must NOT be mis-resolved to either class.
+            let resolved = resolved_call_targets(&service, loose, "run");
+            assert!(
+                !resolved.contains(&a_run.id) && !resolved.contains(&b_run.id),
+                "unknown-receiver y.run() must not be mis-resolved; got {resolved:?}"
+            );
+        }
+
+        #[test]
+        fn receiver_type_slice_unique_named_call_is_unchanged() {
+            // Regression guard: a uniquely-named call still resolves via the
+            // untouched `len() == 1` path (no receiver type involved).
+            let (service, _tmp, symbols) = index_source("recv.py", AMBIG_PY);
+            let go = sym(&symbols, "A.go");
+            let helper = sym(&symbols, "unique_helper");
+
+            let resolved = resolved_call_targets(&service, go, "unique_helper");
+            assert!(
+                resolved.contains(&helper.id),
+                "unique_helper() must still resolve to its single definition"
+            );
+        }
+
+        #[test]
+        fn receiver_type_slice_resolves_rust_self_and_constructor() {
+            const RS: &str = "\
+struct A;
+struct B;
+
+impl A {
+    fn run(&self) -> i32 {
+        1
+    }
+    fn go(&self) -> i32 {
+        let b = B::new();
+        let x = self.run();
+        let y = b.run();
+        x + y
+    }
+}
+
+impl B {
+    fn new() -> B {
+        B
+    }
+    fn run(&self) -> i32 {
+        2
+    }
+}
+";
+            let (service, _tmp, symbols) = index_source("recv.rs", RS);
+            let go = sym(&symbols, "A::go");
+            let a_run = sym(&symbols, "A::run");
+            let b_run = sym(&symbols, "B::run");
+
+            let resolved = resolved_call_targets(&service, go, "run");
+            let expected: std::collections::HashSet<String> =
+                [a_run.id.clone(), b_run.id.clone()].into_iter().collect();
+            assert_eq!(
+                resolved, expected,
+                "Rust self.run()→A::run and (b = B::new()) b.run()→B::run"
+            );
+        }
+
+        // ---- M5.1 CONSERVATISM probes (adversarial review) ------------------
+        // Each mirrors a reviewer probe where the OLD typing was too eager and
+        // produced a WRONG confidence-0.8 resolution. The fixed typing yields
+        // `Unknown`, which falls through to today's resolver → the ambiguous
+        // `run` call stays UNRESOLVED (never mis-resolved to the wrong class).
+        // (Every fixture has `run` defined on BOTH `Widget` and `Gadget`, so only
+        // a CORRECT receiver type could ever resolve it.)
+
+        /// Raw (pre-resolution) extraction so a test can inspect `recv_type`.
+        fn extract_raw(
+            file: &str,
+            source: &str,
+            language: Language,
+        ) -> (Vec<Symbol>, Vec<SymbolRelationship>) {
+            let tree = parse_with_thread_local_parser(source, language).unwrap();
+            let symbols = extract_symbols(&tree, source, language, file);
+            let relationships =
+                extract_symbol_relationships(&tree, source, language, file, &symbols);
+            (symbols, relationships)
+        }
+
+        /// The `recv_type`s carried by `target_name` Call edges leaving `source_qn`.
+        fn recv_types_for_call(
+            symbols: &[Symbol],
+            relationships: &[SymbolRelationship],
+            source_qn: &str,
+            target_name: &str,
+        ) -> Vec<Option<String>> {
+            let source = sym(symbols, source_qn);
+            relationships
+                .iter()
+                .filter(|r| {
+                    r.relationship_type == SymbolRelationshipType::Call
+                        && r.source_symbol_id == source.id
+                        && r.target_name == target_name
+                })
+                .map(|r| r.recv_type.clone())
+                .collect()
+        }
+
+        // FIX 1: `x = Widget(); for x in gadgets(): x.run()` — the loop target
+        // rebinds `x`, so its `Widget` type is stale. `x.run()` must NOT resolve to
+        // `Widget.run`.
+        #[test]
+        fn receiver_type_slice_loop_rebind_drops_stale_type() {
+            let source = "\
+class Widget:
+    def run(self):
+        return 1
+
+
+class Gadget:
+    def run(self):
+        return 2
+
+
+def gadgets():
+    return []
+
+
+def loop_rebind():
+    x = Widget()
+    for x in gadgets():
+        x.run()
+";
+            let (service, _tmp, symbols) = index_source("recv_loop.py", source);
+            let loop_rebind = sym(&symbols, "loop_rebind");
+            let widget_run = sym(&symbols, "Widget.run");
+
+            let resolved = resolved_call_targets(&service, loop_rebind, "run");
+            assert!(
+                !resolved.contains(&widget_run.id),
+                "loop-rebound x.run() must not resolve to the stale Widget.run; got {resolved:?}"
+            );
+            assert!(
+                resolved.is_empty(),
+                "the rebound x has no confident type → run stays unresolved; got {resolved:?}"
+            );
+
+            // And the captured receiver type is Unknown (no recv_type emitted).
+            let (raw_syms, raw_rels) = extract_raw("recv_loop.py", source, Language::Python);
+            assert_eq!(
+                recv_types_for_call(&raw_syms, &raw_rels, "loop_rebind", "run"),
+                vec![None],
+                "loop-rebound receiver must carry no recv_type"
+            );
+        }
+
+        // FIX 2: `if c: x = Widget() else: x = Gadget(); x.run()` — conflicting
+        // arms with no CFG → ambiguous. `x.run()` must NOT resolve to either arm.
+        #[test]
+        fn receiver_type_slice_if_else_conflict_is_unresolved() {
+            let source = "\
+class Widget:
+    def run(self):
+        return 1
+
+
+class Gadget:
+    def run(self):
+        return 2
+
+
+def cond():
+    return True
+
+
+def if_else_conflict():
+    if cond():
+        x = Widget()
+    else:
+        x = Gadget()
+    x.run()
+";
+            let (service, _tmp, symbols) = index_source("recv_if.py", source);
+            let if_else = sym(&symbols, "if_else_conflict");
+
+            let resolved = resolved_call_targets(&service, if_else, "run");
+            assert!(
+                resolved.is_empty(),
+                "conflicting if/else x.run() must stay unresolved; got {resolved:?}"
+            );
+
+            let (raw_syms, raw_rels) = extract_raw("recv_if.py", source, Language::Python);
+            assert_eq!(
+                recv_types_for_call(&raw_syms, &raw_rels, "if_else_conflict", "run"),
+                vec![None],
+                "conflicting reassignment must poison the type to Unknown (no recv_type)"
+            );
+        }
+
+        // FIX 3: `def outer(): w = Widget(); def inner(w): w.run()` — `inner`'s
+        // untyped param `w` shadows the outer `Widget`. `w.run()` inside `inner`
+        // must NOT resolve to the outer `Widget.run`.
+        #[test]
+        fn receiver_type_slice_inner_param_shadows_outer_type() {
+            let source = "\
+class Widget:
+    def run(self):
+        return 1
+
+
+class Gadget:
+    def run(self):
+        return 2
+
+
+def outer():
+    w = Widget()
+    def inner(w):
+        w.run()
+    return inner
+";
+            let (service, _tmp, symbols) = index_source("recv_shadow.py", source);
+            let inner = sym(&symbols, "outer.inner");
+            let widget_run = sym(&symbols, "Widget.run");
+
+            let resolved = resolved_call_targets(&service, inner, "run");
+            assert!(
+                !resolved.contains(&widget_run.id),
+                "shadowed inner w.run() must not leak the outer Widget type; got {resolved:?}"
+            );
+            assert!(
+                resolved.is_empty(),
+                "inner untyped param has no confident type → run unresolved; got {resolved:?}"
+            );
+
+            let (raw_syms, raw_rels) = extract_raw("recv_shadow.py", source, Language::Python);
+            assert_eq!(
+                recv_types_for_call(&raw_syms, &raw_rels, "outer.inner", "run"),
+                vec![None],
+                "the untyped inner param must shadow the outer type (no recv_type)"
+            );
+        }
+
+        // FIX 4: `def Widget(): return Gadget(); x = Widget(); x.run()` — `Widget`
+        // is a FACTORY FUNCTION, not a class, so `x` must not be typed `Widget`.
+        // The receiver carries no recv_type and the call stays unresolved.
+        #[test]
+        fn receiver_type_slice_python_factory_not_constructor_typed() {
+            const FACTORY_PY: &str = "\
+class Gadget:
+    def run(self):
+        return 2
+
+
+class Other:
+    def run(self):
+        return 3
+
+
+def Widget():
+    return Gadget()
+
+
+def factory_user():
+    x = Widget()
+    x.run()
+";
+            // Raw extraction: `Widget` is a function → `x = Widget()` is NOT
+            // constructor-typed → no recv_type on `x.run()` (old code wrongly
+            // captured "Widget").
+            let (raw_syms, raw_rels) = extract_raw("factory.py", FACTORY_PY, Language::Python);
+            assert_eq!(
+                recv_types_for_call(&raw_syms, &raw_rels, "factory_user", "run"),
+                vec![None],
+                "a factory function call must not be constructor-typed"
+            );
+
+            // End-to-end: with no receiver type, the ambiguous `run` stays
+            // unresolved rather than being mis-attributed.
+            let (service, _tmp, symbols) = index_source("factory.py", FACTORY_PY);
+            let factory_user = sym(&symbols, "factory_user");
+            let resolved = resolved_call_targets(&service, factory_user, "run");
+            assert!(
+                resolved.is_empty(),
+                "factory-typed x.run() must stay unresolved; got {resolved:?}"
+            );
+        }
+
+        // Minor (TS): a `this` inside a nested NON-arrow `function` is rebound at
+        // runtime, so it must NOT be typed as the enclosing class. The ambiguous
+        // `run` (defined on A and B) therefore stays unresolved from that call.
+        #[test]
+        fn receiver_type_slice_ts_nested_function_this_is_unknown() {
+            const TS: &str = "\
+class A {
+  run(): number {
+    return 1;
+  }
+  go(): number {
+    function inner(): number {
+      return this.run();
+    }
+    return inner();
+  }
+}
+class B {
+  run(): number {
+    return 2;
+  }
+}
+";
+            // The nested-function `this.run()` is attributed to `inner`; it must
+            // carry no recv_type (a plain function rebinds `this`).
+            let (raw_syms, raw_rels) = extract_raw("nested_this.ts", TS, Language::TypeScript);
+            let inner = raw_syms.iter().find(|s| s.name == "inner").expect("inner fn");
+            let recv_types: Vec<Option<String>> = raw_rels
+                .iter()
+                .filter(|r| {
+                    r.relationship_type == SymbolRelationshipType::Call
+                        && r.source_symbol_id == inner.id
+                        && r.target_name == "run"
+                })
+                .map(|r| r.recv_type.clone())
+                .collect();
+            assert_eq!(
+                recv_types,
+                vec![None],
+                "this inside a nested non-arrow function must not be typed as the class"
+            );
+        }
+    }
+
     struct ExpectedSymbol {
         name: &'static str,
         symbol_type: SymbolType,
@@ -13899,6 +14589,7 @@ metadata:
             target_symbol_id: None,
             relationship_type: SymbolRelationshipType::Call,
             line: 5,
+            ..Default::default()
         }];
         assert_eq!(
             LanguageService::suppress_known_external_relationships(
