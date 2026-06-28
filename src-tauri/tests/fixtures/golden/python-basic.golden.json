@@ -2,8 +2,8 @@
   "case": "python-basic",
   "language": "Python",
   "parse_status": "ok",
-  "symbol_count": 5,
-  "relationship_count": 3,
+  "symbol_count": 8,
+  "relationship_count": 5,
   "symbols": [
     {
       "name": "os",
@@ -64,6 +64,42 @@
       "parent_qualified_name": null,
       "docstring": null,
       "signature": "(name: str) -> str"
+    },
+    {
+      "name": "load_config",
+      "kind": "function",
+      "qualified_name": "load_config",
+      "start_line": 19,
+      "start_col": 0,
+      "end_line": 21,
+      "end_col": 37,
+      "parent_qualified_name": null,
+      "docstring": "Read the database URL from the environment (M4.2 reads_env fixture).",
+      "signature": "()"
+    },
+    {
+      "name": "getenv",
+      "kind": "function",
+      "qualified_name": "getenv",
+      "start_line": 24,
+      "start_col": 0,
+      "end_line": 27,
+      "end_col": 15,
+      "parent_qualified_name": null,
+      "docstring": "User-defined getenv shadow (M4.2 anchoring): a bare `getenv(...)` call is\n    NOT `os.getenv`, so calling it must NOT emit a reads_env edge.",
+      "signature": "(name)"
+    },
+    {
+      "name": "read_shadowed",
+      "kind": "function",
+      "qualified_name": "read_shadowed",
+      "start_line": 30,
+      "start_col": 0,
+      "end_line": 33,
+      "end_col": 28,
+      "parent_qualified_name": null,
+      "docstring": "NEGATIVE reads_env fixture: calls the user-defined `getenv` above, so no\n    reads_env edge is emitted (only the usual call edge to `getenv`).",
+      "signature": "()"
     }
   ],
   "relationships": [
@@ -84,6 +120,18 @@
       "source_qualified_name": "helper",
       "target_name": "strip",
       "line": 16
+    },
+    {
+      "relationship_type": "reads_env",
+      "source_qualified_name": "load_config",
+      "target_name": "DATABASE_URL",
+      "line": 19
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "read_shadowed",
+      "target_name": "getenv",
+      "line": 33
     }
   ]
 }

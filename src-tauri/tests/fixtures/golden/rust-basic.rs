@@ -42,3 +42,24 @@ pub fn pick<T>(items: Vec<T>, anchor: Point, choose: &dyn Fn(Color) -> T) -> Opt
     let _ = (items, anchor, choose);
     None
 }
+
+/// Reads the `API_KEY` environment variable (M4.2 `reads_env` fixture). The
+/// `std::env::var` accessor also yields the usual `call` edge to `var`.
+pub fn load_api_key() {
+    let _ = std::env::var("API_KEY");
+}
+
+/// Holds a field named `env` whose `var` method shadows the env accessor name.
+struct EnvReader {
+    env: Point,
+}
+
+impl EnvReader {
+    /// NEGATIVE `reads_env` fixture (M4.2 anchoring): `self.env.var(...)` is a
+    /// FIELD access (a `field_expression` callee), NOT the `std::env::var` PATH,
+    /// so it must NOT emit a `reads_env` edge — only the usual `call` edge to
+    /// `var`.
+    fn read_field(&self) {
+        let _ = self.env.var("NOT_ENV");
+    }
+}

@@ -3461,7 +3461,8 @@ impl LanguageService {
             | SymbolRelationshipType::Extends
             | SymbolRelationshipType::Implements
             | SymbolRelationshipType::Usage
-            | SymbolRelationshipType::UsesType => {
+            | SymbolRelationshipType::UsesType
+            | SymbolRelationshipType::ReadsEnv => {
                 if reference.target_symbol_id.as_deref() == Some(symbol.id.as_str()) {
                     return Ok(true);
                 }
@@ -4266,7 +4267,8 @@ impl LanguageService {
             | SymbolRelationshipType::Extends
             | SymbolRelationshipType::Implements
             | SymbolRelationshipType::Usage
-            | SymbolRelationshipType::UsesType => {
+            | SymbolRelationshipType::UsesType
+            | SymbolRelationshipType::ReadsEnv => {
                 self.find_relationship_references_to_symbol(symbol, relationship_type, limit)?
             }
             SymbolRelationshipType::Contains => self.get_containment_incoming(symbol)?,
@@ -10799,6 +10801,7 @@ fn direct_relationship_score(relationship_type: SymbolRelationshipType) -> u32 {
         SymbolRelationshipType::Usage => 76,
         SymbolRelationshipType::Import => 74,
         SymbolRelationshipType::UsesType => 72,
+        SymbolRelationshipType::ReadsEnv => 70,
     }
 }
 

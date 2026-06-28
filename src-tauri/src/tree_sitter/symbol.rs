@@ -3,7 +3,7 @@
 //! Extracts semantic symbols (functions, classes, methods, etc.) from
 //! tree-sitter AST trees for indexing and context assembly.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -250,6 +250,12 @@ pub enum SymbolRelationshipType {
     /// type). Source is the enclosing function/method symbol; `target_name` is the
     /// base type name (M4.1). Stored as the TEXT value `"uses_type"`.
     UsesType,
+    /// A function/method reads an ENVIRONMENT-VARIABLE KEY (e.g. `std::env::var`,
+    /// `os.environ[...]`, `process.env.X`, `os.Getenv`). Source is the enclosing
+    /// function/method symbol; `target_name` is the KEY string (NOT a symbol, so
+    /// `target_symbol_id` stays NULL) (M4.2). Stored as the TEXT value
+    /// `"reads_env"`.
+    ReadsEnv,
 }
 
 impl std::fmt::Display for SymbolRelationshipType {
@@ -263,6 +269,7 @@ impl std::fmt::Display for SymbolRelationshipType {
             SymbolRelationshipType::Contains => "contains",
             SymbolRelationshipType::Usage => "usage",
             SymbolRelationshipType::UsesType => "uses_type",
+            SymbolRelationshipType::ReadsEnv => "reads_env",
         };
         write!(f, "{}", s)
     }
@@ -281,6 +288,7 @@ impl std::str::FromStr for SymbolRelationshipType {
             "contains" => Ok(SymbolRelationshipType::Contains),
             "usage" | "uses" => Ok(SymbolRelationshipType::Usage),
             "uses_type" => Ok(SymbolRelationshipType::UsesType),
+            "reads_env" => Ok(SymbolRelationshipType::ReadsEnv),
             _ => Err(format!("Unknown relationship type: {}", s)),
         }
     }
@@ -360,6 +368,12 @@ struct RelState<'a> {
     /// later in the file. Call/structural-TS/Python attribution instead uses the
     /// live scope stack in `WalkState` (the innermost enclosing symbol).
     all_symbols: &'a [Symbol],
+    /// Module-level `NAME = "string literal"` bindings, precomputed once for the
+    /// whole file (M4.2 constant propagation). When an env accessor's KEY arg is a
+    /// BARE IDENTIFIER rather than a string literal, its name is looked up here to
+    /// recover the literal (e.g. `const KEY = "DATABASE_URL"; env::var(KEY)`).
+    /// Single-file / scope-agnostic heuristic — no dataflow.
+    const_map: HashMap<String, String>,
 }
 
 impl SymbolExtractor {
@@ -524,6 +538,11 @@ impl SymbolExtractor {
 
         // Call / macro-call concern: attribute to the innermost enclosing symbol.
         self.process_call_relationship(&node, source, language, state, rel);
+        // `reads_env` concern (M4.2): body-level env accessors (`std::env::var`,
+        // `os.environ[...]`, `process.env.X`, `os.Getenv`, …). Like calls, these
+        // live anywhere in a body, so this fires on EVERY node (not gated on
+        // `pushed`) and attributes to the innermost enclosing symbol.
+        self.process_env_access_relationship(&node, source, language, state, rel);
         // Structural concern: extends / implements / contains. Runs AFTER the
         // scope push so a class node resolves to its own symbol (reproducing the
         // old `find_enclosing_symbol(class_range)` self-match).
@@ -656,6 +675,50 @@ impl SymbolExtractor {
                 line,
             });
         }
+    }
+
+    /// Emit a `ReadsEnv` edge (M4.2) when `node` is an environment-variable
+    /// accessor (`std::env::var("KEY")`, `os.environ["KEY"]`, `os.getenv("KEY")`,
+    /// `process.env.KEY` / `process.env["KEY"]`, `os.Getenv("KEY")`, …). The KEY is
+    /// the first string-literal argument / subscript / member-property name, with
+    /// bare-identifier args resolved through the module-level constant map. The
+    /// source is the innermost enclosing symbol (normally the function/method whose
+    /// body holds the access); module-level accesses with no enclosing symbol are
+    /// skipped. `target_symbol_id` stays NULL (the target is a KEY string, not a
+    /// symbol). The edge `line` is the enclosing symbol's definition line so the
+    /// shared `seen` set dedups on `(source, KEY)` (one edge per function per KEY).
+    fn process_env_access_relationship(
+        &self,
+        node: &Node,
+        source: &str,
+        language: Language,
+        state: &WalkState,
+        rel: &mut RelState,
+    ) {
+        let Some(key) = extract_env_key(node, source, language, &rel.const_map) else {
+            return;
+        };
+        if !is_env_var_name(&key) {
+            return;
+        }
+        // Attribute to the innermost enclosing symbol (the function/method whose
+        // body holds the access). Use ITS definition line as the edge line so the
+        // dedup key `(source, KEY, ReadsEnv, line)` collapses to `(source, KEY)`.
+        let range = Range::from_node(node);
+        let Some(scope) = resolve_enclosing_scope(&state.scope, &range) else {
+            return;
+        };
+        let source_id = scope.id.to_string();
+        let line = scope.range.start.line;
+        push_relationship(
+            &mut rel.relationships,
+            &mut rel.seen,
+            &source_id,
+            &self.file_path,
+            key,
+            SymbolRelationshipType::ReadsEnv,
+            line,
+        );
     }
 
     /// Emit `UsesType` edges (M4.1) for a node that just created a
@@ -1594,10 +1657,17 @@ pub fn extract_symbol_relationships(
         scope: Vec::new(),
         symbols: Vec::new(),
     };
+    // Precompute the per-file module-level constant map (M4.2): `NAME = "literal"`
+    // bindings used to resolve bare-identifier env-var KEYs. Built up-front (not
+    // during the walk) so a const declared *after* its use still resolves.
+    let mut const_map: HashMap<String, String> = HashMap::new();
+    collect_module_constants(&tree.root_node(), language, source, &mut const_map);
+
     let mut rel = RelState {
         relationships: Vec::new(),
         seen: HashSet::new(),
         all_symbols: symbols,
+        const_map,
     };
 
     // Unified relationship walk: call/macro + structural edges off one DFS,
@@ -2407,6 +2477,489 @@ fn last_named_child<'tree>(node: &Node<'tree>) -> Option<Node<'tree>> {
     }
 }
 
+// ---- M4.2 `reads_env` env-accessor extraction -------------------------------
+
+/// Extract the environment-variable KEY that `node` reads, if `node` is an env
+/// accessor for `language` (M4.2). Returns the raw KEY (the caller validates it
+/// via `is_env_var_name`). Three node shapes are recognized:
+/// - a CALL whose callee path matches a known accessor (`std::env::var` /
+///   `env::var_os` / `os.getenv` / `os.environ.get` / `os.Getenv` /
+///   `os.LookupEnv`) → its first string/identifier argument;
+/// - a SUBSCRIPT on a known container (`os.environ["KEY"]`, `environ["KEY"]`,
+///   `process.env["KEY"]`) → the index string/identifier;
+/// - a MEMBER access on `process.env` (`process.env.KEY`) → the property name.
+///
+/// A bare-identifier argument/index is resolved through `const_map` (constant
+/// propagation); a member property name is already a name and is taken literally.
+fn extract_env_key(
+    node: &Node,
+    source: &str,
+    language: Language,
+    const_map: &HashMap<String, String>,
+) -> Option<String> {
+    match language {
+        Language::Python => match node.kind() {
+            "subscript" => {
+                let container = node.child_by_field_name("value")?;
+                if !env_container_matches(&container, source, language) {
+                    return None;
+                }
+                let index = node.child_by_field_name("subscript")?;
+                literal_or_const(&index, source, const_map)
+            }
+            "call" => {
+                let callee = node.child_by_field_name("function")?;
+                if !env_callee_matches(&callee, source, language) {
+                    return None;
+                }
+                first_string_arg(node, source, const_map)
+            }
+            _ => None,
+        },
+        Language::Rust | Language::Go => {
+            if node.kind() != "call_expression" {
+                return None;
+            }
+            let callee = node.child_by_field_name("function")?;
+            if !env_callee_matches(&callee, source, language) {
+                return None;
+            }
+            first_string_arg(node, source, const_map)
+        }
+        Language::TypeScript
+        | Language::Tsx
+        | Language::Astro
+        | Language::JavaScript
+        | Language::Jsx => match node.kind() {
+            "member_expression" => {
+                let object = node.child_by_field_name("object")?;
+                if !env_container_matches(&object, source, language) {
+                    return None;
+                }
+                let property = node.child_by_field_name("property")?;
+                property
+                    .utf8_text(source.as_bytes())
+                    .ok()
+                    .map(|s| s.to_string())
+            }
+            "subscript_expression" => {
+                let object = node.child_by_field_name("object")?;
+                if !env_container_matches(&object, source, language) {
+                    return None;
+                }
+                let index = node.child_by_field_name("index")?;
+                literal_or_const(&index, source, const_map)
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The dotted/scoped identifier path of `node` as segments, or `None` when `node`
+/// is not a pure path expression. `::` is normalized to `.`; any whitespace or
+/// bracket/paren/quote/operator char means it is not a simple path (reject), which
+/// keeps callee/receiver matching robust against complex expressions.
+fn node_path_text(node: &Node, source: &str) -> Option<Vec<String>> {
+    let text = node.utf8_text(source.as_bytes()).ok()?;
+    if text.is_empty() {
+        return None;
+    }
+    let norm = text.replace("::", ".");
+    if norm
+        .chars()
+        .any(|c| c.is_whitespace() || "()[]{}<>\"'`,?&*!".contains(c))
+    {
+        return None;
+    }
+    Some(norm.split('.').map(|s| s.to_string()).collect())
+}
+
+/// The UTF-8 text of `node` in `source`, if valid.
+fn node_text<'a>(node: &Node, source: &'a str) -> Option<&'a str> {
+    node.utf8_text(source.as_bytes()).ok()
+}
+
+/// True when `node` is a bare `identifier` whose text equals `name` exactly.
+fn ident_is(node: &Node, source: &str, name: &str) -> bool {
+    node.kind() == "identifier" && node_text(node, source) == Some(name)
+}
+
+/// True when `callee`'s node STRUCTURE is a known env-reading FUNCTION for
+/// `language`, anchored on the REAL qualifier by inspecting the AST shape rather
+/// than a flattened path suffix (M4.2 BUG-1 fix). This rejects field/method
+/// receivers that merely END in the right name (`self.env.var(...)`,
+/// `obj.os.environ.get(...)`, a user-defined bare `getenv(...)`).
+fn env_callee_matches(callee: &Node, source: &str, language: Language) -> bool {
+    match language {
+        Language::Rust => rust_env_callee_matches(callee, source),
+        Language::Go => go_env_callee_matches(callee, source),
+        Language::Python => py_env_callee_matches(callee, source),
+        _ => false,
+    }
+}
+
+/// Rust env callee: a `scoped_identifier` PATH (never a `field_expression`)
+/// ending in `env::var` / `env::var_os`, where the segment immediately before
+/// `var`/`var_os` is exactly the module `env` (so `env::var` and `std::env::var`
+/// match; `self.env.var(...)` / `foo.env.var(...)` — `field_expression` callees —
+/// are rejected because their kind is not `scoped_identifier`).
+fn rust_env_callee_matches(callee: &Node, source: &str) -> bool {
+    if callee.kind() != "scoped_identifier" {
+        return false;
+    }
+    let Some(name) = callee.child_by_field_name("name") else {
+        return false;
+    };
+    let name_txt = node_text(&name, source);
+    if name_txt != Some("var") && name_txt != Some("var_os") {
+        return false;
+    }
+    let Some(path) = callee.child_by_field_name("path") else {
+        return false;
+    };
+    match path.kind() {
+        // `env::var` — the whole qualifier is the single identifier `env`.
+        "identifier" => node_text(&path, source) == Some("env"),
+        // `std::env::var` (or `a::b::env::var`) — the LAST path segment is `env`.
+        "scoped_identifier" => {
+            path.child_by_field_name("name")
+                .and_then(|n| node_text(&n, source))
+                == Some("env")
+        }
+        _ => false,
+    }
+}
+
+/// Go env callee: a `selector_expression` `os.Getenv` / `os.LookupEnv` whose
+/// `operand` is the bare identifier `os` (rejects other receivers / nested
+/// selectors such as `foo.os.Getenv(...)`).
+fn go_env_callee_matches(callee: &Node, source: &str) -> bool {
+    if callee.kind() != "selector_expression" {
+        return false;
+    }
+    let Some(field) = callee.child_by_field_name("field") else {
+        return false;
+    };
+    let field_txt = node_text(&field, source);
+    if field_txt != Some("Getenv") && field_txt != Some("LookupEnv") {
+        return false;
+    }
+    callee
+        .child_by_field_name("operand")
+        .is_some_and(|operand| ident_is(&operand, source, "os"))
+}
+
+/// Python env callee: an `attribute` `os.getenv` (object = identifier `os`) or
+/// `os.environ.get` (object = the `os.environ` attribute). A bare `getenv(...)`
+/// (identifier callee), `self.getenv(...)`, or `obj.os.getenv(...)` is rejected.
+fn py_env_callee_matches(callee: &Node, source: &str) -> bool {
+    if callee.kind() != "attribute" {
+        return false;
+    }
+    let Some(attr) = callee.child_by_field_name("attribute") else {
+        return false;
+    };
+    let Some(object) = callee.child_by_field_name("object") else {
+        return false;
+    };
+    match node_text(&attr, source) {
+        Some("getenv") => ident_is(&object, source, "os"),
+        Some("get") => py_is_os_environ(&object, source),
+        _ => false,
+    }
+}
+
+/// True when `node`'s STRUCTURE is a known env-mapping CONTAINER for `language`,
+/// anchored on the real qualifier (M4.2 BUG-1 fix): Python `os.environ`, TS/JS
+/// `process.env`.
+fn env_container_matches(node: &Node, source: &str, language: Language) -> bool {
+    match language {
+        Language::Python => py_is_os_environ(node, source),
+        Language::TypeScript
+        | Language::Tsx
+        | Language::Astro
+        | Language::JavaScript
+        | Language::Jsx => ts_is_process_env(node, source),
+        _ => false,
+    }
+}
+
+/// True when `node` is the Python `os.environ` `attribute` whose object is the
+/// bare identifier `os` (rejects bare `environ`, `self.environ`, `obj.os.environ`).
+fn py_is_os_environ(node: &Node, source: &str) -> bool {
+    if node.kind() != "attribute" {
+        return false;
+    }
+    let Some(attr) = node.child_by_field_name("attribute") else {
+        return false;
+    };
+    if node_text(&attr, source) != Some("environ") {
+        return false;
+    }
+    node.child_by_field_name("object")
+        .is_some_and(|object| ident_is(&object, source, "os"))
+}
+
+/// True when `node` is the TS/JS `process.env` `member_expression` whose object
+/// is the bare identifier `process` (rejects `foo.process.env`, where the
+/// `.env` member's object is a nested member access, not the bare `process`).
+fn ts_is_process_env(node: &Node, source: &str) -> bool {
+    if node.kind() != "member_expression" {
+        return false;
+    }
+    let Some(property) = node.child_by_field_name("property") else {
+        return false;
+    };
+    if node_text(&property, source) != Some("env") {
+        return false;
+    }
+    node.child_by_field_name("object")
+        .is_some_and(|object| ident_is(&object, source, "process"))
+}
+
+/// The KEY carried by the first argument of a call node (`arguments` field): a
+/// string literal's value, or — via `const_map` — a bare identifier's bound
+/// literal. `None` if there is no argument or it is neither.
+fn first_string_arg(
+    call_node: &Node,
+    source: &str,
+    const_map: &HashMap<String, String>,
+) -> Option<String> {
+    let args = call_node.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let first = args.named_children(&mut cursor).next()?;
+    literal_or_const(&first, source, const_map)
+}
+
+/// The string value of `node` when it is a string literal, otherwise — when it is
+/// a bare/scoped identifier — its module-level constant binding (keyed on the last
+/// path segment). `None` for anything else. This is the constant-propagation hook
+/// for env KEYs.
+fn literal_or_const(
+    node: &Node,
+    source: &str,
+    const_map: &HashMap<String, String>,
+) -> Option<String> {
+    if let Some(value) = string_literal_value(node, source) {
+        return Some(value);
+    }
+    let segs = node_path_text(node, source)?;
+    let name = segs.last()?;
+    const_map.get(name).cloned()
+}
+
+/// The literal text of a string node (quotes / string prefixes stripped), across
+/// the per-language string node kinds. `None` for any non-string node.
+fn string_literal_value(node: &Node, source: &str) -> Option<String> {
+    let is_string = matches!(
+        node.kind(),
+        "string" | "string_literal" | "interpreted_string_literal" | "raw_string_literal"
+    );
+    if !is_string {
+        return None;
+    }
+    // Prefer the inner content node (excludes quotes / `r"`/`b"` prefixes).
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if matches!(
+            child.kind(),
+            "string_content" | "string_fragment" | "interpreted_string_literal_content"
+        ) {
+            return child
+                .utf8_text(source.as_bytes())
+                .ok()
+                .map(|s| s.to_string());
+        }
+    }
+    // Fallback (e.g. an empty string with no content child): strip one matching
+    // surrounding quote pair.
+    let text = node.utf8_text(source.as_bytes()).ok()?.trim();
+    let bytes = text.as_bytes();
+    if bytes.len() >= 2 {
+        let first = bytes[0];
+        let last = bytes[bytes.len() - 1];
+        if (first == b'"' || first == b'\'' || first == b'`') && last == first {
+            return Some(text[1..text.len() - 1].to_string());
+        }
+    }
+    Some(text.to_string())
+}
+
+/// True when `name` is a PLAUSIBLE environment-variable KEY (M4.2, relaxed now
+/// that accessors are structurally anchored — only genuine env reads reach here).
+/// Accepts a non-empty run of ASCII letters (EITHER case), digits, and
+/// underscores containing at least one letter — so conventional upper-case keys
+/// (`DATABASE_URL`, `PORT`) AND real lower-case keys (`http_proxy`, `no_proxy`,
+/// `npm_config_cache`) both qualify, while pure-digit/underscore noise (`123`,
+/// `__`) and any key carrying other characters (`A-B`, dynamic/computed names)
+/// are rejected. For `process.env.X` the property `X` is always a real env key.
+fn is_env_var_name(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let mut has_letter = false;
+    for c in name.chars() {
+        if c.is_ascii_alphabetic() {
+            has_letter = true;
+        } else if c.is_ascii_digit() || c == '_' {
+            // allowed, but not letter-bearing on its own
+        } else {
+            return false;
+        }
+    }
+    has_letter
+}
+
+/// Build the per-file MODULE-LEVEL constant map (M4.2 constant propagation,
+/// BUG-2 fix): `NAME = "string literal"` bindings declared at FILE / MODULE scope
+/// ONLY — never inside a function/method/class body. Used to resolve
+/// bare-identifier env KEYs (`const KEY = "DATABASE_URL"; env::var(KEY)`).
+///
+/// Scope is determined structurally during the walk: the first time the DFS
+/// descends through a function/method/class node (`introduces_local_scope`) the
+/// `in_local_scope` flag latches, gating out every binding nested below it — so a
+/// function-local `const` can never substitute across unrelated functions.
+///
+/// Ambiguity: if the SAME module-level name maps to DIFFERENT literals it is
+/// dropped from the map and never re-added (no substitution); identical
+/// re-bindings of the same literal are harmless and kept.
+fn collect_module_constants(
+    root: &Node,
+    language: Language,
+    source: &str,
+    out: &mut HashMap<String, String>,
+) {
+    let mut ambiguous: HashSet<String> = HashSet::new();
+    walk_module_constants(root, language, source, false, out, &mut ambiguous);
+}
+
+/// Recursive worker for `collect_module_constants`. `in_local_scope` is true once
+/// the walk has descended into a function/method/class body.
+fn walk_module_constants(
+    node: &Node,
+    language: Language,
+    source: &str,
+    in_local_scope: bool,
+    out: &mut HashMap<String, String>,
+    ambiguous: &mut HashSet<String>,
+) {
+    if !in_local_scope {
+        if let Some((name, value)) = constant_binding(node, language, source) {
+            if !ambiguous.contains(&name) {
+                match out.get(&name) {
+                    // Same module-level name bound to a DIFFERENT literal → drop.
+                    Some(existing) if *existing != value => {
+                        out.remove(&name);
+                        ambiguous.insert(name);
+                    }
+                    // First binding, or an identical re-binding (kept).
+                    _ => {
+                        out.insert(name, value);
+                    }
+                }
+            }
+        }
+    }
+    // Descendants of a function/method/class body are NOT module-level.
+    let child_local = in_local_scope || introduces_local_scope(node, language);
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        walk_module_constants(&child, language, source, child_local, out, ambiguous);
+    }
+}
+
+/// True when `node` opens a non-module (function / method / class) scope, so any
+/// `NAME = "literal"` binding nested inside it is local and must NOT enter the
+/// module constant map. (Unknown kind strings simply never match a real grammar
+/// node, so over-listing is harmless.)
+fn introduces_local_scope(node: &Node, language: Language) -> bool {
+    match language {
+        Language::Rust => matches!(node.kind(), "function_item" | "closure_expression"),
+        Language::Python => matches!(node.kind(), "function_definition" | "class_definition"),
+        Language::TypeScript
+        | Language::Tsx
+        | Language::Astro
+        | Language::JavaScript
+        | Language::Jsx => matches!(
+            node.kind(),
+            "function_declaration"
+                | "function_expression"
+                | "generator_function_declaration"
+                | "arrow_function"
+                | "method_definition"
+                | "class_declaration"
+                | "class"
+        ),
+        Language::Go => matches!(
+            node.kind(),
+            "function_declaration" | "method_declaration" | "func_literal"
+        ),
+        _ => false,
+    }
+}
+
+/// If `node` is a simple `NAME = "string literal"` binding for `language`, return
+/// `(NAME, literal)`. Per-language binding sites:
+/// - Rust: `const_item` / `static_item` (`name` + string `value`).
+/// - Python: `assignment` (identifier `left` + string `right`).
+/// - TS/JS: `variable_declarator` (identifier `name` + string `value`).
+/// - Go: `const_spec` / `var_spec` (identifier `name` + string in the `value`
+///   `expression_list`).
+fn constant_binding(node: &Node, language: Language, source: &str) -> Option<(String, String)> {
+    let pair = match language {
+        Language::Rust => {
+            if matches!(node.kind(), "const_item" | "static_item") {
+                node.child_by_field_name("name")
+                    .zip(node.child_by_field_name("value"))
+            } else {
+                None
+            }
+        }
+        Language::Python => {
+            if node.kind() == "assignment" {
+                node.child_by_field_name("left")
+                    .zip(node.child_by_field_name("right"))
+            } else {
+                None
+            }
+        }
+        Language::TypeScript
+        | Language::Tsx
+        | Language::Astro
+        | Language::JavaScript
+        | Language::Jsx => {
+            if node.kind() == "variable_declarator" {
+                node.child_by_field_name("name")
+                    .zip(node.child_by_field_name("value"))
+            } else {
+                None
+            }
+        }
+        Language::Go => {
+            if matches!(node.kind(), "const_spec" | "var_spec") {
+                node.child_by_field_name("name")
+                    .zip(node.child_by_field_name("value"))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    let (name_node, mut value_node) = pair?;
+    // Only a single, plain identifier name (skip tuple/array/object patterns).
+    if name_node.kind() != "identifier" {
+        return None;
+    }
+    // Go wraps the binding value in an `expression_list`; unwrap its first entry.
+    if value_node.kind() == "expression_list" {
+        value_node = value_node.named_child(0)?;
+    }
+    let value = string_literal_value(&value_node, source)?;
+    let name = node_text(&name_node, source)?;
+    Some((name.to_string(), value))
+}
+
 /// The first named child of `node` whose kind is `kind`, if any.
 fn first_child_of_kind<'tree>(node: &Node<'tree>, kind: &str) -> Option<Node<'tree>> {
     let mut cursor = node.walk();
@@ -3150,6 +3703,225 @@ func (s *Server) Handle() error {
             .collect();
         targets.sort();
         targets
+    }
+
+    /// Collect the `reads_env` target KEYs attributed to a given source
+    /// qualified-name from a freshly-extracted file (M4.2).
+    fn reads_env_targets(
+        code: &str,
+        language: Language,
+        path: &str,
+        source_qn: &str,
+    ) -> Vec<String> {
+        let mut parser = TreeSitterParser::new().unwrap();
+        let tree = parser.parse(code, language).unwrap();
+        let symbols = extract_symbols(&tree, code, language, path);
+        let relationships = extract_symbol_relationships(&tree, code, language, path, &symbols);
+        let source_id = symbols
+            .iter()
+            .find(|s| s.qualified_name == source_qn)
+            .map(|s| s.id.clone())
+            .expect("source symbol not found");
+        let mut targets: Vec<String> = relationships
+            .iter()
+            .filter(|r| {
+                r.relationship_type == SymbolRelationshipType::ReadsEnv
+                    && r.source_symbol_id == source_id
+            })
+            .map(|r| r.target_name.clone())
+            .collect();
+        targets.sort();
+        targets
+    }
+
+    #[test]
+    fn test_reads_env_literal_keys_all_languages() {
+        // Rust: `std::env::var` / `env::var_os`, both string-literal KEYs.
+        let rust = "fn load() {\n    let _ = std::env::var(\"API_KEY\");\n    let _ = env::var_os(\"HOME_DIR\");\n}\n";
+        assert_eq!(
+            reads_env_targets(rust, Language::Rust, "lib.rs", "load"),
+            vec!["API_KEY".to_string(), "HOME_DIR".to_string()]
+        );
+
+        // Python: `os.environ[...]` subscript, `os.environ.get`, `os.getenv`.
+        let py = "import os\ndef load():\n    a = os.environ[\"DATABASE_URL\"]\n    b = os.environ.get(\"REDIS_URL\")\n    c = os.getenv(\"PORT\")\n    return (a, b, c)\n";
+        assert_eq!(
+            reads_env_targets(py, Language::Python, "m.py", "load"),
+            vec![
+                "DATABASE_URL".to_string(),
+                "PORT".to_string(),
+                "REDIS_URL".to_string()
+            ]
+        );
+
+        // TS/JS: member access (KEY is the property name) and subscript string.
+        let ts = "function load(): void {\n    const a = process.env.NODE_ENV;\n    const b = process.env[\"PORT\"];\n}\n";
+        assert_eq!(
+            reads_env_targets(ts, Language::TypeScript, "m.ts", "load"),
+            vec!["NODE_ENV".to_string(), "PORT".to_string()]
+        );
+
+        // Go: `os.Getenv` / `os.LookupEnv`.
+        let go = "package main\nfunc load() {\n    _ = os.Getenv(\"HOME\")\n    _, _ = os.LookupEnv(\"PATH\")\n}\n";
+        assert_eq!(
+            reads_env_targets(go, Language::Go, "m.go", "load"),
+            vec!["HOME".to_string(), "PATH".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_reads_env_constant_propagation() {
+        // A bare-identifier KEY resolves to its module-level string literal.
+        let rust =
+            "const KEY: &str = \"DATABASE_URL\";\nfn load() {\n    let _ = std::env::var(KEY);\n}\n";
+        assert_eq!(
+            reads_env_targets(rust, Language::Rust, "lib.rs", "load"),
+            vec!["DATABASE_URL".to_string()]
+        );
+
+        // Same for Python: module-level `NAME = "literal"` feeds `os.getenv(NAME)`.
+        let py = "import os\nKEY = \"REDIS_URL\"\ndef load():\n    return os.getenv(KEY)\n";
+        assert_eq!(
+            reads_env_targets(py, Language::Python, "m.py", "load"),
+            vec!["REDIS_URL".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_reads_env_unanchored_negative() {
+        // BUG-1 regression: receivers that merely END in the right names must NOT
+        // emit a `reads_env` edge — accessors are anchored on the REAL qualifier.
+
+        // TS: `foo.process.env.PORT` is NOT the global `process.env` (the `.env`
+        // member's object is a nested member access, not the bare `process`).
+        let ts = "function load(foo: any): string {\n    return foo.process.env.PORT;\n}\n";
+        assert!(
+            reads_env_targets(ts, Language::TypeScript, "m.ts", "load").is_empty(),
+            "foo.process.env.PORT must not emit reads_env"
+        );
+
+        // Rust: `self.env.var(\"X\")` is a FIELD access (`field_expression` callee),
+        // not the `std::env::var` PATH.
+        let rust = "struct S;\nimpl S {\n    fn load(&self) {\n        let _ = self.env.var(\"NOT_ENV\");\n    }\n}\n";
+        assert!(
+            reads_env_targets(rust, Language::Rust, "lib.rs", "S::load").is_empty(),
+            "self.env.var(...) must not emit reads_env"
+        );
+
+        // Python: a user-defined `getenv` shadow called bare is NOT `os.getenv`.
+        let py = "def getenv(name):\n    return name\ndef load():\n    return getenv(\"NOT_ENV\")\n";
+        assert!(
+            reads_env_targets(py, Language::Python, "m.py", "load").is_empty(),
+            "user-defined getenv(...) must not emit reads_env"
+        );
+
+        // Python: `self.environ[...]` is not the `os.environ` mapping.
+        let py2 = "def load(self):\n    return self.environ[\"NOT_ENV\"]\n";
+        assert!(
+            reads_env_targets(py2, Language::Python, "m.py", "load").is_empty(),
+            "self.environ[...] must not emit reads_env"
+        );
+
+        // Go: a non-`os` receiver `cfg.Getenv(...)` must not emit.
+        let go = "package main\nfunc load() string {\n    return cfg.Getenv(\"NOT_ENV\")\n}\n";
+        assert!(
+            reads_env_targets(go, Language::Go, "m.go", "load").is_empty(),
+            "cfg.Getenv(...) must not emit reads_env"
+        );
+    }
+
+    #[test]
+    fn test_reads_env_anchored_positive_still_fires() {
+        // Sanity guard for the BUG-1 fix: the genuine anchored forms keep firing.
+        let ts = "function load(): string {\n    return process.env.PORT;\n}\n";
+        assert_eq!(
+            reads_env_targets(ts, Language::TypeScript, "m.ts", "load"),
+            vec!["PORT".to_string()]
+        );
+        // Relaxed key rule: a real lower-case env property now fires.
+        let ts_lower = "function load(): string {\n    return process.env.http_proxy;\n}\n";
+        assert_eq!(
+            reads_env_targets(ts_lower, Language::TypeScript, "m.ts", "load"),
+            vec!["http_proxy".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_reads_env_rejects_unresolved_and_garbage() {
+        // An unresolved bare identifier (no module-level binding) yields nothing.
+        let rust = "fn load() {\n    let _ = std::env::var(missing);\n}\n";
+        assert!(reads_env_targets(rust, Language::Rust, "lib.rs", "load").is_empty());
+
+        // A non-key index (pure digits) yields nothing even on a real accessor.
+        let ts = "function load(): void {\n    const a = process.env[\"123\"];\n}\n";
+        assert!(reads_env_targets(ts, Language::TypeScript, "m.ts", "load").is_empty());
+    }
+
+    #[test]
+    fn test_reads_env_module_vs_local_const_scope() {
+        // BUG-2 regression: two functions each declare a function-LOCAL `const`
+        // with the SAME name but DIFFERENT literals. A local const must NOT be
+        // collected, so neither `var(KEY)` resolves — no edge, and crucially no
+        // WRONG cross-function substitution.
+        let rust_local = "fn a() {\n    const KEY: &str = \"AAA\";\n    let _ = std::env::var(KEY);\n}\nfn b() {\n    const KEY: &str = \"BBB\";\n    let _ = std::env::var(KEY);\n}\n";
+        assert!(
+            reads_env_targets(rust_local, Language::Rust, "lib.rs", "a").is_empty(),
+            "function-local const must not substitute (a)"
+        );
+        assert!(
+            reads_env_targets(rust_local, Language::Rust, "lib.rs", "b").is_empty(),
+            "function-local const must not substitute (b)"
+        );
+
+        // A MODULE-level const DOES substitute correctly.
+        let rust_mod = "const KEY: &str = \"REAL_KEY\";\nfn a() {\n    let _ = std::env::var(KEY);\n}\n";
+        assert_eq!(
+            reads_env_targets(rust_mod, Language::Rust, "lib.rs", "a"),
+            vec!["REAL_KEY".to_string()]
+        );
+
+        // Two CONFLICTING module-level consts of the same name → ambiguous → drop.
+        let rust_ambig = "const KEY: &str = \"AAA\";\nconst KEY: &str = \"BBB\";\nfn a() {\n    let _ = std::env::var(KEY);\n}\n";
+        assert!(
+            reads_env_targets(rust_ambig, Language::Rust, "lib.rs", "a").is_empty(),
+            "ambiguous module const must be dropped"
+        );
+
+        // Python: a function-local `KEY = \"X\"` must not leak to another function.
+        let py_local = "import os\ndef a():\n    KEY = \"AAA\"\n    return os.getenv(KEY)\ndef b():\n    KEY = \"BBB\"\n    return os.getenv(KEY)\n";
+        assert!(reads_env_targets(py_local, Language::Python, "m.py", "a").is_empty());
+        assert!(reads_env_targets(py_local, Language::Python, "m.py", "b").is_empty());
+
+        // Python: a module-level `NAME = \"literal\"` resolves correctly.
+        let py_mod = "import os\nKEY = \"REAL_KEY\"\ndef a():\n    return os.getenv(KEY)\n";
+        assert_eq!(
+            reads_env_targets(py_mod, Language::Python, "m.py", "a"),
+            vec!["REAL_KEY".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_is_env_var_name_rule() {
+        // Relaxed (M4.2): upper-case AND real lower-case keys are accepted.
+        for ok in [
+            "DATABASE_URL",
+            "PORT",
+            "NODE_ENV",
+            "PORT2",
+            "_PRIVATE",
+            "A1",
+            "http_proxy",
+            "no_proxy",
+            "npm_config_cache",
+            "nodeEnv",
+            "a",
+        ] {
+            assert!(is_env_var_name(ok), "{ok} should be accepted");
+        }
+        // Rejected: empty, pure digits, pure underscores, and stray characters.
+        for bad in ["", "123", "__", "A-B", "a.b", "FOO BAR"] {
+            assert!(!is_env_var_name(bad), "{bad} should be rejected");
+        }
     }
 
     #[test]

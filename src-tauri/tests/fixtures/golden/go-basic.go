@@ -29,3 +29,9 @@ func (s *Server) Start() error {
 func Pick[T any](items []T, srv *Server) *Server {
 	return srv
 }
+
+// LoadHome reads the HOME environment variable (M4.2 reads_env fixture). The
+// os.Getenv accessor also yields the usual call edge to Getenv.
+func LoadHome() string {
+	return os.Getenv("HOME")
+}

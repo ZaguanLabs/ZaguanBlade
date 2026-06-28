@@ -2,8 +2,8 @@
   "case": "typescript-basic",
   "language": "TypeScript",
   "parse_status": "ok",
-  "symbol_count": 9,
-  "relationship_count": 3,
+  "symbol_count": 11,
+  "relationship_count": 4,
   "symbols": [
     {
       "name": "./logger",
@@ -112,6 +112,30 @@
       "parent_qualified_name": null,
       "docstring": null,
       "signature": "(name: string) : string"
+    },
+    {
+      "name": "loadPort",
+      "kind": "function",
+      "qualified_name": "loadPort",
+      "start_line": 30,
+      "start_col": 7,
+      "end_line": 32,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": "() : string"
+    },
+    {
+      "name": "readNested",
+      "kind": "function",
+      "qualified_name": "readNested",
+      "start_line": 37,
+      "start_col": 7,
+      "end_line": 39,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": "(foo: any) : string"
     }
   ],
   "relationships": [
@@ -132,6 +156,12 @@
       "source_qualified_name": "helper",
       "target_name": "trim",
       "line": 25
+    },
+    {
+      "relationship_type": "reads_env",
+      "source_qualified_name": "loadPort",
+      "target_name": "PORT",
+      "line": 30
     }
   ]
 }

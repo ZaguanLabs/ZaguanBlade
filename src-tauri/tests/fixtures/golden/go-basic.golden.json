@@ -2,8 +2,8 @@
   "case": "go-basic",
   "language": "Go",
   "parse_status": "ok",
-  "symbol_count": 6,
-  "relationship_count": 6,
+  "symbol_count": 7,
+  "relationship_count": 8,
   "symbols": [
     {
       "name": "fmt",
@@ -76,6 +76,18 @@
       "parent_qualified_name": null,
       "docstring": "edge, while the real `Server` parameter/return type must.",
       "signature": "(items []T, srv *Server) *Server"
+    },
+    {
+      "name": "LoadHome",
+      "kind": "function",
+      "qualified_name": "LoadHome",
+      "start_line": 34,
+      "start_col": 0,
+      "end_line": 36,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "os.Getenv accessor also yields the usual call edge to Getenv.",
+      "signature": "() string"
     }
   ],
   "relationships": [
@@ -114,6 +126,18 @@
       "source_qualified_name": "Pick",
       "target_name": "Server",
       "line": 28
+    },
+    {
+      "relationship_type": "reads_env",
+      "source_qualified_name": "LoadHome",
+      "target_name": "HOME",
+      "line": 34
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "LoadHome",
+      "target_name": "Getenv",
+      "line": 35
     }
   ]
 }
