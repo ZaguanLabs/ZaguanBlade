@@ -372,29 +372,27 @@ impl SymbolExtractor {
             );
 
             // Process children with this symbol as parent
-            for i in 0..node.child_count() {
-                if let Some(child) = node.child(i as u32) {
-                    self.extract_from_node(
-                        child,
-                        source,
-                        language,
-                        Some(child_context.clone()),
-                        symbols,
-                    );
-                }
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                self.extract_from_node(
+                    child,
+                    source,
+                    language,
+                    Some(child_context.clone()),
+                    symbols,
+                );
             }
         } else {
             // No symbol at this node, process children with same parent
-            for i in 0..node.child_count() {
-                if let Some(child) = node.child(i as u32) {
-                    self.extract_from_node(
-                        child,
-                        source,
-                        language,
-                        parent_context.clone(),
-                        symbols,
-                    );
-                }
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                self.extract_from_node(
+                    child,
+                    source,
+                    language,
+                    parent_context.clone(),
+                    symbols,
+                );
             }
         }
     }
@@ -977,13 +975,12 @@ impl SymbolExtractor {
     }
 
     fn has_js_ts_function_descendant(&self, node: &Node, source: &str) -> bool {
-        for i in 0..node.named_child_count() {
-            if let Some(child) = node.named_child(i as u32) {
-                if self.is_js_ts_function_value(&child, source)
-                    || self.has_js_ts_function_descendant(&child, source)
-                {
-                    return true;
-                }
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            if self.is_js_ts_function_value(&child, source)
+                || self.has_js_ts_function_descendant(&child, source)
+            {
+                return true;
             }
         }
         false
@@ -1326,18 +1323,17 @@ fn extract_structural_relationships_from_node(
         | Language::BuildScript => {}
     }
 
-    for i in 0..node.child_count() {
-        if let Some(child) = node.child(i as u32) {
-            extract_structural_relationships_from_node(
-                child,
-                source,
-                language,
-                file_path,
-                symbols,
-                relationships,
-                seen,
-            );
-        }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        extract_structural_relationships_from_node(
+            child,
+            source,
+            language,
+            file_path,
+            symbols,
+            relationships,
+            seen,
+        );
     }
 }
 
@@ -1569,12 +1565,11 @@ fn extract_go_structural_relationships(
 /// Resolve the base type name of a Go method receiver (`(s *Server)` → `Server`).
 fn go_receiver_type_name(receiver: &Node, source: &str) -> Option<String> {
     let mut type_node = None;
-    for i in 0..receiver.named_child_count() {
-        if let Some(param) = receiver.named_child(i as u32) {
-            if let Some(ty) = param.child_by_field_name("type") {
-                type_node = Some(ty);
-                break;
-            }
+    let mut cursor = receiver.walk();
+    for param in receiver.named_children(&mut cursor) {
+        if let Some(ty) = param.child_by_field_name("type") {
+            type_node = Some(ty);
+            break;
         }
     }
     let mut ty = type_node?;
@@ -1596,10 +1591,8 @@ fn go_embedded_type_names(struct_type: &Node, source: &str) -> Vec<String> {
         return names;
     };
 
-    for i in 0..field_list.named_child_count() {
-        let Some(field) = field_list.named_child(i as u32) else {
-            continue;
-        };
+    let mut cursor = field_list.walk();
+    for field in field_list.named_children(&mut cursor) {
         if field.kind() != "field_declaration" {
             continue;
         }
@@ -1849,18 +1842,17 @@ fn extract_relationships_from_node(
         }
     }
 
-    for i in 0..node.child_count() {
-        if let Some(child) = node.child(i as u32) {
-            extract_relationships_from_node(
-                child,
-                source,
-                language,
-                file_path,
-                symbols,
-                relationships,
-                seen,
-            );
-        }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        extract_relationships_from_node(
+            child,
+            source,
+            language,
+            file_path,
+            symbols,
+            relationships,
+            seen,
+        );
     }
 }
 
